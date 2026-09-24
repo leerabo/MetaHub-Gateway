@@ -8,6 +8,8 @@ import {
   permissionRevision,
   PERMISSIONS,
 } from "../../lib/permissions.js";
+import { workspaceConsoleSessionFromShell } from "../../lib/workspaceConsoleSession.js";
+import { workspaceResourcePageOwner } from "../../lib/workspaceResourcePage.js";
 
 const PAGE_ID = "support-tickets";
 const LANES = Object.freeze(["list", "mutation"]);
@@ -19,6 +21,9 @@ export function supportTicketReadIdentitySnapshot(authContext) {
 }
 
 export function supportTicketPageOwner(authContext, consoleShellState) {
+  if (consoleShellState?.workspaceNavigationContract === true) {
+    return workspaceSupportTicketOwner(authContext, consoleShellState);
+  }
   const readIdentity = supportTicketReadIdentitySnapshot(authContext);
   const permissions = permissionCodesFromAuthContext(authContext);
   const revision = permissionRevision(authContext);
@@ -56,6 +61,34 @@ export function supportTicketPageOwner(authContext, consoleShellState) {
     ]),
     canCreate: hasPermission(authContext, PERMISSIONS.SUPPORT_TICKET_CREATE),
     canManage: hasPermission(authContext, PERMISSIONS.SUPPORT_TICKET_MANAGE),
+  });
+}
+
+// Current Workspace sessions carry their own authorization contract. Fence
+// requests with the actual session owner instead of reconstructing Legacy IDs.
+function workspaceSupportTicketOwner(authContext, shell) {
+  const session = workspaceConsoleSessionFromShell(shell);
+  if (!session
+    || authContext?.permission_fingerprint !== session.context.permission_fingerprint
+    || authContext?.permission_revision !== session.context.permission_revision
+    || authContext?.membership_revision !== session.context.membership_revision
+    || JSON.stringify(permissionCodesFromAuthContext(authContext))
+      !== JSON.stringify(permissionCodesFromAuthContext(session.context))) return null;
+  const resource = workspaceResourcePageOwner(session, shell, {
+    navigationId: PAGE_ID, permissions: [PERMISSIONS.SUPPORT_TICKET_READ],
+  });
+  if (!resource) return null;
+  const identity = (permission) => hasPermission(session.context, permission)
+    ? JSON.stringify([resource.key, permission]) : "";
+  return Object.freeze({
+    page: PAGE_ID,
+    workspaceId: session.owner.workspaceId,
+    readIdentity: identity(PERMISSIONS.SUPPORT_TICKET_READ),
+    createIdentity: identity(PERMISSIONS.SUPPORT_TICKET_CREATE),
+    manageIdentity: identity(PERMISSIONS.SUPPORT_TICKET_MANAGE),
+    navigationOwner: resource.key,
+    canCreate: hasPermission(session.context, PERMISSIONS.SUPPORT_TICKET_CREATE),
+    canManage: hasPermission(session.context, PERMISSIONS.SUPPORT_TICKET_MANAGE),
   });
 }
 

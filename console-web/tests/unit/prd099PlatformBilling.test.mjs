@@ -8,7 +8,8 @@ import {
   listPlatformBillingSummary,
   saveWorkspaceBillingExport,
 } from "../../src/lib/platformBilling.js";
-import { renderIdentitySecurityPage } from "../../src/features/identity/renderIdentityPage.js";
+import { renderIdentitySecurityPage as renderAccountPage } from "../../src/features/identity/renderIdentityPage.js";
+const renderIdentitySecurityPage = (root, state) => renderAccountPage(root, { accountSection: "billing", ...state });
 import { renderPlatformWorkspace } from "../../src/features/platform/renderPlatformPage.js";
 
 const CONTROL_URL = "http://control.test";

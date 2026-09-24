@@ -88,15 +88,26 @@ def _request_meta(request_id: str, trace_id: str) -> tuple[str, str]:
 
 
 def _require_live(
-    connection: sqlite3.Connection, context: AuthContext, permission: str
+    connection: sqlite3.Connection, context: AuthContext, permission: str | tuple[str, ...]
 ) -> AuthContext:
+    permissions = (permission,) if isinstance(permission, str) else tuple(permission)
+    last_error: ApiError | None = None
     try:
-        return require_transaction_permission(
-            connection,
-            context,
-            permission,
-            unavailable_error_code="tenant_data.unavailable",
-        )
+        for candidate in permissions:
+            try:
+                return require_transaction_permission(
+                    connection,
+                    context,
+                    candidate,
+                    unavailable_error_code="tenant_data.unavailable",
+                )
+            except ApiError as exc:
+                if exc.code != "auth.permission_denied":
+                    raise
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        raise ApiError("tenant_data.unavailable")
     except ApiError:
         raise
     except Exception:
@@ -162,7 +173,7 @@ def get_data_management(
     connection = _connect(config)
     try:
         connection.execute("BEGIN")
-        live = _require_live(connection, context, "tenant_data.read")
+        live = _require_live(connection, context, ("tenant_data.read", "tenant.settings.read"))
         state = _state_row(connection, live.user.tenant_id)
         exports = connection.execute(
             "SELECT * FROM tenant_export_jobs WHERE tenant_id=? ORDER BY created_at DESC LIMIT 20",
@@ -321,7 +332,7 @@ def get_export(
     connection = _connect(config)
     try:
         connection.execute("BEGIN")
-        live = _require_live(connection, context, "tenant_data.read")
+        live = _require_live(connection, context, ("tenant_data.read", "tenant.settings.read"))
         row = connection.execute(
             "SELECT * FROM tenant_export_jobs WHERE tenant_id=? AND tenant_export_job_id=?",
             (live.user.tenant_id, job_id),

@@ -180,8 +180,31 @@ function renderStatusItem(item = {}, probingProviderId, canProbe) {
       <div><span>维护备注</span><strong class="provider-maintenance-note">${escapeHtml(item.maintenance_note ?? "无维护备注")}</strong></div>
       <div><span>最近调用 / 探测</span><strong>${formatDate(item.latest_call_at)} / ${formatDate(item.latest_probe_at)}</strong></div>
     </div>
+    ${renderOperationalCaveat(item)}
     ${renderFailures(failures)}
   </article>`;
+}
+
+/**
+ * 将“状态”和“证据覆盖范围”分开表达。
+ * effective_health_status 是后端路由判定，不能由前端重算；当只有探测或探测存在失败时，
+ * 仍要明确告诉运营人员健康结论的局限，避免把探测成功率误读成真实调用可用率。
+ */
+function renderOperationalCaveat(item) {
+  const eligibleCalls = safeCountNumber(item.eligible_call_count);
+  const probeTotal = safeCountNumber(item.probe_total);
+  const probeRate = Number.isSafeInteger(item.probe_success_rate_bps)
+    ? item.probe_success_rate_bps
+    : null;
+  const notices = [];
+  if (eligibleCalls === 0) {
+    notices.push("过去 24 小时没有真实调用样本；当前状态主要来自独立探测。");
+  }
+  if (probeTotal > 0 && probeRate !== null && probeRate < 10000) {
+    notices.push(`独立探测成功率 ${formatRate(probeRate, "暂无数据")}，存在失败或超时；请结合最近错误判断。`);
+  }
+  if (!notices.length) return "";
+  return `<aside class="provider-status-caveat" role="note"><strong>证据范围</strong>${notices.map((notice) => `<span>${escapeHtml(notice)}</span>`).join("")}</aside>`;
 }
 
 /** 手工探测失败只展示统一错误字段，不覆盖仍可读取的状态快照。 */
@@ -291,6 +314,10 @@ function formatDate(value) {
 /** 计数只接受 JavaScript 安全非负整数；异常响应失败关闭为短横线而不是猜测。 */
 function safeCount(value) {
   return Number.isSafeInteger(value) && value >= 0 ? value : "-";
+}
+
+function safeCountNumber(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
 
 /** 分页 limit 只接受正安全整数，异常响应使用页面固定默认值。 */

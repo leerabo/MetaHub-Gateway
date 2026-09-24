@@ -558,7 +558,7 @@ test("main binds export only to an explicit authorized click and clears every ow
   assert.match(source, /logoutButton\?\.addEventListener\("click"[\s\S]*?clearAuditExportSessionState\(\)/);
   assert.match(source, /itemId !== "audit-logs"[\s\S]*?clearAuditExportSessionState\(\)/);
   assert.match(source, /status === 401[\s\S]*?clearAuditExportSessionState\(\)/);
-  assert.match(source, /const session = sameWorkspaceConsoleSession\(authSession, nextSession\) \? authSession : nextSession;\s*if \(authSession !== session\) \{\s*clearConsoleSessionState\(\{ clearNavigation: false \}\)/);
+  assert.match(source, /const session = sameWorkspaceConsoleSession\(authSession, nextSession\) \? authSession : nextSession;\s*const sessionChanged = authSession !== session;\s*if \(sessionChanged\) \{\s*clearConsoleSessionState\(\{ clearNavigation: false \}\)/);
   assert.match(source, /function clearConsoleSessionState[\s\S]*clearAuditExportSessionState\(\)/);
   assert.match(source, /auditExportLifecycle\.clear\(\)/);
 });

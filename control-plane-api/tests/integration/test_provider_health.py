@@ -12,6 +12,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient, Response
 from metahub_control.auth.routes import router as auth_router
 from metahub_control.provider_health.routes import router as health_router
+from metahub_control.provider_health import service as provider_health_service
 from metahub_control.provider_health.service import (
     _PinnedNetworkBackend,
     _read_model_catalog,
@@ -338,3 +339,44 @@ def test_provider_health_pins_validated_dns_address() -> None:
     assert delegate.hosts == ["8.8.8.8"]
     with pytest.raises(httpcore.ConnectError):
         backend.connect_tcp("changed.example", 443)
+
+
+def test_provider_health_connect_budget_is_shared_across_validated_addresses(monkeypatch) -> None:
+    """多个已验证地址共享一次探测预算，不能各自重新获得完整 timeout。"""
+
+    class FailingBackend:
+        """记录每次尝试的剩余预算，并模拟地址不可达。"""
+
+        def __init__(self) -> None:
+            self.timeouts: list[float | None] = []
+
+        def connect_tcp(
+            self,
+            host: str,
+            port: int,
+            timeout: float | None = None,
+            local_address: str | None = None,
+            socket_options: object = None,
+        ) -> object:
+            del host, port, local_address, socket_options
+            self.timeouts.append(timeout)
+            raise httpcore.ConnectTimeout("address unavailable")
+
+        def sleep(self, seconds: float) -> None:
+            del seconds
+
+    clock = iter((100.0, 100.0, 104.5, 104.5))
+    monkeypatch.setattr(provider_health_service.time, "monotonic", lambda: next(clock))
+    delegate = FailingBackend()
+    target = _ValidatedProbeUrl(
+        "https://provider.example/v1/models",
+        hostname="provider.example",
+        port=443,
+        addresses=("192.0.2.10", "192.0.2.11"),
+    )
+    backend = _PinnedNetworkBackend(target, delegate=delegate)  # type: ignore[arg-type]
+
+    with pytest.raises(httpcore.ConnectTimeout):
+        backend.connect_tcp("provider.example", 443, timeout=5.0)
+
+    assert delegate.timeouts == [5.0, 0.5]

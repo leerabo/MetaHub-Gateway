@@ -29,6 +29,7 @@ from .service import (
     _require_permission,
     _rollback,
     _utcnow,
+    begin_platform_read_transaction,
 )
 from .workspace_models import (
     OwnerNotificationResponse,
@@ -144,7 +145,7 @@ def authorize_workspace_write(
 ) -> None:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
+        connection.execute("BEGIN IMMEDIATE")
         context = _authenticate_platform(
             connection, config, session_token, csrf_token=csrf_token, touch=False
         )
@@ -172,8 +173,7 @@ def list_platform_workspaces(
 ) -> PlatformWorkspaceListResponse:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
-        context = _authenticate_platform(connection, config, session_token, touch=True)
+        context = begin_platform_read_transaction(connection, config, session_token=session_token)
         _require_directory(context)
         normalized = _normalize_filters(filters)
         filter_digest = _filter_digest(normalized)
@@ -237,8 +237,7 @@ def get_platform_workspace(
 ) -> PlatformWorkspaceDetailResponse:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
-        context = _authenticate_platform(connection, config, session_token, touch=True)
+        context = begin_platform_read_transaction(connection, config, session_token=session_token)
         _require_directory(context)
         row = _workspace_row(connection, workspace_id)
         actions = connection.execute(
@@ -286,8 +285,7 @@ def get_platform_workspace_health(
 ) -> PlatformWorkspaceHealthResponse:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
-        context = _authenticate_platform(connection, config, session_token, touch=True)
+        context = begin_platform_read_transaction(connection, config, session_token=session_token)
         _require_directory(context)
         row = _workspace_row(connection, workspace_id)
         response = PlatformWorkspaceHealthResponse(
@@ -583,8 +581,7 @@ def list_workspace_events(
 ) -> WorkspaceOperationalEventListResponse:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
-        context = _authenticate_platform(connection, config, session_token, touch=True)
+        context = begin_platform_read_transaction(connection, config, session_token=session_token)
         _require_directory(context)
         state = _state_row(connection, workspace_id)
         rows = connection.execute(

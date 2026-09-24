@@ -13,17 +13,17 @@ def test_tenant_data_navigation_requires_backend_read_permission() -> None:
 
     assert definition.group == "租户治理"
     assert definition.target_section == "tenant-data-lifecycle"
-    assert definition.required_permissions == ("tenant_data.read",)
+    assert definition.required_permissions == ("tenant.settings.read",)
     assert EVENT_TYPE_BY_NAVIGATION["tenant-data-lifecycle"] == "console.page_viewed"
 
 
 def test_tenant_data_navigation_disappears_after_runtime_revocation() -> None:
     role_matrix = {role: frozenset() for role in ROLE_CODES}
-    role_matrix["admin"] = frozenset({"tenant_data.read"})
+    role_matrix["admin"] = frozenset({"tenant.settings.read"})
 
-    visible = _visible_navigation_items(("tenant_data.read",), role_permissions_by_role=role_matrix)
+    visible = _visible_navigation_items(("tenant.settings.read",), role_permissions_by_role=role_matrix)
     item = next(candidate for candidate in visible if candidate.id == "tenant-data-lifecycle")
-    assert item.required_permissions == ["tenant_data.read"]
+    assert item.required_permissions == ["tenant.settings.read"]
     assert item.required_roles == ["admin"]
 
     revoked = _visible_navigation_items((), role_permissions_by_role=role_matrix)

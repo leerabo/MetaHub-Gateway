@@ -2,13 +2,30 @@ import { hasPermission, PERMISSIONS } from "../../lib/permissions.js";
 
 const COMPATIBILITY_LABELS = Object.freeze({
   native: "原生接入",
-  openai_compatible: "OpenAI-compatible",
+  openai_compatible: "通用模型接口",
   migration_only: "仅迁移参考",
 });
 
+// Translate only the catalog's stock names; preserve custom published names.
+const CATALOG_NAMES = Object.freeze({
+  "Alibaba Cloud Model Studio": "阿里云百炼（通义千问）",
+  "Tencent Hunyuan": "腾讯混元",
+  "Moonshot AI": "Kimi（Moonshot）",
+  "Volcengine Ark": "火山方舟（豆包）",
+  "Baidu Qianfan": "百度千帆",
+  "Zhipu AI": "智谱 AI",
+  "Local OpenAI-compatible endpoint": "本地模型（OpenAI 兼容）",
+  "OpenRouter migration source": "OpenRouter（迁移参考）",
+  "SiliconFlow migration source": "硅基流动（迁移参考）",
+});
+
+function catalogName(entry) {
+  return CATALOG_NAMES[entry.display_name] ?? entry.display_name;
+}
+
 export function renderProviderCatalog(catalogState, authContext) {
   if (!hasPermission(authContext, PERMISSIONS.PROVIDER_CATALOG_READ)) return "";
-  if (!catalogState) return '<div class="empty-state">正在读取官方 Provider Catalog。</div>';
+  if (!catalogState) return '<div class="empty-state">正在加载模型厂家...</div>';
   if (catalogState.state === "error") {
     return `<div class="empty-state error-state">${escapeHtml(catalogState.message)} request_id: ${escapeHtml(catalogState.requestId ?? "-")}</div>`;
   }
@@ -19,20 +36,23 @@ export function renderProviderCatalog(catalogState, authContext) {
     <section class="provider-catalog" aria-labelledby="provider-catalog-title">
       <div class="provider-catalog-heading">
         <div>
-          <p>Signed catalog · Generation ${number(catalogState.generation)}</p>
-          <h3 id="provider-catalog-title">官方 Provider 目录</h3>
+          <h3 id="provider-catalog-title">选择模型厂家</h3>
+          <p>品牌目录用于快速配置；自定义中转站请点击“返回已接入服务”后填写地址。</p>
         </div>
-        <code title="Manifest SHA-256">${escapeHtml(shortHash(catalogState.manifest_sha256))}</code>
       </div>
       ${renderFeedback(catalogState)}
       ${renderCreatedCheckpoint(catalogState, canWrite)}
-      <form class="provider-catalog-filters" data-provider-catalog-filter-form>
+      <label class="provider-catalog-selection"><span>模型厂家</span>
+        <select data-provider-catalog-selection><option value="">请选择</option>
+          ${entries.map((entry) => `<option value="${escapeAttribute(entry.entry_code)}"${entry.entry_code === catalogState.selectedEntryCode ? " selected" : ""}>${escapeHtml(catalogName(entry))}</option>`).join("")}
+        </select></label>
+      <details class="provider-catalog-filter-options"><summary>筛选目录</summary><form class="provider-catalog-filters" data-provider-catalog-filter-form>
         <label><span>状态</span><select name="status">${options(filters.status, [["", "全部"], ["active", "可用"], ["deprecated", "已弃用"], ["retired", "已退役"]])}</select></label>
         <label><span>厂商</span><input name="vendorCode" value="${escapeAttribute(filters.vendorCode ?? "")}" pattern="[a-z0-9][a-z0-9_-]{1,63}" maxlength="64" placeholder="例如 deepseek" /></label>
         <label><span>能力</span><input name="capabilityCode" value="${escapeAttribute(filters.capabilityCode ?? "")}" pattern="[a-z][a-z0-9_]{1,63}" maxlength="64" placeholder="例如 chat" /></label>
         <label><span>区域</span><input name="regionCode" value="${escapeAttribute(filters.regionCode ?? "")}" pattern="[a-z0-9][a-z0-9-]{1,39}" maxlength="40" placeholder="例如 cn-beijing" /></label>
         <button type="submit">筛选</button>
-      </form>
+      </form></details>
       <div class="provider-catalog-list">
         ${entries.map((entry) => renderEntry(entry, catalogState, canWrite)).join("") || '<div class="empty-state">当前筛选下没有目录条目。</div>'}
       </div>
@@ -42,15 +62,15 @@ export function renderProviderCatalog(catalogState, authContext) {
 function renderEntry(entry, state, canWrite) {
   const compatibility = state.compatibilityByEntryCode?.[entry.entry_code];
   return `
-    <article class="provider-catalog-entry" data-provider-catalog-entry="${escapeAttribute(entry.entry_code)}">
+    <article class="provider-catalog-entry" data-provider-catalog-entry="${escapeAttribute(entry.entry_code)}"${entry.entry_code === state.selectedEntryCode ? "" : " hidden"}>
       <header>
         <div>
-          <strong>${escapeHtml(entry.display_name)}</strong>
-          <span>${escapeHtml(entry.vendor_code)} · ${escapeHtml(serviceClassLabel(entry.service_class))}</span>
+          <strong>${escapeHtml(catalogName(entry))}</strong>
+          <span>${escapeHtml(serviceClassLabel(entry.service_class))}</span>
         </div>
-        <mark class="status-mark status-${escapeAttribute(entry.status)}">${escapeHtml(entry.status)}</mark>
+        <mark class="status-mark status-${escapeAttribute(entry.status)}">${escapeHtml(({ active: "可接入", deprecated: "已弃用", retired: "已停用" })[entry.status] ?? entry.status)}</mark>
       </header>
-      <div class="provider-catalog-meta">
+      <details class="provider-catalog-technical"><summary>服务详情</summary><div class="provider-catalog-meta">
         <span><b>区域</b>${escapeHtml((entry.data_regions ?? []).join(" · "))}</span>
         <span><b>认证</b>${escapeHtml((entry.auth_modes ?? []).join(" / "))}</span>
         <span><b>合规</b>${escapeHtml((entry.compliance_tags ?? []).join(" · "))}</span>
@@ -60,13 +80,14 @@ function renderEntry(entry, state, canWrite) {
         ${(entry.capabilities ?? []).map((item) => `<span title="最大上下文 ${number(item.max_context_tokens)} tokens">${escapeHtml(item.code)}${item.supports_stream ? " · stream" : ""}${item.supports_tools ? " · tools" : ""}${item.supports_files ? " · files" : ""}</span>`).join("")}
       </div>
       ${renderCompatibility(entry, compatibility)}
+      </details>
       ${renderEntryAction(entry, state.version, canWrite)}
     </article>`;
 }
 
 function renderEntryAction(entry, version, canWrite) {
   if (entry.instantiation_mode === "local_endpoint") {
-    return '<div class="provider-catalog-next"><span>本地地址必须走企业网络验证边界。</span><a href="/#local-models">前往本地模型</a></div>';
+    return '<div class="provider-catalog-next"><a href="/console.html#workspace.gateway.private-endpoints">前往本地模型</a></div>';
   }
   if (entry.instantiation_mode === "migration_only") {
     return '<div class="provider-catalog-next"><span>此条目仅说明迁移兼容性，不会创建共享或默认上游。</span></div>';
@@ -77,12 +98,14 @@ function renderEntryAction(entry, version, canWrite) {
   return `<form class="provider-catalog-create" data-provider-catalog-create-form autocomplete="off">
     <input type="hidden" name="entryCode" value="${escapeAttribute(entry.entry_code)}" />
     <input type="hidden" name="version" value="${escapeAttribute(version)}" />
-    <label><span>Provider Code</span><input name="providerCode" value="${escapeAttribute(`${entry.entry_code}_official`)}" pattern="[a-z][a-z0-9_]{1,63}" maxlength="64" required /></label>
-    <label><span>显示名称</span><input name="name" value="${escapeAttribute(entry.display_name)}" minlength="2" maxlength="120" required /></label>
-    <label><span>数据区域</span><select name="regionCode">${endpoints.map((endpoint) => `<option value="${escapeAttribute(endpoint.region_code)}">${escapeHtml(endpoint.region_code)} · ${escapeHtml(endpoint.cloud_service_code)}</option>`).join("")}</select></label>
-    <fieldset><legend>能力</legend>${capabilities.map((capability, index) => `<label class="provider-catalog-check"><input type="checkbox" name="capabilityCodes" value="${escapeAttribute(capability.code)}" ${index === 0 ? "checked" : ""} /><span>${escapeHtml(capability.code)}</span></label>`).join("")}</fieldset>
-    <label class="provider-catalog-check provider-catalog-confirm"><input type="checkbox" name="confirmed" required /><span>确认以当前版本和区域创建不可变目录实例</span></label>
-    <button type="submit">创建 Provider</button>
+    ${endpoints.length === 1 ? `<input type="hidden" name="regionCode" value="${escapeAttribute(endpoints[0].region_code)}" />` : `<label><span>服务区域</span><select name="regionCode">${endpoints.map((endpoint) => `<option value="${escapeAttribute(endpoint.region_code)}">${escapeHtml(endpoint.region_code)}</option>`).join("")}</select></label>`}
+    <details class="provider-catalog-advanced"><summary>高级设置</summary>
+      <label><span>服务名称（可选修改）</span><input name="name" value="${escapeAttribute(catalogName(entry))}" minlength="2" maxlength="120" required /></label>
+      <label><span>服务标识</span><input name="providerCode" placeholder="自动生成" pattern="[a-z][a-z0-9_]{1,63}" maxlength="64" /></label>
+      <fieldset><legend>模型能力</legend>${capabilities.map((capability, index) => `<label class="provider-catalog-check"><input type="checkbox" name="capabilityCodes" value="${escapeAttribute(capability.code)}" ${index === 0 ? "checked" : ""} /><span>${escapeHtml(({ chat: "对话", embeddings: "向量", image: "图像", audio: "语音" })[capability.code] ?? capability.code)}</span></label>`).join("")}</fieldset>
+    </details>
+    <input type="hidden" name="confirmed" value="on" />
+    <button type="submit">添加并配置密钥</button>
   </form>`;
 }
 

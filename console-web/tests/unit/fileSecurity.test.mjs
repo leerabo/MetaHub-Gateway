@@ -792,7 +792,7 @@ test("PRD-073 main lifecycle and narrow CSS freeze cleanup, permissions and no h
   assert.match(mainSource, /case "file-security":[\s\S]*loadFileSecurityState\(consoleShellState, refreshId\)/);
   assert.match(mainSource, /error\.status === 403[\s\S]*error\.code === "auth\.permission_denied"/);
   const loaderSource = mainSource.match(
-    /async function loadFileSecurityState[\s\S]*?\n}\n\/\*\*\n \* 清除预算页会话内快照/,
+    /async function loadFileSecurityState[\s\S]*?\r?\n}\r?\n\/\*\*\r?\n \* 清除预算页会话内快照/,
   )?.[0] ?? "";
   // 每个 await 的成功和异常落盘路径都必须独立核对全局 refresh generation；
   // 断言限定在 PAGE-103 loader 内，避免被函数入口或其他页面的同名门禁误满足。

@@ -10,7 +10,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Request, Response
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import (
-    clear_identity_cookies_on_error,
+    clear_identity_cookies_on_auth_error,
     clear_workspace_cookies_on_error,
 )
 from pydantic import ValidationError
@@ -126,16 +126,16 @@ def require_workspace_console(request: Request) -> WorkspaceSessionContext:
 
 
 def require_identity_preferences(request: Request) -> AuthenticatedIdentity:
-    clear_identity_cookies_on_error(request)
+    clear_identity_cookies_on_auth_error(request)
     if (
         _raw_headers(request, b"authorization")
         or _cookie_values(request, PLATFORM_SESSION_COOKIE)
         or _cookie_values(request, PLATFORM_CSRF_COOKIE)
-        or _cookie_values(request, WORKSPACE_SESSION_COOKIE)
-        or _cookie_values(request, WORKSPACE_CSRF_COOKIE)
         or _cookie_values(request, SUPPORT_SESSION_COOKIE)
     ):
         raise ApiError("identity.credential_invalid")
+    # Global and Workspace cookies coexist on the browser host. Only the Global
+    # session and its CSRF token authorize account preferences.
     if request.method == "PATCH":
         _require_origin(request, "identity.origin_invalid")
         _required_csrf(request, IDENTITY_CSRF_COOKIE, "identity.csrf_invalid")

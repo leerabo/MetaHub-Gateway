@@ -33,6 +33,19 @@ class AcceptInvitationRequest(BaseModel):
     password: str = Field(min_length=1, max_length=256)
 
 
+class InvitationPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    token: str = Field(min_length=1, max_length=128)
+
+
+class InvitationPreviewResponse(BaseModel):
+    email: str
+    workspace_name: str
+    role: str
+    expires_at: datetime
+
+
 class InvitationInfo(BaseModel):
     """返回给邀请管理员的 tenant-qualified Invitation 安全摘要。"""
 

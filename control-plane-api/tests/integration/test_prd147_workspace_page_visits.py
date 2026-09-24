@@ -72,6 +72,21 @@ def _events(database):
         }
 
 
+def _rollback_page_visits(url):
+    with closing(connect_database(url)) as connection:
+        version = "0144" if getattr(connection, "backend", "sqlite") == "postgresql" else "0143"
+        descendants = [row[0] for row in connection.execute(
+            "SELECT version FROM schema_migrations WHERE status='applied' AND version>? "
+            "ORDER BY version DESC", (version,),
+        )]
+    for descendant in descendants:
+        # SQLite 0146 predates the expected-version SQL wrapper; its down guard
+        # still runs on this isolated fixture and the returned version is checked.
+        expected = None if version == "0143" and descendant == "0146" else descendant
+        assert rollback_last_migration(url, expected_version=expected).rolled_back == descendant
+    return rollback_last_migration(url, expected_version=version)
+
+
 @pytest.mark.anyio
 async def test_workspace_page_visits_share_original_facts_and_replay(visit_subjects):
     app, database, fixtures = visit_subjects
@@ -296,7 +311,7 @@ async def test_page_visit_migration_preserves_legacy_rows_and_guards_owner(visit
         )
         connection.commit()
     before = _events(database)
-    rollback_last_migration(url)
+    assert _rollback_page_visits(url).rolled_back in {"0143", "0144"}
     apply_migrations(url)
     assert _events(database) == before
     with closing(connect_database(url)) as connection:
@@ -323,7 +338,8 @@ async def test_page_visit_migration_preserves_legacy_rows_and_guards_owner(visit
     )
     assert accepted.status_code == 200, accepted.json().get("code")
     with pytest.raises(DbError):
-        rollback_last_migration(url)
+        _rollback_page_visits(url)
+    apply_migrations(url)
     assert len(_events(database)) == len(before) + 1
     with closing(connect_database(url)) as connection:
         row = connection.execute(

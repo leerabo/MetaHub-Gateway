@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import UTC, datetime
+from typing import Any
 
 # SQLite 累计列使用 signed 64-bit；所有增量必须在写入前证明不会溢出或饱和。
 MAX_SQLITE_INTEGER = 9_223_372_036_854_775_807
 
 
 def record_model_quality_observation(
-    connection: sqlite3.Connection,
+    connection: Any,
     *,
     tenant_id: str,
     model_id: str,
@@ -30,8 +31,10 @@ def record_model_quality_observation(
     返回：无。约束：恰好更新一条 Score，否则抛 SQLite 一致性错误并由调用方回滚终态。
     """
 
+    # connect_database also returns transaction-owning request and pool facades.
+    # Execute through that owner; unwrapping it would bypass lifetime guards.
     if (
-        not isinstance(connection, sqlite3.Connection)
+        not callable(getattr(connection, "execute", None))
         or type(tenant_id) is not str
         or not tenant_id
         or type(model_id) is not str

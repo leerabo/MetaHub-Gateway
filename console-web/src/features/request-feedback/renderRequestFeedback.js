@@ -637,11 +637,11 @@ export function renderRequestFeedbackSummaryPanel(state, authContext, filters = 
   const models = Array.isArray(state.models) ? state.models : [];
   return `
     ${renderSummaryHeading(state, i18n)}
-    ${renderSummaryFilters(filters, i18n)}
+    ${renderSummaryFilters(filters, i18n, state)}
     <div class="feedback-summary-metrics" aria-label="${escapeAttribute(t(i18n, "feedback.summary.metrics", "租户反馈总计"))}">
       ${renderMetric(t(i18n, "feedback.summary.samples", "反馈样本"), summary.feedback_count ?? 0)}
-      ${renderMetric(t(i18n, "feedback.summary.average", "平均评分"), formatRatingMilli(summary.average_rating_milli))}
-      ${renderMetric(t(i18n, "feedback.summary.adoption", "采纳率"), formatBps(summary.adoption_rate_bps))}
+      ${renderMetric(t(i18n, "feedback.summary.average", "平均评分"), formatSummaryMetric(summary.feedback_count, summary.average_rating_milli, formatRatingMilli, t(i18n, "feedback.summary.no_data", "暂无数据")))}
+      ${renderMetric(t(i18n, "feedback.summary.adoption", "采纳率"), formatSummaryMetric(summary.feedback_count, summary.adoption_rate_bps, formatBps, t(i18n, "feedback.summary.no_data", "暂无数据")))}
       ${renderMetric(t(i18n, "feedback.summary.accepted_count", "已采纳"), summary.accepted_count ?? 0)}
     </div>
     <div class="feedback-summary-breakdown">
@@ -760,12 +760,12 @@ function renderSummaryHeading(state, i18n) {
 }
 
 /** 渲染模型和 UTC 时间筛选；表单不包含 tenant_id 或 actor 输入。 */
-function renderSummaryFilters(filters, i18n) {
+function renderSummaryFilters(filters, i18n, summaryWindow = null) {
   return `
     <form class="feedback-summary-filters" id="feedback-summary-filter-form">
       <label><span>${escapeHtml(t(i18n, "feedback.summary.model", "模型 ID"))}</span><input name="modelId" maxlength="128" value="${escapeAttribute(filters.modelId ?? "")}" /></label>
-      <label><span>${escapeHtml(t(i18n, "feedback.summary.from", "开始时间（UTC）"))}</span><input name="fromTime" maxlength="20" placeholder="2026-06-19T12:00:00Z" value="${escapeAttribute(filters.fromTime ?? "")}" /></label>
-      <label><span>${escapeHtml(t(i18n, "feedback.summary.to", "结束时间（UTC）"))}</span><input name="toTime" maxlength="20" placeholder="2026-07-19T12:00:00Z" value="${escapeAttribute(filters.toTime ?? "")}" /></label>
+      <label><span>${escapeHtml(t(i18n, "feedback.summary.from", "开始时间（UTC）"))}</span><input name="fromTime" maxlength="20" placeholder="${escapeAttribute(summaryWindow?.from_time || "YYYY-MM-DDTHH:mm:ssZ")}" value="${escapeAttribute(filters.fromTime ?? "")}" /></label>
+      <label><span>${escapeHtml(t(i18n, "feedback.summary.to", "结束时间（UTC）"))}</span><input name="toTime" maxlength="20" placeholder="${escapeAttribute(summaryWindow?.to_time || "YYYY-MM-DDTHH:mm:ssZ")}" value="${escapeAttribute(filters.toTime ?? "")}" /></label>
       <div class="feedback-summary-filter-actions">
         <button type="submit">${escapeHtml(t(i18n, "feedback.summary.apply", "查询"))}</button>
         <button type="button" id="feedback-summary-refresh">${escapeHtml(t(i18n, "feedback.summary.refresh", "刷新"))}</button>
@@ -820,9 +820,9 @@ function renderModelSummaryTable(models, i18n) {
         <div class="feedback-model-row" role="row">
           <span data-label="${escapeAttribute(t(i18n, "feedback.summary.model", "模型"))}"><strong>${escapeHtml(model.display_name || model.internal_model_id || model.model_id || "-")}</strong><code>${escapeHtml(model.internal_model_id || model.model_id || "-")}</code></span>
           <span data-label="${escapeAttribute(t(i18n, "feedback.summary.samples", "反馈样本"))}">${escapeHtml(model.feedback_count)}</span>
-          <span data-label="${escapeAttribute(t(i18n, "feedback.summary.average", "平均评分"))}">${escapeHtml(formatRatingMilli(model.average_rating_milli))}</span>
+          <span data-label="${escapeAttribute(t(i18n, "feedback.summary.average", "平均评分"))}">${escapeHtml(formatSummaryMetric(model.feedback_count, model.average_rating_milli, formatRatingMilli, t(i18n, "feedback.summary.no_data", "暂无数据")))}</span>
           <span data-label="${escapeAttribute(t(i18n, "feedback.summary.accepted_count", "已采纳"))}">${escapeHtml(model.accepted_count)}</span>
-          <span data-label="${escapeAttribute(t(i18n, "feedback.summary.adoption", "采纳率"))}">${escapeHtml(formatBps(model.adoption_rate_bps))}</span>
+          <span data-label="${escapeAttribute(t(i18n, "feedback.summary.adoption", "采纳率"))}">${escapeHtml(formatSummaryMetric(model.feedback_count, model.adoption_rate_bps, formatBps, t(i18n, "feedback.summary.no_data", "暂无数据")))}</span>
           <code data-label="${escapeAttribute(t(i18n, "feedback.summary.distribution", "评分分布"))}">${escapeHtml(compactDistribution(model.rating_distribution))}</code>
         </div>
       `).join("") : `<div class="feedback-model-empty" role="row">${escapeHtml(t(i18n, "feedback.summary.empty", "当前筛选没有反馈样本"))}</div>`}
@@ -891,6 +891,13 @@ function formatBps(value) {
   const whole = Math.floor(value / 100);
   const fraction = String(value % 100).padStart(2, "0").replace(/0+$/, "");
   return `${whole}${fraction ? `.${fraction}` : ""}%`;
+}
+
+/** 无反馈样本时明确区分“暂无数据”和真实的 0 分/0% 结果。 */
+function formatSummaryMetric(sampleCount, value, formatter, emptyLabel) {
+  return Number.isSafeInteger(sampleCount) && sampleCount > 0
+    ? formatter(value)
+    : emptyLabel;
 }
 
 /** 将五档分布压缩为稳定文本，便于窄表格扫描且不丢零计数。 */

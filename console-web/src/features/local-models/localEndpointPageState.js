@@ -39,23 +39,53 @@ export function localEndpointReadIdentitySnapshot(authContext) {
 
 /** Build a complete PAGE-116 owner from auth/me and the exact backend navigation item. */
 export function localEndpointPageOwner(authContext, consoleShellState) {
-  const readIdentity = localEndpointReadIdentitySnapshot(authContext);
-  const manageIdentity = hasPermission(authContext, PERMISSIONS.LOCAL_ENDPOINT_MANAGE)
+  const workspaceMode = consoleShellState?.workspaceNavigationContract === true
+    && Boolean(consoleShellState.workspaceOwner?.workspaceId)
+    && Array.isArray(consoleShellState.workspaceAuthorization?.permission_codes);
+  const permissionContext = workspaceMode
+    ? consoleShellState.workspaceAuthorization
+    : authContext;
+  const workspaceIdentity = workspaceMode
+    ? JSON.stringify([
+      "workspace",
+      consoleShellState.workspaceOwner.workspaceId,
+      consoleShellState.workspaceOwner.globalSessionId,
+      consoleShellState.workspaceOwner.revokeGeneration,
+      consoleShellState.workspaceOwner.permissionRevision,
+      consoleShellState.workspaceOwner.membershipRevision,
+      consoleShellState.workspaceOwner.permissionFingerprint,
+    ])
+    : "";
+  const readIdentity = localEndpointReadIdentitySnapshot(authContext) || (
+    workspaceMode && hasPermission(permissionContext, PERMISSIONS.LOCAL_ENDPOINT_READ)
+      ? workspaceIdentity
+      : ""
+  );
+  const manageIdentity = hasPermission(permissionContext, PERMISSIONS.LOCAL_ENDPOINT_MANAGE)
     ? authorizationIdentitySnapshot(authContext, PERMISSIONS.LOCAL_ENDPOINT_MANAGE)
+      || (workspaceMode ? workspaceIdentity : "")
     : "";
-  const testIdentity = hasPermission(authContext, PERMISSIONS.LOCAL_ENDPOINT_TEST)
+  const testIdentity = hasPermission(permissionContext, PERMISSIONS.LOCAL_ENDPOINT_TEST)
     ? authorizationIdentitySnapshot(authContext, PERMISSIONS.LOCAL_ENDPOINT_TEST)
+      || (workspaceMode ? workspaceIdentity : "")
     : "";
-  const tenantId = mirroredTenantId(authContext);
-  const permissions = permissionCodesFromAuthContext(authContext);
+  const tenantId = mirroredTenantId(authContext)
+    || (workspaceMode ? `workspace:${consoleShellState.workspaceOwner.workspaceId}` : "");
+  // Workspace sessions keep the authoritative permission snapshot in the shell
+  // authorization object; the legacy auth context has no top-level codes.
+  const permissions = permissionCodesFromAuthContext(permissionContext);
   const navigation = consoleShellState?.navigation;
   const item = Array.isArray(navigation?.navigation_items)
     ? navigation.navigation_items.find((candidate) => candidate?.id === PAGE_ID)
     : null;
   const required = normalizePermissionCodes(item?.required_permissions);
   const navigationPermissions = normalizePermissionCodes(navigation?.permission_codes);
-  const revision = permissionRevision(authContext);
-  const fingerprint = authorizationFingerprint(authContext);
+  const revision = workspaceMode
+    ? Number(consoleShellState.workspaceAuthorization.permission_revision)
+    : permissionRevision(authContext);
+  const fingerprint = workspaceMode
+    ? String(consoleShellState.workspaceAuthorization.permission_fingerprint ?? "")
+    : authorizationFingerprint(authContext);
   if (
     !readIdentity
     || !tenantId

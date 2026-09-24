@@ -17,17 +17,20 @@ export function createWorkspaceCommercialAccountingController({
   let activationContext = null;
   let workspaceSession = null;
 
-  async function open({ authContext, activeNavigationItemId }) {
+  async function open({ authContext, workspaceIdentity, activeNavigationItemId }) {
     const currentActivation = ++activation;
     activationController?.abort();
     activationController = new AbortController();
-    activationContext = { authContext, activeNavigationItemId };
+    activationContext = { authContext, workspaceIdentity, activeNavigationItemId };
     workspaceSession = null;
     store.prepare(activeNavigationItemId);
     try {
       const session = await api.workspaceSession({ signal: activationController.signal });
       if (currentActivation !== activation || activationController.signal.aborted) return false;
-      if (!store.enter({ ...activationContext, workspaceSession: session })) return false;
+      if (!store.enter({ ...activationContext, workspaceSession: session })) {
+        throw new AuthApiError({ status: 403, code: "workspace.authorization_mismatch",
+          message: "组织授权已变化，请刷新页面。" });
+      }
       workspaceSession = session;
       return isSubscriptionNavigation(activeNavigationItemId)
         ? loadSubscription()

@@ -33,8 +33,9 @@ def _migration_subset(destination: Path, maximum_version: int) -> Path:
 
 
 def test_prd147_fresh_matrix_and_pristine_roundtrip(tmp_path: Path) -> None:
+    migrations_0139 = _migration_subset(tmp_path / "migrations-0139", 139)
     database_url = _url(tmp_path / "prd147-fresh.sqlite3")
-    result = apply_migrations(database_url)
+    result = apply_migrations(database_url, migrations_dir=migrations_0139)
     assert result.applied[-1] == "0139"
 
     with closing(connect_database(database_url)) as connection:
@@ -106,9 +107,9 @@ def test_prd147_fresh_matrix_and_pristine_roundtrip(tmp_path: Path) -> None:
                 ("0" * 64, "2026-09-04T00:00:00Z"),
             )
 
-    assert apply_migrations(database_url).applied == []
+    assert apply_migrations(database_url, migrations_dir=migrations_0139).applied == []
     assert rollback_last_migration(
-        database_url, expected_version="0139"
+        database_url, migrations_dir=migrations_0139, expected_version="0139"
     ).rolled_back == "0139"
     with closing(connect_database(database_url)) as connection:
         assert connection.execute(
@@ -120,16 +121,17 @@ def test_prd147_fresh_matrix_and_pristine_roundtrip(tmp_path: Path) -> None:
                  'console_domain_migrations','console_ingress_contract_heads',
                  'platform_console_migration_batch_items')"""
         ).fetchone()[0] == 0
-    assert apply_migrations(database_url).applied == ["0139"]
+    assert apply_migrations(database_url, migrations_dir=migrations_0139).applied == ["0139"]
 
 
 def test_prd147_upgrades_0138_and_refuses_fact_loss(tmp_path: Path) -> None:
     migrations_0138 = _migration_subset(tmp_path / "migrations-0138", 138)
+    migrations_0139 = _migration_subset(tmp_path / "migrations-0139", 139)
     database_url = _url(tmp_path / "prd147-upgrade.sqlite3")
     assert apply_migrations(
         database_url, migrations_dir=migrations_0138
     ).applied[-1] == "0138"
-    assert apply_migrations(database_url).applied == ["0139"]
+    assert apply_migrations(database_url, migrations_dir=migrations_0139).applied == ["0139"]
 
     with closing(connect_database(database_url)) as connection:
         connection.execute(
@@ -152,7 +154,9 @@ def test_prd147_upgrades_0138_and_refuses_fact_loss(tmp_path: Path) -> None:
         connection.commit()
 
     with pytest.raises(DbError, match="Rollback failed"):
-        rollback_last_migration(database_url, expected_version="0139")
+        rollback_last_migration(
+            database_url, migrations_dir=migrations_0139, expected_version="0139"
+        )
     with closing(connect_database(database_url)) as connection:
         assert connection.execute(
             "SELECT status FROM schema_migrations WHERE version='0139'"
@@ -160,3 +164,12 @@ def test_prd147_upgrades_0138_and_refuses_fact_loss(tmp_path: Path) -> None:
         assert connection.execute(
             "SELECT count(*) FROM platform_console_migration_audits"
         ).fetchone()[0] == 1
+
+
+def test_fresh_schema_installs_current_head(tmp_path: Path) -> None:
+    database_url = _url(tmp_path / "prd147-current.sqlite3")
+    assert apply_migrations(database_url).applied[-1] == "0156"
+    assert apply_migrations(database_url).applied == []
+    with closing(connect_database(database_url)) as connection:
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"

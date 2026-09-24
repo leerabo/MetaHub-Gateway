@@ -53,8 +53,10 @@ test("UI-02/UCD-05 visible shell content uses product labels and keeps internal 
   for (const forbidden of ["PRD-", "0066", "migration_", "worker_state", "scheduler_", "tenant_opaque"]) {
     assert.doesNotMatch(html, new RegExp(forbidden, "i"));
   }
-  assert.match(html, /Overview/);
-  assert.match(html, /Providers/);
+  // Navigation labels are localized for the actual product surface; keep the
+  // contract compatible with the English fixture and the shipped Chinese UI.
+  assert.match(html, /Overview|概览/);
+  assert.match(html, /Providers|模型服务/);
   assert.match(html, /QA Enterprise/);
   assert.match(html, /Safe content/);
 });

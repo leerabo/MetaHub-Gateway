@@ -25,6 +25,10 @@ const BUDGET_ACTION_LABELS = {
  * 面板只对管理员和开发者可见；后端 /usage 仍必须执行 RBAC 和 tenant_id 隔离校验。
  */
 export function renderUsagePanel(usageState, authContext, budgetState) {
+  if (hasPermission(authContext, PERMISSIONS.VIRTUAL_KEY_READ)
+    && !hasPermission(authContext, PERMISSIONS.BILLING_USAGE_READ)) {
+    return renderPersonalUsagePanel(usageState);
+  }
   // 全租户账单只对后端 billing.usage.read 授权主体可见，Developer 不再因旧角色集合误获数据。
   if (!hasPermission(authContext, PERMISSIONS.BILLING_USAGE_READ)) {
     return "";
@@ -61,6 +65,40 @@ export function renderUsagePanel(usageState, authContext, budgetState) {
     ${renderSummaryTables(summary)}
     ${renderRecordTable(records)}
     ${renderPager(usageState.records ?? {})}
+  `;
+}
+
+function renderPersonalUsagePanel(usageState) {
+  if (!usageState) {
+    return '<div class="panel-heading"><h2 id="usage-title">我的用量</h2><p>正在读取本人调用统计。</p></div><div class="empty-state" role="status">正在加载...</div>';
+  }
+  if (usageState.state === "error") {
+    return `<div class="panel-heading"><h2 id="usage-title">我的用量</h2><p>个人用量暂不可用。</p></div><div class="empty-state error-state" role="alert">${escapeHtml(usageState.message ?? "用量接口读取失败")} request_id: ${escapeHtml(usageState.requestId ?? "-")}</div>`;
+  }
+  const totals = usageState.personalSummary?.totals ?? {};
+  const records = usageState.personalRecords?.usage_records ?? [];
+  const days = usageState.personalSummary?.by_day ?? [];
+  return `
+    <div class="panel-heading usage-heading"><div><h2 id="usage-title">我的用量</h2><p>只显示本人通过个人 KEY 的调用统计。</p></div><span class="usage-count">${escapeHtml(records.length)} / ${escapeHtml(usageState.personalRecords?.total ?? 0)}</span></div>
+    ${renderActionError(usageState.actionError)}
+    <form class="usage-filter-form usage-personal-filter" id="usage-filter-form">
+      <label><span>开始日期</span><input type="date" name="startDate" value="${escapeAttribute(usageState.filters?.startDate ?? "")}" /></label>
+      <label><span>结束日期</span><input type="date" name="endDate" value="${escapeAttribute(usageState.filters?.endDate ?? "")}" /></label>
+      <div class="usage-filter-actions"><button type="submit">查询</button><button type="button" id="usage-filter-reset">清除筛选</button></div>
+    </form>
+    <section class="usage-total-grid" aria-label="个人 Token 汇总">
+      <div><strong>${escapeHtml(totals.request_count ?? 0)}</strong><span>请求次数</span></div>
+      <div><strong>${escapeHtml(totals.input_tokens ?? 0)}</strong><span>输入 Token</span></div>
+      <div><strong>${escapeHtml(totals.output_tokens ?? 0)}</strong><span>输出 Token</span></div>
+      <div><strong>${escapeHtml(totals.total_tokens ?? 0)}</strong><span>总 Token</span></div>
+    </section>
+    ${days.length ? `<section class="usage-personal-days"><h3>每日用量</h3><div class="usage-record-table" role="table"><div class="usage-record-row usage-record-head" role="row"><span>日期</span><span>请求次数</span><span>输入 Token</span><span>输出 Token</span><span>总 Token</span></div>${days.map((item) => `<div class="usage-record-row" role="row"><time>${escapeHtml(item.day)}</time><span>${escapeHtml(item.request_count)}</span><span>${escapeHtml(item.input_tokens)}</span><span>${escapeHtml(item.output_tokens)}</span><span>${escapeHtml(item.total_tokens)}</span></div>`).join("")}</div></section>` : ""}
+    <h3>调用记录</h3>
+    <div class="usage-record-table" role="table" aria-label="个人调用记录">
+      <div class="usage-record-row usage-record-head" role="row"><span>时间</span><span>模型</span><span>输入</span><span>输出</span><span>总计</span></div>
+      ${records.length ? records.map((item) => `<div class="usage-record-row" role="row"><time>${escapeHtml(formatDateTime(item.created_at))}</time><span>${escapeHtml(item.resolved_model ?? item.model_id ?? item.request_model ?? "默认路由")}</span><span>${escapeHtml(item.input_tokens)}</span><span>${escapeHtml(item.output_tokens)}</span><span>${escapeHtml(item.total_tokens)}</span></div>`).join("") : renderRecordEmpty()}
+    </div>
+    ${renderPager(usageState.personalRecords ?? {})}
   `;
 }
 

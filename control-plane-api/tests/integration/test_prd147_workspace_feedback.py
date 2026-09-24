@@ -119,6 +119,7 @@ async def test_workspace_feedback_create_replay_scope_and_summary(feedback_subje
     response = await f.source.post("/feedback", headers=headers, json=_payload(ids[0]))
     assert response.status_code == 201, response.json().get("code")
     identity = response.json()["feedback"]["request_feedback_id"]
+    created_at = datetime.fromisoformat(response.json()["feedback"]["created_at"])
     response = await f.source.post("/feedback", headers=headers, json=_payload(ids[0]))
     assert response.status_code == 200 and response.json()["idempotent_replay"]
     assert response.json()["feedback"]["request_feedback_id"] == identity
@@ -130,10 +131,30 @@ async def test_workspace_feedback_create_replay_scope_and_summary(feedback_subje
     assert foreign.json()["code"] == missing.json()["code"]
     response = await f.source.get("/feedback/summary")
     assert response.status_code == 200, response.json().get("code")
+    default_from = datetime.fromisoformat(response.json()["from_time"])
+    default_to = datetime.fromisoformat(response.json()["to_time"])
+    assert default_to - default_from == timedelta(days=30)
+    assert response.json()["summary"]["feedback_count"] == int(
+        default_from <= created_at < default_to
+    )
+    # Explicit seconds keep this assertion independent of request speed and wall-clock rollover.
+    window = {
+        "from_time": (created_at - timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "to_time": created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    response = await f.source.get("/feedback/summary", params=window)
+    assert response.status_code == 200, response.json().get("code")
+    assert response.json()["summary"]["feedback_count"] == 0
+    window["from_time"] = window["to_time"]
+    window["to_time"] = (created_at + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    response = await f.source.get("/feedback/summary", params=window)
+    assert response.status_code == 200, response.json().get("code")
     assert response.json()["summary"]["feedback_count"] == 1
     assert response.json()["summary"]["average_rating_milli"] == 5000
     assert response.headers["cache-control"] == "no-store, private"
-    assert (await f.target.get("/feedback/summary")).json()["summary"]["feedback_count"] == 0
+    assert (await f.target.get("/feedback/summary", params=window)).json()["summary"][
+        "feedback_count"
+    ] == 0
     legacy_headers, _ = await _legacy(app, f)
     response = await f.anonymous.post(
         "/feedback",

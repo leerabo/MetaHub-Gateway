@@ -51,15 +51,21 @@ export function renderLoginPage(container, options = {}) {
 
 export function renderWorkspaceSessionPrompt(container, { error, requestId, pending = false } = {}) {
   if (!container) return;
+  if (pending) {
+    container.innerHTML = '<section class="console-entry-loading" role="status"><strong>MetaHub</strong><p>正在退出登录...</p></section>';
+    return;
+  }
   container.innerHTML = `
-    <main class="login-shell">
-      <section class="login-panel" aria-labelledby="login-title">
-        <div class="login-brand"><div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
-          <div><p class="eyebrow">MetaHub</p><h1 id="login-title">MetaHub 控制台</h1></div></div>
-        <p role="status">${pending ? "正在退出账号..." : "请登录账号并选择 Workspace。"}</p>
-        ${error ? `<p class="login-error" role="alert">${escapeHtml(error)}</p>` : ""}
-        ${requestId && requestId !== "-" ? `<small>request_id: ${escapeHtml(requestId)}</small>` : ""}
-        ${pending ? "" : '<p><a href="/identity.html">账号与 Workspace</a></p><button type="button" data-console-session-retry>重新验证</button>'}
+    <main class="console-entry-recovery">
+      <a class="console-entry-brand" href="/">MetaHub</a>
+      <section aria-labelledby="workspace-recovery-title">
+        <h1 id="workspace-recovery-title">${error ? "连接暂时中断" : "登录后继续"}</h1>
+        <p role="status">${error ? "请重新连接，继续刚才的操作。" : "登录账号后，即可进入你的组织空间。"}</p>
+        <div class="console-entry-actions">
+          ${error ? '<button type="button" data-console-session-retry>重新连接</button>' : '<a href="/identity.html">前往登录</a>'}
+          <a href="/">返回首页</a>
+        </div>
+        ${error ? `<details class="console-entry-diagnostics"><summary>查看错误详情</summary><p>${escapeHtml(error)}</p>${requestId && requestId !== "-" ? `<small>request_id: ${escapeHtml(requestId)}</small>` : ""}<a href="/identity.html">重新登录或选择组织</a></details>` : ""}
       </section>
     </main>`;
 }

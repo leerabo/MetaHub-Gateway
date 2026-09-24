@@ -21,6 +21,7 @@ from metahub_shared.runtime.errors import ApiError
 
 from metahub_control.identity.mfa_service import consume_active_totp_in_transaction
 from metahub_control.identity.service import (
+    authenticate_global_session,
     authenticate_global_session_in_transaction,
     valid_opaque_value,
 )
@@ -293,6 +294,7 @@ _PERMISSION_EXTENSION_TABLES = (
     "platform_supply_chain_role_permissions",
     "platform_security_assurance_role_permissions",
     "platform_launch_role_permissions",
+    "platform_launch_review_role_permissions",
     "platform_channel_role_permissions",
     "platform_customer_success_role_permissions",
     "platform_growth_role_permissions",
@@ -331,6 +333,10 @@ class IssuedSupportSession:
     session_token: str
 
 
+class _PlatformReadNeedsWrite(Exception):
+    """The read snapshot must be discarded before refreshing session state."""
+
+
 def authenticate_platform_session_context(
     config: AppConfig,
     session_token: str,
@@ -341,13 +347,8 @@ def authenticate_platform_session_context(
 
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
-        context = _authenticate_platform(
-            connection,
-            config,
-            session_token,
-            csrf_token=csrf_token,
-            touch=True,
+        context = begin_platform_read_transaction(
+            connection, config, session_token=session_token, csrf_token=csrf_token
         )
         connection.commit()
         return context
@@ -359,6 +360,35 @@ def authenticate_platform_session_context(
         raise ApiError("platform.unavailable") from None
     finally:
         connection.close()
+
+
+def platform_session_matches_global_cookie(
+    config: AppConfig,
+    context: PlatformContext,
+    global_session_token: str,
+) -> bool:
+    """Allow only the GlobalSession that established this PlatformSession.
+
+    The browser keeps the global identity cookie while exchanging it for a
+    privileged platform session. Domain guards must reject unrelated or
+    malformed cookies, while allowing this exact parent session to remain
+    present during the platform workflow.
+    """
+
+    try:
+        identity = authenticate_global_session(config, global_session_token)
+    except ApiError as exc:
+        if exc.code in {
+            "identity.session_invalid",
+            "identity.session_expired",
+            "identity.session_revoked",
+        }:
+            return False
+        raise
+    return (
+        identity.account_id == context.account_id
+        and identity.session_id == context.global_session_id
+    )
 
 
 def authenticate_platform_session_in_transaction(
@@ -378,6 +408,42 @@ def authenticate_platform_session_in_transaction(
         csrf_token=csrf_token,
         touch=touch,
     )
+
+
+def begin_platform_read_transaction(
+    connection: sqlite3.Connection,
+    config: AppConfig,
+    *,
+    session_token: str,
+    csrf_token: str | None = None,
+) -> PlatformContext:
+    """Authenticate a read without upgrading an old SQLite snapshot in place.
+
+    Most Platform reads touch ``last_seen_at`` only when the minute boundary is
+    reached. If that write is needed, discard the read snapshot and re-authenticate
+    under ``BEGIN IMMEDIATE`` so a concurrent operator revocation is observed.
+    """
+
+    connection.execute("BEGIN")
+    try:
+        return _authenticate_platform(
+            connection,
+            config,
+            session_token,
+            csrf_token=csrf_token,
+            touch=True,
+            read_only=True,
+        )
+    except _PlatformReadNeedsWrite:
+        connection.rollback()
+        connection.execute("BEGIN IMMEDIATE")
+        return _authenticate_platform(
+            connection,
+            config,
+            session_token,
+            csrf_token=csrf_token,
+            touch=True,
+        )
 
 
 def bootstrap_platform_owner(
@@ -599,11 +665,15 @@ def get_platform_session(
 ) -> PlatformSessionResponse:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
-        context = _authenticate_platform(connection, config, session_token, touch=True)
+        context = begin_platform_read_transaction(connection, config, session_token=session_token)
         response = PlatformSessionResponse(
             context=PlatformSessionContext(
-                operator=_operator_summary(connection, context.operator_id),
+                # Authentication already computed the authoritative role matrix;
+                # pass it through to avoid re-reading every immutable extension
+                # table on the hot session endpoint.
+                operator=_operator_summary(
+                    connection, context.operator_id, roles=context.roles
+                ),
                 permissions=context.permissions,
                 expires_at=context.expires_at,
             ),
@@ -633,8 +703,7 @@ def list_platform_operators(
 ) -> PlatformOperatorListResponse:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
-        context = _authenticate_platform(connection, config, session_token, touch=True)
+        context = begin_platform_read_transaction(connection, config, session_token=session_token)
         _require_permission(context, "platform.operator.manage")
         ids = connection.execute(
             """
@@ -857,8 +926,7 @@ def get_platform_navigation(
 ) -> PlatformNavigationResponse:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
-        context = _authenticate_platform(connection, config, session_token, touch=True)
+        context = begin_platform_read_transaction(connection, config, session_token=session_token)
         items = _navigation_items(set(context.permissions))
         connection.commit()
         return PlatformNavigationResponse(items=items, request_id=request_id, trace_id=trace_id)
@@ -989,8 +1057,7 @@ def list_support_grants(
 ) -> SupportGrantListResponse:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
-        actor = _authenticate_platform(connection, config, session_token, touch=True)
+        actor = begin_platform_read_transaction(connection, config, session_token=session_token)
         can_review_all = "platform.support.approve" in actor.permissions
         if not can_review_all and "platform.support.request" not in actor.permissions:
             raise ApiError("platform.permission_denied")
@@ -1599,7 +1666,7 @@ def get_support_session(
 ) -> SupportSessionResponse:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
+        connection.execute("BEGIN IMMEDIATE")
         row = _authenticate_support(connection, config, session_token)
         response = SupportSessionResponse(
             session=SupportSessionSummary(
@@ -1628,7 +1695,7 @@ def get_support_diagnostics(
 ) -> SupportDiagnosticsResponse:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
+        connection.execute("BEGIN IMMEDIATE")
         session = _authenticate_support(connection, config, session_token)
         workspace = connection.execute(
             """
@@ -1703,8 +1770,7 @@ def list_platform_audit(
 ) -> PlatformAuditListResponse:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
-        context = _authenticate_platform(connection, config, session_token, touch=True)
+        context = begin_platform_read_transaction(connection, config, session_token=session_token)
         _require_permission(context, "platform.audit.read")
         scope, predicate, parameters = _audit_scope(context)
         boundary = _decode_audit_cursor(config, context, scope, cursor) if cursor else None
@@ -1907,6 +1973,7 @@ def _authenticate_platform(
     *,
     csrf_token: str | None = None,
     touch: bool = False,
+    read_only: bool = False,
 ) -> PlatformContext:
     if not valid_opaque_value(session_token):
         raise ApiError("platform.session_invalid")
@@ -1942,6 +2009,8 @@ def _authenticate_platform(
             "global_idle_expires_at",
         )
     ):
+        if read_only:
+            raise _PlatformReadNeedsWrite
         connection.execute(
             """
             UPDATE platform_sessions SET status='expired',updated_at=?
@@ -1964,6 +2033,8 @@ def _authenticate_platform(
         or not hmac.compare_digest(row["role_fingerprint"], fingerprint)
     )
     if stale:
+        if read_only:
+            raise _PlatformReadNeedsWrite
         connection.execute(
             """
             UPDATE platform_sessions SET status='revoked',revoked_at=?,
@@ -1979,6 +2050,8 @@ def _authenticate_platform(
     ):
         raise ApiError("platform.csrf_invalid")
     if touch and _parse_time(row["last_seen_at"]) <= now - timedelta(seconds=60):
+        if read_only:
+            raise _PlatformReadNeedsWrite
         connection.execute(
             "UPDATE platform_sessions SET last_seen_at=?,updated_at=? WHERE platform_session_id=?",
             (_db_time(now), _db_time(now), row["platform_session_id"]),
@@ -2391,7 +2464,12 @@ def _audit_grant_approval(
     )
 
 
-def _operator_summary(connection: sqlite3.Connection, operator_id: str) -> PlatformOperatorSummary:
+def _operator_summary(
+    connection: sqlite3.Connection,
+    operator_id: str,
+    *,
+    roles: tuple[str, ...] | None = None,
+) -> PlatformOperatorSummary:
     row = connection.execute(
         """
         SELECT operator.operator_id,operator.status,operator.revision,account.display_name
@@ -2403,7 +2481,8 @@ def _operator_summary(connection: sqlite3.Connection, operator_id: str) -> Platf
     ).fetchone()
     if row is None:
         raise ApiError("platform.operator_not_found")
-    roles, _permissions, _fingerprint = _authority(connection, operator_id)
+    if roles is None:
+        roles, _permissions, _fingerprint = _authority(connection, operator_id)
     return PlatformOperatorSummary(
         operator_id=row["operator_id"],
         display_name=row["display_name"],
@@ -2441,28 +2520,31 @@ def _authority(
             _PERMISSION_EXTENSION_TABLES,
         ).fetchall()
     }
+    role_placeholders = ",".join("?" for _ in roles) or "NULL"
     extension_queries = [
         f"""
         SELECT extension.permission_code
-        FROM platform_operator_role_bindings binding
-        JOIN {table_name} extension ON extension.role_code=binding.role_code
-        WHERE binding.operator_id=? AND binding.status='active'
+        FROM {table_name} extension
+        WHERE extension.role_code IN ({role_placeholders})
         """
         for table_name in _PERMISSION_EXTENSION_TABLES
         if table_name in extension_tables
     ]
-    extension = "".join(f"\nUNION\n{query}" for query in extension_queries)
-    parameters: tuple[object, ...] = tuple([operator_id, *([operator_id] * len(extension_queries))])
+    # The final permission set below already deduplicates and sorts all sources.
+    # UNION + ORDER BY forces SQLite to merge/sort every extension on each auth
+    # check. Stream the current rows without caching any role or permission data.
+    extension = "".join(f"\nUNION ALL\n{query}" for query in extension_queries)
+    # Roles were read in this transaction. Reusing those values avoids repeating
+    # the same binding join for every extension, without caching authority data.
+    parameters: tuple[object, ...] = roles * (1 + len(extension_queries))
     base_permissions = tuple(
         row[0]
         for row in connection.execute(
             f"""
             SELECT permission.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_role_permissions permission ON permission.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
+            FROM platform_role_permissions permission
+            WHERE permission.role_code IN ({role_placeholders})
             {extension}
-            ORDER BY permission_code
             """,
             parameters,
         ).fetchall()

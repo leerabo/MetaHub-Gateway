@@ -230,6 +230,15 @@ test("PRD-146 canonical registry restores five sources and excludes six retired 
   });
 });
 
+test("platform internal deployment route is never a Workspace sidebar or direct-link target", () => {
+  assert.equal(WORKSPACE_ROUTE_REGISTRY["workspace.settings.deployments"].placement, "platform_internal");
+  const navigation = normalizeWorkspaceNavigation(navigationPayload());
+  assert.deepEqual(
+    resolveWorkspaceNavigationRoute(navigation, "workspace.settings.deployments"),
+    { routeCode: "workspace.home.overview", rejected: true },
+  );
+});
+
 test("PRD-146 store supersedes lane tickets and changes route without losing navigation", () => {
   const store = createWorkspaceNavigationStore({
     createIdempotencyKey: () => "preference:test-key",
@@ -340,6 +349,38 @@ test("PRD-146 controller retries preference and advanced open with original idem
   await assert.rejects(controller.openAdvancedTool("provider_error_overrides"), /temporary/u);
   await controller.openAdvancedTool("provider_error_overrides");
   assert.deepEqual(advancedKeys, [advancedKeys[0], advancedKeys[0]]);
+});
+
+test("PRD-146 controller establishes the only Workspace after a fresh login", async () => {
+  const calls = [];
+  let firstSession = true;
+  const controller = createWorkspaceNavigationController({
+    createIdempotencyKey: (namespace) => `${namespace}:fresh-login`,
+    api: completeApi({
+      workspaceSession: async () => {
+        calls.push("session");
+        if (firstSession) {
+          firstSession = false;
+          throw Object.assign(new Error("workspace required"), {
+            code: "workspace_session.required", status: 401,
+          });
+        }
+        return workspaceSession();
+      },
+      workspaces: async () => {
+        calls.push("workspaces");
+        return { workspaces: [{ workspace_id: WORKSPACE_ONE, role: "owner" }] };
+      },
+      switchWorkspace: async ({ workspaceId }) => {
+        calls.push(["switch", workspaceId]);
+        return { context: workspaceSession(workspaceId).context };
+      },
+    }),
+  });
+
+  const loaded = await controller.loadNavigation();
+  assert.equal(loaded.context.workspace_id, WORKSPACE_ONE);
+  assert.deepEqual(calls, ["session", "workspaces", ["switch", WORKSPACE_ONE], "session"]);
 });
 
 test("PRD-146 route changes abort in-flight preference and fence queued writes", async () => {
@@ -727,6 +768,75 @@ test("PRD-146 renderers expose eight groups, one accordion, tasks, advanced dial
   assert.doesNotMatch(dialog, /<dialog[^>]* open/u);
 });
 
+test("role-aware default sidebar defers unrelated controls without changing route authority", () => {
+  const navigation = normalizeWorkspaceNavigation(navigationPayload());
+  const profiles = {
+    admin: ["workspace", "gateway", "finance", "governance"],
+    developer: ["gateway", "observability", "developer-center"],
+    finance_admin: ["finance", "observability"],
+    viewer: ["home"],
+  };
+  for (const [role, expectedGroups] of Object.entries(profiles)) {
+    const projected = projectWorkspaceNavigationForConsole(
+      navigation,
+      "workspace.home.overview",
+      null,
+      null,
+      role,
+    );
+    const visibleGroups = [...new Set(projected.navigation_items
+      .filter((item) => item.sidebar_visible)
+      .map((item) => item.group_code))];
+    assert.deepEqual(visibleGroups, expectedGroups, role);
+    assert.ok(projected.navigation_items.some((item) => item.id === "providers"), role);
+    assert.ok(projected.navigation_items.some((item) => item.sidebar_visible === false), role);
+    const shell = renderConsoleShell({
+      consoleShellState: {
+        navigation: projected,
+        preferences: { preference: navigation.preference },
+        activeNavigationItemId: "overview",
+        activeRouteCode: "workspace.home.overview",
+        sidebarExpandedGroupKey: "home",
+      },
+      contentHtml: "",
+      i18n: { t: (_key, _params, fallback) => fallback },
+    });
+    if (role === "viewer") {
+      assert.doesNotMatch(shell, /sidebar-deferred-controls/u, role);
+      assert.doesNotMatch(shell, /data-console-nav="providers"/u, role);
+      assert.match(shell, /data-console-nav="quickstart"/u, role);
+    } else {
+      assert.match(shell, /sidebar-deferred-controls/u, role);
+      assert.match(shell, /data-console-nav="providers"/u, role);
+      assert.match(shell, /data-sidebar-default="false"/u, role);
+    }
+    assert.match(shell, /data-sidebar-default="true"/u, role);
+    if (role === "admin") {
+      assert.equal((shell.match(/data-sidebar-group="/gu) ?? []).length, 4);
+      assert.doesNotMatch(shell, /data-sidebar-group="home"/u);
+    }
+  }
+});
+
+test("employee lands on task home while first-use administrator lands on organization overview", () => {
+  const navigation = normalizeWorkspaceNavigation({
+    ...navigationPayload(),
+    preference: { ...navigationPayload().preference, revision: 1, last_primary_route_code: "workspace.home.overview" },
+  });
+  assert.equal(
+    resolveWorkspaceNavigationRoute(navigation, "", { roleCode: "viewer" }).routeCode,
+    "workspace.home.getting-started",
+  );
+  assert.equal(
+    resolveWorkspaceNavigationRoute(navigation, "", { roleCode: "admin" }).routeCode,
+    "workspace.home.overview",
+  );
+  assert.equal(
+    resolveWorkspaceNavigationRoute(navigation, "workspace.gateway.providers", { roleCode: "viewer" }).routeCode,
+    "workspace.gateway.providers",
+  );
+});
+
 test("PRD-146 main fences route, logout, Workspace invalidation, and pagehide lifecycles", async () => {
   const [main, client, store, controller] = await Promise.all([
     readFile(new URL("../../src/app/main.js", import.meta.url), "utf8"),
@@ -769,7 +879,8 @@ test("PRD-146 main fences route, logout, Workspace invalidation, and pagehide li
     main,
     /function handleConsoleWorkspaceContextInvalidation[\s\S]*workspaceNavigationController\.leave\(\)/u,
   );
-  assert.equal((main.match(/workspaceNavigationController\.loadGettingStarted\(\)/gu) ?? []).length, 1);
+  assert.equal((main.match(/workspaceNavigationController\.loadGettingStarted\(\)/gu) ?? []).length, 2);
+  assert.match(main, /async function loadWorkspaceConnectionProgress\(\)[\s\S]*?workspaceNavigationController\.loadGettingStarted\(\)/u);
   assert.doesNotMatch([client, store, controller].join("\n"), /localStorage|sessionStorage/u);
 });
 
@@ -878,6 +989,23 @@ function item(routeCode, kind, order) {
     order,
   };
 }
+
+test("completed task actions stay available without becoming the next task", () => {
+  const value = taskHomePayload();
+  value.completed_count = 1;
+  value.tasks.unshift({ ...value.tasks[0], task_code: "model_catalog_ready", status: "completed",
+    action_route_code: "workspace.gateway.models" });
+  assert.equal(normalizeWorkspaceGettingStarted(value).next_task_code, "provider_connected");
+  assert.equal(normalizeWorkspaceGettingStarted(value).tasks[0].action_enabled, true);
+  value.next_task_code = "model_catalog_ready";
+  assert.throws(() => normalizeWorkspaceGettingStarted(value));
+  value.tasks = [value.tasks[0]];
+  value.next_task_code = null;
+  assert.equal(normalizeWorkspaceGettingStarted(value).next_task_code, null);
+  value.tasks[0].status = "blocked";
+  value.completed_count = 0;
+  assert.throws(() => normalizeWorkspaceGettingStarted(value));
+});
 
 function taskHomePayload() {
   return {

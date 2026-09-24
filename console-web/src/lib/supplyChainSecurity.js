@@ -2,6 +2,7 @@
 
 import { AuthApiError } from "./auth.js";
 import { PlatformApiError, readPlatformCsrfCookie } from "./platform.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 const IDS = Object.freeze({
   release: /^sdr_[0-9a-f]{32}$/u,
@@ -22,11 +23,11 @@ const REASONS = ["vendor_fix_pending", "mitigated_exposure", "emergency_continui
 const CONTROLS = ["feature_disablement", "network_isolation", "runtime_detection"];
 
 export async function getDeveloperSupplyChainSecurity({
-  controlApiUrl, token, releaseIds, signal,
+  controlApiUrl, authentication, token, releaseIds, signal,
 } = {}) {
   return loadReleaseSecurity({
     controlApiUrl,
-    token: developerToken(token),
+    ...developerCredentials(authentication, token),
     releaseIds,
     signal,
     domain: "developer",
@@ -107,16 +108,16 @@ export async function applyPlatformSecurityException({
   });
 }
 
-async function loadReleaseSecurity({ controlApiUrl, token, releaseIds, signal, domain }) {
+async function loadReleaseSecurity({ controlApiUrl, authentication, token, releaseIds, signal, domain }) {
   const ids = releaseIdList(releaseIds, domain);
   const entries = await Promise.all(ids.map(async (releaseId) => {
     try {
       const [reportValue, provenanceValue] = await Promise.all([
         releaseJson(controlApiUrl, `/releases/${encodeURIComponent(releaseId)}/security-report`, {
-          domain, token, signal,
+          domain, authentication, token, signal,
         }),
         releaseJson(controlApiUrl, `/releases/${encodeURIComponent(releaseId)}/provenance`, {
-          domain, token, signal,
+          domain, authentication, token, signal,
         }),
       ]);
       const report = securityReportResponse(reportValue, domain, releaseId);
@@ -457,11 +458,10 @@ async function verifyAttestation(signature, releaseId) {
   }
 }
 
-async function releaseJson(controlApiUrl, path, { domain, token, signal }) {
+async function releaseJson(controlApiUrl, path, { domain, authentication, token, signal }) {
   const headers = { Accept: "application/json" };
-  if (domain === "developer") headers.Authorization = `Bearer ${token}`;
   return requestJson(controlApiUrl, path, {
-    domain, headers, credentials: domain === "developer" ? "omit" : "include", signal,
+    domain, authentication, token, headers, credentials: domain === "developer" ? "omit" : "include", signal,
   });
 }
 
@@ -485,7 +485,9 @@ async function platformJson(controlApiUrl, path, options) {
 async function requestJson(controlApiUrl, path, options) {
   let response;
   try {
-    response = await fetch(apiUrl(controlApiUrl, path, options.domain), {
+    const fetcher = options.domain === "developer" ? authenticatedResourceFetch : fetch;
+    response = await fetcher(apiUrl(controlApiUrl, path, options.domain), {
+      ...(options.domain === "developer" ? { authentication: options.authentication, token: options.token } : {}),
       method: options.method ?? "GET",
       headers: options.headers,
       body: options.body,
@@ -557,6 +559,17 @@ function developerToken(value) {
   if (typeof value !== "string" || value.length < 16 || value.length > 4096
     || /[\u0000-\u0020\u007f]/u.test(value)) invalidRequest("token", "developer");
   return value;
+}
+
+function developerCredentials(authentication, token) {
+  if (authentication === "workspace") {
+    if (token !== undefined && token !== null) {
+      throw new AuthApiError({ status: 401, code: "workspace_session.credential_conflict", message: "Authentication context is unavailable." });
+    }
+    return { authentication };
+  }
+  if (authentication !== undefined && authentication !== "legacy") invalidRequest("authentication", "developer");
+  return { authentication, token: developerToken(token) };
 }
 
 function apiUrl(baseUrl, path, domain) {

@@ -94,7 +94,11 @@ def list_provider_catalog(
     checked_capability = _optional_code(capability_code)
     checked_region = _optional_region(region_code)
     connection = _connect(config)
-    transaction = ResourceWriteTransaction(connection, config, context, "provider_catalog.read")
+    # Catalog reads only verify authorization and immutable publication facts; use a deferred
+    # read transaction so opening the Provider page cannot block concurrent usage/navigation reads.
+    transaction = ResourceWriteTransaction(
+        connection, config, context, "provider_catalog.read", read_only=True
+    )
     try:
         transaction.begin()
         _workspace_owner(connection, transaction.context)

@@ -13,7 +13,8 @@ import pytest
 import test_prd138_launch_governance as rc
 from httpx import ASGITransport, AsyncClient
 from metahub_control.launch_governance import ga_service, service
-from metahub_shared.db import connect_database
+from metahub_shared.db import apply_migrations, connect_database, rollback_last_migration
+from metahub_shared.db.errors import DbError
 from test_prd138_launch_governance import (
     WAVES,
     _app,
@@ -175,6 +176,40 @@ def _facts(runtime):
                 "ga_action_commands",
             )
         }
+
+
+def _review_migration_facts(runtime):
+    with closing(connect_database(runtime.config.database_url)) as connection:
+        return {
+            table: sorted(tuple(row) for row in connection.execute(f"SELECT * FROM {table}"))
+            for table in (
+                "post_ga_reviews", "platform_launch_review_role_permissions", "ga_gate_policies"
+            )
+        }
+
+
+def _assert_review_migration_roundtrip(runtime):
+    before = _review_migration_facts(runtime)
+    database_url = runtime.config.database_url
+    assert rollback_last_migration(database_url, expected_version="0155").rolled_back == "0155"
+    with closing(connect_database(database_url)) as connection:
+        assert connection.execute(
+            "SELECT max(version) FROM schema_migrations WHERE status='applied'"
+        ).fetchone()[0] == "0154"
+        reviews = sorted(
+            tuple(row) for row in connection.execute("SELECT * FROM post_ga_reviews")
+        )
+        assert reviews == before["post_ga_reviews"]
+    assert apply_migrations(database_url).applied == ["0155"]
+    assert _review_migration_facts(runtime) == before
+    with closing(connect_database(database_url)) as connection:
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_ga_review_migration_roundtrip_uses_expected_version_entrypoint(runtime):
+    """A pristine 0155 down must execute through the public migration entrypoint."""
+    _assert_review_migration_roundtrip(runtime)
 
 
 @pytest.mark.anyio
@@ -379,6 +414,178 @@ async def test_ga_launch_review_and_independent_rollback_are_durable_and_idempot
         assert len(consumed) == (24 if rollback else 22)
         assert before["ga_events"] == before["ga_event_outbox"] == (3 if rollback else 2)
 
+    _assert_review_migration_roundtrip(runtime)
+    assert _facts(runtime) == before
+
+
+@pytest.mark.anyio
+async def test_ga_review_can_be_recorded_again_after_a_prior_launch_review_and_rollback(
+    runtime, ga_app
+):
+    """A launch review and a rollback review are separate immutable conclusions."""
+
+    app, clock, _consumed = ga_app
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        candidate = await _rc(client, runtime, clock)
+        await _import_all(client, runtime, candidate)
+        launched = await client.post(
+            "/platform/ga-launches",
+            headers=_headers(runtime.tokens["executor"], "prd148-review-twice-launch-0001", candidate["revision"]),
+            json=_launch_body(candidate),
+        )
+        assert launched.status_code == 201, launched.text
+        launch = launched.json()["launch"]
+        review_url = f"/platform/ga-launches/{launch['ga_launch_id']}/review"
+        launched_review = await client.post(
+            review_url,
+            headers=_headers(runtime.tokens["executor"], "prd148-review-twice-launched-0001", launch["revision"]),
+            json={
+                "expected_revision": launch["revision"],
+                "summary_sha256": _sha("launched-summary"),
+                "action_items_sha256": _sha("launched-actions"),
+                "conclusion": "ga_launched",
+                "confirmed": True,
+            },
+        )
+        assert launched_review.status_code == 201, launched_review.text
+        launch = launched_review.json()["launch"]
+
+        requested = await client.post(
+            f"/platform/ga-launches/{launch['ga_launch_id']}/rollback",
+            headers=_headers(runtime.tokens["rollback_requester"], "prd148-review-twice-request-0001", launch["revision"]),
+            json={
+                "operation": "request",
+                "expected_revision": launch["revision"],
+                "trigger_code": "operator_request",
+                "trigger_sha256": _sha("trigger"),
+                "checkpoint_sha256": _sha("checkpoint"),
+                "job_receipt_sha256": _sha("job"),
+                "confirmed": True,
+            },
+        )
+        assert requested.status_code == 201, requested.text
+        rollback = requested.json()["rollback"]
+        launch = requested.json()["launch"]
+        clock[0] += timedelta(seconds=1)
+        verified = await client.post(
+            f"/platform/ga-launches/{launch['ga_launch_id']}/rollback",
+            headers=_headers(runtime.tokens["rollback_verifier"], "prd148-review-twice-verify-0001", launch["revision"]),
+            json={
+                "operation": "verify",
+                "expected_revision": launch["revision"],
+                "ga_rollback_id": rollback["ga_rollback_id"],
+                "outcome": "passed",
+                "verification_sha256": _sha("verification"),
+                "confirmed": True,
+            },
+        )
+        assert verified.status_code == 201, verified.text
+        launch = verified.json()["launch"]
+        rolled_back_review = await client.post(
+            review_url,
+            headers=_headers(runtime.tokens["executor"], "prd148-review-twice-rolled-back-0001", launch["revision"]),
+            json={
+                "expected_revision": launch["revision"],
+                "summary_sha256": _sha("rollback-summary"),
+                "action_items_sha256": _sha("rollback-actions"),
+                "conclusion": "ga_rolled_back",
+                "confirmed": True,
+            },
+        )
+        assert rolled_back_review.status_code == 201, rolled_back_review.text
+        assert rolled_back_review.json()["review"]["conclusion"] == "ga_rolled_back"
+        with closing(connect_database(runtime.config.database_url)) as connection:
+            rows = connection.execute(
+                "SELECT conclusion FROM post_ga_reviews WHERE ga_launch_id=? ORDER BY conclusion",
+                (launch["ga_launch_id"],),
+            ).fetchall()
+        assert [row["conclusion"] for row in rows] == ["ga_launched", "ga_rolled_back"]
+
+    before = _review_migration_facts(runtime)
+    with pytest.raises(DbError) as blocked:
+        rollback_last_migration(runtime.config.database_url, expected_version="0155")
+    assert blocked.value.code == "db.migration_failed"
+    # Require the data guard itself to reject two conclusions; an invalid down
+    # script or version mismatch must not make this test pass accidentally.
+    assert isinstance(blocked.value.__cause__, sqlite3.IntegrityError)
+    assert _review_migration_facts(runtime) == before
+    with closing(connect_database(runtime.config.database_url)) as connection:
+        assert connection.execute(
+            "SELECT max(version) FROM schema_migrations WHERE status='applied'"
+        ).fetchone()[0] == "0155"
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+@pytest.mark.anyio
+async def test_ga_outbox_delivers_and_retries_with_bounded_backoff(runtime, ga_app, monkeypatch):
+    """The launch scheduler must acknowledge GA events and recover transient sink failures."""
+
+    app, clock, _consumed = ga_app
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        candidate = await _rc(client, runtime, clock)
+        await _import_all(client, runtime, candidate)
+        response = await client.post(
+            "/platform/ga-launches",
+            headers=_headers(runtime.tokens["executor"], "prd148-outbox-launch-0001", candidate["revision"]),
+            json=_launch_body(candidate),
+        )
+        assert response.status_code == 201, response.text
+
+    with closing(connect_database(runtime.config.database_url)) as connection:
+        pending = connection.execute(
+            "SELECT status,attempt_count FROM ga_event_outbox ORDER BY ga_event_outbox_id"
+        ).fetchall()
+    assert pending and all(row["status"] == "pending" and row["attempt_count"] == 0 for row in pending)
+
+    delivered = []
+    monkeypatch.setattr(service, "_deliver_ga_event", lambda _config, event: delivered.append(event["ga_event_id"]))
+    changed = service.process_launch_governance_once(runtime.config, worker_id="ga-test-worker-0001")
+    assert changed >= len(pending)
+    assert len(delivered) == len(pending)
+    with closing(connect_database(runtime.config.database_url)) as connection:
+        rows = connection.execute(
+            "SELECT status,attempt_count,delivered_at,next_attempt_at FROM ga_event_outbox ORDER BY ga_event_outbox_id"
+        ).fetchall()
+    assert all(row["status"] == "delivered" and row["attempt_count"] == 1 and row["delivered_at"] for row in rows)
+
+    # A fresh launch event is forced through a transient sink failure and must be
+    # scheduled for a retry instead of being acknowledged as delivered.
+    with closing(connect_database(runtime.config.database_url)) as connection:
+        now = clock[0].isoformat()
+        event_id = "gev_" + "f" * 32
+        outbox_id = "geo_" + "f" * 32
+        launch_id = connection.execute("SELECT ga_launch_id FROM ga_launches LIMIT 1").fetchone()[0]
+        connection.execute(
+            "INSERT INTO ga_events(ga_event_id,ga_launch_id,event_type,payload_sha256,occurred_at) VALUES(?,?,?,?,?)",
+            (event_id, launch_id, "ga.gate_failed", "f" * 64, now),
+        )
+        connection.execute(
+            "INSERT INTO ga_event_outbox(ga_event_outbox_id,ga_event_id,status,attempt_count,next_attempt_at,delivered_at,created_at,updated_at) VALUES(?,?, 'pending',0,?,NULL,?,?)",
+            (outbox_id, event_id, now, now, now),
+        )
+        connection.commit()
+    monkeypatch.setattr(service, "_deliver_ga_event", lambda *_args: (_ for _ in ()).throw(RuntimeError("sink unavailable")))
+    service.process_launch_governance_once(runtime.config, worker_id="ga-test-worker-0002")
+    with closing(connect_database(runtime.config.database_url)) as connection:
+        failed = connection.execute(
+            "SELECT status,attempt_count,next_attempt_at,delivered_at FROM ga_event_outbox WHERE ga_event_outbox_id=?",
+            (outbox_id,),
+        ).fetchone()
+    assert failed["status"] == "failed" and failed["attempt_count"] == 1
+    assert failed["delivered_at"] is None
+    assert datetime.fromisoformat(failed["next_attempt_at"].replace("Z", "+00:00")) > clock[0]
+
+    clock[0] += timedelta(seconds=3)
+    monkeypatch.setattr(service, "_deliver_ga_event", lambda *_args: None)
+    service.process_launch_governance_once(runtime.config, worker_id="ga-test-worker-0003")
+    with closing(connect_database(runtime.config.database_url)) as connection:
+        recovered = connection.execute(
+            "SELECT status,attempt_count,delivered_at FROM ga_event_outbox WHERE ga_event_outbox_id=?",
+            (outbox_id,),
+        ).fetchone()
+    assert recovered["status"] == "delivered" and recovered["attempt_count"] == 2
+    assert recovered["delivered_at"] is not None
+
 
 def test_ga_empty_migration_roundtrip_and_command_only_down_protection(runtime):
     with closing(connect_database(runtime.config.database_url)) as connection:
@@ -409,6 +616,21 @@ def test_ga_empty_migration_roundtrip_and_command_only_down_protection(runtime):
         with pytest.raises(sqlite3.DatabaseError, match="ga_facts_present"):
             connection.executescript(DOWN.read_text(encoding="utf-8"))
         assert connection.execute("SELECT count(*) FROM ga_action_commands").fetchone()[0] == 1
+
+
+def test_launch_scheduler_remains_healthy_before_ga_migration_is_applied(runtime):
+    """RC scheduler iterations must continue while the optional GA tables are absent."""
+
+    with closing(connect_database(runtime.config.database_url)) as connection:
+        connection.executescript(DOWN.read_text(encoding="utf-8"))
+        connection.commit()
+    changed = service.process_launch_governance_once(runtime.config, worker_id="ga-pre-migration-0001")
+    assert isinstance(changed, int) and changed >= 0
+    with closing(connect_database(runtime.config.database_url)) as connection:
+        missing = connection.execute(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('ga_events','ga_event_outbox')"
+        ).fetchone()[0]
+    assert missing == 0
 
 
 @pytest.mark.parametrize(

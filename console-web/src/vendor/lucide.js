@@ -16,10 +16,6 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 */
 export const iconNodes = {
-  "rotate-cw": [
-    ["path", { "d": "M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" }],
-    ["path", { "d": "M21 3v5h-5" }]
-  ],
   "arrow-right": [
     [
       "path",
@@ -345,6 +341,75 @@ export const iconNodes = {
       "path",
       {
         "d": "m2 2 20 20"
+      }
+    ]
+  ],
+  "rotate-cw": [
+    [
+      "path",
+      {
+        "d": "M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"
+      }
+    ],
+    [
+      "path",
+      {
+        "d": "M21 3v5h-5"
+      }
+    ]
+  ],
+  "copy": [
+    [
+      "rect",
+      {
+        "width": "14",
+        "height": "14",
+        "x": "8",
+        "y": "8",
+        "rx": "2",
+        "ry": "2"
+      }
+    ],
+    [
+      "path",
+      {
+        "d": "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"
+      }
+    ]
+  ],
+  "search": [
+    [
+      "circle",
+      {
+        "cx": "11",
+        "cy": "11",
+        "r": "8"
+      }
+    ],
+    [
+      "path",
+      {
+        "d": "m21 21-4.3-4.3"
+      }
+    ]
+  ],
+  "eraser": [
+    [
+      "path",
+      {
+        "d": "m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"
+      }
+    ],
+    [
+      "path",
+      {
+        "d": "M22 21H7"
+      }
+    ],
+    [
+      "path",
+      {
+        "d": "m5 11 9 9"
       }
     ]
   ]

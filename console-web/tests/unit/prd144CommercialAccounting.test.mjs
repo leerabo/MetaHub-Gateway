@@ -488,6 +488,18 @@ test("renderers escape dynamic facts and preserve Platform versus Workspace boun
   assert.doesNotMatch(finOpsHtml, /private-admin|content_sha256|permission_fingerprint/u);
 });
 
+test("workspace subscription empty state explains the blocked commercial next step", () => {
+  const html = renderWorkspaceSubscription({
+    ...createWorkspaceCommercialAccountingStore().snapshot(),
+    phase: "empty",
+    subscription: { subscription: null },
+  });
+  assert.match(html, /当前 Workspace 暂无订阅/u);
+  assert.match(html, /没有可用套餐、付款或发票记录/u);
+  assert.match(html, /联系平台运营开通套餐/u);
+  assert.doesNotMatch(html, /提交争议/u);
+});
+
 test("commercial accounting routes, lifecycle cleanup, and responsive runtime wiring are active", async () => {
   const [
     entry, developerRenderer, platformMain, platformState, platformRenderer,

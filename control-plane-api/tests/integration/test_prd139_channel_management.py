@@ -89,7 +89,9 @@ def _config(database_url: str) -> AppConfig:
 def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     database = tmp_path_factory.mktemp("prd139-api-base") / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0139"
+    # Run the current integration baseline so shared Workspace/Platform
+    # session projections match the production schema head.
+    assert apply_migrations(database_url).applied[-1] == "0156"
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", secrets.token_urlsafe(32))
         apply_seed_data(database_url)
@@ -256,7 +258,7 @@ def _app(monkeypatch: pytest.MonkeyPatch, runtime: Runtime):
     monkeypatch.setattr(
         platform_access_service,
         "_authenticate_platform",
-        lambda connection, _config, session_token, *, touch: current_context(
+        lambda connection, _config, session_token, *, csrf_token=None, touch, read_only=False: current_context(
             connection, session_token
         ),
     )
@@ -443,7 +445,7 @@ async def test_transport_unknown_fields_idempotency_cas_and_partner_revocation(
             "/platform/navigation",
             headers=_headers(runtime.tokens["billing"]),
         )
-        assert billing_navigation.status_code == 200
+        assert billing_navigation.status_code == 200, billing_navigation.text
         assert "channels" in {
             item["id"] for item in billing_navigation.json()["items"]
         }

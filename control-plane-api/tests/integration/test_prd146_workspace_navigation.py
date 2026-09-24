@@ -7,7 +7,9 @@ import json
 import os
 import secrets
 import shutil
+import sqlite3
 from contextlib import closing
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -231,6 +233,17 @@ def _api_app(monkeypatch: pytest.MonkeyPatch, runtime):
     app.include_router(router)
     app.include_router(console_routes.router)
     return app
+
+
+@pytest.fixture
+def preference_runtime(runtime, tmp_path: Path):
+    database = tmp_path / "navigation-preference.sqlite3"
+    with closing(connect_database(runtime["config"].database_url)) as source:
+        with closing(sqlite3.connect(database)) as target:
+            source.backup(target)
+    return {**runtime, "config": runtime["config"].model_copy(
+        update={"database_url": _url(database)},
+    )}
 
 
 def _workspace_headers(runtime, *, write: bool = False) -> dict[str, str]:
@@ -654,7 +667,7 @@ async def test_navigation_catalog_task_truth_and_placement(
                  WHERE workspace_id=? AND tenant_id=?)""",
                 (runtime["workspace"].workspace_id, runtime["workspace"].tenant_id),
             ).fetchone()[0]
-            == 60
+            == 59
         )
         assert (
             connection.execute(
@@ -665,6 +678,81 @@ async def test_navigation_catalog_task_truth_and_placement(
         )
     assert len(CONTRACT_SPECS) == 68
     assert len(LEGACY_SOURCE_IDS_0137) == 63
+
+
+@pytest.mark.anyio
+async def test_developer_group_preference_persists_and_respects_authority(
+    monkeypatch: pytest.MonkeyPatch,
+    preference_runtime,
+) -> None:
+    runtime = preference_runtime
+    app = _api_app(monkeypatch, runtime)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://control") as client:
+        response = await client.get("/workspace/navigation", headers=_workspace_headers(runtime))
+        assert response.status_code == 200
+        nav = response.json()
+        assert nav["developer_route_codes"]
+        assert all(group["group_code"] != "developer-center" for group in nav["groups"])
+        payload = {
+            "workspace_id": runtime["workspace"].workspace_id,
+            "contract_snapshot_id": nav["contract_snapshot_id"],
+            "expanded_group_code": "developer-center",
+        }
+        headers = _identity_headers(
+            runtime, revision=nav["preference"]["revision"],
+            idempotency_key="prd148-developer-group-preference",
+        )
+        changed = await client.patch(
+            "/identity/preferences/navigation", headers=headers, json=payload,
+        )
+        assert changed.status_code == 200, changed.text
+        replay = await client.patch(
+            "/identity/preferences/navigation", headers=headers, json=payload,
+        )
+        assert replay.status_code == 200
+        assert replay.json()["idempotent_replay"] is True
+        loaded = await client.get("/workspace/navigation", headers=_workspace_headers(runtime))
+        assert loaded.status_code == 200
+        preference = loaded.json()["preference"]
+        assert preference["expanded_group_code"] == "developer-center"
+        assert preference["revision"] == changed.json()["revision"]
+        invalid_primary = await client.patch(
+            "/identity/preferences/navigation",
+            headers=_identity_headers(runtime, revision=preference["revision"],
+                                      idempotency_key="prd148-developer-not-primary"),
+            json={**payload, "last_primary_route_code": nav["developer_route_codes"][0]},
+        )
+        assert invalid_primary.status_code == 422
+
+        # Both read and transaction-write fixtures use the same reduced authority.
+        denied_codes = {code for spec in CONTRACT_SPECS if spec.placement == "developer_center"
+                        for code in spec.permissions}
+        runtime["workspace"] = replace(
+            runtime["workspace"],
+            permission_codes=tuple(code for code in runtime["workspace"].permission_codes
+                                   if code not in denied_codes),
+        )
+        original = service.workspace_actor_permissions_in_transaction
+
+        def restricted_actor(*args, **kwargs):
+            actor = original(*args, **kwargs)
+            return replace(actor, permission_codes=tuple(
+                code for code in actor.permission_codes if code not in denied_codes
+            ))
+
+        monkeypatch.setattr(service, "workspace_actor_permissions_in_transaction", restricted_actor)
+        restricted = await client.get("/workspace/navigation", headers=_workspace_headers(runtime))
+        assert restricted.status_code == 200, restricted.text
+        assert restricted.json()["developer_route_codes"] == []
+        assert restricted.json()["preference"]["expanded_group_code"] is None
+        forbidden = await client.patch(
+            "/identity/preferences/navigation",
+            headers=_identity_headers(runtime, revision=preference["revision"],
+                                      idempotency_key="prd148-developer-group-forbidden"),
+            json=payload,
+        )
+        assert forbidden.status_code == 422
+        assert forbidden.json()["code"] == "identity.request_invalid"
 
 
 @pytest.mark.anyio
@@ -736,6 +824,9 @@ async def test_navigation_preference_cas_and_exact_replay(
     assert replay.json()["idempotent_replay"] is True
     assert conflict.status_code == 409
     assert conflict.json()["code"] == "identity.idempotency_conflict"
+    assert not stale.headers.get_list("set-cookie"), (
+        "a navigation revision conflict must preserve the authenticated browser session"
+    )
     assert stale.status_code == 412
     assert stale.json()["code"] == "identity.revision_conflict"
     with closing(connect_database(runtime["config"].database_url)) as connection:

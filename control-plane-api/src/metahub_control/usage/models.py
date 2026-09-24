@@ -200,6 +200,46 @@ class UsageRecordListResponse(BaseModel):
     trace_id: str
 
 
+class PersonalUsageTotals(BaseModel):
+    request_count: int
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    cache_tokens: int
+
+
+class PersonalUsageDaySummary(PersonalUsageTotals):
+    day: str
+
+
+class PersonalUsageSummaryResponse(BaseModel):
+    totals: PersonalUsageTotals
+    by_day: list[PersonalUsageDaySummary]
+    request_id: str
+    trace_id: str
+
+
+class PersonalUsageRecord(BaseModel):
+    request_id: str
+    model_id: str | None
+    request_model: str | None
+    resolved_model: str | None
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    cache_tokens: int
+    created_at: datetime
+
+
+class PersonalUsageRecordListResponse(BaseModel):
+    usage_records: list[PersonalUsageRecord]
+    total: int
+    limit: int
+    offset: int
+    request_id: str
+    trace_id: str
+
+
 class UsageExportJobInfo(BaseModel):
     """用量导出任务的安全状态 DTO。
 

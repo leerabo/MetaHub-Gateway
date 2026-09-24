@@ -298,6 +298,24 @@ a {
   background: var(--identity-accent-dark);
 }
 
+.identity-secondary-action {
+  display: block;
+  width: 100%;
+  min-height: 38px;
+  margin-top: 10px;
+  border: 1px solid #bdc7d2;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--identity-accent-dark);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.identity-secondary-action:hover {
+  background: #f5f8f7;
+}
+
 .identity-quiet-command,
 .identity-danger-command {
   border: 1px solid #bdc7d2;
@@ -330,6 +348,13 @@ a {
   border-color: var(--identity-accent);
   background: #edf8f6;
   color: var(--identity-accent-dark);
+}
+
+.identity-setup-status {
+  margin: -2px 0 0;
+  color: var(--identity-muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
 }
 
 .identity-security-shell {
@@ -608,6 +633,116 @@ a {
 .identity-icon-command:disabled {
   cursor: default;
   opacity: 0.55;
+}
+
+.identity-account-layout {
+  display: grid;
+  grid-template-columns: 204px minmax(0, 1fr);
+  gap: 40px;
+  width: min(1180px, calc(100% - 48px));
+  margin: 0 auto;
+  align-items: start;
+}
+
+.identity-account-layout > .identity-account-main {
+  width: 100%;
+  min-width: 0;
+  padding: 32px 0 48px;
+}
+
+.identity-account-main .identity-heading {
+  margin-bottom: 24px;
+}
+
+.identity-account-main .identity-heading h1 {
+  font-size: 22px;
+}
+
+.identity-account-navigation {
+  display: grid;
+  gap: 20px;
+  padding-top: 36px;
+  font-size: 16px;
+}
+
+.identity-account-primary-nav,
+.identity-account-organization-nav > div {
+  display: grid;
+  gap: 4px;
+}
+
+.identity-account-navigation a {
+  display: block;
+  padding: 10px 12px;
+  border-left: 2px solid transparent;
+  color: var(--identity-muted);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.identity-account-navigation a:hover {
+  background: #f0f4f3;
+  color: var(--identity-text);
+}
+
+.identity-account-navigation a[aria-current="page"] {
+  background: #edf5f0;
+  border-color: #287b58;
+  color: #175539;
+  font-weight: 600;
+}
+
+.identity-account-organization-nav {
+  border-top: 1px solid var(--identity-line);
+  padding-top: 16px;
+}
+
+.identity-account-organization-nav > summary {
+  padding: 8px 12px;
+  cursor: pointer;
+  color: var(--identity-muted);
+}
+
+.identity-account-main .identity-workspace-row {
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+}
+
+.identity-account-main .identity-workspace-row button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .identity-account-layout {
+    width: calc(100% - 32px);
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .identity-account-navigation {
+    padding-top: 20px;
+    gap: 12px;
+  }
+
+  .identity-account-primary-nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .identity-account-layout > .identity-account-main {
+    padding-top: 20px;
+  }
+
+  .identity-account-main .identity-workspace-row {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .identity-account-main .identity-workspace-row button {
+    grid-column: 2;
+    justify-self: start;
+  }
 }
 
 .identity-data-governance {
@@ -967,6 +1102,30 @@ a {
 .identity-security-controls,
 .identity-conditional-access {
   min-width: 0;
+}
+
+.identity-security-tool {
+  border-bottom: 1px solid var(--identity-line);
+}
+
+.identity-security-tool > summary {
+  padding: 18px 0;
+  font-size: 1rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.identity-security-tool > summary[aria-disabled="true"] {
+  cursor: default;
+}
+
+.identity-security-tool-body {
+  min-width: 0;
+  padding-bottom: 20px;
+}
+
+.identity-security-tool-body > .identity-security-subheading:first-child {
+  margin-top: 0;
 }
 
 .identity-security-summary,
@@ -2498,22 +2657,43 @@ a {
 }
 
 .identity-onboarding-layout {
-  display: grid;
-  grid-template-columns: minmax(240px, 0.72fr) minmax(0, 1.28fr);
   min-width: 0;
   border-block: 1px solid var(--identity-line);
 }
 
-.identity-onboarding-steps {
+.identity-onboarding-steps-details {
   min-width: 0;
+  border-top: 1px solid var(--identity-line);
+}
+
+.identity-onboarding-steps-details > summary {
+  cursor: pointer;
+  padding: 13px 20px;
+  color: var(--identity-accent-dark);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.identity-onboarding-steps-details > summary:focus-visible {
+  outline: 3px solid rgba(8, 120, 111, 0.25);
+  outline-offset: -3px;
+}
+
+.identity-onboarding-steps {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   margin: 0;
-  border-right: 1px solid var(--identity-line);
   padding: 0;
   list-style: none;
 }
 
-.identity-onboarding-steps li + li {
+.identity-onboarding-steps li {
+  min-width: 0;
   border-top: 1px solid var(--identity-line);
+}
+
+.identity-onboarding-steps li:nth-child(even) {
+  border-left: 1px solid var(--identity-line);
 }
 
 .identity-onboarding-steps button {
@@ -2840,7 +3020,7 @@ a {
 
 .identity-workspace-form {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   border-block: 1px solid var(--identity-line);
   background: var(--identity-soft);
@@ -3154,22 +3334,15 @@ a {
   }
 
   .identity-onboarding-layout {
-    grid-template-columns: minmax(0, 1fr);
+    display: block;
   }
 
   .identity-onboarding-steps {
-    display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    border-right: 0;
-    border-bottom: 1px solid var(--identity-line);
   }
 
   .identity-onboarding-steps li:nth-child(even) {
     border-left: 1px solid var(--identity-line);
-  }
-
-  .identity-onboarding-steps li + li {
-    border-top: 0;
   }
 
   .identity-onboarding-steps li:nth-child(n + 3) {
@@ -3254,8 +3427,7 @@ a {
     border-left: 0;
   }
 
-  .identity-onboarding-steps li + li,
-  .identity-onboarding-steps li:nth-child(n + 3) {
+  .identity-onboarding-steps li:nth-child(n + 2) {
     border-top: 1px solid var(--identity-line);
   }
 
@@ -4368,3 +4540,6 @@ a {
     width: 100%;
   }
 }
+.identity-account-loading { width: min(960px, 100%); margin: 48px auto; padding: 24px; }
+.identity-account-loading h1 { font-size: 24px; margin: 32px 0 24px; }
+.identity-account-skeleton { height: 64px; max-width: 640px; margin: 16px 0; background: #edf1f4; border-radius: 6px; }

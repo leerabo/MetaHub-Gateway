@@ -481,10 +481,12 @@ async def test_warm_workspace_core_creation_meets_p95_budget(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("generated_slug", [False, True])
 async def test_unverified_legacy_account_is_rejected_and_concurrent_replay_is_singleton(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     migrated_workspace_database: Path,
+    generated_slug: bool,
 ) -> None:
     database_url, app = _prepare(monkeypatch, tmp_path, migrated_workspace_database)
     transport = ASGITransport(app=app)
@@ -506,6 +508,8 @@ async def test_unverified_legacy_account_is_rejected_and_concurrent_replay_is_si
     async with AsyncClient(transport=transport, base_url="https://testserver") as client:
         await _register(client, "concurrent.owner@example.com")
         body = _organization("concurrent-singleton")
+        if generated_slug:
+            body = {"kind": "organization", "name": "Concurrent Team"}
         responses = await asyncio.gather(
             *(
                 _create(client, body, "workspace-concurrent-idempotency-0001")

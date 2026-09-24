@@ -1,20 +1,30 @@
 /** User-facing projection of the final GA boundary. */
-export function renderGaLaunchGates(projection = {}) {
+export function renderGaLaunchGates(projection = {}, now = Date.now()) {
   const gates = Array.isArray(projection.gates) ? projection.gates : [];
   const candidate = projection.candidate;
   const launch = projection.launch;
   // Evidence is collected before the GA launch row exists.  Prefer the
   // candidate-stage projection and merge the launch projection after promotion.
-  const evidence = new Set([
+  const records = [
     ...(projection.evidence ?? []),
     ...(launch?.evidence ?? []),
-  ].map((item) => item.ga_gate_id));
+  ];
+  // The server remains authoritative at submission time. Expired records must
+  // not look fresh or advance the page to a launch that the server will reject.
+  const evidence = new Set(records.filter((item) => item.outcome === "passed"
+    && Date.parse(item.finished_at) <= now && Date.parse(item.expires_at) > now)
+    .map((item) => item.ga_gate_id));
+  const expired = new Set(records.filter((item) => Date.parse(item.expires_at) <= now)
+    .map((item) => item.ga_gate_id));
   const passed = gates.filter((gate) => evidence.has(gate.ga_gate_id)).length;
   const required = gates.length || 20;
   const status = launch?.status ?? (candidate ? "待发布" : "待准备");
   const statusClass = /launched|approved/u.test(String(launch?.status)) ? "is-ok"
     : /rolled_back|failed/u.test(String(launch?.status)) ? "is-danger" : "is-warn";
-  const next = !launch ? (candidate ? "完成 GA 门禁证据后即可发布" : "等待 RC 形成可发布候选")
+  const next = !launch ? (!candidate || candidate.status !== "release_candidate"
+    ? "等待 RC 形成可发布候选"
+    : expired.size ? "证据已过期，请重新准备 RC 候选并验证"
+      : "完成 GA 门禁证据后即可发布")
     : launch.status === "approved" ? "可以执行 GA 发布"
       : launch.status === "launched" ? (launch.review ? "发布后复核已完成" : "发布已完成，等待发布后复盘")
         : launch.status === "rollback_pending" ? "等待第二位操作员复核回滚"
@@ -28,33 +38,35 @@ export function renderGaLaunchGates(projection = {}) {
       <div><span>稳定性</span><strong>72 小时</strong><small>必须有连续稳定证据</small></div>
       <div><span>回滚</span><strong>双人复核</strong><small>申请人与验证人必须不同</small></div>
     </div>
-    <details class="platform-ga-gates"><summary>查看门禁状态</summary><ul>${gates.map((gate) => `<li><span>${escapeHtml(gateLabel(gate.gate_code))}</span><strong class="platform-status ${evidence.has(gate.ga_gate_id) ? "is-ok" : "is-warn"}">${evidence.has(gate.ga_gate_id) ? "已通过" : "待验证"}</strong></li>`).join("")}</ul></details>
-    ${nextAction(projection, gates, passed)}
+    <details class="platform-ga-gates"><summary>查看门禁状态</summary><ul>${gates.map((gate) => `<li><span>${escapeHtml(gateLabel(gate.gate_code))}</span><strong class="platform-status ${evidence.has(gate.ga_gate_id) ? "is-ok" : "is-warn"}">${evidence.has(gate.ga_gate_id) ? "已通过" : expired.has(gate.ga_gate_id) ? "已过期" : "待验证"}</strong></li>`).join("")}</ul></details>
+    ${nextAction(projection, gates, evidence, expired)}
   </section>`;
 }
 
-function nextAction(projection, gates, passed) {
+function nextAction(projection, gates, evidence, expired) {
   const candidate = projection.candidate;
   const launch = projection.launch;
-  if (!candidate) return "";
-  if (!launch && passed < gates.length) {
-    const existing = new Set([
-      ...(projection.evidence ?? []),
-      ...(launch?.evidence ?? []),
-    ].map((item) => item.ga_gate_id));
-    const gate = gates.find((item) => !existing.has(item.ga_gate_id));
-    const source = (candidate.evidence ?? []).find((item) => item.gate_code === gate?.gate_code);
+  if (!launch) {
+    if (!candidate || candidate.status !== "release_candidate" || expired.size) return "";
+    if (!gates.length) return '<p class="platform-empty">GA 门禁目录尚未加载。</p>';
+    const gate = gates.find((item) => !evidence.has(item.ga_gate_id));
+    if (!gate) return gaLaunchForm(candidate);
+    const source = (candidate.evidence ?? []).find((item) => item.gate_code === gate.gate_code);
     return gaEvidenceForm(candidate, gate, source);
   }
-  if (!launch && passed === gates.length) return gaLaunchForm(candidate);
   if (launch?.status === "rollback_pending") {
     const rollback = (launch.rollbacks ?? []).find((item) => item.status === "pending");
     return rollback ? gaRollbackVerifyForm(launch, rollback) : "";
   }
-  if ((launch?.status === "launched" || launch?.status === "rolled_back") && !launch.review) {
+  // Incident response must be available immediately after launch, independently
+  // of whether a post-launch review has already been submitted.
+  if (["approved", "launched"].includes(launch.status)) {
+    return gaRollbackRequestForm(launch)
+      + (launch.status === "launched" && !launch.review ? gaReviewForm(launch) : "");
+  }
+  if (launch.status === "rolled_back" && !launch.review) {
     return gaReviewForm(launch);
   }
-  if (launch && ["approved", "launched"].includes(launch.status)) return gaRollbackRequestForm(launch);
   return "";
 }
 

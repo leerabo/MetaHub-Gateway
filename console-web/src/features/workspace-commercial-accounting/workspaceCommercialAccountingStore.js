@@ -7,6 +7,7 @@ import {
   permissionRevision,
   PERMISSIONS,
 } from "../../lib/permissions.js";
+import { workspaceNavigationOwner } from "../workspace-navigation/workspaceNavigationStore.js";
 
 const NAVIGATION_PERMISSIONS = Object.freeze({
   "workspace-subscription": PERMISSIONS.WORKSPACE_COMMERCIAL_SUBSCRIPTION_READ,
@@ -47,9 +48,10 @@ export function createWorkspaceCommercialAccountingStore({ onChange = () => {} }
     publish();
   }
 
-  function enter({ authContext, workspaceSession, activeNavigationItemId }) {
+  function enter({ authContext, workspaceIdentity, workspaceSession, activeNavigationItemId }) {
     const signature = workspaceCommercialAccountingOwner({
       authContext,
+      workspaceIdentity,
       workspaceSession,
       activeNavigationItemId,
     });
@@ -277,11 +279,22 @@ export function createWorkspaceCommercialAccountingStore({ onChange = () => {} }
 
 export function workspaceCommercialAccountingOwner({
   authContext,
+  workspaceIdentity,
   workspaceSession,
   activeNavigationItemId,
 } = {}) {
   const navigation = safeNavigation(activeNavigationItemId);
   const requiredPermission = NAVIGATION_PERMISSIONS[navigation];
+  if (workspaceIdentity !== undefined) {
+    const owner = workspaceNavigationOwner(workspaceIdentity, workspaceSession);
+    if (!owner || !requiredPermission || !hasPermission(authContext, requiredPermission)
+      || owner.permissionRevision !== authContext?.permission_revision
+      || owner.membershipRevision !== authContext?.membership_revision
+      || owner.permissionFingerprint !== authContext?.permission_fingerprint
+      || Date.parse(owner.globalExpiresAt) <= Date.now()
+      || Date.parse(owner.workspaceExpiresAt) <= Date.now()) return "";
+    return JSON.stringify({ ...owner, navigation, requiredPermission });
+  }
   const identity = authorizationIdentitySnapshot(authContext, requiredPermission);
   const context = workspaceSession?.context;
   const sessionId = String(

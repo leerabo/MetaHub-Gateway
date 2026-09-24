@@ -110,6 +110,23 @@ test("guide renders complete migration contract and four isolated copy targets",
   assert.match(html, /chat&lt;prod&gt;/);
 });
 
+test("Workspace migration takes authorized connection metadata and rejects stale legacy navigation fields", () => {
+  const consoleShellState = shellState();
+  consoleShellState.navigation.contract_version = "workspace-navigation-v1";
+  const inputs = { consoleShellState, ...ACTIVE_STATES, selectedEnvironmentId: "env_prod", selectedModelAlias: "chat<prod>" };
+  assert.equal(buildMigrationGuide(inputs).copy_ready, false);
+  const ready = buildMigrationGuide({ ...inputs, connectionState: { state: "ok", gateway_base_url: "https://actual.gateway/v1" } });
+  assert.equal(ready.copy_ready, true);
+  assert.equal(ready.gateway_base_url, "https://actual.gateway/v1");
+  for (const gateway_base_url of ["", "javascript:alert(1)", "https://user:secret@gateway.test/v1",
+    "https://gateway.test/v1?key=secret", "https://gateway.test/v1#secret", "https://gateway.test/v1\n"]) {
+    const invalid = buildMigrationGuide({ ...inputs, connectionState: { state: "ok", gateway_base_url } });
+    assert.equal(invalid.copy_ready, false);
+    assert.equal(invalid.gateway_base_url, null);
+  }
+  assert.equal(buildMigrationGuide({ ...inputs, connectionState: { state: "error" } }).copy_ready, false);
+});
+
 test("migration tabs own ARIA relationships and complete keyboard mapping", () => {
   const guide = buildMigrationGuide({ consoleShellState: shellState(), ...ACTIVE_STATES });
   const html = renderMigrationGuide({
@@ -128,6 +145,16 @@ test("migration tabs own ARIA relationships and complete keyboard mapping", () =
   assert.equal(migrationLanguageForKey("python", "End"), "node");
   assert.equal(migrationLanguageForKey("node", " "), "node");
   assert.equal(migrationLanguageForKey("python", "Tab"), null);
+});
+
+test("migration distinguishes a failed configuration read from an empty environment", () => {
+  const guide = buildMigrationGuide({ consoleShellState: shellState(),
+    environmentState: { state: "error" }, modelAliasesState: { model_aliases: [] } });
+  const html = renderMigrationGuide({ guide,
+    authContext: withPermissionSnapshot({ user: { role: "developer" } }, [PERMISSIONS.DEVELOPER_PORTAL_READ]) });
+  assert.equal(guide.copy_ready, false);
+  assert.match(html, /role="alert"[\s\S]*data-resource-retry/);
+  assert.doesNotMatch(html, /暂无可用环境/);
 });
 
 test("developer start dispatches with developer_portal.read and fails closed without it", () => {

@@ -5,6 +5,7 @@
  */
 
 import { hasPermission, PERMISSIONS } from "../../lib/permissions.js";
+import { gatewayConnectionAddresses } from "../../lib/gatewayConnection.js";
 
 // 指南版本用于把静态内容与验收记录对应起来；它不是租户业务数据，也不在浏览器持久化。
 export const MIGRATION_GUIDE_VERSION = "1.0.0";
@@ -133,13 +134,18 @@ if (streamEnabled) {
  */
 export function buildMigrationGuide({
   consoleShellState,
+  connectionState,
   environmentState,
   modelAliasesState,
   selectedEnvironmentId = null,
   selectedModelAlias = null,
 } = {}) {
   const navigation = consoleShellState?.navigation ?? {};
-  const gatewayReady = navigation.gateway_base_url_status === "ready" && Boolean(navigation.gateway_base_url);
+  const connection = connectionState === undefined && navigation.contract_version !== "workspace-navigation-v1"
+    ? { state: navigation.gateway_base_url_status === "ready" ? "ok" : "error", gateway_base_url: navigation.gateway_base_url }
+    : connectionState;
+  const addresses = connection?.state === "ok" ? gatewayConnectionAddresses(connection.gateway_base_url) : null;
+  const gatewayReady = Boolean(addresses);
   const environments = (environmentState?.environments ?? []).filter((item) => item.status === "active");
   const aliases = (modelAliasesState?.model_aliases ?? []).filter(isEligibleAlias);
   const environmentOptions = environments.map((environment) => ({
@@ -157,12 +163,13 @@ export function buildMigrationGuide({
     id: "direct-provider-to-metahub",
     version: MIGRATION_GUIDE_VERSION,
     status: "active",
-    gateway_base_url: gatewayReady ? navigation.gateway_base_url : null,
+    gateway_base_url: addresses?.openai ?? null,
     gateway_base_url_status: gatewayReady ? "ready" : "configuration_required",
     environment_options: environmentOptions,
     selected_environment_id: selectedEnvironment?.environment_id ?? null,
     selected_model_alias: selectedAlias?.alias ?? null,
     copy_ready: Boolean(gatewayReady && selectedEnvironment && selectedAlias),
+    load_error: [connection, environmentState, modelAliasesState].some((state) => state?.state === "error"),
   };
 }
 
@@ -196,7 +203,7 @@ export function renderMigrationGuide({ guide, authContext, activeLanguage = "pyt
       <p class="migration-lead">通过替换 base URL、API Key 和模型 ID，把现有 OpenAI-compatible 调用接入统一网关；业务 messages、temperature、stream 和消费逻辑保持不变。</p>
       <div class="migration-notice" data-kind="scope">
         <strong>明确适用范围</strong>
-        <p>首版仅保证 Python/Node 服务端 <code>/v1/chat/completions</code> 的非流式与流式迁移。<code>/v1/embeddings</code> 仅提供兼容入口提示；Responses、Assistants、厂商专有 SDK/参数和浏览器直连不属于直接替换范围。</p>
+        <p>MetaHub 为统一 KEY 提供 <code>/v1/chat/completions</code>、<code>/v1/responses</code> 和 <code>/v1/messages</code> 入口，并支持 <code>/v1/embeddings</code>。Responses、Assistants 的高级专有参数、厂商私有 SDK 和浏览器直连仍需按工具版本单独验证。</p>
       </div>
       <div class="migration-event-warning" data-migration-event-warning ${eventWarning ? "" : "hidden"} role="status">
         ${eventWarning ? `访问记录暂不可用：${escapeHtml(eventWarning.message ?? "未知错误")} · request_id: ${escapeHtml(eventWarning.requestId ?? "-")}` : ""}
@@ -204,18 +211,19 @@ export function renderMigrationGuide({ guide, authContext, activeLanguage = "pyt
 
       <section class="migration-section" aria-labelledby="migration-config-title">
         <div class="migration-section-heading"><span>01</span><h3 id="migration-config-title">确认目标配置</h3></div>
+        ${guide.load_error ? '<p role="alert">迁移配置加载失败，请重试。<button type="button" data-resource-retry>重试</button></p>' : ""}
         <div class="migration-config-grid">
           <div class="migration-config-status" data-status="${guide.gateway_base_url_status}">
-            <span>可信 Gateway /v1</span><strong>${escapeHtml(gatewayLabel)}</strong>
-            <small>${guide.gateway_base_url_status === "ready" ? "来源：GET /console/navigation" : "配置未通过后端校验，MetaHub 复制已禁用"}</small>
+            <span>网关接口地址</span><strong>${escapeHtml(gatewayLabel)}</strong>
+            <small>${guide.gateway_base_url_status === "ready" ? "使用当前组织的网关配置" : "网关地址不可用，暂不能复制接入代码"}</small>
           </div>
-          <label>Environment
+          <label>环境
             <select data-migration-environment-select>
-              <option value="">请选择 active Environment</option>
+              <option value="">请选择环境</option>
               ${guide.environment_options.map((item) => renderEnvironmentOption(item, guide.selected_environment_id)).join("")}
             </select>
           </label>
-          <label>同环境 active 模型别名
+          <label>模型别名
             <select data-migration-alias-select ${selectedEnvironment ? "" : "disabled"}>
               <option value="">请选择模型别名</option>
               ${aliases.map((item) => renderAliasOption(item, guide.selected_model_alias)).join("")}
@@ -238,7 +246,7 @@ export function renderMigrationGuide({ guide, authContext, activeLanguage = "pyt
       <section class="migration-section" aria-labelledby="migration-replace-title">
         <div class="migration-section-heading"><span>03</span><h3 id="migration-replace-title">只替换三项配置</h3></div>
         <div class="migration-table-wrap"><table class="migration-table"><thead><tr><th>配置</th><th>直连值</th><th>MetaHub 值</th><th>安全边界</th></tr></thead><tbody>
-          <tr><td>base URL</td><td><code>PROVIDER_BASE_URL</code></td><td><code>METAHUB_BASE_URL</code><small>${escapeHtml(gatewayLabel)}</small></td><td>只信任导航响应，不回退 localhost</td></tr>
+          <tr><td>base URL</td><td><code>PROVIDER_BASE_URL</code></td><td><code>METAHUB_BASE_URL</code><small>${escapeHtml(gatewayLabel)}</small></td><td>使用管理员配置的网关地址</td></tr>
           <tr><td>API Key</td><td><code>PROVIDER_API_KEY</code></td><td><code>METAHUB_VIRTUAL_KEY</code></td><td>两套凭据隔离，不写入源码、事件或日志</td></tr>
           <tr><td>模型</td><td><code>PROVIDER_MODEL</code></td><td><code>METAHUB_MODEL_ALIAS</code><small>${escapeHtml(guide.selected_model_alias ?? "待选择")}</small></td><td>只能使用所选 Environment 的 active alias</td></tr>
         </tbody></table></div>
@@ -340,24 +348,25 @@ function renderAliasOption(alias, selectedAlias) {
  * 根据配置缺口给出受控跳转提示；不生成自动修复动作，也不回落到第一个 Environment 或 alias。
  */
 function renderConfigurationHint(guide, selectedEnvironment) {
+  if (guide.load_error) return "";
   if (guide.gateway_base_url_status !== "ready") {
-    return `<p class="migration-config-hint">请管理员修复公开 Gateway URL 配置；在状态变为 ready 前不可复制 MetaHub 代码。</p>`;
+    return `<p class="migration-config-hint">网关接入配置暂不可用，请稍后重试或联系管理员。</p>`;
   }
   if (guide.environment_options.length === 0) {
-    return `<p class="migration-config-hint">没有可用 Environment。请前往 Environment、模型别名和 Provider 健康页面完成 active 配置。</p>`;
+    return `<p class="migration-config-hint">暂无可用环境，请由管理员完成环境与模型配置。</p>`;
   }
   if (!selectedEnvironment) {
-    return `<p class="migration-config-hint">必须显式选择 Environment；多候选时不会静默选择第一项。</p>`;
+    return `<p class="migration-config-hint">请选择准备接入的环境。</p>`;
   }
   if (selectedEnvironment.aliases.length === 0) {
-    return `<p class="migration-config-hint">该 Environment 没有同时满足 alias、模型和 Provider active 的候选，请检查模型别名与 Provider 健康。</p>`;
+    return `<p class="migration-config-hint">此环境暂无可用模型别名，请由管理员检查模型及其供应商状态。</p>`;
   }
   // Environment 已确认后仍要求用户显式选择同环境 alias，不能因当前只有一个候选而自动填充。
   if (!guide.selected_model_alias) {
-    return `<p class="migration-config-hint">请选择同 Environment 的 active 模型别名后再复制 MetaHub 代码。</p>`;
+    return `<p class="migration-config-hint">请选择此环境的模型别名。</p>`;
   }
   // 三项配置就绪只代表示例可复制，Virtual Key 明文仍不得进入页面输入框或生成的代码文本。
-  return `<p class="migration-config-hint migration-config-ready">配置三元组已就绪；Virtual Key 仍只通过部署环境变量注入。</p>`;
+  return `<p class="migration-config-hint migration-config-ready">配置已就绪。运行服务端示例时使用你的个人 MetaHub KEY。</p>`;
 }
 
 /**

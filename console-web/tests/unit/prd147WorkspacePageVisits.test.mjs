@@ -31,6 +31,11 @@ function deferred() {
   const promise = new Promise((accept, fail) => { resolve = accept; reject = fail; });
   return { promise, resolve, reject };
 }
+async function flushVisitQueue() {
+  await new Promise((resolve) => setImmediate(resolve));
+  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 800));
+}
 function harness(initial = state()) {
   const box = { value: initial }, calls = [], errors = [], pending = [];
   const tracker = createWorkspacePageVisitTracker({ current: () => box.value,
@@ -46,7 +51,7 @@ for (const id of ["provider-health", "overview", "projects", "migration-guide", 
     const h = harness(state(id));
     const first = h.tracker.afterRender({ source: "sidebar", viewportClass: "mobile" });
     const second = h.tracker.afterRender();
-    await Promise.resolve();
+    await flushVisitQueue();
     assert.equal(h.calls.length, 1);
     assert.equal(h.calls[0].visit.route_code, WORKSPACE_SOURCE_ROUTE_REGISTRY[id]);
     assert.equal(h.calls[0].visit.source, "sidebar");
@@ -70,15 +75,16 @@ for (const status of [401, 403, 409, 412, 503]) {
   test(`Late ${status} cannot affect a new Workspace visit or its in-flight state`, async () => {
     const h = harness();
     const first = h.tracker.afterRender();
-    await Promise.resolve();
+    await flushVisitQueue();
     h.box.value = state("provider-health", "2");
     const second = h.tracker.afterRender();
-    await Promise.resolve();
+    await flushVisitQueue();
     assert.equal(h.calls[0].signal.aborted, true);
     h.pending[0].reject({ status });
     await first;
     assert.deepEqual(h.errors, []);
     const duplicate = h.tracker.afterRender();
+    await flushVisitQueue();
     assert.equal(h.calls.length, 2);
     h.pending[1].resolve();
     await Promise.all([second, duplicate]);
@@ -88,7 +94,7 @@ for (const status of [401, 403, 409, 412, 503]) {
 test("Current failure is reported once without retry; return to the page is a new visit", async () => {
   const h = harness();
   const first = h.tracker.afterRender();
-  await Promise.resolve();
+  await flushVisitQueue();
   const error = { status: 503 };
   h.pending[0].reject(error);
   await first;
@@ -97,7 +103,7 @@ test("Current failure is reported once without retry; return to the page is a ne
   assert.equal(h.calls.length, 1);
   h.tracker.leave();
   const second = h.tracker.afterRender();
-  await Promise.resolve();
+  await flushVisitQueue();
   assert.equal(h.calls.length, 2);
   h.pending[1].resolve();
   await second;
@@ -165,4 +171,24 @@ test("Visit client sends only Cookie/CSRF and strict DTO; body abort propagates"
     globalThis.fetch = originalFetch;
     globalThis.document = originalDocument;
   }
+});
+
+test("Workspace visit writers stay serialized across a rapid route transition", async () => {
+  const h = harness();
+  const first = h.tracker.afterRender();
+  await flushVisitQueue();
+  h.box.value = state("provider-health", "2");
+  const second = h.tracker.afterRender();
+  await flushVisitQueue();
+
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].visit.page_visit_session_ref, "1".repeat(64));
+  assert.equal(h.calls[0].signal.aborted, true);
+
+  h.pending[0].resolve({ accepted: true });
+  await flushVisitQueue();
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.calls[1].visit.page_visit_session_ref, "2".repeat(64));
+  h.pending[1].resolve({ accepted: true });
+  await Promise.all([first, second]);
 });

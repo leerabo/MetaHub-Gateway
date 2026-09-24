@@ -1,4 +1,3 @@
-BEGIN;
 DO $$ BEGIN
   IF EXISTS(SELECT 1 FROM ga_launches) OR EXISTS(SELECT 1 FROM ga_rollbacks)
     OR EXISTS(SELECT 1 FROM post_ga_reviews) OR EXISTS(SELECT 1 FROM ga_evidence)
@@ -19,4 +18,3 @@ DROP FUNCTION ga_gate_immutable();
 DROP FUNCTION ga_launch_guard();
 DROP FUNCTION ga_immutable();
 DROP FUNCTION ga_rollback_guard();
-COMMIT;

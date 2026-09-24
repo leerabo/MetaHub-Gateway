@@ -20,7 +20,7 @@ function hydrateLoginBranding() {
   if (hasWorkspaceConsoleSession(authSession) || !globalThis.document) return;
   const branding = publicBrandingPreview;
   const productName = String(branding?.product_name ?? "MetaHub");
-  const loginTitle = String(branding?.login_title ?? "MetaHub 控制台登录");
+  const loginTitle = "进入组织空间";
   const message = String(branding?.login_message ?? "");
   const brand = document.querySelector(".login-brand");
   const eyebrow = brand?.querySelector(".eyebrow");
@@ -230,6 +230,12 @@ import { renderWebhookDeadLetters } from "../features/webhook-dead-letters/rende
 import { applyWebhookFormatMode } from "../features/webhooks/renderWebhookPanel.js";
 import { renderWorkspaceSessionPrompt } from "../features/auth/renderLoginPage.js";
 import {
+  bindConsoleSidebarViewport,
+  localizeConsoleGroup,
+  renderConsoleEntryLoading,
+  revealConsoleSidebarItem,
+} from "../features/console-shell/renderConsoleShell.js";
+import {
   createEnterpriseChatPageState,
   enterpriseChatIdentitySnapshot,
 } from "../features/enterprise-chat/enterpriseChatPageState.js";
@@ -268,6 +274,7 @@ import {
   providerStatusIdentitySnapshot,
 } from "../features/provider-health/providerStatusPageState.js";
 import { createI18n, DEFAULT_LOCALE } from "../i18n/messages.js";
+import { localizeConsoleStaticHtml } from "../i18n/localizeConsoleStaticHtml.js";
 import {
   AuthApiError,
   clearAuthSession,
@@ -384,7 +391,9 @@ import {
   requestUsageCsvExport,
   triggerUsageCsvDownload,
   getUsageSummary,
+  getPersonalUsageSummary,
   listUsageRecords,
+  listPersonalUsageRecords,
 } from "../lib/usage.js";
 import {
   createFinOpsAdjustment,
@@ -515,9 +524,17 @@ import {
   createIdentityStepUpGrant,
   getIdentityMe,
   getWebAuthnAssertion,
+  loginIdentity,
   logoutIdentity,
+  identityLoginHref,
 } from "../lib/identity.js";
-import { getCurrentWorkspaceSession } from "../lib/workspaces.js";
+import {
+  createWorkspaceMembershipInvitation,
+  getCurrentWorkspaceSession,
+  handoffWorkspaceToPartner,
+  listIdentityWorkspaces,
+  switchIdentityWorkspace,
+} from "../lib/workspaces.js";
 import {
   WORKSPACE_ROUTE_REGISTRY,
   WORKSPACE_SOURCE_ROUTE_REGISTRY,
@@ -581,7 +598,8 @@ import {
 } from "../lib/modelQualityScores.js";
 import { createModel, listModels, updateModel } from "../lib/models.js";
 import { createApplication, createProject, listApplications, listProjects } from "../lib/projects.js";
-import { probeProvider } from "../lib/providerHealth.js";
+import { discoverProviderModels, probeProvider, selectRepresentativeProbeAttempt } from "../lib/providerHealth.js";
+import { bindModelDiscovery } from "../features/models/bindModelDiscovery.js";
 import { listProviderStatuses } from "../lib/providerStatus.js";
 import {
   createSavedRequestLogFilter,
@@ -602,18 +620,24 @@ import {
   publishPolicySnapshot,
   rollbackPolicySnapshot,
 } from "../lib/policySnapshots.js";
-import { createUser, listWorkspaceMembers, updateUserRole, updateWorkspaceMember } from "../lib/users.js";
+import {
+  createUser,
+  listWorkspaceMembers,
+  removeWorkspaceMember,
+  updateUserRole,
+  updateWorkspaceMember,
+} from "../lib/users.js";
 import {
   acceptInvitation,
   captureInvitationRoute,
   createInvitation,
+  previewInvitation,
 } from "../lib/invitations.js";
 import {
   createProvider,
   createProviderKey,
   listProviderKeys,
   listProviders,
-  testProviderConnection,
   updateProvider,
   updateProviderKey,
 } from "../lib/providers.js";
@@ -652,7 +676,6 @@ import {
   updateVirtualKey,
   updateVirtualKeyLimits,
 } from "../lib/virtualKeys.js";
-import { createConsumer, listConsumers, updateConsumer } from "../lib/consumers.js";
 import {
   budgetIdentitySnapshot,
   createBudgetMutationLifecycle,
@@ -738,18 +761,20 @@ import { renderRolePermissionMatrix } from "../features/role-permissions/renderR
 import { createRolePermissionPageState } from "../features/role-permissions/rolePermissionPageState.js";
 import { createInvitationPageState } from "../features/invitations/invitationPageState.js";
 import { renderInvitationAcceptancePage } from "../features/invitations/renderInvitationAcceptancePage.js";
+import { gatewayServiceOrigin, serviceOrigin } from "../lib/runtimeOrigins.js";
+import { installUserFacingTextGuard } from "../lib/userFacingTextGuard.js";
 
 // 非浏览器单测只导入生命周期管理器，不启动应用；真实页面仍要求存在 #app 根节点。
 const app = globalThis.document?.querySelector("#app") ?? null;
+// All feature pages redraw into #app; keep internal diagnostics out of the
+// visible projection while retaining them in API responses and audit logs.
+installUserFacingTextGuard(app);
+// Keep the first Workspace bootstrap bounded even when the Control API stalls.
+const WORKSPACE_NAVIGATION_BOOTSTRAP_TIMEOUT_MS = 8_000;
 // Gateway traffic has no Workspace Cookie; Control must retain the page's host.
-const localLoopback = globalThis.window?.location?.hostname === "localhost";
-const gatewayUrl = localLoopback ? "http://127.0.0.1:8000" : "http://localhost:8000";
 const controlPage = globalThis.window?.location;
-const controlApiUrl = workspaceCookieApiOrigin(
-  !controlPage?.origin || new Set(["localhost", "127.0.0.1", "::1", "[::1]"]).has(controlPage.hostname)
-    ? `${controlPage?.protocol ?? "http:"}//${controlPage?.hostname ?? "localhost"}:8001`
-    : controlPage.origin,
-);
+const gatewayUrl = gatewayServiceOrigin(controlPage);
+const controlApiUrl = workspaceCookieApiOrigin(serviceOrigin(controlPage, 8001));
 const workspaceControlApiUrl = controlApiUrl;
 const consoleUrl = globalThis.window?.location?.origin ?? "";
 // 公开邀请 fragment 必须先于认证 Storage 读取同步截获并清除，避免既有 Session 污染 accept 请求。
@@ -771,16 +796,19 @@ const workspacePageVisitTracker = createWorkspacePageVisitTracker({
     else if ([403, 409, 412].includes(error?.status)) void refresh();
   },
 });
-const RESOURCE_NAVIGATION_IDS = new Set(["sdk-examples", "tenant", "users", "environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health",
+const RESOURCE_NAVIGATION_IDS = new Set(["dlp-rules", "sdk-examples", "migration-guide", "api-docs", "tenant", "users", "environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health",
   "model-aliases", "routing-policies", "model-quality-scores", "experiments",
   "request-logs", "request-explanations", "output-safety", "audit-logs", "feedback-summary", "usage",
-  "budgets", "internal-finops"]);
+  "budgets", "internal-finops", "webhooks", "webhook-dead-letters",
+  "role-permissions", "cost-anomalies", "policy-snapshots"]);
 const resourcePageLifecycle = createWorkspaceResourcePage({ current: () => ({
   session: authSession, shell: resourcePageShellState, hash: readActiveNavigationHash(),
   refreshGeneration: refreshSequence,
 }) });
 let consoleLogoutPending = false;
+const boundConsoleLogoutButtons = new WeakSet();
 let workspaceMembersOffset = 0;
+let workspaceMembersSearch = "";
 let workspaceMembersFeedback = "";
 let workspaceMembersActionError = null;
 let consoleShellActionError = null;
@@ -793,6 +821,7 @@ let gatewayDebugState = {};
 // 0138 分组状态只来自当前 Workspace 的服务端偏好；默认全部折叠。
 let expandedConsoleGroupKey = null;
 let sidebarGroupSequence = 0;
+let sidebarGroupPending = false;
 let workspaceAdvancedToolsDialogState = null;
 let workspaceAdvancedToolsDialogController = null;
 let workspaceAdvancedToolsDialogTrigger = null;
@@ -823,12 +852,15 @@ let modelFeedback = "";
 let providerActionError = null;
 let providerFeedback = "";
 let providerLastTestResult = null;
-let providerCatalogActiveTab = "catalog";
+let providerCatalogActiveTab = "providers";
+let providerCatalogSelectedEntryCode = "";
 let providerCatalogFilters = { status: "", vendorCode: "", capabilityCode: "", regionCode: "" };
 let providerCatalogActionError = null;
 let providerCatalogFeedback = "";
 let providerCatalogCompatibilityByEntryCode = {};
 let providerCatalogLastCreated = null;
+let providerSetupId = null;
+let providerCustomCreateCode = null;
 let providerCatalogLastPreflight = null;
 let providerCatalogCreateIntent = null;
 let providerCatalogPreflightIntent = null;
@@ -880,6 +912,14 @@ const workspaceNavigationController = createWorkspaceNavigationController({
       ...input,
     }),
     workspaceSession: (input) => getCurrentWorkspaceSession({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
+    workspaces: (input) => listIdentityWorkspaces({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
+    switchWorkspace: (input) => switchIdentityWorkspace({
       controlApiUrl: workspaceControlApiUrl,
       ...input,
     }),
@@ -954,6 +994,7 @@ const workspaceCommercialAccountingController = createWorkspaceCommercialAccount
   },
 });
 let consoleSidebarController = null;
+let disposeSidebarViewport = null;
 let mobileSidebarCollapsed = true;
 // 导航偏好和访问事件是低优先级写入；快速切页时只保留最后一页。
 const CONSOLE_NAVIGATION_SIDE_EFFECT_DELAY_MS = 5_000;
@@ -1091,9 +1132,16 @@ const workspaceConsoleExperienceController = createWorkspaceConsoleExperienceCon
     if (snapshot.status !== "draft") renderCurrentWorkspaceConsoleExperience();
   },
   onSessionInvalid(error) {
-    clearAuthSession();
-    authSession = { token: null, context: null };
-    renderLogin(authErrorMessage(error), error?.requestId);
+    // Workspace 子会话失效时保留全局账号会话，允许用户重新连接空间；
+    // 直接清空全局登录态会把一次局部过期误报成“账号退出”。
+    workspaceNavigationController.leave();
+    workspaceConsoleExperienceController.leave();
+    renderWorkspaceSessionPrompt(app, {
+      error: "组织空间连接已失效，请重新连接。",
+      requestId: error?.requestId,
+    });
+    const retry = document.querySelector("[data-console-session-retry]");
+    if (retry) retry.onclick = () => refresh();
   },
   onPermissionRevoked() {
     globalThis.queueMicrotask?.(() => {
@@ -1155,8 +1203,8 @@ const webhookPendingReplayKeys = new Map();
 const webhookDeadLetterPageState = createWebhookDeadLetterPageState();
 let virtualKeyCreatedSecret = null;
 let virtualKeyActionError = null;
-let consumerDirectoryOffset = 0;
 let virtualKeyFeedback = "";
+let keyCreateOpen = false;
 // SDK active language 使用模块级状态，保证 15 秒刷新和下载反馈后仍保留选择；进入登录页时统一重置为 Python。
 let activeSdkLanguage = "python";
 // 迁移指南使用完全独立的语言和显式配置选择，禁止与 SDK tabs 或其他页面筛选状态相互覆盖。
@@ -1172,12 +1220,18 @@ const migrationGuideVisitTracker = createMigrationGuideVisitTracker(recordMigrat
 let providerStatusEventWarning = null;
 let providerStatusEntrySource = readActiveNavigationHash() === "provider-health" ? "direct_hash" : "sidebar";
 const providerStatusVisitTracker = createProviderStatusVisitTracker(recordProviderStatusVisit);
+let publicInvitationSummary = null;
+let publicInvitationPreviewController = null;
 
 // 只有真实页面根节点存在时才启动网络加载；Node 单测导入本模块不会产生定时器或请求副作用。
 if (app && globalThis.window) {
   if (publicInvitationRoute?.isPublicMode()) {
     // 公开页不绑定控制台 hash、认证或遥测；离页只需销毁尚未消费的一次性凭据。
-    window.addEventListener("pagehide", () => publicInvitationRoute.clear());
+    window.addEventListener("pagehide", () => {
+      publicInvitationRoute.clear();
+      publicInvitationPreviewController?.abort();
+      publicInvitationSummary = null;
+    });
     window.addEventListener("hashchange", () => {
       clearBasicResourceSessionState({ clearDom: true });
       if (window.location.hash === "#accept-invitation") return;
@@ -1185,9 +1239,12 @@ if (app && globalThis.window) {
       publicInvitationRoute.leave();
       window.location.reload();
     }, { once: true });
-    renderPublicInvitation();
+    void loadPublicInvitation();
   } else {
     bindConsoleWorkspaceContextInvalidation();
+    window.addEventListener("pageshow", (event) => {
+      if (event.persisted) window.location.reload();
+    });
     window.addEventListener("hashchange", () => {
       workspaceConsoleExperienceShellState = null;
       workspacePageVisitTracker.leave();
@@ -1332,6 +1389,27 @@ if (app && globalThis.window) {
  *
  * 该路径在认证 bootstrap 前运行；提交只调用 `acceptInvitation`，不会读取或附加现有 Session。
  */
+async function loadPublicInvitation() {
+  publicInvitationPreviewController?.abort();
+  publicInvitationPreviewController = new AbortController();
+  const controller = publicInvitationPreviewController;
+  publicInvitationSummary = null;
+  const token = publicInvitationRoute?.readToken();
+  if (!token) return renderPublicInvitation({ status: "invalid", message: "邀请链接不可用或已失效" });
+  renderPublicInvitation({ status: "loading" });
+  try {
+    const summary = await previewInvitation({ controlApiUrl, token, signal: controller.signal });
+    if (controller.signal.aborted || publicInvitationRoute?.readToken() !== token) return;
+    publicInvitationSummary = summary;
+    renderPublicInvitation({ status: "form" });
+  } catch (error) {
+    if (controller.signal.aborted || publicInvitationRoute?.readToken() !== token) return;
+    if (Number(error?.status) === 410) publicInvitationRoute.clear();
+    renderPublicInvitation({ status: Number(error?.status) === 410 ? "invalid" : "preview-error",
+      message: error?.message || "邀请服务暂不可用", requestId: error?.requestId });
+  }
+}
+
 function renderPublicInvitation(state = null) {
   if (!app || !publicInvitationRoute?.isPublicMode()) return;
   const token = publicInvitationRoute.readToken();
@@ -1340,15 +1418,18 @@ function renderPublicInvitation(state = null) {
       ? { status: "form" }
       : { status: "invalid", message: "邀请链接不可用或已失效" }
   );
-  app.innerHTML = renderInvitationAcceptancePage(viewState);
+  app.innerHTML = renderInvitationAcceptancePage({ ...viewState, invitation: publicInvitationSummary });
+  document.querySelector("[data-invitation-preview-retry]")?.addEventListener("click", () => void loadPublicInvitation());
 
   const loginButton = document.querySelector("[data-invitation-login]");
   loginButton?.addEventListener("click", () => {
     // 接受页不复用可能属于管理员的旧 Session；回到登录页前先清空本地认证状态。
     publicInvitationRoute.leave();
+    publicInvitationPreviewController?.abort();
+    publicInvitationSummary = null;
     clearAuthSession();
     authSession = { token: null, context: null };
-    window.location.reload();
+    window.location.replace("/identity.html?view=login");
   });
 
   const form = document.querySelector("#invitation-accept-form");
@@ -1378,7 +1459,14 @@ function renderPublicInvitation(state = null) {
       });
       // 成功后先销毁凭据再渲染用户摘要，后续任何 DOM handler 都无法再次读取 Token。
       publicInvitationRoute.clear();
-      renderPublicInvitation({ status: "success", user: result.user });
+      try {
+        await loginIdentity({ controlApiUrl: workspaceControlApiUrl, email: result.user.email, password });
+        publicInvitationSummary = null;
+        window.location.replace("/identity.html");
+      } catch {
+        renderPublicInvitation({ status: "success", user: result.user,
+          message: "已加入组织，请登录受邀账号。" });
+      }
     } catch (error) {
       // 公开终态统一销毁凭据并展示同形失效页，避免重试差异泄漏真实 Invitation 状态。
       if (Number(error?.status) === 410) {
@@ -1499,6 +1587,8 @@ function broadcastConsoleWorkspaceContextInvalidation() {
  */
 async function performRefresh(options = {}) {
   if (consoleLogoutPending) return;
+  const groupSequence = sidebarGroupSequence;
+  const groupPending = sidebarGroupPending;
   const refreshId = ++refreshSequence;
   resourcePageLifecycle.cancelReads();
   filePageState.cancelList();
@@ -1513,6 +1603,7 @@ async function performRefresh(options = {}) {
     { generation: refreshId, session: refreshSession },
     { generation: refreshSequence, session: authSession },
   );
+  if (!app?.firstElementChild) renderConsoleEntryLoading(app);
   const consoleShellState = await loadConsoleShellState(refreshOwnerCurrent);
   // 导航读取期间可能发生来源跳转、侧栏切换或新 Session 登录；旧 shell 快照不得清理新页面 owner。
   if (!refreshOwnerCurrent()) {
@@ -1521,17 +1612,34 @@ async function performRefresh(options = {}) {
   if (!consoleShellState) return;
   const nextSession = workspaceConsoleSessionFromShell(consoleShellState);
   if (!nextSession) {
+    if (consoleShellState?.state === "error") {
+      renderWorkspaceSessionPrompt(app, {
+        error: "组织空间暂时无法连接，请重新连接。",
+        requestId: consoleShellState.error?.requestId,
+      });
+      const retry = document.querySelector("[data-console-session-retry]");
+      if (retry) retry.onclick = () => {
+        clearBasicResourceSessionState();
+        app?.replaceChildren();
+        refresh();
+      };
+      return;
+    }
     renderLogin(consoleShellState.error ? authErrorMessage(consoleShellState.error) : undefined,
       consoleShellState.error?.requestId);
     return;
   }
   const session = sameWorkspaceConsoleSession(authSession, nextSession) ? authSession : nextSession;
-  if (authSession !== session) {
+  const sessionChanged = authSession !== session;
+  if (sessionChanged) {
     clearConsoleSessionState({ clearNavigation: false });
     app?.replaceChildren();
   }
   authSession = session;
   refreshSession = session;
+  if (sessionChanged || (!groupPending && !sidebarGroupPending && groupSequence === sidebarGroupSequence)) {
+    expandedConsoleGroupKey = consoleShellState.sidebarExpandedGroupKey;
+  }
   const previousResourceNavigation = resourcePageLifecycle.navigation();
   resourcePageShellState = consoleShellState;
   if (resourcePageLifecycle.enter().changed) {
@@ -1553,8 +1661,7 @@ async function performRefresh(options = {}) {
     workspaceCommercialNavigationItems = [];
     workspaceCommercialAccountingController.close();
   }
-  consoleShellState.sidebarExpandedGroupKey = expandedConsoleGroupKey;
-  consoleShellState.mobileSidebarCollapsed = mobileSidebarCollapsed;
+  syncConsoleSidebarState(consoleShellState);
   if (!hasWorkspaceConsoleSession(authSession) || !refreshOwnerCurrent()) {
     return;
   }
@@ -1577,10 +1684,15 @@ async function performRefresh(options = {}) {
     providerStatusPageState.clear();
   }
   // 邀请弹窗必须同时属于当前 Session、授权指纹和后端确认的 users 导航；任一漂移立即清除密文。
+  // Keep this owner snapshot inline because the refresh lifecycle is extracted
+  // independently by the console regression harness.  Calling a helper that
+  // lives outside that slice would turn a valid refresh into a ReferenceError.
   invitationPageState.syncOwner({
     authContext: authSession.context,
-    token: null,
+    token: authSession.token,
     activeNavigation: consoleShellState?.activeNavigationItemId,
+    workspaceContext: consoleShellState?.workspaceContext,
+    workspaceOwner: consoleShellState?.workspaceOwner,
   });
   if (consoleShellState?.activeNavigationItemId !== "budgets") {
     // 离开 PAGE-076 会推进 Mutation revision，旧写响应不能回填其他页面或下一次登录。
@@ -1782,6 +1894,7 @@ async function loadAndRenderActiveNavigation({
     clearBasicResourceFeedback();
     if (RESOURCE_NAVIGATION_IDS.has(previousResourceNavigation)) app?.replaceChildren();
   }
+  if (!app?.firstElementChild) renderConsoleEntryLoading(app);
   const activeNavigationId = consoleShellState.activeNavigationItemId;
   const consoleExperienceView = workspaceConsoleExperienceView(activeNavigationId);
   if (!consoleExperienceView) {
@@ -1826,16 +1939,16 @@ async function loadAndRenderActiveNavigation({
       await load("providerHealthState", () => loadProviderHealthState(consoleShellState));
       break;
     case "models":
-      [state.modelsState, state.providersState] = await Promise.all([
-        loadModelsState(), loadProvidersState(),
+      [state.modelsState, state.providersState, state.workspaceTaskHomeState] = await Promise.all([
+        loadModelsState(), loadProvidersState(), loadWorkspaceConnectionProgress(),
       ]);
       break;
     case "response-cache":
       await load("responseCacheState", () => loadResponseCacheState(consoleShellState, refreshId));
       break;
     case "model-aliases":
-      [state.modelAliasesState, state.modelsState, state.environmentState] = await Promise.all([
-        loadModelAliasesState(), loadModelsState(), loadEnvironmentState(),
+      [state.modelAliasesState, state.modelsState, state.environmentState, state.workspaceTaskHomeState] = await Promise.all([
+        loadModelAliasesState(), loadModelsState(), loadEnvironmentState(), loadWorkspaceConnectionProgress(),
       ]);
       break;
     case "routing-policies": {
@@ -1887,9 +2000,16 @@ async function loadAndRenderActiveNavigation({
       await load("projectState", loadProjectState);
       break;
     case "virtual-keys":
-      [state.virtualKeysState, state.projectState, state.environmentState] = await Promise.all([
-        loadVirtualKeysState(), loadProjectState(), loadEnvironmentState(),
-      ]);
+      state.virtualKeysState = await loadVirtualKeysState();
+      if (hasPermission(authSession.context, PERMISSIONS.USER_MANAGE)) {
+        [state.projectState, state.environmentState, state.workspaceTaskHomeState] = await Promise.all([
+          loadProjectState(), loadEnvironmentState(), loadWorkspaceConnectionProgress(),
+        ]);
+      } else {
+        state.projectState = null;
+        state.environmentState = null;
+        state.workspaceTaskHomeState = null;
+      }
       break;
     case "usage":
       await load("usageState", loadUsageState);
@@ -1903,6 +2023,7 @@ async function loadAndRenderActiveNavigation({
       ];
       await workspaceCommercialAccountingController.open({
         authContext: authSession.context,
+        workspaceIdentity: consoleShellState.workspaceIdentity,
         activeNavigationItemId: activeNavigationId,
       });
       state.workspaceCommercialAccountingState =
@@ -2035,37 +2156,50 @@ async function loadAndRenderActiveNavigation({
       ));
       break;
     case "sdk-examples":
-      await load("sdkExampleStates", () => loadSdkExampleStates(consoleShellState));
+      [state.sdkExampleStates, state.workspaceTaskHomeState] = await Promise.all([
+        loadSdkExampleStates(consoleShellState), loadWorkspaceConnectionProgress(),
+      ]);
       break;
     case "migration-guide":
-      [state.environmentState, state.modelAliasesState] = await Promise.all([
-        loadEnvironmentState(), loadModelAliasesState(),
+      [state.environmentState, state.modelAliasesState, state.developerConnectionState] = await Promise.all([
+        loadEnvironmentState(), loadModelAliasesState(), loadDeveloperConnectionState(),
       ]);
       break;
     case "api-docs":
       if (hasPermission(authSession.context, PERMISSIONS.DEVELOPER_PORTAL_READ)) {
-        const token = authSession.token;
+        const session = authSession;
         const controller = new AbortController();
         developerContractSecurityController = controller;
-        const contracts = await getDeveloperContractWorkspace({
+        let contracts;
+        let supplyChain;
+        let loadFailed = false;
+        try {
+          state.developerConnectionState = await loadDeveloperConnectionState();
+          if (controller.signal.aborted || session !== authSession || !refreshOwnerCurrent()) break;
+          contracts = await getDeveloperContractWorkspace({
           controlApiUrl,
-          token,
+          authentication: "workspace",
           signal: controller.signal,
         });
-        const supplyChain = await getDeveloperSupplyChainSecurity({
+          supplyChain = await getDeveloperSupplyChainSecurity({
           controlApiUrl,
-          token,
+          authentication: "workspace",
           releaseIds: contracts.sdk_releases
             .filter((item) => item.status === "published")
             .map((item) => item.sdk_release_id),
           signal: controller.signal,
         });
+        } catch (error) {
+          if (error?.name === "AbortError") break;
+          loadFailed = true;
+        }
         if (developerContractSecurityController !== controller
-          || controller.signal.aborted || token !== authSession.token
+          || controller.signal.aborted || session !== authSession
           || refreshId !== refreshSequence || !refreshOwnerCurrent()
           || consoleShellState.activeNavigationItemId !== "api-docs") break;
         developerContractSecurityController = null;
-        state.developerContractState = Object.freeze({ ...contracts, supply_chain: supplyChain });
+        state.developerContractState = Object.freeze(loadFailed
+          ? { status: "error" } : { ...contracts, supply_chain: supplyChain });
       }
       break;
     case "enterprise-chat":
@@ -2115,8 +2249,11 @@ async function loadAndRenderActiveNavigation({
     ]))
     : new Map();
 
-  if (resourcePageLifecycle.blocksReplacement(false)) return;
+  if (resourcePageLifecycle.blocksReplacement(false)
+    || rolePermissionPageState.snapshot().busy || costAnomalyPageState.isActionBusy()
+    || policySnapshotOperationStatus !== "idle") return;
   resourcePageLifecycle.render();
+  syncConsoleSidebarState(consoleShellState);
   renderDeveloperStart(app, {
     gatewayUrl,
     controlApiUrl,
@@ -2127,6 +2264,11 @@ async function loadAndRenderActiveNavigation({
     branding: publicBrandingDisplay(),
     gatewayDebugState,
     policyDryRunState,
+    activeSdkLanguage,
+    activeMigrationLanguage,
+    selectedMigrationEnvironmentId,
+    selectedMigrationModelAlias,
+    migrationGuideEventWarning,
     enterpriseChatState: enterpriseChatPageState.snapshot(),
     workspaceConsoleExperienceState:
       state.workspaceConsoleExperienceState ?? workspaceConsoleExperienceController.snapshot(),
@@ -2134,6 +2276,7 @@ async function loadAndRenderActiveNavigation({
     preserveConsoleSidebar,
     ...state,
   });
+  if (!isBackgroundRefresh && !preserveConsoleSidebar) revealConsoleSidebarItem(app);
   if (activeNavigationId === "enterprise-chat") {
     hydrateEnterpriseChatText(app, enterpriseChatPageState.snapshot());
   }
@@ -2145,7 +2288,7 @@ async function loadAndRenderActiveNavigation({
   }
   if (activeNavigationId === "debug-console") {
     const panel = document.querySelector(".gateway-debug-panel");
-    if (panel) panel.innerHTML = renderGatewayDebugConsole(gatewayDebugState, { gatewayUrl });
+    if (panel) panel.innerHTML = renderGatewayDebugConsole(gatewayDebugState, { gatewayUrl, i18n: currentI18n });
   }
   bindOutputSafetyDetailInteractions(consoleShellState);
   bindAuthenticatedEvents(consoleShellState);
@@ -2155,18 +2298,34 @@ async function loadAndRenderActiveNavigation({
  * 渲染 控制台主应用 的 `renderLogin` 界面，把后端状态转换为用户可操作的视图。
  * 边界：前端隐藏按钮只改善体验，不能替代后端 RBAC 和租户校验。
  */
-function renderLogin(error, requestId) {
+function renderLogin(message = "", requestId = "-") {
   refreshSequence += 1;
   clearAuthSession();
   authSession = { context: null, owner: null };
   clearConsoleSessionState();
-  renderWorkspaceSessionPrompt(app, { error, requestId, branding: publicBrandingPreview });
-  const retry = document.querySelector("[data-console-session-retry]");
-  if (retry) retry.onclick = () => refresh();
-  void loadPublicBrandingPreview(publicBrandingGeneration, true);
+  app?.replaceChildren();
+  window.location.replace(identityLoginHref({ interrupted: Boolean(message), requestId }));
+}
+
+async function loadWorkspaceConnectionProgress() {
+  if (!resourcePageShellState?.workspaceNavigationContract) return null;
+  try {
+    return await workspaceNavigationController.loadGettingStarted();
+  } catch (error) {
+    if (isAbortError(error) || [401, 403, 409, 412].includes(Number(error?.status))) throw error;
+    return { status: "error" };
+  }
 }
 
 function clearBasicResourceFeedback() {
+  rolePermissionPageState.clear();
+  costAnomalyPageState.clear();
+  clearPolicySnapshotSessionState();
+  clearWebhookSessionState();
+  webhookDeadLetterPageState.clear();
+  dlpActionError = null;
+  dlpFeedback = "";
+  dlpScanScopeFilter = "";
   workspaceProfileState = workspaceProfileMutation = workspaceProfileRecovery = null;
   clearBudgetSessionState();
   finOpsPageState.clear();
@@ -2179,6 +2338,7 @@ function clearBasicResourceFeedback() {
   clearAuditExportSessionState();
   auditLogFilters = { limit: 20, offset: 0 };
   workspaceMembersOffset = 0;
+  workspaceMembersSearch = "";
   workspaceMembersFeedback = "";
   workspaceMembersActionError = null;
   modelAliasActionError = null;
@@ -2193,11 +2353,13 @@ function clearBasicResourceFeedback() {
   environmentActionError = projectActionError = providerActionError = modelActionError = virtualKeyActionError = null;
   environmentFeedback = projectFeedback = providerFeedback = modelFeedback = virtualKeyFeedback = "";
   providerLastTestResult = virtualKeyCreatedSecret = null;
-  consumerDirectoryOffset = 0;
-  providerCatalogActiveTab = "catalog";
+  keyCreateOpen = false;
+  providerCatalogActiveTab = "providers";
+  providerCatalogSelectedEntryCode = "";
   providerCatalogFilters = { status: "", vendorCode: "", capabilityCode: "", regionCode: "" };
   providerCatalogCompatibilityByEntryCode = {};
   providerCatalogLastCreated = providerCatalogLastPreflight = null;
+  providerSetupId = providerCustomCreateCode = null;
   providerCatalogCreateIntent = providerCatalogPreflightIntent = null;
   providerCatalogActionError = null;
   providerCatalogFeedback = "";
@@ -2268,6 +2430,49 @@ async function refreshResourceMutation(operation) {
   if (current) await refresh();
 }
 
+function setModelSetupFormPending(form, message) {
+  form.setAttribute("aria-busy", "true");
+  const button = form.querySelector("button[type='submit']");
+  button.dataset.setupLabel ??= button.textContent;
+  button.disabled = true;
+  button.textContent = message;
+  const feedback = form.querySelector("[data-model-setup-feedback]");
+  if (feedback) { feedback.setAttribute("role", "status"); feedback.textContent = ""; }
+  for (const field of form.querySelectorAll("input, select, textarea")) {
+    if (!field.disabled) { field.dataset.setupLocked = "true"; field.disabled = true; }
+  }
+}
+
+function showModelSetupFormError(form, error) {
+  const messages = {
+    "model_alias.alias_invalid": "模型名称格式不正确，请使用小写字母、数字、点、下划线或短横线。",
+    "model_alias.duplicate": "此运行环境已存在同名路由，请更换名称或查看已有路由。",
+    "model.internal_id_exists": "此模型名称已存在，请更换名称或查看已有模型。",
+    "model.internal_id_invalid": "MetaHub 模型名称格式不正确，请在高级设置中修改。",
+    "model.provider_invalid": "模型服务已不可用，请刷新列表后重新选择。",
+    "model.provider_model_id_invalid": "厂家模型名称不正确，请核对厂家提供的名称。",
+  };
+  const uncertain = !error?.status || error.status >= 500;
+  const message = uncertain ? "提交结果尚未确认，请先刷新列表核对。"
+    : messages[error.code] ?? "未能保存，请检查填写内容后重试。";
+  form.setAttribute("aria-busy", "false");
+  form.dataset.setupUnconfirmed = String(uncertain);
+  const button = form.querySelector("button[type='submit']");
+  button.textContent = button.dataset.setupLabel;
+  button.disabled = uncertain;
+  for (const field of form.querySelectorAll('[data-setup-locked="true"]')) {
+    field.disabled = false;
+    delete field.dataset.setupLocked;
+  }
+  const feedback = form.querySelector("[data-model-setup-feedback]");
+  if (feedback) {
+    feedback.setAttribute("role", "alert");
+    feedback.textContent = message + (error?.requestId ? ` request_id: ${error.requestId}` : "");
+  }
+  const reload = form.querySelector("[data-model-setup-reload]");
+  if (reload) reload.hidden = !uncertain;
+}
+
 async function loadResourceState(lane, permissions, request, project, errorFields = {}) {
   const operation = resourcePageLifecycle.beginRead(lane, permissions);
   if (!operation) return null;
@@ -2277,6 +2482,9 @@ async function loadResourceState(lane, permissions, request, project, errorField
     return current() ? project(result) : null;
   } catch (error) {
     if (!current() || isAbortError(error) || handleResourceAuthorizationError(error)) return null;
+    console.warn("MetaHub resource load failed", lane, error?.name ?? "Error",
+      ["Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource.", "Illegal invocation"].includes(error?.message) ? error.message : "unclassified",
+      [...String(error?.stack ?? "").matchAll(/(?:at |^)([A-Za-z_$][\w.$]*)\s*(?:@|\()/gmu)].map((match) => match[1]).slice(0, 4).join(" > "));
     return { ...errorFields, state: "error", message: authErrorMessage(error), requestId: error?.requestId ?? "-" };
   } finally {
     resourcePageLifecycle.finishRead(operation);
@@ -2285,8 +2493,13 @@ async function loadResourceState(lane, permissions, request, project, errorField
 
 function clearConsoleSessionState({ clearNavigation = true } = {}) {
   clearBasicResourceSessionState();
+  disposeSidebarViewport?.();
+  disposeSidebarViewport = null;
   consoleSidebarController?.abort();
   consoleSidebarController = null;
+  sidebarGroupSequence += 1;
+  sidebarGroupPending = false;
+  expandedConsoleGroupKey = null;
   mobileSidebarCollapsed = true;
   cancelPendingConsoleNavigationSideEffects();
   workspaceConsoleExperienceShellState = null;
@@ -2377,6 +2590,8 @@ function invitationOwnerInput(consoleShellState) {
     authContext: authSession.context,
     token: authSession.token,
     activeNavigation: consoleShellState?.activeNavigationItemId,
+    workspaceContext: consoleShellState?.workspaceContext,
+    workspaceOwner: consoleShellState?.workspaceOwner,
   };
 }
 
@@ -2485,6 +2700,29 @@ async function copyInvitationSecret(
  * 边界：不得在前端伪造权限结果或展示未脱敏的密钥、Token、Prompt。
  */
 function bindAuthenticatedEvents(consoleShellState) {
+  for (const button of document.querySelectorAll("[data-resource-retry]")) {
+    const binding = bindResourceElement(button, []);
+    button.onclick = async () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
+      button.disabled = true;
+      button.textContent = "正在重试...";
+      await refresh();
+    };
+  }
+  for (const link of document.querySelectorAll(".console-home-return, .console-flow-next, .console-flow-related, .workspace-recovery-action")) {
+    const routeCode = new URL(link.href).hash.slice(1);
+    const route = WORKSPACE_ROUTE_REGISTRY[routeCode];
+    if (!route) continue;
+    link.onclick = async (event) => {
+      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      link.dataset.consoleNav = route.sourceId;
+      link.dataset.consoleRoute = routeCode;
+      link.dataset.consoleTarget = route.sourceId;
+      link.dataset.consoleNavLabel = link.textContent;
+      await switchConsoleNavigation(link, consoleShellState);
+    };
+  }
   bindWorkspaceMemberInteractions();
   bindDeveloperContractDownloads(consoleShellState);
   // PAGE-093 使用独立事件绑定；DOM 不存在或后端导航未授权时该函数立即失败关闭且不发请求。
@@ -2536,13 +2774,20 @@ function bindAuthenticatedEvents(consoleShellState) {
     clearInvitationManualCopy(invitationDialog);
     applyInvitationDialogSnapshot(invitationDialog, invitationPageState.snapshot());
     try {
-      const result = await createInvitation({
-        controlApiUrl,
-        token: ownerInput.token,
-        email: intent.email,
-        role: intent.role,
-        expiresInHours: Number(data.get("expiresInHours")),
-      });
+      const result = ownerInput.workspaceContext
+        ? await createWorkspaceMembershipInvitation({
+            controlApiUrl,
+            email: intent.email,
+            role: intent.role,
+            expiresInHours: Number(data.get("expiresInHours")),
+          })
+        : await createInvitation({
+            controlApiUrl,
+            token: ownerInput.token,
+            email: intent.email,
+            role: intent.role,
+            expiresInHours: Number(data.get("expiresInHours")),
+          });
       if (invitationPageState.resolveCreate(ticket, result, consoleUrl)) {
         applyInvitationDialogSnapshot(invitationDialog, invitationPageState.snapshot());
       }
@@ -2604,27 +2849,52 @@ function bindAuthenticatedEvents(consoleShellState) {
   }
 
   const logoutButton = document.querySelector("#logout-button");
-  logoutButton?.addEventListener("click", async () => {
-    if (consoleLogoutPending) return;
-    consoleLogoutPending = true;
-    const logoutGeneration = ++refreshSequence;
-    clearConsoleSessionState();
-    clearAuthSession();
-    authSession = { context: null, owner: null };
-    renderWorkspaceSessionPrompt(app, { pending: true });
-    broadcastConsoleWorkspaceContextInvalidation();
-    let failure = null;
-    try {
-      await logoutIdentity({ controlApiUrl: workspaceControlApiUrl });
-    } catch (error) {
-      if (Number(error?.status) !== 401) failure = error;
-    } finally {
+  if (logoutButton && !boundConsoleLogoutButtons.has(logoutButton)) {
+    boundConsoleLogoutButtons.add(logoutButton);
+    logoutButton?.addEventListener("click", async () => {
+      if (consoleLogoutPending) return;
+      consoleLogoutPending = true;
+      const logoutGeneration = ++refreshSequence;
+      clearConsoleSessionState();
+      clearAuthSession();
+      authSession = { context: null, owner: null };
+      renderWorkspaceSessionPrompt(app, { pending: true });
+      broadcastConsoleWorkspaceContextInvalidation();
+      let failure = null;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          await logoutIdentity({ controlApiUrl: workspaceControlApiUrl });
+          failure = null;
+          break;
+        } catch (error) {
+          // A concurrent tab or a slow cookie write can make the first request
+          // miss the current CSRF/session pair. Give the browser one short retry.
+          if (Number(error?.status) === 401) {
+            failure = null;
+            break;
+          }
+          failure = error;
+          if (attempt === 0) {
+            if (typeof globalThis.setTimeout === "function") {
+              await new Promise((resolve) => globalThis.setTimeout(resolve, 180));
+            }
+          }
+        }
+      }
+      // Keep the local page deterministic even when the server already revoked
+      // the session or the best-effort cleanup endpoint is temporarily unavailable.
       consoleLogoutPending = false;
       broadcastConsoleWorkspaceContextInvalidation();
-    }
-    if (logoutGeneration !== refreshSequence || hasWorkspaceConsoleSession(authSession)) return;
-    renderLogin(failure ? authErrorMessage(failure) : undefined, failure?.requestId);
-  });
+      if (logoutGeneration !== refreshSequence || hasWorkspaceConsoleSession(authSession)) return;
+      if (failure) {
+        renderWorkspaceSessionPrompt(app, { error: "退出未完成，请重试。", requestId: failure.requestId });
+        const retry = document.querySelector("[data-console-session-retry]");
+        if (retry) retry.onclick = () => refresh();
+        return;
+      }
+      window.location.replace("/");
+    });
+  }
 
   for (const navigationButton of document.querySelectorAll("[data-console-nav]")) {
     navigationButton.onclick = async () => {
@@ -2640,6 +2910,12 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindWorkspaceNavigationInteractions(consoleShellState);
 
   const sidebarToggle = document.querySelector("[data-sidebar-toggle]");
+  disposeSidebarViewport?.();
+  disposeSidebarViewport = bindConsoleSidebarViewport({
+    shell: sidebarToggle?.closest(".console-shell"), state: consoleShellState,
+    applyCollapsed: applyConsoleSidebarCollapsedState,
+    onCompact: () => { mobileSidebarCollapsed = true; },
+  });
   if (sidebarToggle) sidebarToggle.onclick = async () => {
     await toggleConsoleSidebar(sidebarToggle, consoleShellState);
   };
@@ -2974,22 +3250,26 @@ function bindAuthenticatedEvents(consoleShellState) {
     button.disabled = true;
     virtualKeyActionError = null;
     virtualKeyFeedback = "创建中";
+    button.textContent = "正在创建...";
     try {
       const result = await resourceMutationRequest(operation, createVirtualKey, {
         controlApiUrl,
-        name: String(data.get("name") ?? ""),
-        environmentId: String(data.get("environmentId") ?? ""),
+        name: String(data.get("name") ?? "").trim() || "个人 KEY",
+        environmentId: hasPermission(authSession.context, PERMISSIONS.USER_MANAGE)
+          ? String(data.get("environmentId") ?? "")
+          : undefined,
         environment: undefined,
         description: String(data.get("description") ?? ""),
         projectId: String(data.get("projectId") ?? ""),
         applicationId: String(data.get("applicationId") ?? ""),
-        consumerId: String(data.get("consumerId") ?? ""),
       });
       virtualKeyCreatedSecret = {
         plainValue: result.plain_value,
         keyPrefix: result.virtual_key?.key_prefix,
+        keyName: result.virtual_key?.name || String(data.get("name") ?? "").trim(),
       };
-      virtualKeyFeedback = "创建完成";
+      keyCreateOpen = true;
+      virtualKeyFeedback = "KEY 已创建，请复制保存。";
       await refreshResourceMutation(operation);
     } catch (error) {
       if (handleResourceMutationError(operation, error)) return;
@@ -3024,7 +3304,7 @@ function bindAuthenticatedEvents(consoleShellState) {
             status: nextStatus,
           });
         }
-        virtualKeyFeedback = nextStatus === "disabled" ? "已禁用" : "已启用";
+        virtualKeyFeedback = nextStatus === "disabled" ? "已禁用，KEY 已立即失效" : "已启用";
         await refreshResourceMutation(operation);
       } catch (error) {
         if (handleResourceMutationError(operation, error)) return;
@@ -3035,31 +3315,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     });
   }
 
-  for (const form of document.querySelectorAll("#create-consumer-form, [data-consumer-form]")) {
-    const binding = bindResourceElement(form, [PERMISSIONS.VIRTUAL_KEY_READ, PERMISSIONS.VIRTUAL_KEY_WRITE, PERMISSIONS.USER_MANAGE], "virtual-keys");
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const operation = resourcePageLifecycle.beginMutation(binding);
-      if (!operation) return;
-      form.querySelector("button[type='submit']").disabled = true;
-      const data = new FormData(form);
-      virtualKeyActionError = null;
-      try {
-        await resourceMutationRequest(operation, form.dataset.consumerId ? updateConsumer : createConsumer, {
-          controlApiUrl, consumerId: form.dataset.consumerId,
-          displayName: String(data.get("displayName") ?? ""), department: String(data.get("department") ?? ""),
-          status: data.has("active") ? "active" : "disabled", revision: Number(form.dataset.revision),
-        });
-        virtualKeyFeedback = form.dataset.consumerId ? "使用者已更新" : "使用者已添加";
-        await refreshResourceMutation(operation);
-      } catch (error) {
-        if (handleResourceMutationError(operation, error)) return;
-        virtualKeyActionError = error;
-        await refreshResourceMutation(operation);
-      }
-    });
-  }
-  for (const button of document.querySelectorAll("[data-consumer-page], [data-rotate-virtual-key]")) {
+  for (const button of document.querySelectorAll("[data-rotate-virtual-key]")) {
     const binding = bindResourceElement(button, [PERMISSIONS.VIRTUAL_KEY_READ, PERMISSIONS.VIRTUAL_KEY_WRITE], "virtual-keys");
     button.addEventListener("click", async () => {
       const operation = resourcePageLifecycle.beginMutation(binding);
@@ -3067,15 +3323,14 @@ function bindAuthenticatedEvents(consoleShellState) {
       button.disabled = true;
       virtualKeyActionError = null;
       try {
-        if (button.dataset.consumerPage !== undefined) {
-          consumerDirectoryOffset = Number(button.dataset.consumerPage);
-        } else {
-          const result = await resourceMutationRequest(operation, rotateVirtualKey, {
-            controlApiUrl, virtualKeyId: button.dataset.rotateVirtualKey, expectedRevision: Number(button.dataset.keyRevision),
-          });
-          virtualKeyCreatedSecret = { plainValue: result.plain_value, keyPrefix: result.virtual_key?.key_prefix };
-          virtualKeyFeedback = "KEY 已轮换";
-        }
+        const result = await resourceMutationRequest(operation, rotateVirtualKey, {
+          controlApiUrl, virtualKeyId: button.dataset.rotateVirtualKey, expectedRevision: Number(button.dataset.keyRevision),
+        });
+        virtualKeyCreatedSecret = {
+          plainValue: result.plain_value, keyPrefix: result.virtual_key?.key_prefix,
+          keyName: result.virtual_key?.name, operation: "rotated",
+        };
+        virtualKeyFeedback = "KEY 已轮换";
         await refreshResourceMutation(operation);
       } catch (error) {
         if (handleResourceMutationError(operation, error)) return;
@@ -3124,11 +3379,48 @@ function bindAuthenticatedEvents(consoleShellState) {
       if (!new Set(["catalog", "providers"]).has(nextTab)) return;
       providerCatalogActiveTab = nextTab;
       providerCatalogActionError = null;
+      tab.disabled = true;
+      tab.textContent = "正在打开...";
       await refresh();
     });
   }
 
   const providerCatalogFilterForm = document.querySelector("[data-provider-catalog-filter-form]");
+  const providerSelection = document.querySelector("[data-provider-catalog-selection]");
+  providerSelection?.addEventListener("change", () => {
+    providerCatalogSelectedEntryCode = providerSelection.value;
+    for (const entry of document.querySelectorAll("[data-provider-catalog-entry]")) {
+      entry.hidden = entry.dataset.providerCatalogEntry !== providerCatalogSelectedEntryCode;
+    }
+  });
+  for (const group of document.querySelectorAll("details.provider-disabled-services")) {
+    group.addEventListener("toggle", () => {
+      if (group.open) return;
+      group.querySelectorAll('input[type="password"]').forEach((input) => { input.value = ""; });
+      group.querySelectorAll("details.provider-keypool").forEach((details) => { details.open = false; });
+    });
+  }
+  for (const details of document.querySelectorAll("details.provider-keypool")) {
+    const setupButton = [...document.querySelectorAll("[data-provider-key-open]")]
+      .find((button) => button.dataset.providerKeyOpen === details.dataset.providerKeypool);
+    // 展开密钥表单是本地 UI 动作。按钮只有在 renderProviderRow 已确认写权限时才会渲染，
+    // 不应再被异步资源页生命周期拦截，否则读请求完成或后台刷新后会出现“按钮可见但点了没反应”。
+    setupButton?.addEventListener("click", () => {
+      if (!setupButton.isConnected) return;
+      details.open = !details.open;
+      providerSetupId = details.open ? details.dataset.providerKeypool : "";
+      if (details.open) {
+        details.scrollIntoView({ block: "nearest" });
+        details.querySelector('input[name="plainValue"]')?.focus({ preventScroll: true });
+      }
+    });
+    details.addEventListener("toggle", () => {
+      if (!details.isConnected) return;
+      setupButton?.setAttribute("aria-expanded", String(details.open));
+      if (!details.open && providerSetupId === details.dataset.providerKeypool) providerSetupId = "";
+      if (!details.open) details.querySelectorAll('input[type="password"]').forEach((input) => { input.value = ""; });
+    });
+  }
   const providerCatalogFilterBinding = bindResourceElement(providerCatalogFilterForm, [PERMISSIONS.PROVIDER_CATALOG_READ], "providers");
   providerCatalogFilterForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -3181,6 +3473,15 @@ function bindAuthenticatedEvents(consoleShellState) {
       if (!operation) return;
       try {
         const data = new FormData(form);
+        const codeInput = form.elements.namedItem("providerCode");
+        if (codeInput && !codeInput.value.trim()) {
+          const previousInput = providerCatalogCreateIntent?.fingerprint
+            ? JSON.parse(providerCatalogCreateIntent.fingerprint) : null;
+          codeInput.value = previousInput?.entryCode === data.get("entryCode")
+            ? previousInput.providerCode
+            : `${String(data.get("entryCode") ?? "provider").slice(0, 44)}_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
+          data.set("providerCode", codeInput.value);
+        }
         const input = {
           entryCode: String(data.get("entryCode") ?? ""),
           version: String(data.get("version") ?? ""),
@@ -3206,8 +3507,14 @@ function bindAuthenticatedEvents(consoleShellState) {
         });
         providerCatalogCreateIntent = null;
         providerCatalogLastCreated = result;
+        providerSetupId = result.instance?.provider_id ?? null;
+        providerCatalogActiveTab = "providers";
+        providerFeedback = "模型服务已添加，请配置厂家 API KEY。";
         providerCatalogFeedback = result.idempotent_replay ? "已恢复同一创建结果" : "Provider 已从目录创建";
         await refreshResourceMutation(operation);
+        if (resourcePageLifecycle.navigation() === "providers") {
+          document.querySelector("details.provider-keypool[open]")?.scrollIntoView({ block: "center" });
+        }
       } catch (error) {
         if (handleResourceMutationError(operation, error)) return;
         if (!(error instanceof AuthApiError) || ![0, 503].includes(error.status)) {
@@ -3269,21 +3576,31 @@ function bindAuthenticatedEvents(consoleShellState) {
     const button = createProviderForm.querySelector("button[type='submit']");
     const data = new FormData(createProviderForm);
     button.disabled = true;
+    button.textContent = "正在添加...";
+    const providerCode = String(data.get("providerCode") ?? "").trim()
+      || providerCustomCreateCode || `provider_${crypto.randomUUID().replaceAll("-", "")}`;
+    providerCustomCreateCode = providerCode;
     providerActionError = null;
     providerFeedback = "创建中";
     providerLastTestResult = null;
     try {
-      await resourceMutationRequest(operation, createProvider, {
+      const result = await resourceMutationRequest(operation, createProvider, {
         controlApiUrl,
-        providerCode: String(data.get("providerCode") ?? ""),
+        providerCode,
         name: String(data.get("name") ?? ""),
         providerType: String(data.get("providerType") ?? "openai_compatible"),
         baseUrl: String(data.get("baseUrl") ?? ""),
         authType: String(data.get("authType") ?? "bearer"),
         description: String(data.get("description") ?? ""),
       });
-      providerFeedback = "创建完成";
+      providerSetupId = result.provider?.provider_id ?? null;
+      providerCustomCreateCode = null;
+      providerFeedback = result.provider?.auth_type === "none"
+        ? "模型服务已添加。" : "模型服务已添加，请配置厂家 API KEY。";
       await refreshResourceMutation(operation);
+      if (resourcePageLifecycle.navigation() === "providers") {
+        document.querySelector("details.provider-keypool[open] input[name='plainValue']")?.focus();
+      }
     } catch (error) {
       if (handleResourceMutationError(operation, error)) return;
       providerActionError = error;
@@ -3329,21 +3646,36 @@ function bindAuthenticatedEvents(consoleShellState) {
       if (!operation) return;
       const button = providerForm.querySelector("button[type='submit']");
       button.disabled = true;
+      button.textContent = "正在测试...";
+      providerForm.setAttribute("aria-busy", "true");
       providerActionError = null;
+      providerLastTestResult = null;
       providerFeedback = "测试中";
       try {
-        const result = await resourceMutationRequest(operation, testProviderConnection, {
+        // Use the health probe contract so the server tests the active Provider
+        // KeyPool credential.  The legacy /providers/{id}/test route only
+        // checked endpoint reachability and therefore returned a misleading
+        // 401 even when the saved key was valid.
+        const result = await resourceMutationRequest(operation, probeProvider, {
           controlApiUrl,
           providerId: providerForm.dataset.providerId,
-          timeoutSeconds: 5,
         });
-        providerFeedback = "测试完成";
+        // KeyPool 会按权重依次尝试多把凭据；诊断必须与聚合结论使用同一把代表性尝试。
+        // 旧逻辑固定取 attempts[0]，会把第一把失效 Key 的 401 显示成整体失败，即使后续
+        // 有效 Key 已返回 200。成功优先选择成功尝试，失败才选择首个失败尝试。
+        const attempts = Array.isArray(result.attempts) ? result.attempts : [];
+        const attempt = selectRepresentativeProbeAttempt(result);
+        const retried = attempts.length > 1;
+        providerFeedback = result.result_status === "success"
+          ? (retried ? "测试完成（已找到可用 KEY）" : "测试完成")
+          : "测试未通过";
         providerLastTestResult = {
-          providerCode: result.provider?.provider_code,
-          status: result.test_result?.status,
-          message: result.test_result?.message,
-          httpStatus: result.test_result?.http_status,
-          latencyMs: result.test_result?.latency_ms,
+          providerName: result.provider_health?.name,
+          status: result.result_status,
+          message: attempt?.result_summary,
+          httpStatus: attempt?.http_status,
+          latencyMs: attempt?.latency_ms,
+          attemptCount: attempts.length,
         };
         await refreshResourceMutation(operation);
       } catch (error) {
@@ -3364,8 +3696,10 @@ function bindAuthenticatedEvents(consoleShellState) {
       const button = providerKeyForm.querySelector("button[type='submit']");
       const data = new FormData(providerKeyForm);
       button.disabled = true;
+      button.textContent = "正在保存...";
+      providerKeyForm.querySelector('input[name="plainValue"]').value = "";
       providerActionError = null;
-      providerFeedback = "Key 创建中";
+      providerFeedback = "正在保存密钥...";
       try {
         await resourceMutationRequest(operation, createProviderKey, {
           controlApiUrl,
@@ -3374,12 +3708,13 @@ function bindAuthenticatedEvents(consoleShellState) {
           plainValue: String(data.get("plainValue") ?? ""),
           weight: optionalNumber(data.get("weight"), 100),
         });
-        providerFeedback = "Key 创建完成";
+        providerSetupId = "";
+        providerFeedback = "密钥已保存。下一步：测试连接。";
         await refreshResourceMutation(operation);
       } catch (error) {
         if (handleResourceMutationError(operation, error)) return;
         providerActionError = error;
-        providerFeedback = "Key 创建失败";
+        providerFeedback = "密钥保存失败，请重新输入后重试。";
         await refreshResourceMutation(operation);
       }
     });
@@ -3416,37 +3751,57 @@ function bindAuthenticatedEvents(consoleShellState) {
 
   const createModelForm = document.querySelector("#create-model-form");
   const modelCreateBinding = bindResourceElement(createModelForm, [PERMISSIONS.MODEL_READ, PERMISSIONS.MODEL_WRITE], "models");
+  if (typeof bindModelDiscovery === "function") {
+    bindModelDiscovery(createModelForm, { request: async (providerId) => {
+      if (!resourcePageLifecycle.isBindingCurrent(modelCreateBinding)) throw new DOMException("Cancelled", "AbortError");
+      const ticket = resourcePageLifecycle.beginRead("model-discovery", [PERMISSIONS.MODEL_READ, PERMISSIONS.MODEL_WRITE, PERMISSIONS.PROVIDER_HEALTH_PROBE]);
+      if (!ticket) throw new DOMException("Cancelled", "AbortError");
+      try {
+        const result = await discoverProviderModels({ controlApiUrl, providerId, authentication: "workspace", signal: ticket.controller.signal });
+        if (!resourcePageLifecycle.isReadCurrent(ticket)) throw new DOMException("Cancelled", "AbortError");
+        return result;
+      } catch (error) {
+        if (!resourcePageLifecycle.isReadCurrent(ticket)) throw new DOMException("Cancelled", "AbortError");
+        handleResourceAuthorizationError(error);
+        throw error;
+      } finally { resourcePageLifecycle.finishRead(ticket); }
+    }});
+  }
   createModelForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (createModelForm.dataset.setupUnconfirmed === "true") return;
     const operation = resourcePageLifecycle.beginMutation(modelCreateBinding);
     if (!operation) return;
-    const button = createModelForm.querySelector("button[type='submit']");
     const data = new FormData(createModelForm);
-    button.disabled = true;
+    const capabilities = readCapabilities(createModelForm);
+    const priceMultiplier = Math.max(0, Number(data.get("priceMultiplier") ?? 1) || 1);
+    setModelSetupFormPending(createModelForm, "正在创建模型...");
     modelActionError = null;
     modelFeedback = "创建中";
     try {
       await resourceMutationRequest(operation, createModel, {
         controlApiUrl,
-        internalModelId: String(data.get("internalModelId") ?? ""),
+        internalModelId: String(data.get("internalModelId") ?? "").trim() || String(data.get("providerModelId") ?? "").trim().toLowerCase().replace(/[^a-z0-9._-]/gu, "-").replace(/^[^a-z0-9]+/u, "").slice(0, 120),
         providerId: String(data.get("providerId") ?? ""),
         providerModelId: String(data.get("providerModelId") ?? ""),
         displayName: optionalText(data.get("displayName")),
-        capabilities: readCapabilities(createModelForm),
+        capabilities,
         contextWindow: optionalNumber(data.get("contextWindow"), 0),
-        inputPricePer1k: optionalNumber(data.get("inputPricePer1k"), 0),
-        outputPricePer1k: optionalNumber(data.get("outputPricePer1k"), 0),
+        inputPricePer1k: optionalNumber(data.get("inputPricePer1k"), 0) * priceMultiplier,
+        outputPricePer1k: optionalNumber(data.get("outputPricePer1k"), 0) * priceMultiplier,
         currency: String(data.get("currency") ?? "CNY"),
         priceSchemaVersion: optionalText(data.get("priceSchemaVersion")),
         description: optionalText(data.get("description")),
       });
       modelFeedback = "创建完成";
+      setModelSetupFormPending(createModelForm, "已创建，正在刷新列表...");
       await refreshResourceMutation(operation);
     } catch (error) {
       if (handleResourceMutationError(operation, error)) return;
       modelActionError = error;
       modelFeedback = "创建失败";
-      await refreshResourceMutation(operation);
+      resourcePageLifecycle.finishMutation(operation);
+      showModelSetupFormError(createModelForm, error);
     }
   });
 
@@ -3479,16 +3834,44 @@ function bindAuthenticatedEvents(consoleShellState) {
     });
   }
 
+  for (const editForm of document.querySelectorAll("[data-model-edit-form]")) {
+    const binding = bindResourceElement(editForm, [PERMISSIONS.MODEL_READ, PERMISSIONS.MODEL_WRITE], "models");
+    editForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const operation = resourcePageLifecycle.beginMutation(binding);
+      if (!operation) return;
+      const data = new FormData(editForm);
+      const button = editForm.querySelector("button[type='submit']");
+      if (button) button.disabled = true;
+      try {
+        await resourceMutationRequest(operation, updateModel, {
+          controlApiUrl,
+          modelId: editForm.dataset.modelId,
+          displayName: optionalText(data.get("displayName")),
+          inputPricePer1k: optionalNumber(data.get("inputPricePer1k"), 0),
+          outputPricePer1k: optionalNumber(data.get("outputPricePer1k"), 0),
+        });
+        modelFeedback = "模型已更新";
+        await refreshResourceMutation(operation);
+      } catch (error) {
+        if (handleResourceMutationError(operation, error)) return;
+        modelActionError = error;
+        resourcePageLifecycle.finishMutation(operation);
+        await refresh();
+      }
+    });
+  }
+
   const createModelAliasForm = document.querySelector("#create-model-alias-form");
   const createModelAliasBinding = bindResourceElement(createModelAliasForm,
     [PERMISSIONS.ROUTING_READ, PERMISSIONS.ROUTING_WRITE], "model-aliases");
   createModelAliasForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (createModelAliasForm.dataset.setupUnconfirmed === "true") return;
     const operation = resourcePageLifecycle.beginMutation(createModelAliasBinding);
     if (!operation) return;
-    const button = createModelAliasForm.querySelector("button[type='submit']");
     const data = new FormData(createModelAliasForm);
-    button.disabled = true;
+    setModelSetupFormPending(createModelAliasForm, "正在创建路由...");
     modelAliasActionError = null;
     modelAliasFeedback = "创建中";
     try {
@@ -3502,12 +3885,14 @@ function bindAuthenticatedEvents(consoleShellState) {
         description: optionalText(data.get("description")),
       });
       modelAliasFeedback = "创建完成";
+      setModelSetupFormPending(createModelAliasForm, "已创建，正在刷新列表...");
       await refreshResourceMutation(operation);
     } catch (error) {
       if (handleResourceMutationError(operation, error)) return;
       modelAliasActionError = error;
       modelAliasFeedback = "创建失败";
-      await refreshResourceMutation(operation);
+      resourcePageLifecycle.finishMutation(operation);
+      showModelSetupFormError(createModelAliasForm, error);
     }
   });
 
@@ -3741,91 +4126,54 @@ function bindAuthenticatedEvents(consoleShellState) {
     await refresh();
   });
 
-  const dlpRuleForm = document.querySelector("#dlp-rule-form");
-  dlpRuleForm?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const token = authSession.token;
-    // DLP 规则会直接影响请求是否进入模型，前端只提交当前表单，admin 权限和 tenant_id 必须由后端校验。
-    if (!token) {
-      renderLogin();
-      return;
-    }
-    const button = dlpRuleForm.querySelector("button[type='submit']");
-    const data = new FormData(dlpRuleForm);
-    button.disabled = true;
-    dlpActionError = null;
-    dlpFeedback = "DLP 规则保存中";
-    try {
-      await createDlpRule({
-        controlApiUrl,
-        token,
-        name: String(data.get("name") ?? ""),
-        ruleType: String(data.get("ruleType") ?? ""),
-        pattern: String(data.get("pattern") ?? ""),
-        action: String(data.get("action") ?? "log_only"),
-        scanScope: String(data.get("scanScope") ?? "input"),
-        status: String(data.get("status") ?? "active"),
-        priority: optionalNumber(data.get("priority"), 100),
-        description: String(data.get("description") ?? ""),
-      });
-      dlpFeedback = "DLP 规则已保存";
-      await refresh();
-    } catch (error) {
-      // 认证过期会改变前端会话边界，必须立即清理本地登录态并回到登录页。
-      if (error instanceof AuthApiError && error.status === 401) {
-        clearAuthSession();
-        authSession = { token: null, context: null };
-        renderLogin(authErrorMessage(error), error.requestId);
-        return;
-      }
-      dlpActionError = error;
-      dlpFeedback = "DLP 规则保存失败";
-      await refresh();
-    }
-  });
-
-  for (const dlpUpdateForm of document.querySelectorAll("[data-dlp-rule-update]")) {
-    dlpUpdateForm.addEventListener("submit", async (event) => {
+  for (const form of document.querySelectorAll("#dlp-rule-form, [data-dlp-rule-update]")) {
+    const binding = bindResourceElement(form, [PERMISSIONS.DLP_WRITE], "dlp-rules");
+    form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const token = authSession.token;
-      // 快捷更新只调整方向、动作、状态和优先级；规则归属和字段白名单仍由后端 PATCH 接口限制。
-      if (!token) {
-        renderLogin();
-        return;
-      }
-      const button = dlpUpdateForm.querySelector("button[type='submit']");
-      const data = new FormData(dlpUpdateForm);
-      button.disabled = true;
+      const operation = resourcePageLifecycle.beginMutation(binding);
+      if (!operation) return;
+      const data = new FormData(form);
+      const update = form.hasAttribute("data-dlp-rule-update");
+      form.querySelector("button[type='submit']").disabled = true;
       dlpActionError = null;
-      dlpFeedback = "DLP 规则更新中";
       try {
-        await updateDlpRule({
+        await resourceMutationRequest(operation, update ? updateDlpRule : createDlpRule, {
           controlApiUrl,
-          token,
-          ruleId: dlpUpdateForm.dataset.dlpRuleId,
-          action: String(data.get("action") ?? ""),
+          ...(update ? { ruleId: form.dataset.dlpRuleId } : {
+            name: String(data.get("name") ?? ""),
+            ruleType: String(data.get("ruleType") ?? ""),
+            pattern: String(data.get("pattern") ?? ""),
+            description: String(data.get("description") ?? ""),
+          }),
+          action: String(data.get("action") ?? "log_only"),
           scanScope: String(data.get("scanScope") ?? "input"),
-          status: String(data.get("status") ?? ""),
+          status: String(data.get("status") ?? "active"),
           priority: optionalNumber(data.get("priority"), 100),
         });
-        dlpFeedback = "DLP 规则已更新";
-        await refresh();
+        dlpFeedback = update ? "DLP 规则已更新" : "DLP 规则已保存";
       } catch (error) {
-        // 认证过期会改变前端会话边界，必须立即清理本地登录态并回到登录页。
-        if (error instanceof AuthApiError && error.status === 401) {
-          clearAuthSession();
-          authSession = { token: null, context: null };
-          renderLogin(authErrorMessage(error), error.requestId);
-          return;
-        }
+        if (handleResourceMutationError(operation, error)) return;
         dlpActionError = error;
-        dlpFeedback = "DLP 规则更新失败";
-        await refresh();
+        dlpFeedback = "DLP 规则保存失败";
+      } finally {
+        await refreshResourceMutation(operation);
       }
     });
   }
 
   const webhookForm = document.querySelector("#webhook-form");
+  const webhookFormBinding = bindResourceElement(webhookForm, [PERMISSIONS.WEBHOOK_MANAGE], "webhooks");
+  webhookForm?.querySelector("[data-webhook-event-search]")?.addEventListener("input", (event) => {
+    if (!resourcePageLifecycle.isBindingCurrent(webhookFormBinding)) return;
+    const query = event.currentTarget.value.trim().toLocaleLowerCase();
+    let matches = 0;
+    for (const option of webhookForm.querySelectorAll("[data-webhook-event-option]")) {
+      const input = option.querySelector('[name="eventTypes"]');
+      option.hidden = !`${option.textContent} ${input.value}`.toLocaleLowerCase().includes(query);
+      if (!option.hidden) matches += 1;
+    }
+    webhookForm.querySelector("[data-webhook-event-empty]").hidden = matches > 0;
+  });
   const syncWebhookFormatMode = () => {
     const selectedFormat = webhookForm
       ?.querySelector('input[name="format"]:checked')
@@ -3838,21 +4186,16 @@ function bindAuthenticatedEvents(consoleShellState) {
   syncWebhookFormatMode();
   webhookForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const token = authSession.token;
-    // Webhook 会把治理事件推送到企业系统，前端只提交表单字段，角色和 tenant_id 必须由后端校验。
-    if (!token) {
-      renderLogin();
-      return;
-    }
+    const operation = resourcePageLifecycle.beginMutation(webhookFormBinding);
+    if (!operation) return;
     const button = webhookForm.querySelector("button[type='submit']");
     const data = new FormData(webhookForm);
     button.disabled = true;
     webhookActionError = null;
     webhookFeedback = "Webhook Endpoint 保存中";
     try {
-      const result = await createWebhook({
+      const result = await resourceMutationRequest(operation, createWebhook, {
         controlApiUrl,
-        token,
         name: String(data.get("name") ?? ""),
         endpointUrl: String(data.get("endpointUrl") ?? ""),
         eventTypes: data.getAll("eventTypes").map((item) => String(item)),
@@ -3871,36 +4214,26 @@ function bindAuthenticatedEvents(consoleShellState) {
       };
       webhookSelectedEndpointId = result.webhook?.webhook_endpoint_id ?? webhookSelectedEndpointId;
       webhookFeedback = { message: "Webhook Endpoint 已保存", requestId: result.request_id };
-      await refresh();
     } catch (error) {
-      // 认证过期会改变前端会话边界，必须立即清理本地登录态并回到登录页。
-      if (error instanceof AuthApiError && error.status === 401) {
-        clearAuthSession();
-        authSession = { token: null, context: null };
-        renderLogin(authErrorMessage(error), error.requestId);
-        return;
-      }
+      if (handleResourceMutationError(operation, error)) return;
       webhookActionError = error;
       webhookFeedback = "Webhook Endpoint 保存失败";
-      await refresh();
+    } finally {
+      await refreshResourceMutation(operation);
     }
   });
 
   for (const testButton of document.querySelectorAll("[data-webhook-test]")) {
+    const binding = bindResourceElement(testButton, [PERMISSIONS.WEBHOOK_MANAGE], "webhooks");
     testButton.addEventListener("click", async () => {
-      const token = authSession.token;
-      // 测试发送必须由后端按 Endpoint 归属和角色再次校验，前端不能只相信按钮可见性。
-      if (!token) {
-        renderLogin();
-        return;
-      }
+      const operation = resourcePageLifecycle.beginMutation(binding);
+      if (!operation) return;
       testButton.disabled = true;
       webhookActionError = null;
       webhookFeedback = "Webhook 测试发送中";
       try {
-        webhookLastTestResult = await testWebhook({
+        webhookLastTestResult = await resourceMutationRequest(operation, testWebhook, {
           controlApiUrl,
-          token,
           webhookEndpointId: testButton.dataset.webhookTest,
         });
         webhookSelectedEndpointId = testButton.dataset.webhookTest;
@@ -3911,24 +4244,20 @@ function bindAuthenticatedEvents(consoleShellState) {
               : "Webhook 测试发送失败",
           requestId: webhookLastTestResult.request_id,
         };
-        await refresh();
       } catch (error) {
-        // 认证过期会改变前端会话边界，必须立即清理本地登录态并回到登录页。
-        if (error instanceof AuthApiError && error.status === 401) {
-          clearAuthSession();
-          authSession = { token: null, context: null };
-          renderLogin(authErrorMessage(error), error.requestId);
-          return;
-        }
+        if (handleResourceMutationError(operation, error)) return;
         webhookActionError = error;
         webhookFeedback = "Webhook 测试发送失败";
-        await refresh();
+      } finally {
+        await refreshResourceMutation(operation);
       }
     });
   }
 
   for (const detailsButton of document.querySelectorAll("[data-webhook-details]")) {
+    const binding = bindResourceElement(detailsButton, [PERMISSIONS.WEBHOOK_MANAGE], "webhooks");
     detailsButton.addEventListener("click", async () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
       // Endpoint 选择只影响当前详情查询；租户归属仍由后端按登录态重新验证。
       webhookSelectedEndpointId = detailsButton.dataset.webhookDetails;
       webhookDeliveryFilters = { eventType: "", status: "all" };
@@ -3937,8 +4266,10 @@ function bindAuthenticatedEvents(consoleShellState) {
   }
 
   const webhookDeliveryFilterForm = document.querySelector("#webhook-delivery-filters");
+  const webhookFilterBinding = bindResourceElement(webhookDeliveryFilterForm, [PERMISSIONS.WEBHOOK_MANAGE], "webhooks");
   webhookDeliveryFilterForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!resourcePageLifecycle.isBindingCurrent(webhookFilterBinding)) return;
     const data = new FormData(webhookDeliveryFilterForm);
     webhookSelectedEndpointId = webhookDeliveryFilterForm.dataset.webhookEndpointId;
     webhookDeliveryFilters = {
@@ -3949,7 +4280,9 @@ function bindAuthenticatedEvents(consoleShellState) {
   });
 
   const webhookDetailsRefreshButton = document.querySelector("[data-webhook-refresh-details]");
+  const webhookRefreshBinding = bindResourceElement(webhookDetailsRefreshButton, [PERMISSIONS.WEBHOOK_MANAGE], "webhooks");
   webhookDetailsRefreshButton?.addEventListener("click", async () => {
+    if (!resourcePageLifecycle.isBindingCurrent(webhookRefreshBinding)) return;
     // 刷新只重读当前筛选的 Endpoint 详情，不改变 tenant、筛选或一次性 Secret 状态。
     webhookSelectedEndpointId = webhookDetailsRefreshButton.dataset.webhookRefreshDetails;
     webhookDetailsRefreshButton.disabled = true;
@@ -3958,13 +4291,10 @@ function bindAuthenticatedEvents(consoleShellState) {
   });
 
   for (const replayButton of document.querySelectorAll("[data-webhook-replay]")) {
+    const binding = bindResourceElement(replayButton, [PERMISSIONS.WEBHOOK_MANAGE], "webhooks");
     replayButton.addEventListener("click", async () => {
-      const token = authSession.token;
-      // replay 请求只提交路径 Endpoint、来源 delivery 和本次幂等键，tenant_id/actor/payload 由后端恢复。
-      if (!token) {
-        renderLogin();
-        return;
-      }
+      const operation = resourcePageLifecycle.beginMutation(binding);
+      if (!operation) return;
       replayButton.disabled = true;
       replayButton.setAttribute("aria-busy", "true");
       webhookActionError = null;
@@ -3975,9 +4305,8 @@ function bindAuthenticatedEvents(consoleShellState) {
           replayButton.dataset.webhookEndpointId,
           replayButton.dataset.webhookReplay,
         );
-        webhookLastReplayResult = await replayWebhook({
+        webhookLastReplayResult = await resourceMutationRequest(operation, replayWebhook, {
           controlApiUrl,
-          token,
           webhookEndpointId: replayButton.dataset.webhookEndpointId,
           webhookDeliveryId: replayButton.dataset.webhookReplay,
           idempotencyKey: replayKey,
@@ -3990,47 +4319,38 @@ function bindAuthenticatedEvents(consoleShellState) {
               : "Webhook 重放已完成，接收端仍失败",
           requestId: webhookLastReplayResult.request_id,
         };
-        await refresh();
       } catch (error) {
-        // 重放遇到认证过期必须立即清空会话，不能让旧页面继续展示管理操作入口。
-        if (error instanceof AuthApiError && error.status === 401) {
-          clearAuthSession();
-          authSession = { token: null, context: null };
-          renderLogin(authErrorMessage(error), error.requestId);
-          return;
-        }
+        if (handleResourceMutationError(operation, error)) return;
         webhookActionError = error;
         webhookFeedback = "Webhook 重放失败";
         // 4xx 已明确拒绝且未出网，可以释放幂等键；网络错误和 5xx 结果不确定时保留同一键供安全重试。
         if (error instanceof AuthApiError && error.status >= 400 && error.status < 500) {
           releaseWebhookReplayKey(replayButton.dataset.webhookEndpointId, replayButton.dataset.webhookReplay);
         }
-        await refresh();
+      } finally {
+        await refreshResourceMutation(operation);
       }
     });
   }
 
   for (const rotateButton of document.querySelectorAll("[data-webhook-rotate]")) {
+    const binding = bindResourceElement(rotateButton, [PERMISSIONS.WEBHOOK_MANAGE], "webhooks");
     rotateButton.addEventListener("click", async () => {
-      const token = authSession.token;
-      // Secret 轮换属于敏感管理操作，没有有效 Token 时不能继续展示确认或调用接口。
-      if (!token) {
-        renderLogin();
-        return;
-      }
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
       // 轮换会让旧 Secret 立即失效，必须由用户显式确认；确认框不展示旧密钥或 Endpoint URL。
       if (!globalThis.confirm?.("轮换后旧签名密钥将立即失效，确认继续？")) {
         return;
       }
+      const operation = resourcePageLifecycle.beginMutation(binding);
+      if (!operation) return;
       rotateButton.disabled = true;
       rotateButton.setAttribute("aria-busy", "true");
       webhookActionError = null;
       webhookFeedback = "Webhook Secret 轮换中";
       webhookSelectedEndpointId = rotateButton.dataset.webhookRotate;
       try {
-        const result = await rotateWebhookSecret({
+        const result = await resourceMutationRequest(operation, rotateWebhookSecret, {
           controlApiUrl,
-          token,
           webhookEndpointId: rotateButton.dataset.webhookRotate,
         });
         webhookCreatedSecret = {
@@ -4042,24 +4362,20 @@ function bindAuthenticatedEvents(consoleShellState) {
           message: `Webhook Secret 已轮换到版本 ${result.webhook?.secret_version ?? "-"}`,
           requestId: result.request_id,
         };
-        await refresh();
       } catch (error) {
-        // 轮换遇到认证过期必须回到登录页，不能保留可能过时的一次性 Secret 状态。
-        if (error instanceof AuthApiError && error.status === 401) {
-          clearAuthSession();
-          authSession = { token: null, context: null };
-          renderLogin(authErrorMessage(error), error.requestId);
-          return;
-        }
+        if (handleResourceMutationError(operation, error)) return;
         webhookActionError = error;
         webhookFeedback = "Webhook Secret 轮换失败";
-        await refresh();
+      } finally {
+        await refreshResourceMutation(operation);
       }
     });
   }
 
   const copyWebhookSecretButton = document.querySelector("[data-copy-webhook-secret]");
+  const webhookCopyBinding = bindResourceElement(copyWebhookSecretButton, [PERMISSIONS.WEBHOOK_MANAGE], "webhooks");
   copyWebhookSecretButton?.addEventListener("click", async () => {
+    if (!resourcePageLifecycle.isBindingCurrent(webhookCopyBinding)) return;
     const value = copyWebhookSecretButton.dataset.copyWebhookSecret;
     // signing secret 只在刚创建后临时存在内存和 DOM，复制后不写入本地存储或事件 payload。
     if (!value || !navigator.clipboard?.writeText) {
@@ -4069,8 +4385,10 @@ function bindAuthenticatedEvents(consoleShellState) {
     }
     try {
       await navigator.clipboard.writeText(value);
+      if (!resourcePageLifecycle.isBindingCurrent(webhookCopyBinding)) return;
       webhookFeedback = "Webhook 签名密钥已复制";
     } catch {
+      if (!resourcePageLifecycle.isBindingCurrent(webhookCopyBinding)) return;
       // Clipboard 权限拒绝不能形成未处理 Promise，也不能把 Secret 附加到错误消息。
       webhookActionError = { message: "签名密钥复制失败，请手工选择", requestId: "-" };
     }
@@ -4078,7 +4396,9 @@ function bindAuthenticatedEvents(consoleShellState) {
   });
 
   const dismissWebhookSecretButton = document.querySelector("[data-dismiss-webhook-secret]");
+  const webhookDismissBinding = bindResourceElement(dismissWebhookSecretButton, [PERMISSIONS.WEBHOOK_MANAGE], "webhooks");
   dismissWebhookSecretButton?.addEventListener("click", async () => {
+    if (!resourcePageLifecycle.isBindingCurrent(webhookDismissBinding)) return;
     webhookCreatedSecret = null;
     webhookFeedback = "Webhook 签名密钥已隐藏";
     await refresh();
@@ -4449,34 +4769,39 @@ function bindAuthenticatedEvents(consoleShellState) {
   }
 
   const usageFilterForm = document.querySelector("#usage-filter-form");
-  const usageFilterBinding = bindResourceElement(usageFilterForm, [PERMISSIONS.BILLING_USAGE_READ], "usage");
+  const usagePagePermissions = hasPermission(authSession.context, PERMISSIONS.BILLING_USAGE_READ)
+    ? [PERMISSIONS.BILLING_USAGE_READ]
+    : [PERMISSIONS.VIRTUAL_KEY_READ];
+  const usageFilterBinding = bindResourceElement(usageFilterForm, usagePagePermissions, "usage");
   usageFilterForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (!resourcePageLifecycle.isBindingCurrent(usageFilterBinding)) return;
     // 筛选变化会改变导出快照；先取消旧任务轮询，避免旧 CSV 完成后覆盖新筛选页面反馈。
     clearUsageExportSessionState();
     const data = new FormData(usageFilterForm);
-    usageFilters = {
-      consumerId: optionalText(data.get("consumerId")),
-      startDate: optionalText(data.get("startDate")),
-      endDate: optionalText(data.get("endDate")),
-      environmentId: optionalText(data.get("environmentId")),
-      modelId: optionalText(data.get("modelId")),
-      virtualKeyId: optionalText(data.get("virtualKeyId")),
-      projectId: optionalText(data.get("projectId")),
-      applicationId: optionalText(data.get("applicationId")),
-      providerId: optionalText(data.get("providerId")),
-      estimated: optionalText(data.get("estimated")),
-      requestId: optionalText(data.get("requestId")),
-      limit: 20,
-      offset: 0,
-    };
+    usageFilters = hasPermission(authSession.context, PERMISSIONS.BILLING_USAGE_READ)
+      ? {
+        consumerId: optionalText(data.get("consumerId")),
+        startDate: optionalText(data.get("startDate")),
+        endDate: optionalText(data.get("endDate")),
+        environmentId: optionalText(data.get("environmentId")),
+        modelId: optionalText(data.get("modelId")),
+        virtualKeyId: optionalText(data.get("virtualKeyId")),
+        projectId: optionalText(data.get("projectId")),
+        applicationId: optionalText(data.get("applicationId")),
+        providerId: optionalText(data.get("providerId")),
+        estimated: optionalText(data.get("estimated")),
+        requestId: optionalText(data.get("requestId")),
+        limit: 20,
+        offset: 0,
+      }
+      : { startDate: optionalText(data.get("startDate")), endDate: optionalText(data.get("endDate")), limit: 20, offset: 0 };
     usageActionError = null;
     await refresh();
   });
 
   const usageFilterReset = document.querySelector("#usage-filter-reset");
-  const usageResetBinding = bindResourceElement(usageFilterReset, [PERMISSIONS.BILLING_USAGE_READ], "usage");
+  const usageResetBinding = bindResourceElement(usageFilterReset, usagePagePermissions, "usage");
   usageFilterReset?.addEventListener("click", async () => {
     if (!resourcePageLifecycle.isBindingCurrent(usageResetBinding)) return;
     clearUsageExportSessionState();
@@ -4486,7 +4811,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   });
 
   const usagePrev = document.querySelector("#usage-prev");
-  const usagePrevBinding = bindResourceElement(usagePrev, [PERMISSIONS.BILLING_USAGE_READ], "usage");
+  const usagePrevBinding = bindResourceElement(usagePrev, usagePagePermissions, "usage");
   usagePrev?.addEventListener("click", async () => {
     if (!resourcePageLifecycle.isBindingCurrent(usagePrevBinding)) return;
     usageFilters = {
@@ -4497,7 +4822,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   });
 
   const usageNext = document.querySelector("#usage-next");
-  const usageNextBinding = bindResourceElement(usageNext, [PERMISSIONS.BILLING_USAGE_READ], "usage");
+  const usageNextBinding = bindResourceElement(usageNext, usagePagePermissions, "usage");
   usageNext?.addEventListener("click", async () => {
     if (!resourcePageLifecycle.isBindingCurrent(usageNextBinding)) return;
     usageFilters = {
@@ -4949,6 +5274,8 @@ function setGatewayDebugText(selector, value) {
  * tenant、actor、状态迁移、处置期限和有效限流值仍由后端恢复并校验。
  */
 function bindCostAnomalyPageInteractions(consoleShellState) {
+  const binding = bindResourceElement(document.querySelector(".cost-anomaly-page"), [PERMISSIONS.BILLING_ANOMALY_READ], "cost-anomalies");
+  if (!binding) return;
   bindCostAnomalyInteractions({
     /** 新筛选会使签名 cursor、详情和未提交动作草稿同时失效。 */
     async onFilter(filters) {
@@ -5029,7 +5356,7 @@ function bindCostAnomalyPageInteractions(consoleShellState) {
       costAnomalyPageState.clear();
       await switchConsoleNavigation(navigationButton, consoleShellState);
     },
-  });
+  }, { isCurrent: () => resourcePageLifecycle.isBindingCurrent(binding) });
 }
 
 /**
@@ -5040,15 +5367,10 @@ function bindCostAnomalyPageInteractions(consoleShellState) {
  * 状态机、幂等冲突和临时限流是否真正收紧的权威判断。
  */
 async function submitCostAnomalyAction(values, consoleShellState) {
-  const token = authSession.token;
   const owner = currentCostAnomalyActionOwner(consoleShellState);
   // 写请求必须同时拥有当前 Token 和完整 admin 页面 owner，任一缺失都先销毁旧租户事实。
-  if (!token || !owner) {
+  if (!owner) {
     costAnomalyPageState.clear();
-    // 只有认证令牌缺失才回到登录页；单纯离页时保持当前已授权页面。
-    if (!token) {
-      renderLogin();
-    }
     return;
   }
   const payload = costAnomalyPageState.beginAction(values);
@@ -5065,7 +5387,7 @@ async function submitCostAnomalyAction(values, consoleShellState) {
   try {
     const result = await applyCostAnomalyAction({
       controlApiUrl,
-      token,
+      authentication: "workspace",
       ...payload,
       signal: operation.controller.signal,
     });
@@ -5074,6 +5396,7 @@ async function submitCostAnomalyAction(values, consoleShellState) {
       return;
     }
     costAnomalyPageState.acceptAction(result);
+    costAnomalyPageState.finishActionOperation(operation);
     await refresh();
   } catch (error) {
     const currentOwner = currentCostAnomalyActionOwner(consoleShellState);
@@ -5086,6 +5409,11 @@ async function submitCostAnomalyAction(values, consoleShellState) {
       clearAuthSession();
       authSession = { token: null, context: null };
       renderLogin(authErrorMessage(error), error.requestId);
+      return;
+    }
+    if (error?.status === 403) {
+      costAnomalyPageState.clear();
+      await refresh();
       return;
     }
     const retainIdempotencyKey = shouldRetainCostAnomalyIdempotencyKey(error);
@@ -5106,6 +5434,7 @@ async function submitCostAnomalyAction(values, consoleShellState) {
             },
       },
     );
+    costAnomalyPageState.finishActionOperation(operation);
     await refresh();
   } finally {
     costAnomalyPageState.finishActionOperation(operation);
@@ -5117,17 +5446,15 @@ async function submitCostAnomalyAction(values, consoleShellState) {
  * 后端导航快照、当前 hash 和 admin 身份任一不匹配都返回 null，避免只凭可篡改 DOM 发起写入。
  */
 function currentCostAnomalyActionOwner(consoleShellState) {
-  const hashNavigation = readActiveNavigationHash();
-  const identity = costAnomalyIdentitySnapshot(authSession.context);
-  if (
-    !hasPermission(authSession.context, PERMISSIONS.BILLING_ANOMALY_WRITE)
-    || !identity
-    || consoleShellState?.activeNavigationItemId !== "cost-anomalies"
-    || (hashNavigation && hashNavigation !== "cost-anomalies")
-  ) {
-    return null;
-  }
-  return { identity, navigation: "cost-anomalies" };
+  return currentCostAnomalyOwner(consoleShellState, PERMISSIONS.BILLING_ANOMALY_WRITE);
+}
+
+function currentCostAnomalyOwner(consoleShellState, permission) {
+  const page = workspaceResourcePageOwner(authSession, consoleShellState, {
+    navigationId: "cost-anomalies", permissions: [permission], hash: readActiveNavigationHash(),
+  });
+  return page && page.key === currentEvaluationPageIdentity("cost-anomalies", permission)
+    ? { identity: page.key, navigation: "cost-anomalies" } : null;
 }
 
 /**
@@ -6062,15 +6389,18 @@ function bindLocalEndpointsPageInteractions(consoleShellState) {
 /** Create an Endpoint without retaining URL or token in state, errors, or post-submit DOM. */
 async function submitLocalEndpointCreate(request, consoleShellState) {
   const owner = currentLocalEndpointOwner(consoleShellState);
-  const token = authSession.token;
+  const workspace = hasWorkspaceConsoleSession(authSession);
+  const authentication = workspace ? "workspace" : "legacy";
+  const token = workspace ? undefined : authSession.token;
   const operation = localEndpointPageState.beginCreate(owner);
-  if (!token || !operation) return null;
+  if ((!workspace && !token) || !operation) return null;
   refreshSequence += 1;
   renderCurrentLocalEndpointsPanel(consoleShellState);
   try {
     const pending = createLocalEndpoint({
       controlApiUrl,
       token,
+      authentication,
       tenantId: owner.tenantId,
       request,
       requestId: operation.requestId,
@@ -6103,13 +6433,16 @@ async function submitLocalEndpointCreate(request, consoleShellState) {
 async function submitLocalEndpointTest(localEndpointId, consoleShellState) {
   const owner = currentLocalEndpointOwner(consoleShellState);
   const operation = localEndpointPageState.beginTest(owner, localEndpointId);
-  if (!authSession.token || !operation) return null;
+  const workspace = hasWorkspaceConsoleSession(authSession);
+  const authentication = workspace ? "workspace" : "legacy";
+  if ((!workspace && !authSession.token) || !operation) return null;
   refreshSequence += 1;
   renderCurrentLocalEndpointsPanel(consoleShellState);
   try {
     const result = await testLocalEndpoint({
       controlApiUrl,
-      token: authSession.token,
+      token: workspace ? undefined : authSession.token,
+      authentication,
       tenantId: owner.tenantId,
       localEndpointId: operation.localEndpointId,
       signal: operation.controller.signal,
@@ -6160,14 +6493,14 @@ function renderCurrentPrivateGatewayPanel(consoleShellState) {
   const owner = currentPrivateGatewayOwner(consoleShellState);
   if (!panel || !owner || !privateGatewayPageState.enter(owner)) return false;
   privateGatewayBrandingShellState = consoleShellState;
-  panel.innerHTML = renderPrivateGateways(
+  panel.innerHTML = localizeConsoleStaticHtml(renderPrivateGateways(
     {
       ...privateGatewayPageState.snapshot(),
       deploymentBranding: deploymentBrandingController.snapshot(),
     },
     authSession.context,
     consoleShellState,
-  );
+  ), currentI18n);
   bindPrivateGatewayPageInteractions(consoleShellState);
   return true;
 }
@@ -7698,7 +8031,7 @@ function renderCurrentSupportTicketPanel(consoleShellState) {
     return false;
   }
   clearSupportTicketDom(globalThis.document);
-  panel.innerHTML = html;
+  panel.innerHTML = localizeConsoleStaticHtml(html, currentI18n);
   bindSupportTicketPageInteractions(consoleShellState);
   return true;
 }
@@ -9194,7 +9527,7 @@ function authErrorMessage(error) {
       ? "登录状态已失效，请重新登录。"
       : error.message;
   }
-  return "无法连接控制面认证接口。";
+  return "暂时无法加载，请重试。";
 }
 
 /** Download a signed SDK only while the API docs navigation owner remains current. */
@@ -9205,22 +9538,23 @@ function bindDeveloperContractDownloads(consoleShellState) {
     developerContractDownloadMetadata = new Map();
     return;
   }
+  document.querySelector("[data-developer-contract-retry]")?.addEventListener("click", () => { void refresh(); });
   for (const button of document.querySelectorAll("[data-developer-sdk-download]")) {
     button.addEventListener("click", async () => {
-      const token = authSession.token;
-      if (!token || button.disabled) return;
+      const session = authSession;
+      if (!hasWorkspaceConsoleSession(session) || button.disabled) return;
       const release = developerContractDownloadMetadata.get(button.dataset.sdkReleaseId);
       if (!release
         || release.language !== button.dataset.language
         || release.sdk_version !== button.dataset.sdkVersion
         || release.artifact_sha256 !== button.dataset.artifactSha256
         || release.artifact_receipt_sha256 !== button.dataset.artifactReceiptSha256) return;
-      const owner = Object.freeze({ token, generation: refreshSequence });
+      const owner = Object.freeze({ session, generation: refreshSequence });
       clearDeveloperContractDownload();
       const downloadController = new AbortController();
       developerContractDownloadController = downloadController;
       const feedback = document.querySelector("[data-developer-contract-feedback]");
-      const current = () => owner.token === authSession.token
+      const current = () => owner.session === authSession
         && owner.generation === refreshSequence
         && developerContractDownloadController === downloadController
         && !downloadController.signal.aborted
@@ -9231,7 +9565,7 @@ function bindDeveloperContractDownloads(consoleShellState) {
       try {
         const result = await downloadDeveloperSdk({
           controlApiUrl,
-          token,
+          authentication: "workspace",
           language: button.dataset.language,
           sdkVersion: button.dataset.sdkVersion,
           contractSha256: release.contract_sha256,
@@ -9280,7 +9614,7 @@ function bindDeveloperContractDownloads(consoleShellState) {
       const release = developerContractDownloadMetadata.get(button.dataset.sdkReleaseId);
       const evidence = release?.supply_chain;
       if (!release || evidence?.status !== "ready" || !button.isConnected
-        || !authSession.token || consoleShellState.activeNavigationItemId !== "api-docs"
+        || !hasWorkspaceConsoleSession(authSession) || consoleShellState.activeNavigationItemId !== "api-docs"
         || !hasPermission(authSession.context, PERMISSIONS.DEVELOPER_PORTAL_READ)) return;
       const blob = new Blob([JSON.stringify({
         report: evidence.report,
@@ -9380,10 +9714,41 @@ async function loadQuickstartState(consoleShellState) {
   }
 }
 
-/**
- * 仅在 SDK 示例导航激活时按 Python、JavaScript 固定顺序读取两种制品元数据。
- * 安全：顺序请求消除双请求 401 竞态；任一 401 立即统一清理会话并停止下一请求，其他错误只写入对应语言状态。
- */
+async function loadDeveloperConnectionState() {
+  if (!hasPermission(authSession.context, PERMISSIONS.DEVELOPER_PORTAL_READ)) return null;
+  if (!hasWorkspaceConsoleSession(authSession)) {
+    const session = authSession;
+    try {
+      const result = await getPythonSdkExample({ controlApiUrl, token: session.token });
+      return session === authSession ? result : null;
+    } catch (error) {
+      return session !== authSession || handleSdkUnauthorized(error) ? null : sdkExampleErrorState(error);
+    }
+  }
+
+  const partnerHandoff = document.querySelector("[data-partner-handoff]");
+  if (partnerHandoff) {
+    partnerHandoff.onclick = async () => {
+      partnerHandoff.disabled = true;
+      try {
+        await handoffWorkspaceToPartner({ controlApiUrl: workspaceControlApiUrl });
+        window.location.assign("/partner.html");
+      } catch (error) {
+        partnerHandoff.disabled = false;
+        consoleShellActionError = currentI18n.t(
+          "shell.partner_handoff_failed",
+          {},
+          "无法切换到 Partner 门户，请稍后重试。",
+        );
+        void refresh();
+      }
+    };
+  }
+  return loadResourceState("developer-connection", [PERMISSIONS.DEVELOPER_PORTAL_READ],
+    (input) => getPythonSdkExample(input), (state) => state);
+}
+
+/** Load SDK languages sequentially so an authorization failure stops the next read. */
 async function loadSdkExampleStates(consoleShellState) {
   if (consoleShellState?.activeNavigationItemId !== "sdk-examples") {
     return null;
@@ -10429,27 +10794,12 @@ function clearPolicyTemplateLibraryStateOnIdentityChange(previous, current) {
  * 后端导航、权限码和 active 页面任一不满足时返回 null 并失败关闭。
  */
 function rolePermissionOwner(consoleShellState, refreshGeneration = null) {
-  const authorizedItem = consoleShellState?.navigation?.navigation_items?.find((item) => (
-    item?.id === "role-permissions"
-    && item?.target_section === "role-permissions"
-  ));
-  const identity = authorizationIdentitySnapshot(
-    authSession.context,
-    PERMISSIONS.RBAC_MATRIX_MANAGE,
-  );
-  const tenantId = String(
-    authSession.context?.user?.tenant_id
-      ?? authSession.context?.tenant?.tenant_id
-      ?? "",
-  ).trim();
-  if (
-    consoleShellState?.state !== "ok"
-    || consoleShellState?.activeNavigationItemId !== "role-permissions"
-    || !authorizedItem
-    || !identity
-    || !tenantId
-  ) return null;
-  const owner = { identity, tenantId, navigation: "role-permissions" };
+  const page = workspaceResourcePageOwner(authSession, consoleShellState, {
+    navigationId: "role-permissions", permissions: [PERMISSIONS.RBAC_MATRIX_MANAGE],
+    hash: readActiveNavigationHash(),
+  });
+  if (!page || page.key !== currentEvaluationPageIdentity("role-permissions", PERMISSIONS.RBAC_MATRIX_MANAGE)) return null;
+  const owner = { identity: page.key, workspaceId: authSession.owner.workspaceId, navigation: "role-permissions" };
   return Number.isSafeInteger(refreshGeneration) && refreshGeneration >= 1
     ? { ...owner, refreshGeneration }
     : owner;
@@ -10469,7 +10819,7 @@ async function loadRolePermissionState(consoleShellState, refreshId) {
   try {
     const result = await getPermissions({
       controlApiUrl,
-      token: authSession.token,
+      authentication: "workspace",
       signal: operation.controller.signal,
     });
     rolePermissionPageState.acceptLoad(
@@ -10507,6 +10857,7 @@ function renderRolePermissionPanel(consoleShellState) {
   panel.outerHTML = renderRolePermissionMatrix(
     rolePermissionPageState.snapshot(),
     authSession.context,
+    currentI18n,
   );
   bindRolePermissionInteractions(consoleShellState);
   return true;
@@ -10518,19 +10869,29 @@ function renderRolePermissionPanel(consoleShellState) {
  * 所有可编辑上限来自后端 ``grantable_permission_codes``；前端不提交 tenant、角色代码、用户或哈希。
  */
 function bindRolePermissionInteractions(consoleShellState) {
-  if (!rolePermissionOwner(consoleShellState)) return;
+  const binding = bindResourceElement(document.querySelector(".role-permission-page"), [PERMISSIONS.RBAC_MATRIX_MANAGE], "role-permissions");
+  if (!binding || !rolePermissionOwner(consoleShellState)) return;
   document.querySelector("#role-permission-category")?.addEventListener("change", (event) => {
+    if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
     rolePermissionPageState.setCategoryFilter(event.currentTarget.value);
+    renderRolePermissionPanel(consoleShellState);
+  });
+  document.querySelector("#role-permission-view-mode")?.addEventListener("click", (event) => {
+    if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
+    const current = event.currentTarget.dataset.rbacViewMode;
+    rolePermissionPageState.setViewMode(current === "all" ? "role" : "all");
     renderRolePermissionPanel(consoleShellState);
   });
   for (const tab of document.querySelectorAll("[data-rbac-role-tab]")) {
     tab.addEventListener("click", () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
       rolePermissionPageState.selectRole(tab.dataset.rbacRoleTab);
       renderRolePermissionPanel(consoleShellState);
     });
   }
   for (const input of document.querySelectorAll("[data-rbac-permission-toggle]")) {
     input.addEventListener("change", () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
       rolePermissionPageState.setPermission(
         input.dataset.roleId,
         input.dataset.permissionCode,
@@ -10540,14 +10901,16 @@ function bindRolePermissionInteractions(consoleShellState) {
     });
   }
   document.querySelector("#role-permission-discard")?.addEventListener("click", () => {
+    if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
     rolePermissionPageState.discardDraft();
     renderRolePermissionPanel(consoleShellState);
   });
   document.querySelector("#role-permission-save")?.addEventListener("click", async () => {
-    const token = authSession.token;
+    if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
+    const session = authSession;
     const operation = rolePermissionPageState.beginMutation(rolePermissionOwner(consoleShellState));
     // Token 或冻结写 ticket 任一缺失时禁止发送 PATCH，只重绘当前失败关闭状态。
-    if (!token || !operation) {
+    if (!operation) {
       renderRolePermissionPanel(consoleShellState);
       return;
     }
@@ -10555,7 +10918,7 @@ function bindRolePermissionInteractions(consoleShellState) {
     try {
       const result = await replaceRolePermissions({
         controlApiUrl,
-        token,
+        authentication: "workspace",
         roleId: operation.roleId,
         expectedRevision: operation.expectedRevision,
         permissionCodes: operation.permissionCodes,
@@ -10565,11 +10928,11 @@ function bindRolePermissionInteractions(consoleShellState) {
       rolePermissionPageState.acceptMutation(
         operation,
         result,
-        authSession.token === token ? rolePermissionOwner(consoleShellState) : null,
+        authSession === session ? rolePermissionOwner(consoleShellState) : null,
       );
       renderRolePermissionPanel(consoleShellState);
     } catch (error) {
-      const currentOwner = authSession.token === token ? rolePermissionOwner(consoleShellState) : null;
+      const currentOwner = authSession === session ? rolePermissionOwner(consoleShellState) : null;
       const accepted = rolePermissionPageState.rejectMutation(operation, error, currentOwner);
       if (!accepted) return;
       // 当前 owner 的 401 才能注销会话；迟到请求已经在上一行被状态机拒绝。
@@ -10595,10 +10958,10 @@ function bindRolePermissionInteractions(consoleShellState) {
  * 读取控制台导航、偏好和当前 active item。
  * 安全：active item 只是 UI 候选值，后端仍会按登录态角色确认是否可见。
  */
-async function loadConsoleShellState(isCurrent = () => true) {
+async function loadConsoleShellState(isCurrent = () => true, allowTransientRetry = true) {
   const hashState = readNavigationHashState();
   try {
-    const loaded = await workspaceNavigationController.loadNavigation();
+    const loaded = await loadWorkspaceNavigationWithDeadline();
     if (!isCurrent()) return null;
     const navigation = loaded.navigation;
     const requestedRegistry = WORKSPACE_ROUTE_REGISTRY[hashState.value];
@@ -10610,19 +10973,32 @@ async function loadConsoleShellState(isCurrent = () => true) {
       advancedTools = await workspaceNavigationController.loadAdvancedTools();
     }
     if (!isCurrent()) return null;
+    const roleCode = loaded.context?.role ?? loaded.authorization?.role_code ?? null;
     const resolution = resolveWorkspaceNavigationRoute(navigation, hashState.value, {
       requestedRejected: hashState.rejected,
       advancedTools,
+      roleCode,
+      authorization: loaded.authorization,
     });
-    if (resolution.rejected) {
-      replaceNavigationHash("");
+    if (resolution.rejected || hashState.value !== resolution.routeCode) {
+      replaceNavigationHash(resolution.routeCode);
     }
     const resolvedNavigation = projectWorkspaceNavigationForConsole(
       navigation,
       resolution.routeCode,
       advancedTools,
+      loaded.authorization,
+      roleCode,
     );
-    expandedConsoleGroupKey = navigation.preference.expanded_group_code;
+    const active = resolvedNavigation.navigation_items.find(
+      (item) => item.id === resolvedNavigation.active_navigation_item_id && item.sidebar_visible !== false,
+    );
+    // A backfilled preference starts at revision 1 with no expanded group. Keep
+    // the active page reachable until the user has made an explicit later choice.
+    const preference = navigation.preference;
+    const savedExpandedGroup = preference.expanded_group_code;
+    const expandedGroup = savedExpandedGroup
+      ?? (Number(preference.revision ?? 0) <= 1 ? active?.group_code ?? null : null);
     return {
       state: "ok",
       navigation: resolvedNavigation,
@@ -10635,7 +11011,7 @@ async function loadConsoleShellState(isCurrent = () => true) {
       locale: navigation.account_locale,
       activeNavigationItemId: resolvedNavigation.active_navigation_item_id,
       activeRouteCode: resolution.routeCode,
-      sidebarExpandedGroupKey: expandedConsoleGroupKey,
+      sidebarExpandedGroupKey: expandedGroup,
       ...(resolution.rejected
         ? { warning: "该入口不可用，已切换至可访问页面。" }
         : {}),
@@ -10643,17 +11019,65 @@ async function loadConsoleShellState(isCurrent = () => true) {
     };
   } catch (error) {
     if (!isCurrent()) return null;
+    if (allowTransientRetry && error?.code === "workspace_session.required" && isCurrent()) {
+      await waitForWorkspaceBootstrapRetry();
+      if (!isCurrent()) return null;
+      return loadConsoleShellState(isCurrent, false);
+    }
     if (Number(error?.status) === 401) {
       clearAuthSession();
       authSession = { token: null, context: null };
       renderLogin(authErrorMessage(error), error.requestId);
       return null;
     }
+    if (allowTransientRetry && isRetryableWorkspaceBootstrapError(error) && isCurrent()) {
+      await waitForWorkspaceBootstrapRetry();
+      if (!isCurrent()) return null;
+      return loadConsoleShellState(isCurrent, false);
+    }
     return {
       state: "error",
       error,
       activeNavigationItemId: null,
     };
+  }
+}
+
+// 启动页不能无限等待账号、空间会话和导航三个串行读请求；超时后由调用方展示可恢复入口。
+function isRetryableWorkspaceBootstrapError(error) {
+  const status = Number(error?.status);
+  return error?.code === "workspace_navigation.timeout"
+    || status === 0
+    || status >= 500;
+}
+
+function waitForWorkspaceBootstrapRetry() {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, 180));
+}
+
+async function loadWorkspaceNavigationWithDeadline() {
+  const schedule = globalThis.setTimeout;
+  const cancel = globalThis.clearTimeout;
+  // 纯加载器单测和极简宿主可能没有计时器；此时保留原始请求语义。
+  if (typeof schedule !== "function" || typeof cancel !== "function") {
+    return workspaceNavigationController.loadNavigation();
+  }
+  let timer;
+  const pending = workspaceNavigationController.loadNavigation();
+  const timeout = new Promise((_, reject) => {
+    timer = schedule(() => {
+      // 终止控制器内部的请求，避免超时后迟到响应继续改变下一次重试的 owner。
+      workspaceNavigationController.leave();
+      const error = new Error("组织空间连接超时，请重新连接。");
+      error.code = "workspace_navigation.timeout";
+      error.status = 504;
+      reject(error);
+    }, WORKSPACE_NAVIGATION_BOOTSTRAP_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([pending, timeout]);
+  } finally {
+    if (timer !== undefined) cancel(timer);
   }
 }
 
@@ -10832,7 +11256,8 @@ async function switchConsoleNavigation(button, consoleShellState) {
   consoleShellActionError = null;
   // navigationOwner 创建时已经推进 refreshSequence，使正在运行的旧刷新立即失效；
   // 不能等偏好写入完成后才阻止旧页面回写。
-  replaceNavigationHash(routeCode);
+  replaceNavigationHash(routeCode, { push: true });
+  window.scrollTo?.({ top: 0, behavior: "instant" });
   // 先投影目标入口和加载态，避免等待偏好、审计事件及完整数据刷新时用户看到旧页面。
   renderConsoleNavigationTransition(button, consoleShellState, itemId);
   // 当前按钮来自上一轮后端授权导航快照；先投影同一快照中的目标入口安全空态，
@@ -10842,8 +11267,20 @@ async function switchConsoleNavigation(button, consoleShellState) {
   );
   let authorizedProjectedState = null;
   if (projectedNavigationItem) {
+    mobileSidebarCollapsed = true;
+    if (projectedNavigationItem.sidebar_visible !== false) {
+      expandedConsoleGroupKey = projectedNavigationItem.group_code ?? expandedConsoleGroupKey;
+    } else {
+      // Deferred controls live in the global More controls disclosure rather than
+      // a standard accordion group. Entering one must close any previously open
+      // standard group and persist the empty expansion state.
+      expandedConsoleGroupKey = null;
+      applyExpandedConsoleGroup(null);
+    }
     authorizedProjectedState = {
       ...consoleShellState,
+      sidebarExpandedGroupKey: expandedConsoleGroupKey,
+      mobileSidebarCollapsed,
       warning: null,
       actionError: null,
       navigation: {
@@ -10865,6 +11302,7 @@ async function switchConsoleNavigation(button, consoleShellState) {
     });
     bindOutputSafetyDetailInteractions(authorizedProjectedState);
     bindAuthenticatedEvents(authorizedProjectedState);
+    revealConsoleSidebarItem(app);
   }
   // 迁移入口的访问事件只能由渲染后 tracker 写入；这里仅标记来源并清理上次 visit 的非阻断告警。
   if (itemId === "migration-guide") {
@@ -10999,6 +11437,8 @@ async function openWorkspaceAdvancedToolsDialog(consoleShellState) {
       workspaceNavigationController.snapshot().navigation,
       consoleShellState.activeRouteCode,
       tools,
+      consoleShellState.workspaceAuthorization,
+      consoleShellState.workspaceContext?.role,
     );
     renderWorkspaceAdvancedToolsDialogState(consoleShellState);
   } catch (error) {
@@ -11015,7 +11455,7 @@ function renderWorkspaceAdvancedToolsDialogState(consoleShellState) {
   if (!shell || consoleShellState?.workspaceNavigationContract !== true) return;
   shell.insertAdjacentHTML(
     "beforeend",
-    renderWorkspaceAdvancedTools(workspaceAdvancedToolsDialogState),
+    renderWorkspaceAdvancedTools(workspaceAdvancedToolsDialogState, currentI18n),
   );
   const dialog = shell.querySelector("[data-workspace-advanced-dialog]");
   if (dialog && typeof dialog.showModal === "function") {
@@ -11090,8 +11530,16 @@ function scheduleConsoleNavigationSideEffects({
     const canonical = WORKSPACE_ROUTE_REGISTRY[routeCode];
     if (canonical) {
       if (new Set(["primary", "task_home"]).has(canonical.placement)) {
+        const groupSequence = sidebarGroupSequence;
+        const navigationGroups = typeof workspaceNavigationController.snapshot === "function"
+          ? workspaceNavigationController.snapshot().navigation?.groups
+          : undefined;
+        const persistedGroup = !Array.isArray(navigationGroups) || navigationGroups.length === 0
+          || navigationGroups.some((group) => group.group_code === expandedConsoleGroupKey)
+          ? expandedConsoleGroupKey : null;
         const result = await workspaceNavigationController.savePreference({
           last_primary_route_code: routeCode,
+          expanded_group_code: persistedGroup,
         }).catch((error) => {
           if (navigationOwnerCurrent() && [401, 403, 409].includes(Number(error?.status))) {
             handleConsoleWorkspaceContextInvalidation();
@@ -11099,7 +11547,7 @@ function scheduleConsoleNavigationSideEffects({
           return null;
         });
         if (!navigationOwnerCurrent()) return;
-        if (result?.navigation) {
+        if (result?.navigation && !sidebarGroupPending && groupSequence === sidebarGroupSequence) {
           expandedConsoleGroupKey = result.navigation.preference.expanded_group_code;
         }
       }
@@ -11123,10 +11571,20 @@ async function toggleConsoleSidebarGroup(button, consoleShellState) {
   const previous = expandedConsoleGroupKey;
   const shouldExpand = button.getAttribute("aria-expanded") !== "true";
   const next = shouldExpand ? key : null;
+  const navigationGroups = consoleShellState.navigation?.groups
+    ?? (typeof workspaceNavigationController.snapshot === "function"
+      ? workspaceNavigationController.snapshot().navigation?.groups
+      : undefined);
+  if (next !== null && Array.isArray(navigationGroups) && navigationGroups.length > 0
+    && !navigationGroups.some((candidate) => candidate.group_code === next)) {
+    applyExpandedConsoleGroup(previous);
+    return;
+  }
   applyExpandedConsoleGroup(next);
   expandedConsoleGroupKey = next;
   if (consoleShellState) consoleShellState.sidebarExpandedGroupKey = next;
   if (consoleShellState?.workspaceNavigationContract !== true) return;
+  sidebarGroupPending = true;
   try {
     const result = await workspaceNavigationController.savePreference({
       expanded_group_code: next,
@@ -11138,6 +11596,8 @@ async function toggleConsoleSidebarGroup(button, consoleShellState) {
       result.navigation,
       consoleShellState.activeRouteCode,
       workspaceNavigationController.snapshot().advancedTools,
+      consoleShellState.workspaceAuthorization,
+      consoleShellState.workspaceContext?.role,
     );
   } catch (error) {
     if (!current()) return;
@@ -11149,7 +11609,19 @@ async function toggleConsoleSidebarGroup(button, consoleShellState) {
     consoleShellState.sidebarExpandedGroupKey = previous;
     applyExpandedConsoleGroup(previous);
     renderConsoleSidebarPreferenceError(error);
+  } finally {
+    if (groupId === sidebarGroupSequence) sidebarGroupPending = false;
   }
+}
+
+function syncConsoleSidebarState(consoleShellState) {
+  const visible = consoleShellState.navigation?.navigation_items?.some(
+    (item) => item.visible !== false && item.disabled !== true && item.sidebar_visible !== false
+      && item.group_code === expandedConsoleGroupKey,
+  );
+  if (!visible) expandedConsoleGroupKey = null;
+  consoleShellState.sidebarExpandedGroupKey = expandedConsoleGroupKey;
+  consoleShellState.mobileSidebarCollapsed = mobileSidebarCollapsed;
 }
 
 function applyExpandedConsoleGroup(expandedKey) {
@@ -11172,13 +11644,13 @@ function renderConsoleNavigationTransition(button, consoleShellState, itemId) {
   const shell = button?.closest?.(".console-shell");
   const main = shell?.querySelector?.(".console-main");
   if (!shell || !main) return;
-  const group = String(button.dataset.consoleGroup ?? "");
+  const group = localizeConsoleGroup(button.dataset.consoleGroup ?? "", currentI18n);
   const label = String(button.dataset.consoleNavLabel ?? button.getAttribute("aria-label") ?? itemId);
   const description = String(button.dataset.consoleDescription ?? "");
   shell.dataset.activeNavigation = itemId;
   shell.dataset.activeRoute = button.dataset.consoleRoute ?? "";
   for (const candidate of shell.querySelectorAll("[data-console-nav]")) {
-    const active = candidate === button;
+    const active = candidate.dataset.consoleNav === itemId;
     candidate.classList.toggle("active", active);
     candidate.setAttribute("aria-current", active ? "page" : "false");
   }
@@ -11246,8 +11718,12 @@ async function toggleConsoleSidebar(button, consoleShellState) {
         result.navigation,
         consoleShellState.activeRouteCode,
         workspaceNavigationController.snapshot().advancedTools,
+        consoleShellState.workspaceAuthorization,
+        consoleShellState.workspaceContext?.role,
       );
       consoleShellState.preferences = { preference: result.navigation.preference };
+      applyConsoleSidebarCollapsedState(shell, globalThis.window.innerWidth <= 820
+        ? mobileSidebarCollapsed : next);
     }
   } catch (error) {
     if (!current() || isAbortError(error) || consoleSidebarController !== controller) return;
@@ -11256,7 +11732,8 @@ async function toggleConsoleSidebar(button, consoleShellState) {
       return;
     }
     if (shell.isConnected) {
-      applyConsoleSidebarCollapsedState(shell, previous);
+      applyConsoleSidebarCollapsedState(shell, globalThis.window.innerWidth <= 820
+        ? mobileSidebarCollapsed : previous);
       renderConsoleSidebarPreferenceError(error);
     }
   } finally {
@@ -11315,9 +11792,11 @@ function bindQuickstartCopyButtons() {
         }
         return;
       }
-      await navigator.clipboard.writeText(value);
-      if (feedback) {
-        feedback.textContent = "已复制";
+      try {
+        await navigator.clipboard.writeText(value);
+        if (feedback) feedback.textContent = "已复制";
+      } catch {
+        if (feedback) feedback.textContent = "复制失败，请选中内容手动复制";
       }
     });
   }
@@ -11347,12 +11826,13 @@ function readActiveNavigationHash() {
 /**
  * 更新浏览器 hash；空值表示回到概览且不保留非法 hash。
  */
-function replaceNavigationHash(itemId) {
+function replaceNavigationHash(itemId, { push = false } = {}) {
   if (!globalThis.history || !globalThis.location) {
     return;
   }
   const nextHash = itemId ? `#${encodeURIComponent(itemId)}` : "";
-  globalThis.history.replaceState(
+  if (globalThis.location.hash === nextHash) return;
+  globalThis.history[push ? "pushState" : "replaceState"](
     null,
     "",
     `${globalThis.location.pathname}${globalThis.location.search}${nextHash}`,
@@ -11475,6 +11955,20 @@ async function loadTenantOnboardingState() {
  * 边界：不得在前端伪造权限结果或展示未脱敏的密钥、Token、Prompt。
  */
 function bindWorkspaceMemberInteractions() {
+  const searchForm = document.querySelector("[data-workspace-members-search-form]");
+  const searchInput = searchForm?.querySelector("[name='search']");
+  searchForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    workspaceMembersSearch = String(searchInput?.value ?? "").trim();
+    workspaceMembersOffset = 0;
+    void refresh();
+  });
+  searchForm?.querySelector("[data-workspace-members-search-clear]")?.addEventListener("click", () => {
+    if (searchInput) searchInput.value = "";
+    workspaceMembersSearch = "";
+    workspaceMembersOffset = 0;
+    void refresh();
+  });
   for (const button of document.querySelectorAll("[data-workspace-members-offset], [data-workspace-members-refresh]")) {
     const binding = bindResourceElement(button, [PERMISSIONS.USER_MANAGE], "users");
     button.addEventListener("click", () => {
@@ -11517,11 +12011,46 @@ function bindWorkspaceMemberInteractions() {
           role: String(data.get("role") ?? ""), status: String(data.get("status") ?? ""),
         });
         broadcastConsoleWorkspaceContextInvalidation();
+        workspaceMembersActionError = null;
         workspaceMembersFeedback = "成员已更新";
         await refreshResourceMutation(operation);
       } catch (error) {
         if (handleResourceMutationError(operation, error)) return;
+        workspaceMembersFeedback = "";
         workspaceMembersActionError = error;
+        await refreshResourceMutation(operation);
+      }
+    });
+    const removeButton = form.querySelector("[data-workspace-member-remove]");
+    if (typeof removeButton?.addEventListener !== "function") continue;
+    removeButton.addEventListener("click", async () => {
+      if (removeButton.dataset.membershipRemoving === "true" || form.dataset.membershipStatus === "disabled") return;
+      removeButton.dataset.membershipRemoving = "true";
+      const operation = resourcePageLifecycle.beginMutation(binding);
+      if (!operation) {
+        delete removeButton.dataset.membershipRemoving;
+        return;
+      }
+      const button = removeButton;
+      button.disabled = true;
+      workspaceMembersActionError = null;
+      workspaceMembersFeedback = "";
+      try {
+        await resourceMutationRequest(operation, removeWorkspaceMember, {
+          controlApiUrl, membershipId: form.dataset.membershipId,
+          revision: Number(form.dataset.membershipRevision),
+        });
+        workspaceMembersActionError = null;
+        workspaceMembersFeedback = "成员已移除，登录会话和已发放 KEY 已立即失效";
+        await refreshResourceMutation(operation);
+      } catch (error) {
+        if (handleResourceMutationError(operation, error)) {
+          delete removeButton.dataset.membershipRemoving;
+          return;
+        }
+        workspaceMembersFeedback = "";
+        workspaceMembersActionError = error;
+        delete removeButton.dataset.membershipRemoving;
         await refreshResourceMutation(operation);
       }
     });
@@ -11531,8 +12060,8 @@ function bindWorkspaceMemberInteractions() {
 async function loadUsersState(consoleShellState) {
   if (consoleShellState?.activeNavigationItemId !== "users") return null;
   return loadResourceState("users", [PERMISSIONS.USER_MANAGE],
-    (input) => listWorkspaceMembers({ ...input, offset: workspaceMembersOffset, limit: 20 }),
-    (result) => ({ ...result, kind: "workspace", state: "ok", role: authSession.owner?.role,
+    (input) => listWorkspaceMembers({ ...input, offset: workspaceMembersOffset, limit: 20, search: workspaceMembersSearch }),
+    (result) => ({ ...result, kind: "workspace", state: "ok", role: authSession.owner?.role, search: workspaceMembersSearch,
       feedback: workspaceMembersFeedback, actionError: workspaceMembersActionError }),
     { kind: "workspace" });
 }
@@ -11863,9 +12392,11 @@ async function loadProvidersState({ includeCatalog = false } = {}) {
       }
     }
     return { ...state, providerKeysByProviderId: Object.fromEntries(entries),
+      setupProviderId: providerSetupId,
       actionError: providerActionError, feedback: providerFeedback, lastTestResult: providerLastTestResult,
       providerEngineering: includeCatalog ? workspaceProviderEngineeringController.snapshot() : null,
       providerCatalog: catalog ? { ...catalog, activeTab: providerCatalogActiveTab, filters: providerCatalogFilters,
+        selectedEntryCode: providerCatalogSelectedEntryCode,
         actionError: providerCatalogActionError, feedback: providerCatalogFeedback,
         compatibilityByEntryCode: providerCatalogCompatibilityByEntryCode,
         lastCreated: providerCatalogLastCreated, lastPreflight: providerCatalogLastPreflight } : null };
@@ -11887,9 +12418,7 @@ async function loadModelsState() {
  * 请求前后同时核对刷新代次、hash、tenant/user/role/session 和 lifecycle owner，旧响应不得覆盖新身份页面。
  */
 async function loadPolicySnapshotsState(consoleShellState, refreshId) {
-  const identity = policySnapshotIdentitySnapshot(
-    policySnapshotIdentityFromAuthContext(authSession.context),
-  );
+  const identity = currentPolicySnapshotIdentity();
   const hashNavigation = readActiveNavigationHash();
   const loadArguments = {
     canPublish: hasPermission(authSession.context, PERMISSIONS.POLICY_PUBLISH),
@@ -11914,20 +12443,18 @@ async function loadPolicySnapshotsState(consoleShellState, refreshId) {
     const [current, history] = await Promise.all([
       getCurrentPolicySnapshot({
         controlApiUrl,
-        token: authSession.token,
+        authentication: "workspace",
         signal: ticket.signal,
       }),
       listPolicySnapshots({
         controlApiUrl,
-        token: authSession.token,
+        authentication: "workspace",
         limit: policySnapshotHistoryFilters.limit,
         offset: policySnapshotHistoryFilters.offset,
         signal: ticket.signal,
       }),
     ]);
-    const currentIdentity = policySnapshotIdentitySnapshot(
-      policySnapshotIdentityFromAuthContext(authSession.context),
-    );
+    const currentIdentity = currentPolicySnapshotIdentity();
     const currentOwner = {
       refreshId,
       navigation: "policy-snapshots",
@@ -11956,7 +12483,10 @@ async function loadPolicySnapshotsState(consoleShellState, refreshId) {
     return buildPolicySnapshotsRenderState();
   } catch (error) {
     // Abort 是主动生命周期收口，不应被包装成服务故障或重新展示旧快照元数据。
-    if (isAbortError(error)) {
+    if (isAbortError(error) || refreshId !== refreshSequence
+      || !policySnapshotLoadLifecycle.isCurrent(ticket, {
+        refreshId, navigation: "policy-snapshots", identity: currentPolicySnapshotIdentity(),
+      })) {
       // 主动取消属于页面生命周期，不显示服务故障，也不恢复任何旧历史或 ETag。
       return null;
     }
@@ -11989,9 +12519,7 @@ function buildPolicySnapshotsRenderState() {
   if (!policySnapshotsState) {
     return null;
   }
-  const identity = policySnapshotIdentitySnapshot(
-    policySnapshotIdentityFromAuthContext(authSession.context),
-  );
+  const identity = currentPolicySnapshotIdentity();
   return {
     ...policySnapshotsState,
     actionError: policySnapshotActionError,
@@ -12022,7 +12550,11 @@ function renderPolicySnapshotPanelFromMemory() {
     buildPolicySnapshotsRenderState(),
     authSession.context,
   );
-  bindPolicySnapshotInteractions({ activeNavigationItemId: "policy-snapshots" });
+  bindPolicySnapshotInteractions(resourcePageShellState);
+}
+
+function currentPolicySnapshotIdentity() {
+  return currentEvaluationPageIdentity("policy-snapshots", PERMISSIONS.POLICY_PUBLISH);
 }
 
 /**
@@ -12030,8 +12562,13 @@ function renderPolicySnapshotPanelFromMemory() {
  * DOM 可见性不构成授权，所有写操作仍携带 Bearer、强 CAS 和稳定 request_id 由后端再次校验。
  */
 function bindPolicySnapshotInteractions(consoleShellState) {
+  const panel = document.querySelector(".policy-snapshots-panel");
+  const binding = bindResourceElement(panel, [PERMISSIONS.POLICY_PUBLISH], "policy-snapshots");
+  const boundContent = panel?.firstElementChild;
+  const isCurrent = () => resourcePageLifecycle.isBindingCurrent(binding)
+    && panel.firstElementChild === boundContent && Boolean(currentPolicySnapshotIdentity());
   if (
-    !hasPermission(authSession.context, PERMISSIONS.POLICY_PUBLISH)
+    !binding || !currentPolicySnapshotIdentity()
     || consoleShellState?.activeNavigationItemId !== "policy-snapshots"
     || !policySnapshotsState
   ) {
@@ -12041,17 +12578,20 @@ function bindPolicySnapshotInteractions(consoleShellState) {
 
   const publishForm = document.querySelector("#policy-snapshot-publish-form");
   publishForm?.addEventListener("input", () => {
+    if (!isCurrent()) return;
     policySnapshotPublishReason = String(new FormData(publishForm).get("reason") ?? "");
     syncPolicySnapshotSubmitButton(publishForm, "publish");
   });
   publishForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!isCurrent()) return;
     policySnapshotPublishReason = String(new FormData(publishForm).get("reason") ?? "");
     await submitPolicySnapshotPublish();
   });
 
   for (const openButton of document.querySelectorAll("[data-policy-snapshot-rollback-open]")) {
     openButton.addEventListener("click", () => {
+      if (!isCurrent()) return;
       const targetId = openButton.dataset.policySnapshotRollbackOpen;
       const allowed = policySnapshotsState?.policy_snapshots?.some(
         (item) => item.policy_snapshot_id === targetId
@@ -12071,15 +12611,18 @@ function bindPolicySnapshotInteractions(consoleShellState) {
 
   const rollbackForm = document.querySelector("[data-policy-snapshot-rollback-form]");
   rollbackForm?.addEventListener("input", () => {
+    if (!isCurrent()) return;
     policySnapshotRollbackReason = String(new FormData(rollbackForm).get("reason") ?? "");
     syncPolicySnapshotSubmitButton(rollbackForm, "rollback");
   });
   rollbackForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!isCurrent()) return;
     policySnapshotRollbackReason = String(new FormData(rollbackForm).get("reason") ?? "");
     await submitPolicySnapshotRollback(rollbackForm.dataset.policySnapshotRollbackForm);
   });
   rollbackForm?.querySelector("[data-policy-snapshot-rollback-cancel]")?.addEventListener("click", () => {
+    if (!isCurrent()) return;
     policySnapshotRollbackTargetId = null;
     policySnapshotRollbackReason = "";
     policySnapshotActionError = null;
@@ -12088,12 +12631,14 @@ function bindPolicySnapshotInteractions(consoleShellState) {
 
   for (const abandonButton of document.querySelectorAll("[data-policy-snapshot-abandon]")) {
     abandonButton.addEventListener("click", async () => {
+      if (!isCurrent()) return;
       await abandonPendingPolicySnapshotOperation();
     });
   }
 
   for (const pageButton of document.querySelectorAll("[data-policy-snapshot-page]")) {
     pageButton.addEventListener("click", async () => {
+      if (!isCurrent()) return;
       const direction = pageButton.dataset.policySnapshotPage;
       const limit = Number(policySnapshotsState.limit ?? 20);
       const offset = Number(policySnapshotsState.offset ?? 0);
@@ -12118,7 +12663,7 @@ function syncPolicySnapshotSubmitButton(form, kind) {
   }
   const reason = String(new FormData(form).get("reason") ?? "");
   const pending = policySnapshotOperationMemory.read(
-    policySnapshotIdentitySnapshot(policySnapshotIdentityFromAuthContext(authSession.context)),
+    currentPolicySnapshotIdentity(),
   );
   const busy = policySnapshotOperationStatus !== "idle";
   const canRetryPublish = pending?.kind === "publish";
@@ -12139,15 +12684,11 @@ function syncPolicySnapshotSubmitButton(form, kind) {
  * 网络结果未知时保留原 reason/head/candidate/request_id；下一次点击只允许重试完全相同的业务操作。
  */
 async function submitPolicySnapshotPublish() {
-  const token = authSession.token;
-  const identity = policySnapshotIdentitySnapshot(
-    policySnapshotIdentityFromAuthContext(authSession.context),
-  );
+  const identity = currentPolicySnapshotIdentity();
   const reason = policySnapshotPublishReason.trim();
   // 会话、身份或原因任一不可信时禁止占用幂等键并发起发布请求。
   if (
-    !token
-    || !identity
+    !identity || policySnapshotOperationStatus !== "idle"
     || !hasPermission(authSession.context, PERMISSIONS.POLICY_PUBLISH)
     || !isPolicySnapshotReasonValid(reason)
   ) {
@@ -12180,7 +12721,7 @@ async function submitPolicySnapshotPublish() {
   try {
     const result = await publishPolicySnapshot({
       controlApiUrl,
-      token,
+      authentication: "workspace",
       reason: operation.reason,
       headEtag: operation.headEtag,
       candidateEtag: operation.candidateEtag,
@@ -12209,10 +12750,7 @@ async function submitPolicySnapshotPublish() {
  * 回滚只携带原 head CAS，不发送 candidate ETag，也不会修改 active Policy 候选。
  */
 async function submitPolicySnapshotRollback(targetId) {
-  const token = authSession.token;
-  const identity = policySnapshotIdentitySnapshot(
-    policySnapshotIdentityFromAuthContext(authSession.context),
-  );
+  const identity = currentPolicySnapshotIdentity();
   const reason = policySnapshotRollbackReason.trim();
   const target = policySnapshotsState?.policy_snapshots?.find(
     (item) => item.policy_snapshot_id === targetId
@@ -12220,8 +12758,7 @@ async function submitPolicySnapshotRollback(targetId) {
   );
   // 会话、上一版对象和原因必须同时有效，避免伪造 data 属性绕过页面回滚范围。
   if (
-    !token
-    || !identity
+    !identity || policySnapshotOperationStatus !== "idle"
     || !hasPermission(authSession.context, PERMISSIONS.POLICY_PUBLISH)
     || !target
     || !isPolicySnapshotReasonValid(reason)
@@ -12256,7 +12793,7 @@ async function submitPolicySnapshotRollback(targetId) {
   try {
     const result = await rollbackPolicySnapshot({
       controlApiUrl,
-      token,
+      authentication: "workspace",
       policySnapshotId: operation.targetId,
       reason: operation.reason,
       headEtag: operation.headEtag,
@@ -12301,9 +12838,7 @@ function beginPolicySnapshotWrite(status, identity) {
 
 /** 核对写回调仍属于当前 tenant/user/session 和 active 发布页。 */
 function isCurrentPolicySnapshotWrite(owner) {
-  const currentIdentity = policySnapshotIdentitySnapshot(
-    policySnapshotIdentityFromAuthContext(authSession.context),
-  );
+  const currentIdentity = currentPolicySnapshotIdentity();
   return owner.generation === policySnapshotOperationGeneration
     && owner.controller === policySnapshotOperationController
     && !owner.signal.aborted
@@ -12333,7 +12868,7 @@ async function handlePolicySnapshotWriteError(error, operation, owner) {
   }
   finishPolicySnapshotWrite(owner);
   // 结构化 HTTP 错误代表服务端已给出明确结论，可以释放原幂等票据；网络异常则不能释放。
-  if (error instanceof AuthApiError) {
+  if (error instanceof AuthApiError && error.status >= 400 && error.status < 500) {
     policySnapshotOperationMemory.markDefinitive(operation);
     // 认证失效会改变 tenant/user 边界，必须先清理原因、CAS 和票据再返回登录页。
     if (error.status === 401) {
@@ -14887,14 +15422,22 @@ async function loadProjectState() {
  */
 async function loadUsageState() {
   const filters = { ...usageFilters };
-  return loadResourceState("usage", [PERMISSIONS.BILLING_USAGE_READ],
-    (options) => Promise.all([
-      getUsageSummary({ ...options, ...filters }),
-      listUsageRecords({ ...options, ...filters }),
-    ]), ([summary, records]) => ({
-      state: "ok", summary, records, filters,
-      actionError: usageActionError, exportState: usageExportState,
-    }));
+  const permissions = hasPermission(authSession.context, PERMISSIONS.BILLING_USAGE_READ)
+    ? [PERMISSIONS.BILLING_USAGE_READ]
+    : [PERMISSIONS.VIRTUAL_KEY_READ];
+  return loadResourceState("usage", permissions,
+    (options) => hasPermission(authSession.context, PERMISSIONS.BILLING_USAGE_READ)
+      ? Promise.all([
+        getUsageSummary({ ...options, ...filters }),
+        listUsageRecords({ ...options, ...filters }),
+      ])
+      : Promise.all([
+        getPersonalUsageSummary({ ...options, startDate: filters.startDate, endDate: filters.endDate }),
+        listPersonalUsageRecords({ ...options, startDate: filters.startDate, endDate: filters.endDate, limit: filters.limit, offset: filters.offset }),
+      ]),
+    ([summary, records]) => hasPermission(authSession.context, PERMISSIONS.BILLING_USAGE_READ)
+      ? ({ state: "ok", summary, records, filters, actionError: usageActionError, exportState: usageExportState })
+      : ({ state: "ok", personalSummary: summary, personalRecords: records, filters, actionError: usageActionError }));
 }
 
 /**
@@ -14937,7 +15480,7 @@ async function loadCostAnomaliesState(consoleShellState, refreshId) {
   try {
     const state = await listCostAnomalies({
       controlApiUrl,
-      token: authSession.token,
+      authentication: "workspace",
       ...costAnomalyPageState.query(),
       operationRequestId: createCostAnomalyRequestId("list"),
       operationTraceId: createCostAnomalyTraceId(),
@@ -14985,8 +15528,8 @@ function currentCostAnomalyListOwner(consoleShellState, refreshId) {
   if (refreshId !== refreshSequence) {
     return null;
   }
-  const actionOwner = currentCostAnomalyActionOwner(consoleShellState);
-  return actionOwner ? { ...actionOwner, refreshGeneration: refreshId } : null;
+  const readOwner = currentCostAnomalyOwner(consoleShellState, PERMISSIONS.BILLING_ANOMALY_READ);
+  return readOwner ? { ...readOwner, refreshGeneration: refreshId } : null;
 }
 
 /**
@@ -15241,11 +15784,12 @@ async function loadLocalEndpointsState(consoleShellState, refreshId) {
   const owner = currentLocalEndpointOwner(consoleShellState);
   if (!owner || refreshId !== refreshSequence || !localEndpointPageState.enter(owner)) return null;
   const operation = localEndpointPageState.beginLoad(owner, refreshId);
-  if (!operation || !authSession.token) return null;
+  if (!operation || (!hasWorkspaceConsoleSession(authSession) && !authSession.token)) return null;
   try {
     const result = await listLocalEndpoints({
       controlApiUrl,
-      token: authSession.token,
+      authentication: hasWorkspaceConsoleSession(authSession) ? "workspace" : "legacy",
+      token: hasWorkspaceConsoleSession(authSession) ? undefined : authSession.token,
       tenantId: owner.tenantId,
       signal: operation.controller.signal,
     });
@@ -15976,38 +16520,12 @@ async function loadBudgetState(virtualKeysState, consoleShellState, refreshId) {
 }
 /**
  * 读取当前租户 DLP 规则。
- * 只有 admin 才会调用控制面 API；viewer/developer 返回 null 只是界面优化，真实权限仍由后端 /dlp/rules 校验。
+ * 页面生命周期绑定当前 Workspace 和后端 DLP 权限；失效响应不能重建旧页面。
  */
 async function loadDlpState() {
-  if (!hasPermission(authSession.context, PERMISSIONS.DLP_READ)) {
-    return null;
-  }
-  try {
-    const rules = await listDlpRules({
-      controlApiUrl,
-      token: authSession.token,
-      status: "all",
-    });
-    return {
-      state: "ok",
-      rules,
-      actionError: dlpActionError,
-      feedback: dlpFeedback,
-    };
-  } catch (error) {
-    // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
-    return {
-      state: "error",
-      message: authErrorMessage(error),
-      requestId: error?.requestId ?? "-",
-    };
-  }
+  return loadResourceState("dlp", [PERMISSIONS.DLP_READ],
+    (options) => listDlpRules({ ...options, status: "all", scanScope: dlpScanScopeFilter }),
+    (rules) => ({ state: "ok", rules, actionError: dlpActionError, feedback: dlpFeedback }));
 }
 
 /**
@@ -16015,31 +16533,26 @@ async function loadDlpState() {
  * 管理员/开发者才会调用控制面 API；viewer 返回 null 只是界面优化，真实权限仍由后端 /webhooks 校验。
  */
 async function loadWebhookState() {
-  if (!hasPermission(authSession.context, PERMISSIONS.WEBHOOK_MANAGE)) {
-    return null;
-  }
-  try {
-    const webhooks = await listWebhooks({
-      controlApiUrl,
-      token: authSession.token,
-      status: "all",
-      includeDeliveries: false,
-    });
-    const endpointIds = (webhooks.webhooks ?? []).map((endpoint) => endpoint.webhook_endpoint_id);
-    if (!endpointIds.includes(webhookSelectedEndpointId)) {
-      webhookSelectedEndpointId = endpointIds[0] ?? null;
-    }
-    const deliveryDetails = webhookSelectedEndpointId
-      ? await listWebhookDeliveries({
-          controlApiUrl,
-          token: authSession.token,
-          webhookEndpointId: webhookSelectedEndpointId,
-          eventType: webhookDeliveryFilters.eventType,
-          status: webhookDeliveryFilters.status,
-          limit: 100,
-        })
-      : null;
-    return {
+  return loadResourceState("webhooks", [PERMISSIONS.WEBHOOK_MANAGE],
+    async (options, current) => {
+      const webhooks = await listWebhooks({ ...options, status: "all", includeDeliveries: false });
+      if (!current()) return null;
+      const endpointIds = (webhooks.webhooks ?? []).map((endpoint) => endpoint.webhook_endpoint_id);
+      if (!endpointIds.includes(webhookSelectedEndpointId)) {
+        webhookSelectedEndpointId = endpointIds[0] ?? null;
+      }
+      const deliveryDetails = webhookSelectedEndpointId
+        ? await listWebhookDeliveries({
+            ...options,
+            webhookEndpointId: webhookSelectedEndpointId,
+            eventType: webhookDeliveryFilters.eventType,
+            status: webhookDeliveryFilters.status,
+            limit: 100,
+          })
+        : null;
+      return { webhooks, deliveryDetails };
+    },
+    ({ webhooks, deliveryDetails }) => ({
       state: "ok",
       webhooks,
       actionError: webhookActionError,
@@ -16050,21 +16563,7 @@ async function loadWebhookState() {
       selectedEndpointId: webhookSelectedEndpointId,
       deliveryDetails,
       deliveryFilters: webhookDeliveryFilters,
-    };
-  } catch (error) {
-    // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
-    return {
-      state: "error",
-      message: authErrorMessage(error),
-      requestId: error?.requestId ?? "-",
-    };
-  }
+    }));
 }
 
 /**
@@ -16084,7 +16583,7 @@ async function loadWebhookDeadLettersState(consoleShellState, refreshId) {
   try {
     const result = await listWebhookDeadLetters({
       controlApiUrl,
-      token: authSession.token,
+      authentication: "workspace",
       ...webhookDeadLetterPageState.query(),
       signal: operation.controller.signal,
       operationRequestId: operationIds.requestId,
@@ -16130,18 +16629,11 @@ function currentWebhookDeadLetterListOwner(consoleShellState, refreshId = refres
  * active item、后端导航定义和完整身份必须同时成立，不能只信任 location.hash 或可篡改 DOM。
  */
 function currentWebhookDeadLetterActionOwner(consoleShellState) {
-  const navigationItems = consoleShellState?.navigation?.navigation_items;
-  const authorized = Array.isArray(navigationItems)
-    && navigationItems.some((item) => (
-      item?.id === "webhook-dead-letters"
-      && item?.target_section === "webhook-dead-letters"
-    ));
-  const identity = webhookDeadLetterIdentitySnapshot(authSession.context);
-  // 后端导航授权、完整身份和当前页面任一不成立时都失败关闭，禁止创建网络 owner。
-  if (!authorized || !identity || consoleShellState?.activeNavigationItemId !== "webhook-dead-letters") {
-    return null;
-  }
-  return { identity, navigation: "webhook-dead-letters" };
+  const owner = workspaceResourcePageOwner(authSession, consoleShellState, {
+    navigationId: "webhook-dead-letters", permissions: [PERMISSIONS.WEBHOOK_MANAGE],
+    hash: readActiveNavigationHash(),
+  });
+  return owner ? { identity: owner.key, navigation: owner.navigation } : null;
 }
 
 /** 绑定 PAGE-083 交互；节点不存在时绑定层静默返回，因此其他导航不会产生死信副作用。 */
@@ -16208,7 +16700,7 @@ function renderWebhookDeadLetterPanel(consoleShellState, state = webhookDeadLett
   if (!panel) {
     return;
   }
-  panel.innerHTML = renderWebhookDeadLetters(state, authSession.context);
+  panel.innerHTML = renderWebhookDeadLetters(state, authSession.context, currentI18n);
   bindWebhookDeadLetterPageInteractions(consoleShellState);
 }
 
@@ -16249,7 +16741,7 @@ async function submitWebhookDeadLetterReplay(deadLetterEventId, consoleShellStat
   try {
     const result = await replayWebhookDelivery({
       controlApiUrl,
-      token: authSession.token,
+      authentication: "workspace",
       webhookDeliveryId: intent.webhookDeliveryId,
       idempotencyKey: intent.idempotencyKey,
       signal: operation.controller.signal,
@@ -16312,7 +16804,7 @@ async function submitWebhookDeadLetterArchive(consoleShellState) {
   try {
     const result = await archiveWebhookDeadLetter({
       controlApiUrl,
-      token: authSession.token,
+      authentication: "workspace",
       deadLetterEventId: intent.deadLetterEventId,
       signal: operation.controller.signal,
       operationRequestId: operationIds.requestId,
@@ -17028,8 +17520,12 @@ async function runRequestExplanationRead(requestId, source, binding, consoleShel
   if (!mutation) return;
   try {
     const owner = currentRequestExplanationOwner();
-    requestExplanationPageMemory.select({ ...owner, requestId, source });
+    const selected = requestExplanationPageMemory.select({ ...owner, requestId, source });
     renderCurrentRequestExplanationSnapshot(consoleShellState);
+    if (!selected) {
+      document.querySelector("#request-explanation-form [name='requestId']")?.focus();
+      return;
+    }
     await loadRequestExplanationState(consoleShellState, refreshSequence, mutation);
     if (resourcePageLifecycle.isMutationCurrent(mutation)) {
       renderCurrentRequestExplanationSnapshot(consoleShellState);
@@ -17065,6 +17561,7 @@ function renderCurrentRequestExplanationSnapshot(consoleShellState) {
   panel.innerHTML = renderRequestExplanationPanel(
     requestExplanationPageMemory.snapshot(),
     authSession.context,
+    currentI18n,
   );
   bindRequestExplanationInteractions(consoleShellState);
 }
@@ -17709,16 +18206,7 @@ async function loadAuditLogsState(consoleShellState, refreshId) {
  */
 async function loadVirtualKeysState() {
   return loadResourceState("virtual-keys", [PERMISSIONS.VIRTUAL_KEY_READ],
-    async (options) => {
-      const keys = await listVirtualKeys(options);
-      if (!hasPermission(authSession?.context, PERMISSIONS.USER_MANAGE)) return keys;
-      try {
-        return { ...keys, consumerDirectory: await listConsumers({ ...options, offset: consumerDirectoryOffset }) };
-      } catch (error) {
-        if (isAbortError(error) || error.status === 401 || error.status === 403) throw error;
-        return { ...keys, consumerDirectory: { state: "error", message: authErrorMessage(error) } };
-      }
-    },
-    (state) => ({ ...state, created: virtualKeyCreatedSecret,
+    (options) => listVirtualKeys(options),
+    (state) => ({ ...state, created: virtualKeyCreatedSecret, keyCreateOpen,
       actionError: virtualKeyActionError, feedback: virtualKeyFeedback }));
 }

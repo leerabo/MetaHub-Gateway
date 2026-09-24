@@ -45,6 +45,7 @@ from metahub_control.audit import (
     record_audit_log,
 )
 from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 
 from .models import (
     PolicySnapshotActorInfo,
@@ -125,7 +126,11 @@ def get_current_policy_snapshot(
     _reject_unknown_query(query_keys, CURRENT_QUERY_KEYS)
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "policy.read", read_only=True
+        )
+        transaction.begin()
+        context = transaction.context
         current_row = _load_current_row(connection, context.user.tenant_id)
         try:
             candidate = _compile_active_candidate(connection, context.user.tenant_id)
@@ -138,6 +143,7 @@ def get_current_policy_snapshot(
                 "policy_snapshot.graph_invalid",
             }:
                 raise
+            transaction.verify()
             connection.rollback()
             return (
                 PolicySnapshotCurrentResponse(
@@ -151,7 +157,7 @@ def get_current_policy_snapshot(
                 _head_etag(current_row),
                 None,
             )
-        connection.commit()
+        transaction.commit()
     # 已规范化领域错误保持原错误码，同时释放可能仍然持有的只读事务。
     except ApiError:
         _safe_rollback(connection)
@@ -209,6 +215,11 @@ def list_policy_snapshots(
     )
     connection = _connect(config)
     try:
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "policy.read", read_only=True
+        )
+        transaction.begin()
+        context = transaction.context
         rows = connection.execute(
             f"""
             {_SNAPSHOT_SELECT}
@@ -228,6 +239,7 @@ def list_policy_snapshots(
         ).fetchone()
         total = int(total_row["total"] if total_row is not None else 0)
         infos = [_snapshot_info(row) for row in rows]
+        transaction.commit()
     # 历史读取与 DTO 转换故障不能返回部分租户数据，统一按快照服务不可用处理。
     except (sqlite3.Error, TypeError, ValueError) as exc:
         raise ApiError("policy_snapshot.unavailable") from exc
@@ -273,7 +285,9 @@ def publish_policy_snapshot(
     audit_record: AuditRecord | None = None
     replayed = False
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        transaction = ResourceWriteTransaction(connection, config, context, "policy.publish")
+        transaction.begin()
+        context = transaction.context
         existing = _load_idempotency_row(connection, context.user.tenant_id, normalized_request_id)
         if existing is not None:
             result = _replay_idempotent_result(
@@ -286,6 +300,7 @@ def publish_policy_snapshot(
             # 原请求可能在 COMMIT 后、首次 Webhook intent 前退出；回放不能只返回业务结果，
             # 必须从同事务持久事实恢复两个稳定事件，让既有派发器按 event_id 补齐漏投并去重。
             event, audit_record = _load_replay_dispatch_facts(connection, existing)
+            transaction.verify()
             connection.rollback()
             dispatch_audit_recorded(
                 config,
@@ -345,7 +360,7 @@ def publish_policy_snapshot(
             request_id=normalized_request_id,
             trace_id=trace_id,
         )
-        commit_audited_transaction(connection)
+        transaction.commit(commit_audited_transaction)
         result_row = _load_snapshot_row(connection, context.user.tenant_id, snapshot_id)
         # 提交后的权威回读缺失表示存储不可确认，调用方可用同 request_id 安全重试回放。
         if result_row is None:
@@ -374,6 +389,8 @@ def publish_policy_snapshot(
         _safe_rollback(connection)
         # 发布构建失败只暴露稳定的快照服务错误，避免 SQL、DSL 或制品校验细节越过管理面边界。
         raise ApiError("policy_snapshot.unavailable") from exc
+    finally:
+        connection.close()
 
     dispatch_audit_recorded(
         config,
@@ -416,7 +433,9 @@ def rollback_policy_snapshot(
     event: _SnapshotEvent | None = None
     audit_record: AuditRecord | None = None
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        transaction = ResourceWriteTransaction(connection, config, context, "policy.publish")
+        transaction.begin()
+        context = transaction.context
         # 模板补偿撤销必须先于普通上一版复制识别。立即撤销时 target 恰好也是 current.previous，
         # 若先走 PRD-045 分支只会复制旧快照，却会把生成 Policy 留在 active candidate 中重新上线。
         from metahub_control.policy_templates.service import (
@@ -449,6 +468,7 @@ def rollback_policy_snapshot(
             # rollback 与 publish 共用相同崩溃恢复合同；只从已核验的持久 event/audit
             # 重建外部事件，不能根据本次请求 body 重新推导可能漂移的 Webhook 内容。
             event, audit_record = _load_replay_dispatch_facts(connection, existing)
+            transaction.verify()
             connection.rollback()
             dispatch_audit_recorded(
                 config,
@@ -522,7 +542,7 @@ def rollback_policy_snapshot(
             request_id=normalized_request_id,
             trace_id=trace_id,
         )
-        commit_audited_transaction(connection)
+        transaction.commit(commit_audited_transaction)
         result_row = _load_snapshot_row(connection, context.user.tenant_id, snapshot_id)
         # 提交后的回读缺失不能伪造成功响应，原请求仍可依赖幂等记录重新确认结果。
         if result_row is None:

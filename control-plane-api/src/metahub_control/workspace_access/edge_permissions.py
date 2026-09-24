@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
+from pathlib import Path
 
 from metahub_shared.db.schema import table_exists
 from metahub_shared.runtime.errors import ApiError
@@ -183,6 +185,8 @@ _WORKSPACE_ROLES_BY_LEGACY_ROLE = {
     "viewer": frozenset(("legal_admin", "auditor", "viewer")),
 }
 
+_PLATFORM_EDGE_PERMISSION_CACHE: dict[tuple[str, int, int], dict[str, tuple[str, ...]]] = {}
+
 
 def resolve_verified_workspace_edge_role(
     connection: sqlite3.Connection,
@@ -358,9 +362,26 @@ def load_verified_platform_edge_permissions(
     roles: tuple[str, ...],
     unavailable_error_code: str,
 ) -> tuple[str, ...]:
+    cache_key = _platform_edge_cache_key(connection)
+    if cache_key is not None:
+        cached = _PLATFORM_EDGE_PERMISSION_CACHE.get(cache_key)
+        if cached is not None:
+            return tuple(
+                sorted({permission for role in roles for permission in cached.get(role, ())})
+            )
     permissions: set[str] = set()
+    # All six platform edge catalogs are verified against the same schema in one
+    # authorization check. Keep discovery results local to this connection so
+    # the hot session read does not repeat identical sqlite_schema and migration
+    # lookups, while preserving fail-closed behavior for every catalog/query.
+    table_cache: dict[str, bool] = _platform_extension_table_cache(connection)
+    migration_cache: dict[str, bool] = _platform_extension_migration_cache(
+        connection, table_cache
+    )
+    projection: dict[str, tuple[str, ...]] = {}
     for role_code in roles:
-        permissions.update(
+        role_permissions: set[str] = set()
+        role_permissions.update(
             _load_verified_permissions(
                 connection,
                 role_code=role_code,
@@ -369,9 +390,11 @@ def load_verified_platform_edge_permissions(
                 assignments_table="platform_edge_offline_role_permissions",
                 introduced_migration="0122",
                 unavailable_error_code=unavailable_error_code,
+                table_cache=table_cache,
+                migration_cache=migration_cache,
             )
         )
-        permissions.update(
+        role_permissions.update(
             _load_verified_permissions(
                 connection,
                 role_code=role_code,
@@ -380,9 +403,11 @@ def load_verified_platform_edge_permissions(
                 assignments_table="platform_edge_role_permissions",
                 introduced_migration="0112",
                 unavailable_error_code=unavailable_error_code,
+                table_cache=table_cache,
+                migration_cache=migration_cache,
             )
         )
-        permissions.update(
+        role_permissions.update(
             _load_verified_permissions(
                 connection,
                 role_code=role_code,
@@ -391,9 +416,11 @@ def load_verified_platform_edge_permissions(
                 assignments_table="platform_edge_backup_role_permissions",
                 introduced_migration="0121",
                 unavailable_error_code=unavailable_error_code,
+                table_cache=table_cache,
+                migration_cache=migration_cache,
             )
         )
-        permissions.update(
+        role_permissions.update(
             _load_verified_permissions(
                 connection,
                 role_code=role_code,
@@ -402,9 +429,11 @@ def load_verified_platform_edge_permissions(
                 assignments_table="platform_edge_license_role_permissions",
                 introduced_migration="0120",
                 unavailable_error_code=unavailable_error_code,
+                table_cache=table_cache,
+                migration_cache=migration_cache,
             )
         )
-        permissions.update(
+        role_permissions.update(
             _load_verified_permissions(
                 connection,
                 role_code=role_code,
@@ -413,9 +442,11 @@ def load_verified_platform_edge_permissions(
                 assignments_table="platform_edge_upgrade_role_permissions",
                 introduced_migration="0119",
                 unavailable_error_code=unavailable_error_code,
+                table_cache=table_cache,
+                migration_cache=migration_cache,
             )
         )
-        permissions.update(
+        role_permissions.update(
             _load_verified_permissions(
                 connection,
                 role_code=role_code,
@@ -424,9 +455,102 @@ def load_verified_platform_edge_permissions(
                 assignments_table="platform_edge_installer_role_permissions",
                 introduced_migration="0116",
                 unavailable_error_code=unavailable_error_code,
+                table_cache=table_cache,
+                migration_cache=migration_cache,
             )
         )
+        projection[role_code] = tuple(sorted(role_permissions))
+        permissions.update(role_permissions)
+    if cache_key is not None:
+        _PLATFORM_EDGE_PERMISSION_CACHE[cache_key] = projection
     return tuple(sorted(permissions))
+
+
+def _platform_edge_cache_key(connection: sqlite3.Connection) -> tuple[str, int, int] | None:
+    """Use file metadata to invalidate the immutable extension projection after writes."""
+
+    if getattr(connection, "backend", "sqlite") == "postgresql":
+        return None
+    try:
+        database = connection.execute("PRAGMA database_list").fetchone()
+        path = str(database[2]) if database is not None else ""
+        if not path or path == ":memory:":
+            return None
+        stat = Path(path).stat()
+        return (os.path.abspath(path), int(stat.st_mtime_ns), int(stat.st_size))
+    except (OSError, sqlite3.Error):
+        return None
+
+
+def _platform_extension_table_cache(connection: sqlite3.Connection) -> dict[str, bool]:
+    """Discover the fixed extension schema with one catalog query per request."""
+
+    names = {
+        name
+        for pair in (
+            (
+                "platform_edge_offline_permission_extensions",
+                "platform_edge_offline_role_permissions",
+            ),
+            ("platform_edge_permission_extensions", "platform_edge_role_permissions"),
+            (
+                "platform_edge_backup_permission_extensions",
+                "platform_edge_backup_role_permissions",
+            ),
+            (
+                "platform_edge_license_permission_extensions",
+                "platform_edge_license_role_permissions",
+            ),
+            (
+                "platform_edge_upgrade_permission_extensions",
+                "platform_edge_upgrade_role_permissions",
+            ),
+            (
+                "platform_edge_installer_permission_extensions",
+                "platform_edge_installer_role_permissions",
+            ),
+        )
+        for name in pair
+    }
+    try:
+        if getattr(connection, "backend", "sqlite") == "postgresql":
+            rows = connection.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema=current_schema() AND table_type='BASE TABLE' "
+                "AND table_name = ANY(?)",
+                (list(names),),
+            ).fetchall()
+        else:
+            placeholders = ",".join("?" for _ in names)
+            rows = connection.execute(
+                f"SELECT name FROM sqlite_schema WHERE type='table' AND name IN ({placeholders})",
+                tuple(names),
+            ).fetchall()
+        available = {str(row[0]) for row in rows}
+        return {name: name in available for name in names}
+    except sqlite3.Error as exc:
+        raise ApiError("platform.unavailable") from exc
+
+
+def _platform_extension_migration_cache(
+    connection: sqlite3.Connection, table_cache: dict[str, bool]
+) -> dict[str, bool]:
+    versions = ("0116", "0119", "0120", "0121", "0122")
+    try:
+        if not table_cache.get("schema_migrations", False):
+            table_cache["schema_migrations"] = _table_exists(connection, "schema_migrations")
+        if not table_cache["schema_migrations"]:
+            return {version: False for version in versions}
+        placeholders = ",".join("?" for _ in versions)
+        rows = connection.execute(
+            "SELECT version FROM schema_migrations "
+            f"WHERE status='applied' AND version IN ({placeholders})",
+            versions,
+        ).fetchall()
+        applied = {str(row[0]) for row in rows}
+        return {version: version in applied for version in versions}
+    except sqlite3.Error as exc:
+        raise ApiError("platform.unavailable") from exc
 
 
 def _load_verified_permissions(
@@ -438,13 +562,27 @@ def _load_verified_permissions(
     assignments_table: str,
     introduced_migration: str,
     unavailable_error_code: str,
+    table_cache: dict[str, bool] | None = None,
+    migration_cache: dict[str, bool] | None = None,
 ) -> tuple[str, ...]:
     """Verify the complete immutable matrix before returning one role projection."""
 
     try:
-        catalog_available = _table_exists(connection, catalog_table)
-        assignments_available = _table_exists(connection, assignments_table)
-        migration_required = _migration_applied(connection, introduced_migration)
+        if table_cache is None:
+            table_cache = {}
+        if migration_cache is None:
+            migration_cache = {}
+        if catalog_table not in table_cache:
+            table_cache[catalog_table] = _table_exists(connection, catalog_table)
+        if assignments_table not in table_cache:
+            table_cache[assignments_table] = _table_exists(connection, assignments_table)
+        if introduced_migration not in migration_cache:
+            migration_cache[introduced_migration] = _migration_applied(
+                connection, introduced_migration
+            )
+        catalog_available = table_cache[catalog_table]
+        assignments_available = table_cache[assignments_table]
+        migration_required = migration_cache[introduced_migration]
         if catalog_available != assignments_available or (
             migration_required and not catalog_available
         ):

@@ -89,6 +89,20 @@ def _digest(value) -> str:
     ).hexdigest()
 
 
+def restore_request_digest(request: RestoreRequest) -> str:
+    return _digest(request.model_dump())
+
+
+def validate_restore_result(request: RestoreRequest, result: RestoreResult) -> None:
+    if (
+        result.execution_id != request.execution_id
+        or result.request_sha256 != restore_request_digest(request)
+    ):
+        raise BackupRuntimeError("backup.restore_binding_changed")
+    if result.proof is not None:
+        _check_proof_binding(request, result.proof)
+
+
 def _proof(request: RestoreRequest, restored: RestoreVerification) -> RestoreProof:
     actual = RestoreProof(
         manifest_sha256=restored.manifest_sha256,
@@ -114,6 +128,7 @@ def _read_result(row, request: RestoreRequest) -> RestoreResult | None:
         result = RestoreResult.model_validate_json(row["result_json"])
     except (ValidationError, TypeError):
         raise BackupRuntimeError("backup.restore_result_invalid") from None
+    validate_restore_result(request, result)
     if (
         result.execution_id != request.execution_id
         or result.request_sha256 != row["request_sha256"]
@@ -123,8 +138,6 @@ def _read_result(row, request: RestoreRequest) -> RestoreResult | None:
         or (not row["started"] and result.status != "cancelled")
     ):
         raise BackupRuntimeError("backup.restore_binding_changed")
-    if result.proof is not None:
-        _check_proof_binding(request, result.proof)
     return result
 
 
@@ -217,7 +230,7 @@ class RestoreExecutor:
         ).fetchone()
         if row is None:
             raise BackupRuntimeError("backup.restore_execution_not_found")
-        if row["request_sha256"] != _digest(request.model_dump()):
+        if row["request_sha256"] != restore_request_digest(request):
             raise BackupRuntimeError("backup.restore_binding_changed")
         _read_result(row, request)
         return row
@@ -271,7 +284,7 @@ class RestoreExecutor:
 
     def _target(self, config, request, postgres_admin_url):
         backend = database_backend(config.database_url)
-        request_hash = _digest(request.model_dump())
+        request_hash = restore_request_digest(request)
         target_path = self.targets / (request.execution_id + ".sqlite3")
         if backend == "postgresql":
             if not postgres_admin_url:
@@ -294,7 +307,7 @@ class RestoreExecutor:
                VALUES(?,?,?,?,'running',0,?,?,?) ON CONFLICT(execution_id) DO NOTHING""",
             (
                 request.execution_id,
-                _digest(request.model_dump()),
+                restore_request_digest(request),
                 target_hash,
                 backend,
                 int(cancel_requested),
@@ -449,4 +462,7 @@ class RestoreExecutor:
             return result
 
 
-__all__ = ["RestoreExecutor", "RestoreProof", "RestoreRequest", "RestoreResult"]
+__all__ = [
+    "RestoreExecutor", "RestoreProof", "RestoreRequest", "RestoreResult",
+    "restore_request_digest", "validate_restore_result",
+]

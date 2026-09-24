@@ -39,12 +39,14 @@ from .models import (
     MembershipListResponse,
     MembershipResponse,
     OwnerTransferResponse,
+    PartnerHandoffResponse,
     WorkspaceSessionResponse,
     WorkspaceSwitchResponse,
 )
 from .service import (
     create_membership_invitation,
     get_workspace_session,
+    handoff_workspace_to_partner,
     list_identity_workspaces,
     list_memberships,
     switch_workspace,
@@ -110,6 +112,37 @@ async def post_workspace_switch(request: Request, response: Response) -> Workspa
     return result
 
 
+@router.post("/identity/partner-handoffs", response_model=PartnerHandoffResponse)
+async def post_partner_handoff(request: Request, response: Response) -> PartnerHandoffResponse:
+    """Explicitly transition a browser from Workspace to Partner credentials."""
+
+    _reject_authorization(request)
+    _require_write_origin(request)
+    _reject_query(request, "identity.request_invalid")
+    payload = await _strict_json(request, "identity.request_invalid")
+    if payload:
+        raise ApiError("identity.request_invalid")
+    _reject_partner_handoff_conflicts(request)
+    await _run(
+        handoff_workspace_to_partner,
+        _config(request),
+        global_session_token=_required_cookie(
+            request, GLOBAL_SESSION_COOKIE,
+            missing_code="identity.session_required", invalid_code="identity.session_invalid",
+        ),
+        global_csrf_token=_required_csrf(
+            request, GLOBAL_CSRF_COOKIE, "identity.csrf_invalid",
+        ),
+        workspace_session_token=_required_workspace_cookie(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _clear_workspace_cookies(response)
+    return PartnerHandoffResponse(
+        request_id=_request_id(request), trace_id=_trace_id(request),
+    )
+
+
 @router.get("/workspace/session", response_model=WorkspaceSessionResponse)
 async def get_current_workspace_session(request: Request) -> WorkspaceSessionResponse:
     _prepare_workspace_request(request)
@@ -127,12 +160,16 @@ async def get_current_workspace_session(request: Request) -> WorkspaceSessionRes
 async def get_memberships(request: Request) -> MembershipListResponse:
     _prepare_workspace_request(request)
     limit, offset = _pagination(request, "membership.request_invalid")
+    search = request.query_params.get("search", "").strip()
+    if len(search) > 160:
+        raise ApiError("membership.request_invalid")
     return await _run(
         list_memberships,
         _config(request),
         session_token=_required_workspace_cookie(request),
         limit=limit,
         offset=offset,
+        search=search or None,
         request_id=_request_id(request),
         trace_id=_trace_id(request),
     )
@@ -166,6 +203,38 @@ async def patch_membership(
         expected_revision=expected_revision,
         role=role,
         status=membership_status,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = f'"{result.membership.revision}"'
+    return result
+
+
+@router.delete("/memberships/{membership_id}", response_model=MembershipResponse)
+async def delete_membership(
+    membership_id: str,
+    request: Request,
+    response: Response,
+) -> MembershipResponse:
+    """Remove a member from this organization and revoke every issued key."""
+    _prepare_workspace_request(request)
+    _require_write_origin(request)
+    _reject_query(request, "membership.request_invalid")
+    expected_revision = _membership_if_match(request)
+    result = await _run(
+        update_membership,
+        _config(request),
+        session_token=_required_workspace_cookie(request),
+        csrf_token=_required_csrf(
+            request,
+            WORKSPACE_CSRF_COOKIE,
+            "workspace_session.csrf_invalid",
+        ),
+        membership_id=membership_id,
+        expected_revision=expected_revision,
+        role=None,
+        status="disabled",
+        remove=True,
         request_id=_request_id(request),
         trace_id=_trace_id(request),
     )
@@ -479,6 +548,15 @@ def _reject_authorization(request: Request) -> None:
         raise ApiError("identity.credential_invalid")
 
 
+def _reject_partner_handoff_conflicts(request: Request) -> None:
+    if (
+        _cookie(request, PLATFORM_SESSION_COOKIE, invalid_code="identity.credential_invalid")
+        or _cookie(request, PLATFORM_CSRF_COOKIE, invalid_code="identity.credential_invalid")
+        or _cookie(request, SUPPORT_SESSION_COOKIE, invalid_code="identity.credential_invalid")
+    ):
+        raise ApiError("workspace_session.credential_conflict")
+
+
 def _required_workspace_cookie(request: Request) -> str:
     cookie = _cookie(
         request,
@@ -618,6 +696,15 @@ def _clear_platform_and_support_cookies(response: Response) -> None:
     )
     response.delete_cookie(
         SUPPORT_SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="lax"
+    )
+
+
+def _clear_workspace_cookies(response: Response) -> None:
+    response.delete_cookie(
+        WORKSPACE_SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="lax"
+    )
+    response.delete_cookie(
+        WORKSPACE_CSRF_COOKIE, path="/", secure=True, httponly=False, samesite="strict"
     )
 
 

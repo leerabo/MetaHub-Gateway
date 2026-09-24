@@ -18,6 +18,7 @@ import {
   patchSupportTicket,
 } from "../../src/lib/customerSupport.js";
 import { PERMISSIONS, withPermissionSnapshot } from "./permissionTestContext.mjs";
+import { workspaceNavigationOwner } from "../../src/features/workspace-navigation/workspaceNavigationStore.js";
 
 const CONTROL_URL = "http://control.local";
 const TICKET_ID = `tkt_${"1".repeat(32)}`;
@@ -33,6 +34,80 @@ const NOW = "2026-08-29T08:00:00.000Z";
 const WORKSPACE_CSRF = "W".repeat(43);
 const PLATFORM_CSRF = "P".repeat(43);
 const IDEMPOTENCY = "support-console-test-000001";
+
+function currentWorkspaceSupportShell(codes = [PERMISSIONS.SUPPORT_TICKET_READ, PERMISSIONS.SUPPORT_TICKET_CREATE]) {
+  const identity = { account: { status: "active" }, current_session: {
+    session_id: "current_support_session", is_current: true, revoke_generation: 1, expires_at: "2099-01-01T00:00:00Z",
+  } };
+  const context = { workspace_id: WORKSPACE_ID, role: "developer", session_status: "active", expires_at: "2099-01-01T00:00:00Z" };
+  const authorization = { permission_codes: [...codes].sort(), permission_revision: 1, membership_revision: 1, permission_fingerprint: "a".repeat(64) };
+  return { state: "ok", workspaceNavigationContract: true, workspaceIdentity: identity,
+    workspaceContext: context, workspaceAuthorization: authorization,
+    workspaceOwner: workspaceNavigationOwner(identity, { context, authorization }),
+    activeNavigationItemId: "support-tickets", activeRouteCode: "workspace.observability.support",
+    navigation: { ...authorization, active_navigation_item_id: "support-tickets", active_route_code: "workspace.observability.support",
+      navigation_items: [{ id: "support-tickets", route_code: "workspace.observability.support", target_section: "support-tickets", visible: true, disabled: false }] } };
+}
+
+test("current Workspace support renders populated tickets and actions without legacy identity fields", () => {
+  const shell = currentWorkspaceSupportShell();
+  const auth = shell.workspaceAuthorization;
+  const owner = supportTicketPageOwner(auth, shell);
+  assert.equal(owner.workspaceId, WORKSPACE_ID);
+  assert.equal(owner.canCreate, true);
+  assert.equal(owner.canManage, false);
+  const state = createSupportTicketPageState();
+  state.enter(owner);
+  const read = state.beginList(owner);
+  assert.equal(state.acceptList(read, ticketList("workspace"), owner), true);
+  state.finish(read);
+  const html = renderSupportTickets(state.snapshot(), auth, shell);
+  assert.match(html, /Gateway unavailable/u);
+  assert.match(html, /data-support-ticket-create-form/u);
+  assert.match(html, /data-support-ticket-reply-form/u);
+  assert.equal(Object.hasOwn(auth, "user"), false);
+  assert.equal(Object.hasOwn(owner, "tenantId"), false);
+});
+
+test("current Workspace support denies expired, mismatched and revoked authorization", () => {
+  for (const change of [
+    s => { s.workspaceContext.expires_at = "2000-01-01T00:00:00Z"; },
+    s => { s.workspaceIdentity.current_session.revoke_generation += 1; },
+    s => { s.navigation.permission_fingerprint = "b".repeat(64); },
+    s => { s.activeNavigationItemId = "overview"; },
+    s => { s.navigation.navigation_items[0].disabled = true; },
+  ]) {
+    const shell = currentWorkspaceSupportShell();
+    change(shell);
+    assert.equal(supportTicketPageOwner(shell.workspaceAuthorization, shell), null);
+  }
+  const shell = currentWorkspaceSupportShell();
+  assert.equal(supportTicketPageOwner({ ...shell.workspaceAuthorization, membership_revision: 2 }, shell), null);
+  const denied = currentWorkspaceSupportShell([]);
+  assert.equal(supportTicketPageOwner(denied.workspaceAuthorization, denied), null);
+  const readOnly = currentWorkspaceSupportShell([PERMISSIONS.SUPPORT_TICKET_READ]);
+  const owner = supportTicketPageOwner(readOnly.workspaceAuthorization, readOnly);
+  const state = createSupportTicketPageState();
+  state.enter(owner);
+  assert.equal(state.beginMutation(owner), null);
+  assert.doesNotMatch(renderSupportTickets(state.snapshot(), readOnly.workspaceAuthorization, readOnly), /data-support-ticket-create-form/u);
+});
+
+test("current Workspace support drops late mutations after real session owner changes", () => {
+  const shell = currentWorkspaceSupportShell();
+  const owner = supportTicketPageOwner(shell.workspaceAuthorization, shell);
+  const state = createSupportTicketPageState();
+  state.enter(owner);
+  const mutation = state.beginMutation(owner);
+  const next = currentWorkspaceSupportShell();
+  next.workspaceIdentity.current_session.session_id = "replacement_session";
+  next.workspaceOwner = workspaceNavigationOwner(next.workspaceIdentity, { context: next.workspaceContext, authorization: next.workspaceAuthorization });
+  const nextOwner = supportTicketPageOwner(next.workspaceAuthorization, next);
+  state.enter(nextOwner);
+  assert.equal(mutation.signal.aborted, true);
+  assert.equal(state.acceptTicket(mutation, ticketMutation("workspace"), nextOwner, "support.ticket_updated"), false);
+  assert.equal(state.snapshot().items.length, 0);
+});
 
 test("support client keeps Workspace and Platform CSRF domains exact with CAS and idempotency", async (t) => {
   const originalDocument = globalThis.document;

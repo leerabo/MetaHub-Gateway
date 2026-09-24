@@ -10,6 +10,7 @@ import json
 import logging
 import sqlite3
 import threading
+from contextlib import closing
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -18,7 +19,12 @@ from typing import Any
 import metahub_gateway.usage.ledger as usage_ledger_service
 import pytest
 from httpx import ASGITransport, AsyncClient
-from metahub_gateway.api.openai_compatible import router as openai_compatible_router
+from metahub_gateway.api.openai_compatible import (
+    router as openai_compatible_router,
+)
+from metahub_gateway.api.openai_compatible import (
+    unversioned_router,
+)
 from metahub_gateway.usage.ledger import (
     RequestLogContext,
     _estimate_cost,
@@ -28,6 +34,7 @@ from metahub_gateway.usage.ledger import (
 )
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
 from metahub_shared.runtime.fastapi_app import create_service_app
+from test_prd144_commercial_accounting_gateway import _insert_rate as insert_test_cost_rate
 
 # 以下测试密钥只用于最小日志闭环夹具，验证用量和成本字段可追踪。
 VIRTUAL_KEY = "mhv_prd016_virtual_key"
@@ -139,6 +146,31 @@ def prepare_database(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, provider_b
         """,
         (seed.tenant_id,),
     )
+    # This legacy PRD-016 fixture asserts the pre-PRD-144 model-catalog price
+    # contract.  The current migration also seeds an authoritative
+    # Workspace ProviderCostRate for ``default-chat``; retire only that
+    # fixture head so the resolver exercises the explicit migration fallback
+    # without deleting immutable financial facts.
+    seeded_rates = connection.execute(
+        """
+        SELECT workspace_provider_cost_rate_id
+        FROM workspace_provider_cost_rates
+        WHERE tenant_id=? AND model_id=(
+          SELECT model_id FROM models
+          WHERE tenant_id=? AND model_alias='default-chat'
+          ORDER BY created_at,model_id LIMIT 1
+        )
+        """,
+        (seed.tenant_id, seed.tenant_id),
+    ).fetchall()
+    for seeded_rate in seeded_rates:
+        rate_id = str(seeded_rate["workspace_provider_cost_rate_id"])
+        connection.execute(
+            "UPDATE workspace_provider_cost_rate_heads "
+            "SET adoption_state='disabled',head_revision=head_revision+1,updated_at=datetime('now') "
+            "WHERE workspace_provider_cost_rate_id=?",
+            (rate_id,),
+        )
     connection.commit()
     return database_url
 
@@ -216,6 +248,164 @@ async def test_gateway_success_request_writes_request_log_usage_and_cost(
     assert VIRTUAL_KEY not in persisted
     assert PROVIDER_KEY not in persisted
     assert "sk-provider-raw-usage-secret" not in persisted
+
+
+@pytest.mark.anyio
+async def test_employee_key_keeps_identity_and_accounting_across_tool_protocols(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_upstream,
+) -> None:
+    """同一员工无需登录，以同一 KEY 使用三种协议，并可统一停用。"""
+
+    upstream_url, captured = fake_upstream
+    database_url = prepare_database(monkeypatch, tmp_path, upstream_url)
+    app = build_gateway_app()
+    app.include_router(unversioned_router)
+    with closing(connect_database(database_url)) as connection:
+        key = connection.execute(
+            """
+            SELECT k.tenant_id, k.virtual_key_id, u.user_id AS created_by, k.created_at
+            FROM virtual_keys k JOIN users u ON u.tenant_id=k.tenant_id
+            ORDER BY u.created_at, u.user_id LIMIT 1
+            """
+        ).fetchone()
+        assert key is not None
+        connection.execute(
+            """
+            INSERT INTO workspace_consumers(
+                consumer_id, tenant_id, display_name, department,
+                created_by, created_at, updated_at
+            ) VALUES('consumer_tool_test', ?, '协议测试员工', '测试部门', ?, ?, ?)
+            """,
+            (key["tenant_id"], key["created_by"], key["created_at"], key["created_at"]),
+        )
+        connection.execute(
+            """
+            INSERT INTO virtual_key_consumers(virtual_key_id, tenant_id, consumer_id, created_at)
+            VALUES(?, ?, 'consumer_tool_test', ?)
+            """,
+            (key["virtual_key_id"], key["tenant_id"], key["created_at"]),
+        )
+        # 隔离于种子自带的零价费率，独立配置本用例模型与权威 ProviderCostRate。
+        connection.execute(
+            """
+            INSERT INTO models(
+                model_id, tenant_id, provider_id, model_alias, upstream_model_name,
+                capabilities, status, created_at, updated_at, input_price_per_1k,
+                output_price_per_1k, currency, price_schema_version
+            ) SELECT 'model_employee_tools', tenant_id, provider_id, 'employee-test-model',
+                     upstream_model_name, capabilities, 'active', created_at, updated_at,
+                     0.1, 0.2, 'CNY', 'test-price-v1'
+              FROM models WHERE tenant_id=? AND model_alias='default-chat'
+            """, (key["tenant_id"],),
+        )
+        connection.execute(
+            """
+            INSERT INTO model_aliases(
+                model_alias_id, tenant_id, alias, environment, environment_id,
+                default_model_id, status, description, created_at, updated_at
+            ) SELECT 'alias_employee_tools', m.tenant_id, 'company-default', 'dev',
+                     e.environment_id, m.model_id, 'active', 'Synthetic employee route',
+                     datetime('now'), datetime('now')
+              FROM models m JOIN environments e ON e.tenant_id=m.tenant_id
+              WHERE m.tenant_id=? AND m.model_id='model_employee_tools' AND e.code='dev'
+            """, (key["tenant_id"],),
+        )
+        owner = connection.execute(
+            """
+            SELECT m.provider_id, b.workspace_id, wm.workspace_membership_id
+            FROM models m JOIN workspace_tenant_bindings b
+              ON b.tenant_id=m.tenant_id AND b.status='active'
+            JOIN workspace_memberships wm ON wm.workspace_id=b.workspace_id
+              AND wm.tenant_id=b.tenant_id AND wm.role_code='owner' AND wm.status='active'
+            WHERE m.tenant_id=? AND m.model_id='model_employee_tools'
+            """, (key["tenant_id"],),
+        ).fetchone()
+        assert owner is not None
+        price_version = "pcrv_" + "8" * 32
+        insert_test_cost_rate(
+            connection, rate_id="pcr_" + "8" * 32, workspace_id=owner["workspace_id"],
+            tenant_id=key["tenant_id"], provider_id=owner["provider_id"],
+            model_id="model_employee_tools", currency="CNY",
+            membership_id=owner["workspace_membership_id"],
+            versions=((price_version, 1, 100_000, 200_000,
+                       "2020-01-01T00:00:00Z", None, "active"),),
+            head_version=price_version,
+        )
+        connection.commit()
+
+    bearer = {"Authorization": f"Bearer {VIRTUAL_KEY}"}
+    # 故意省略 model，验证员工身份下的默认路由仍经过同一处理链路。
+    cases = [
+        ("chat/completions", bearer, {"messages": [{"role": "user", "content": "test"}]}),
+        ("responses", bearer, {"input": "test"}),
+        ("messages", bearer, {"messages": [{"role": "user", "content": "test"}]}),
+        ("messages", {"x-api-key": VIRTUAL_KEY}, {
+            "messages": [{"role": "user", "content": "test"}], "max_tokens": 16,
+        }),
+    ]
+    requests = [
+        (f"{prefix}/{endpoint}", endpoint, headers, payload)
+        for prefix in ("", "/v1") for endpoint, headers, payload in cases
+    ]
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://gateway") as client:
+        for prefix in ("", "/v1"):
+            directory = await client.get(f"{prefix}/models", headers=bearer)
+            assert directory.status_code == 200, directory.text
+            assert any(model["id"] == "company-default" for model in directory.json()["data"])
+        for index, (route, endpoint, headers, payload) in enumerate(requests):
+            request_id = f"req_employee_tools_{index}"
+            response = await client.post(
+                route,
+                headers={**headers, "X-Request-ID": request_id}, json=payload,
+            )
+            assert response.status_code == 200, response.text
+            body = response.json()
+            if endpoint == "responses":
+                assert body["object"] == "response"
+                assert body["output"][0]["content"][0]["text"]
+            elif endpoint == "messages":
+                assert body["type"] == "message"
+                assert body["content"][0]["text"]
+            else:
+                assert body["choices"][0]["message"]["content"]
+            with closing(connect_database(database_url)) as connection:
+                row = connection.execute(
+                    """
+                    SELECT r.tenant_id, r.virtual_key_id, r.status, r.endpoint,
+                           u.total_tokens, u.cost_amount, u.price_schema_version, kc.consumer_id
+                    FROM request_logs r JOIN usage_ledger u
+                      ON u.tenant_id=r.tenant_id AND u.request_id=r.request_id
+                    JOIN virtual_key_consumers kc
+                      ON kc.tenant_id=r.tenant_id AND kc.virtual_key_id=r.virtual_key_id
+                    WHERE r.request_id=?
+                    """, (request_id,),
+                ).fetchone()
+                assert row is not None
+                assert row["consumer_id"] == "consumer_tool_test"
+                assert row["tenant_id"] == key["tenant_id"]
+                assert row["virtual_key_id"] == key["virtual_key_id"]
+                assert row["endpoint"] == f"/v1/{endpoint}"
+                assert row["status"] == "success"
+                assert row["total_tokens"] == 10
+                assert row["price_schema_version"] == f"provider-cost-v1:{price_version}"
+                assert abs(float(row["cost_amount"]) - 0.0016) < 0.0000001
+
+        assert len(captured) == len(requests)
+        assert all(item["authorization"] == f"Bearer {PROVIDER_KEY}" for item in captured)
+        assert all(VIRTUAL_KEY not in json.dumps(item) for item in captured)
+        with closing(connect_database(database_url)) as connection:
+            connection.execute(
+                "UPDATE workspace_consumers SET status='disabled', revision=revision+1 "
+                "WHERE consumer_id='consumer_tool_test'"
+            )
+            connection.commit()
+        for route, _endpoint, headers, payload in requests:
+            rejected = await client.post(route, headers=headers, json=payload)
+            assert rejected.status_code == 401, rejected.text
+        for prefix in ("", "/v1"):
+            directory = await client.get(f"{prefix}/models", headers=bearer)
+            assert directory.status_code == 401, directory.text
+        assert len(captured) == len(requests)
 
 
 def test_price_snapshot_partial_write_rolls_back_closes_and_next_usage_succeeds(

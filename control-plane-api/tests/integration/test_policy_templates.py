@@ -2745,6 +2745,7 @@ async def test_template_rollback_lock_permission_and_audit_failure_are_atomic(
     """写锁权限与审计故障：任一失败都不得留下 rolled_back 或补偿快照。"""
 
     database_url = _prepare_database(monkeypatch, tmp_path)
+    from metahub_control.auth import resource_transactions
     from metahub_control.policy_templates import service as template_service
     from metahub_control.webhooks import service as webhook_service
 
@@ -2764,7 +2765,7 @@ async def test_template_rollback_lock_permission_and_audit_failure_are_atomic(
             auth,
             request_suffix="atomic",
         )
-        original_permission_check = template_service.require_transaction_permission
+        original_permission_check = resource_transactions.require_transaction_permission
 
         def _deny_locked_publish(
             connection,
@@ -2786,7 +2787,7 @@ async def test_template_rollback_lock_permission_and_audit_failure_are_atomic(
             )
 
         monkeypatch.setattr(
-            template_service,
+            resource_transactions,
             "require_transaction_permission",
             _deny_locked_publish,
         )
@@ -2803,7 +2804,7 @@ async def test_template_rollback_lock_permission_and_audit_failure_are_atomic(
         assert permission_denied.json()["code"] == "auth.permission_denied"
 
         monkeypatch.setattr(
-            template_service,
+            resource_transactions,
             "require_transaction_permission",
             original_permission_check,
         )

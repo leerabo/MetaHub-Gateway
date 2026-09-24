@@ -1,4 +1,5 @@
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 /**
  * 控制台使用的稳定权限码。
@@ -335,9 +336,10 @@ export function authorizeNavigationSnapshot(navigation, authContext) {
 }
 
 /** 查询当前租户的完整权限目录与六角色矩阵。 */
-export async function getPermissions({ controlApiUrl, token, signal, requestId = createPermissionRequestId("get") }) {
+export async function getPermissions({ controlApiUrl, authentication, token, signal, requestId = createPermissionRequestId("get") }) {
   return permissionRequest(`${controlApiUrl}/permissions`, {
-    headers: { Authorization: `Bearer ${token}` },
+    authentication,
+    token,
     signal,
   }, requestId);
 }
@@ -349,6 +351,7 @@ export async function getPermissions({ controlApiUrl, token, signal, requestId =
  */
 export async function replaceRolePermissions({
   controlApiUrl,
+  authentication,
   token,
   roleId,
   expectedRevision,
@@ -373,8 +376,9 @@ export async function replaceRolePermissions({
     `${controlApiUrl}/roles/${encodeURIComponent(normalizedRoleId)}/permissions`,
     {
       method: "PATCH",
+      authentication,
+      token,
       headers: {
-        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -408,7 +412,7 @@ export function isMatrixHash(value) {
 
 /** 发送权限 API 并只保留统一公开错误字段。 */
 async function permissionRequest(url, options, requestId) {
-  const response = await fetch(url, {
+  const response = await authenticatedResourceFetch(url, {
     ...options,
     headers: {
       "X-Request-ID": requestId,

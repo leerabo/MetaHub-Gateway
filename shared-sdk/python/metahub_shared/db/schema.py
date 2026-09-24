@@ -42,24 +42,37 @@ def table_columns(connection, table: str) -> tuple[str, ...]:
     return tuple(str(row["name"]) for row in rows)
 
 
-def tables_exist(connection, tables) -> bool:
-    """Check one required table set in the caller's snapshot without N round trips."""
+def existing_table_names(connection, tables) -> frozenset[str]:
+    """Find requested main-schema tables in the caller's current snapshot."""
     names = tuple(sorted({_table_name(table) for table in tables}))
     if not names:
-        return True
+        return frozenset()
     placeholders = ",".join("?" for _ in names)
     if getattr(connection, "backend", "sqlite") == "postgresql":
         query = (
-            "SELECT count(*) FROM pg_catalog.pg_class "
+            "SELECT relname FROM pg_catalog.pg_class "
             "WHERE relnamespace=current_schema()::regnamespace AND relkind IN ('r','p') "
             f"AND relname IN ({placeholders})"
         )
     else:
+        # Named PRAGMA lookups use SQLite's parsed schema instead of scanning every
+        # trigger/index definition. Keep one statement and no cross-snapshot cache.
+        values = ",".join("(?)" for _ in names)
         query = (
-            "SELECT count(*) FROM main.sqlite_schema "
-            f"WHERE type='table' AND name IN ({placeholders})"
+            f"WITH requested(name) AS (VALUES {values}) "
+            "SELECT requested.name FROM requested "
+            "JOIN pragma_table_list(requested.name) listed "
+            "ON listed.schema='main' AND listed.name=requested.name "
+            "AND listed.type IN ('table','virtual','shadow') "
+            "AND listed.name!='sqlite_schema'"
         )
-    return connection.execute(query, names).fetchone()[0] == len(names)
+    return frozenset(str(row[0]) for row in connection.execute(query, names).fetchall())
+
+
+def tables_exist(connection, tables) -> bool:
+    """Check one required table set in the caller's snapshot without N round trips."""
+    names = frozenset(_table_name(table) for table in tables)
+    return existing_table_names(connection, names) == names
 
 
 def foreign_key_violation_count(connection) -> int:

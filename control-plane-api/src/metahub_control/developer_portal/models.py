@@ -73,6 +73,7 @@ class PythonSDKExampleResponse(BaseModel):
     download_url: str
     gateway_base_url: str
     chat_model_alias: str
+    chat_model_configured: bool = False
     embedding_model_alias: str
     environment_variables: list[SDKEnvironmentVariable]
     commands: list[SDKCommand]
@@ -101,6 +102,7 @@ class JavaScriptSDKExampleResponse(BaseModel):
     download_url: str
     gateway_base_url: str
     chat_model_alias: str
+    chat_model_configured: bool = False
     environment_variables: list[SDKEnvironmentVariable]
     commands: list[SDKCommand]
     files: list[str]

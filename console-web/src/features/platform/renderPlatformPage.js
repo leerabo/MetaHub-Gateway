@@ -2,6 +2,7 @@
 import { NOTIFICATION_EVENT_PARAMETERS } from "../../lib/notifications.js";
 import { icon } from "../public-home/icons.js";
 import { renderLaunchGates } from "../launch-gates/renderLaunchGates.js";
+import { renderGaLaunchGates } from "../launch-gates/renderGaLaunchGates.js";
 import { renderChannelManagement } from "../channels/renderChannelManagement.js";
 import { renderBrandEditor } from "../brand-domains/renderBrandEditor.js";
 import { renderPlatformCustomerSuccess } from "../platform-customer-success/renderPlatformCustomerSuccess.js";
@@ -34,6 +35,16 @@ const ROLE_OPTIONS = [
   "platform_communications",
 ];
 
+const NAVIGATION_GROUPS = [
+  ["运营工作台", "activity", [["overview", "平台总览"], ["admin-assistant", "运营助手"], ["approvals", "审批队列"], ["workspaces", "组织目录"], ["customer-success", "客户成功"], ["support", "支持协作"]]],
+  ["网关与基础设施", "cpu", [["infrastructure", "基础设施"], ["gateway", "Gateway 集群"], ["edge-fleet", "私有 Gateway"], ["edge-upgrades", "网关升级"], ["edge-licenses", "网关许可证"], ["edge-backups", "网关备份"], ["offline-bundles", "离线交换"]]],
+  ["服务运行", "activity", [["job-runtime", "任务运行时"], ["config-distribution", "配置分发"], ["observability", "可观测性"], ["status-incidents", "状态与事件"], ["capacity", "容量与韧性"], ["disaster-recovery", "灾难恢复"]]],
+  ["账务与增长", "chart-no-axes-combined", [["billing", "账单与计量"], ["commercial-accounting", "商业账务"], ["channels", "渠道管理"], ["growth", "增长分析"]]],
+  ["安全与治理", "shield-check", [["operators", "操作员"], ["verification", "企业认证"], ["abuse-risk", "滥用风控"], ["audit", "平台审计"], ["compliance", "合规复核"], ["privacy", "隐私请求"], ["data-residency", "数据驻留"], ["security-assurance", "安全评估"]]],
+  ["发布与供应商", "git-branch", [["feature-rollouts", "功能发布"], ["launch-gates", "发布门禁"], ["console-migration", "控制台迁移"], ["releases", "接口与 SDK 发布"], ["providers", "供应商"], ["provider-engineering", "供应商工程"], ["provider-catalog", "供应商目录"]]],
+  ["品牌与通知", "layers", [["branding", "平台品牌"], ["notification-templates", "通知模板"]]],
+];
+
 export function renderPlatformGate(container, state = {}) {
   container.innerHTML = `
     <div class="platform-gate">
@@ -49,7 +60,7 @@ export function renderPlatformGate(container, state = {}) {
           <label><span>动态验证码</span><input name="totpCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required autofocus /></label>
           <button class="platform-primary" type="submit">验证并进入</button>
         </form>
-        <a href="/identity.html">返回账号安全</a>
+        <a href="/identity.html?view=account#security">返回账号安全</a>
       </section>
     </div>`;
 }
@@ -71,15 +82,16 @@ export function renderPlatformWorkspace(container, state) {
         <a class="platform-wordmark" href="/platform.html"><span class="platform-mark" aria-hidden="true">M</span><strong>MetaHub</strong></a>
         <div class="platform-operator-summary"><span>${escapeHtml(operator.display_name ?? "-")}</span><strong>${escapeHtml((operator.roles ?? []).map(roleLabel).join(" · "))}</strong></div>
         <div class="platform-topbar-actions">
-          <button class="platform-icon-button" type="button" data-platform-action="refresh" title="刷新" aria-label="刷新" ${disasterRecoveryBusy ? "disabled" : ""}>↻</button>
-          <a href="/identity.html">账号安全</a>
+          <button class="platform-icon-button platform-navigation-toggle" type="button" data-platform-action="toggle-navigation" aria-label="${state.navigationOpen ? "收起平台导航" : "展开平台导航"}" title="${state.navigationOpen ? "收起平台导航" : "展开平台导航"}" aria-expanded="${Boolean(state.navigationOpen)}" aria-controls="platform-navigation">${icon("layers")}</button>
+          <button class="platform-icon-button" type="button" data-platform-action="refresh" title="刷新" aria-label="刷新" ${disasterRecoveryBusy ? "disabled" : ""}>${icon("rotate-cw")}</button>
+          <a href="/identity.html?view=account#security">账号安全</a>
         </div>
       </header>
       <div class="platform-body">
-        <aside class="platform-sidebar" aria-label="平台导航">
-          ${(state.navigation ?? []).map((item) => navItem(item, state.view, disasterRecoveryBusy)).join("")}
+        <aside id="platform-navigation" class="platform-sidebar${state.navigationOpen ? " is-open" : ""}" aria-label="平台导航">
+          ${renderNavigation(state.navigation ?? [], state.view, disasterRecoveryBusy)}
         </aside>
-        <section class="platform-content" aria-live="polite">
+        <section class="platform-content" aria-live="polite" aria-busy="${Boolean(state.loading)}" tabindex="-1">
           ${feedback(state)}
           ${pendingConfirmation(state)}
           ${renderView(state, permissions)}
@@ -111,7 +123,9 @@ function renderView(state, permissions) {
   if (state.view === "capacity") return capacityView(state, permissions);
   if (state.view === "data-residency") return dataResidencyView(state);
   if (state.view === "security-assurance") return securityAssuranceView(state, permissions);
-  if (state.view === "launch-gates") return renderLaunchGates(state, permissions);
+  if (state.view === "launch-gates") {
+    return `${renderLaunchGates(state, permissions)}${state.gaLaunchGovernance ? renderGaLaunchGates(state.gaLaunchGovernance) : ""}`;
+  }
   if (state.view === "abuse-risk") return abuseRiskView(state, permissions);
   if (state.view === "operators") return operatorsView(state, permissions);
   if (state.view === "workspaces") return workspacesView(state, permissions);
@@ -146,7 +160,7 @@ function renderView(state, permissions) {
 }
 
 function renderPlatformBranding(state) {
-  return `<header class="platform-page-heading"><div><p>Platform owner</p><h1>平台品牌</h1></div><span>独立发布域</span></header>
+  return `<header class="platform-page-heading"><div><p>平台负责人</p><h1>平台品牌</h1></div><span>独立发布域</span></header>
     ${renderBrandEditor(state.brandDomains?.platform, {
       scope: "platform-brand",
       kicker: "SaaS public identity",
@@ -163,29 +177,29 @@ function providerCatalogView(state, permissions) {
   const securityProjection = response.security_projection === true;
   return `
     <header class="platform-page-heading">
-      <div><p>Signed release channel</p><h1>Provider catalog</h1></div>
-      <span>${securityProjection ? "Security projection" : "Release management"}</span>
+      <div><p>签名发布通道</p><h1>供应商目录</h1></div>
+      <span data-contract-label="${securityProjection ? "Security projection" : "Release management"}">${securityProjection ? "安全投影" : "发布管理"}</span>
     </header>
-    <section class="platform-metrics" aria-label="Provider catalog release summary">
-      ${metric("Generation", current?.generation ?? 0, "immutable head")}
-      ${metric("Entries", current?.entry_count ?? 0, "published matrix")}
-      ${metric("Compatibility", current?.compatibility_change_count ?? 0, "changes in head")}
-      ${metric("Recent", recent.length, "retained versions")}
+    <section class="platform-metrics" aria-label="供应商目录发布摘要">
+      ${metric("代数", current?.generation ?? 0, "不可变当前版本")}
+      ${metric("条目", current?.entry_count ?? 0, "已发布矩阵")}
+      ${metric("兼容性", current?.compatibility_change_count ?? 0, "当前版本变更")}
+      ${metric("最近版本", recent.length, "保留版本数")}
     </section>
     <section class="platform-band platform-provider-catalog-head">
-      <div class="platform-section-heading"><div><p>Verified publication</p><h2>Current release</h2></div>${current ? status("active") : ""}</div>
+      <div class="platform-section-heading"><div><p>已验证发布</p><h2>当前版本</h2></div>${current ? status("active") : ""}</div>
       ${current ? `<dl>
         <div><dt>Version</dt><dd>${escapeHtml(current.version)}</dd></div>
         <div><dt>Generation</dt><dd>${number(current.generation)}</dd></div>
         <div><dt>Manifest</dt><dd><code>${escapeHtml(shortHash(current.manifest_sha256))}</code></dd></div>
         <div><dt>Signing key</dt><dd>${escapeHtml(current.key_id)}</dd></div>
         <div><dt>Algorithm</dt><dd>${escapeHtml(current.signature_algorithm)}</dd></div>
-        <div><dt>Signature proof</dt><dd><code>${escapeHtml(shortHash(current.signature_sha256))}</code></dd></div>
+        <div><dt data-contract-label="Signature proof">签名证明</dt><dd><code>${escapeHtml(shortHash(current.signature_sha256))}</code></dd></div>
         <div><dt>Published</dt><dd>${formatTime(current.published_at)}</dd></div>
       </dl>` : '<p class="platform-empty">Provider catalog is unavailable.</p>'}
     </section>
     <section class="platform-band platform-provider-catalog-history">
-      <div class="platform-section-heading"><div><p>Immutable history</p><h2>Recent versions</h2></div><span>${number(recent.length)} versions</span></div>
+      <div class="platform-section-heading"><div><p>不可变历史</p><h2>最近版本</h2></div><span>${number(recent.length)} 个版本</span></div>
       <div class="platform-table-wrap"><table class="platform-provider-catalog-table">
         <thead><tr><th>Version</th><th>Generation</th><th>Entries</th><th>Compatibility</th><th>Manifest</th><th>Published</th></tr></thead>
         <tbody>${recent.map((item) => `<tr>
@@ -195,13 +209,13 @@ function providerCatalogView(state, permissions) {
           <td data-label="Compatibility">${number(item.compatibility_change_count)}</td>
           <td data-label="Manifest"><code>${escapeHtml(shortHash(item.manifest_sha256))}</code></td>
           <td data-label="Published">${formatTime(item.published_at)}</td>
-        </tr>`).join("") || emptyRow("No catalog versions available", 6)}</tbody>
+        </tr>`).join("") || emptyRow("暂无目录版本", 6)}</tbody>
       </table></div>
     </section>
     ${canManage ? `<section class="platform-band platform-provider-catalog-release">
-      <div class="platform-section-heading"><div><p>CAS publication</p><h2>Publish signed manifest</h2></div><span>Expected generation ${number(current?.generation)}</span></div>
+      <div class="platform-section-heading"><div><p>内容寻址发布</p><h2 data-contract-label="Publish signed manifest">发布签名清单</h2></div><span>预期代数 ${number(current?.generation)}</span></div>
       <form data-platform-provider-catalog-form autocomplete="off">
-        <label class="platform-provider-catalog-manifest"><span>Canonical manifest</span><textarea name="manifest" rows="12" maxlength="250000" spellcheck="false" required placeholder='{"schema_version":1,"version":"YYYY.MM.DD.N","entries":[]}'></textarea></label>
+        <label class="platform-provider-catalog-manifest" data-contract-label="Canonical manifest"><span>规范清单</span><textarea name="manifest" rows="12" maxlength="250000" spellcheck="false" required placeholder='{"schema_version":1,"version":"YYYY.MM.DD.N","entries":[]}'></textarea></label>
         <label><span>Trusted key ID</span><input name="keyId" pattern="[A-Za-z0-9][A-Za-z0-9._:-]{2,127}" maxlength="128" required /></label>
         <label><span>Detached Ed25519 signature</span><input name="signature" pattern="[A-Za-z0-9_-]{86}" minlength="86" maxlength="86" autocomplete="off" required /></label>
         <label><span>Release reason</span><select name="reasonCode"><option value="catalog_release">Catalog release</option><option value="compliance_update">Compliance update</option><option value="endpoint_update">Endpoint update</option></select></label>
@@ -1392,8 +1406,8 @@ function notificationTemplatesView(state, permissions) {
   const defaultEvent = "invoice.issued";
   return `
     <header class="platform-page-heading">
-      <div><p>Delivery content</p><h1>通知模板</h1></div>
-      <span>Catalog revision ${number(response.catalog_revision ?? 0)}</span>
+      <div><p>通知内容</p><h1>通知模板</h1></div>
+      <span>目录修订版 ${number(response.catalog_revision ?? 0)}</span>
     </header>
     <section class="platform-band">
       <div class="platform-section-heading">
@@ -1410,7 +1424,7 @@ function notificationTemplatesView(state, permissions) {
     ${canWrite ? `
       <section class="platform-band platform-notification-editor">
         <div class="platform-section-heading">
-          <div><p>Controlled editor</p><h2>创建新版本</h2></div>
+          <div><p>受控编辑</p><h2>创建新版本</h2></div>
         </div>
         <form data-platform-notification-template-form autocomplete="off">
           <label><span>模板代码</span><input name="templateCode" pattern="[a-z0-9][a-z0-9_.-]{2,79}" maxlength="80" value="invoice_issued" required /></label>
@@ -1432,7 +1446,7 @@ function notificationTemplateRow(template) {
   return `<tr>
     <td data-label="模板"><strong>${escapeHtml(template.template_code)}</strong><small>${escapeHtml(template.notification_template_id)}</small></td>
     <td data-label="事件"><strong>${escapeHtml(notificationEventLabel(template.event_type))}</strong><small>${escapeHtml(template.category)}</small></td>
-    <td data-label="渠道 / 语言"><strong>${escapeHtml(template.channel)}</strong><small>${escapeHtml(template.locale)}</small></td>
+    <td data-label="渠道 / 语言"><strong>${escapeHtml(notificationChannelLabel(template.channel))}</strong><small>${escapeHtml(notificationLocaleLabel(template.locale))}</small></td>
     <td data-label="版本"><strong>v${number(template.version)}</strong><small>rev ${number(template.revision)}</small></td>
     <td data-label="状态">${status(template.status)}<small>${formatTime(template.published_at ?? template.created_at)}</small></td>
     <td data-label="正文摘要"><strong>${escapeHtml(template.subject_template)}</strong><small>${escapeHtml(template.content_sha256.slice(0, 12))}</small></td>
@@ -1456,6 +1470,14 @@ function notificationEventLabel(value) {
     "infrastructure.backup_completed": "备份完成",
     "gateway.health_changed": "Gateway 健康变更",
   })[value] ?? "未知事件";
+}
+
+function notificationChannelLabel(value) {
+  return ({ in_app: "站内", email: "邮件", webhook: "Webhook" })[value] ?? String(value ?? "未知渠道");
+}
+
+function notificationLocaleLabel(value) {
+  return ({ "zh-CN": "简体中文", en: "English" })[value] ?? String(value ?? "未知语言");
 }
 
 /** 渲染企业认证审核队列，案件投影不显示 Workspace、主体明文或对象引用。 */
@@ -1934,10 +1956,19 @@ function edgeFleetView(state, permissions) {
 }
 
 function edgeFleetRow(item) {
+  const takeover = item.maintenance_mode
+    ? "维护模式"
+    : item.status === "pending"
+      ? "待接管"
+      : ["offline", "critical", "revoked", "retired"].includes(item.health_code)
+        ? "已停止接管"
+        : item.mode === "connected" && item.status === "active"
+          ? "正常接管"
+          : "未接管";
   return `<tr>
     <td data-label="Deployment"><strong>${escapeHtml(shortReference(item.deployment_id))}</strong><small>${formatTime(item.updated_at)}</small></td>
     <td data-label="区域 / 模式"><strong>${escapeHtml(item.region_code)}</strong><small>${escapeHtml(item.mode)}</small></td>
-    <td data-label="状态">${status(item.status)}<small>${item.maintenance_mode ? "维护模式" : "正常接管"}</small></td>
+    <td data-label="状态">${status(item.status)}<small>${takeover}</small></td>
     <td data-label="健康分">${renderEdgeHealthScore(item.health_score, item.health_code, { compact: true })}<small>${escapeHtml(edgeHealthLabel(item.health_code))}</small></td>
     <td data-label="告警">${status(item.alert_code)}</td>
     <td data-label="证书">${status(item.certificate_signal)}</td>
@@ -2217,10 +2248,10 @@ function workspaceDetailView(state, permissions) {
     <section class="platform-band platform-workspace-summary">
       <div class="platform-section-heading"><div><p>Operational facts</p><h2>运营摘要</h2></div><span>更新于 ${formatTime(workspace.updated_at)}</span></div>
       <dl class="platform-fact-grid">
-        ${fact("Region", workspace.region_code ?? "未配置")}
-        ${fact("Residency policy", workspace.residency_policy_version ?? "未配置")}
+        ${fact("区域", workspace.region_code ?? "未配置")}
+        ${fact("驻留策略", workspace.residency_policy_version ?? "未配置")}
         ${fact("成员", number(workspace.member_count))}
-        ${fact("活跃 Session", number(workspace.active_session_count))}
+        ${fact("活跃会话", number(workspace.active_session_count))}
         ${fact("数据生命周期", statusLabel(workspace.data_lifecycle_status))}
         ${fact("Gateway", statusLabel(workspace.gateway_status))}
         ${fact("部署", statusLabel(workspace.deployment_status))}
@@ -2230,8 +2261,8 @@ function workspaceDetailView(state, permissions) {
     <section class="platform-band platform-health-detail">
       <div class="platform-section-heading"><div><p>Health projection</p><h2>健康投影</h2></div>${status(health.status)}</div>
       <dl class="platform-fact-grid">
-        ${fact("Score band", statusLabel(health.score_band ?? "not_ready"))}
-        ${fact("Risk level", statusLabel(health.risk_level ?? "not_ready"))}
+        ${fact("健康等级", statusLabel(health.score_band ?? "not_ready"))}
+        ${fact("风险等级", statusLabel(health.risk_level ?? "not_ready"))}
         ${fact("评估时间", formatTime(health.evaluated_at))}
         ${fact("健康风险", Array.isArray(health.risk_tags) ? health.risk_tags.map(statusLabel).join("、") || "无" : "受限")}
       </dl>
@@ -2261,8 +2292,9 @@ function riskControls(workspace, options) {
 }
 
 function notificationControls(workspace) {
+  const lastNotificationStatus = workspace.last_notification_status ?? "none";
   return `<section class="platform-band platform-operation-grid">
-    <div><div class="platform-section-heading"><div><p>Owner contact</p><h2>联系 Owner</h2></div></div><dl class="platform-fact-grid platform-fact-grid-compact">${fact("联系状态", statusLabel(workspace.owner_contact_status))}${fact("最近通知", statusLabel(workspace.last_notification_status ?? "none"))}</dl></div>
+    <div><div class="platform-section-heading"><div><p>联系负责人</p><h2>联系 Owner</h2></div></div><dl class="platform-fact-grid platform-fact-grid-compact">${fact("联系状态", statusLabel(workspace.owner_contact_status))}<div><dt>最近通知</dt><dd>${status(lastNotificationStatus)}</dd></div></dl></div>
     <form data-workspace-notification-form autocomplete="off"><label><span>模板</span><select name="templateCode">${filterOptions("", [["workspace_operational_notice", "Operational notice"], ["workspace_risk_follow_up", "Risk follow up"], ["workspace_service_update", "Service update"]])}</select></label><label><span>原因</span><select name="reasonCode">${filterOptions("", [["operational_notice", "Operational notice"], ["risk_follow_up", "Risk follow up"], ["service_update", "Service update"]])}</select></label><button class="platform-primary" type="submit" ${workspace.owner_contact_status === "available" ? "" : "disabled"}>加入投递队列</button></form>
   </section>`;
 }
@@ -3209,7 +3241,11 @@ function domainPlaceholderView(state) {
   const item = (state.navigation ?? []).find((candidate) => candidate.id === state.view);
   return `
     <header class="platform-page-heading"><div><p>Platform domain</p><h1>${escapeHtml(item?.label ?? "平台域")}</h1></div></header>
-    <section class="platform-band platform-domain-empty"><strong>暂无数据</strong></section>`;
+    <section class="platform-band platform-domain-empty" role="status">
+      <strong>暂无数据</strong>
+      <p>当前职责域还没有可验证的记录。返回平台总览查看待处理事项，或稍后刷新本页。</p>
+      <button type="button" class="platform-secondary" data-platform-view="overview">返回平台总览</button>
+    </section>`;
 }
 
 function pendingConfirmation(state) {
@@ -3231,14 +3267,28 @@ function feedback(state) {
       : "";
     return `<div class="platform-feedback is-error" role="alert"><strong>${escapeHtml(state.error.message)}</strong>${conflict ? `<span>${escapeHtml(conflict)}</span>` : ""}<span>Request ID ${escapeHtml(state.error.requestId ?? "-")}</span></div>`;
   }
-  if (state.feedback) return `<div class="platform-feedback is-ok" role="status">${escapeHtml(state.feedback)}</div>`;
   if (state.loading) return '<div class="platform-feedback" role="status">正在刷新…</div>';
+  if (state.feedback) return `<div class="platform-feedback is-ok" role="status">${escapeHtml(state.feedback)}</div>`;
   return "";
 }
 
-function navItem(item, current, disabled = false) {
+function renderNavigation(items, current, disabled) {
+  const remaining = new Map(items.map((item) => [item.id, item]));
+  const groups = NAVIGATION_GROUPS.map(([label, symbol, entries]) => {
+    const links = entries.flatMap(([id, name]) => {
+      const item = remaining.get(id);
+      if (!item) return [];
+      remaining.delete(id);
+      return [navItem({ ...item, label: name }, current, disabled, symbol)];
+    });
+    return links.length ? `<div class="platform-nav-group"><h2>${label}</h2>${links.join("")}</div>` : "";
+  });
+  return groups.join("") + [...remaining.values()].map((item) => navItem(item, current, disabled)).join("");
+}
+
+function navItem(item, current, disabled = false, symbol = "layers") {
   const view = item.id;
-  return `<button type="button" data-platform-view="${escapeAttribute(view)}" class="${view === current ? "is-active" : ""}" ${disabled ? "disabled" : ""}><span aria-hidden="true">${navSymbol(view)}</span>${escapeHtml(item.label)}</button>`;
+  return `<button type="button" data-platform-view="${escapeAttribute(view)}" class="${view === current ? "is-active" : ""}" ${view === current ? 'aria-current="page"' : ""} ${disabled ? "disabled" : ""}>${icon(symbol)}<span>${escapeHtml(item.label)}</span></button>`;
 }
 
 function metric(label, value, detail) {
@@ -3254,12 +3304,43 @@ function status(value) {
       : /revoked|expired|disabled|critical|suspended|deleted|conflict|unavailable|fenced|blocked|violation/u.test(text)
         ? "is-danger"
         : "";
-  return `<span class="platform-status ${kind}">${escapeHtml(statusLabel(text))}</span>`;
+  return `<span class="platform-status ${kind}" data-status-code="${escapeAttribute(text)}">${escapeHtml(statusLabel(text))}</span>`;
 }
 
-function roleLabel(value) { return String(value ?? "").replace(/^platform_/u, "").replaceAll("_", " "); }
+function roleLabel(value) { return ({ platform_owner: "平台负责人", platform_ops: "运营管理员", platform_security: "安全管理员", platform_billing: "账务管理员", platform_support: "支持专员", platform_verification: "认证审核员", platform_compliance: "合规管理员", platform_privacy: "隐私管理员", release_manager: "发布管理员", platform_provider_engineer: "供应商工程师", platform_channel: "渠道管理员", platform_customer_success: "客户成功经理", platform_growth: "增长运营", platform_communications: "通知管理员" })[value] ?? String(value ?? "").replaceAll("_", " "); }
 function domainLabel(value) { return value === "workspace" ? "客户" : value === "platform" ? "平台" : value; }
-function statusLabel(value) { return String(value).replaceAll("_", " "); }
+function statusLabel(value) {
+  const text = String(value ?? "unknown");
+  return ({
+    active: "活跃",
+    available: "可用",
+    healthy: "健康",
+    ready: "就绪",
+    pending: "待处理",
+    pending_approval: "待审批",
+    pending_approvals: "待审批",
+    connected: "已连接",
+    disconnected: "未连接",
+    offline: "离线",
+    degraded: "需关注",
+    critical: "严重",
+    unknown: "未知",
+    not_configured: "未配置",
+    unavailable: "不可用",
+    failed: "失败",
+    succeeded: "已完成",
+    running: "运行中",
+    queued: "排队中",
+    disabled: "已停用",
+    revoked: "已吊销",
+    retired: "已退役",
+    stale: "已过期",
+    fresh: "最新",
+    at_risk: "有风险",
+    objective_met: "达到目标",
+    objective_missed: "未达到目标",
+  })[text] ?? text.replaceAll("_", " ");
+}
 function riskStatusOptions(current) { return [["", "全部"], ["open", "待处理"], ["under_review", "复核中"], ["restricted", "已限制"], ["cleared", "已清除"], ["closed", "已关闭"]].map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join(""); }
 function billingStatusLabel(value) { return ({ open: "进行中", closed: "已关账", reconciliation_required: "需要对账" })[value] ?? statusLabel(value); }
 function billingStatusOptions(current) { return [["open", "进行中"], ["closed", "已关账"], ["reconciliation_required", "需要对账"]].map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join(""); }
@@ -3289,8 +3370,7 @@ function scanStateLabel(value) {
 function meterLabel(value) { return ({ api_requests: "API 请求", input_tokens: "输入 Token", output_tokens: "输出 Token", total_tokens: "总 Token" })[value] ?? statusLabel(value); }
 function actionLabel(value) { return String(value).replaceAll("_", " ").replaceAll(".", " / "); }
 function kindLabel(value) { return value === "organization" ? "Organization" : value === "personal" ? "Personal" : value; }
-function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", "edge-fleet": "▦", "edge-backups": "↺", "offline-bundles": "⇄", observability: "⌁", "disaster-recovery": "↺", "status-incidents": "◉", capacity: "▥", "data-residency": "⊙", "security-assurance": "◈", "launch-gates": "✓", "abuse-risk": "!", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤", privacy: "◌" })[view] ?? "·"; }
-function infrastructureKindLabel(value) { return ({ database_cluster: "DatabaseCluster", cache_cluster: "CacheCluster", object_store: "ObjectStore", key_ring: "KeyRing" })[value] ?? statusLabel(value); }
+function infrastructureKindLabel(value) { return ({ database_cluster: "数据库集群", cache_cluster: "缓存集群", object_store: "对象存储", key_ring: "密钥环" })[value] ?? statusLabel(value); }
 function shortHash(value) { const text = String(value ?? ""); return text.length === 64 ? `${text.slice(0, 12)}…${text.slice(-8)}` : "-"; }
 function emptyRow(label, columns = 5) { return `<tr><td colspan="${number(columns)}" class="platform-empty">${escapeHtml(label)}</td></tr>`; }
 function number(value) { return Number.isFinite(Number(value)) ? new Intl.NumberFormat("zh-CN").format(Number(value)) : "0"; }

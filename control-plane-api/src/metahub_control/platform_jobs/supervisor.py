@@ -92,20 +92,25 @@ def install_platform_job_supervisor(
         async with AsyncExitStack() as stack:
             await stack.enter_async_context(base_lifespan(current_app))
             if structured:
-                contexts = list(registry_contexts)
-                if current_app.state.config.control_background_schedulers_enabled:
+                schedulers_enabled = current_app.state.config.control_background_schedulers_enabled
+                if schedulers_enabled:
+                    contexts = list(registry_contexts)
                     contexts.append(
                         SchedulerContextBinding(
                             "platform-job-runtime", _platform_job_lifespan
                         )
                     )
-                await stack.enter_async_context(
-                    scheduler_coordinator_lifespan(
-                        current_app,
-                        contexts,
-                        replica_code=replica_code,
+                    await stack.enter_async_context(
+                        scheduler_coordinator_lifespan(
+                            current_app,
+                            contexts,
+                            replica_code=replica_code,
+                        )
                     )
-                )
+                else:
+                    # A local HTTP-only profile must not start the coordinator at
+                    # all; even an empty coordinator writes SQLite observations.
+                    await stack.enter_async_context(_noop_lifespan(current_app))
                 yield
                 return
             for context in legacy_contexts:

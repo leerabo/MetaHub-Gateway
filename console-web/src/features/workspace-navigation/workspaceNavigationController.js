@@ -26,7 +26,32 @@ export function createWorkspaceNavigationController({ api, createIdempotencyKey 
     try {
       const identity = await api.identitySession({ signal: sessionController.signal });
       if (!current()) throw conflictError();
-      const session = await api.workspaceSession({ signal: sessionController.signal });
+      let session;
+      try {
+        session = await api.workspaceSession({ signal: sessionController.signal });
+      } catch (error) {
+        // A freshly authenticated account may not have a Workspace cookie yet.
+        // Resolve the only obvious choice here so a normal login does not land on
+        // a dead-end retry screen.
+        if (!new Set([
+          "workspace_session.required",
+          "workspace_session.invalid",
+          "workspace_session.expired",
+          "workspace_session.revoked",
+        ]).has(error?.code)
+          || typeof api.workspaces !== "function"
+          || typeof api.switchWorkspace !== "function") throw error;
+        const directory = await api.workspaces({ signal: sessionController.signal });
+        if (!current()) throw conflictError();
+        const choices = Array.isArray(directory?.workspaces) ? directory.workspaces : [];
+        if (choices.length !== 1 || choices[0]?.role === "service_account") throw error;
+        await api.switchWorkspace({
+          workspaceId: choices[0].workspace_id,
+          signal: sessionController.signal,
+        });
+        if (!current()) throw conflictError();
+        session = await api.workspaceSession({ signal: sessionController.signal });
+      }
       if (!current()) throw conflictError();
       const nextOwner = workspaceNavigationOwner(identity, session);
       const previousGeneration = store.snapshot().generation;

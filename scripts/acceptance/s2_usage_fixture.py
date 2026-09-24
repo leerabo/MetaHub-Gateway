@@ -46,8 +46,7 @@ def create_usage_fixture(database: Path, source: Path, token: str):
                 "JOIN virtual_key_consumers c ON c.tenant_id=k.tenant_id "
                 "AND c.virtual_key_id=k.virtual_key_id "
                 "WHERE w.workspace_id=? AND w.kind='organization' "
-                "AND w.creation_source='user_created' "
-                "AND p.slug_normalized LIKE 's1-browser-%' ORDER BY k.name",
+                "AND w.creation_source='user_created' ORDER BY k.name",
                 (workspace_id,),
             ).fetchall()
             if len(keys) != 2 or keys[0][1] == keys[1][1]:

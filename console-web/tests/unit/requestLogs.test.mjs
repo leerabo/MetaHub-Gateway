@@ -424,7 +424,7 @@ test("main wires RequestLog cleanup to identity logout pagehide navigation and o
   assert.match(mainSource, /pagehide[\s\S]*clearRequestLogSessionState\(\)/);
   assert.match(mainSource, /function renderLogin[\s\S]*clearRequestLogSessionState\(\)/);
   assert.match(mainSource, /logoutButton[\s\S]*clearRequestLogSessionState\(\)/);
-  assert.match(mainSource, /const session = sameWorkspaceConsoleSession\(authSession, nextSession\) \? authSession : nextSession;\s*if \(authSession !== session\) \{\s*clearConsoleSessionState\(\{ clearNavigation: false \}\)/);
+  assert.match(mainSource, /const session = sameWorkspaceConsoleSession\(authSession, nextSession\) \? authSession : nextSession;\s*const sessionChanged = authSession !== session;\s*if \(sessionChanged\) \{\s*clearConsoleSessionState\(\{ clearNavigation: false \}\)/);
   assert.match(mainSource, /function clearConsoleSessionState[\s\S]*clearRequestLogSessionState\(\)/);
   assert.match(mainSource, /!REQUEST_LOG_NAVIGATION_IDS\.has\(consoleShellState\?\.activeNavigationItemId\)[\s\S]*clearRequestLogSessionState\(\)/);
   assert.match(mainSource, /!REQUEST_LOG_NAVIGATION_IDS\.has\(itemId\)[\s\S]*clearRequestLogSessionState\(\)/);

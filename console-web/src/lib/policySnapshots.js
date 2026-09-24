@@ -1,4 +1,5 @@
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 /**
  * 模块职责：封装策略快照公共管理 API，并保留发布所需的强 ETag 与统一链路标识。
@@ -14,12 +15,13 @@ import { AuthApiError } from "./auth.js";
  * @param {AbortSignal} [options.signal] 页面离开或身份切换时使用的取消信号。
  * @returns {Promise<object>} 当前快照、候选摘要以及发布双 CAS 所需的两个强 ETag。
  */
-export async function getCurrentPolicySnapshot({ controlApiUrl, token, signal }) {
+export async function getCurrentPolicySnapshot({ controlApiUrl, authentication, token, signal }) {
   const { payload, response } = await policySnapshotRequest(
     `${controlApiUrl}/policy-snapshots/current`,
     {
       signal,
-      headers: { Authorization: `Bearer ${token}` },
+      authentication,
+      token,
     },
   );
   return {
@@ -38,6 +40,7 @@ export async function getCurrentPolicySnapshot({ controlApiUrl, token, signal })
  */
 export async function listPolicySnapshots({
   controlApiUrl,
+  authentication,
   token,
   limit = 20,
   offset = 0,
@@ -48,7 +51,8 @@ export async function listPolicySnapshots({
   url.searchParams.set("offset", String(offset));
   const { payload } = await policySnapshotRequest(url.toString(), {
     signal,
-    headers: { Authorization: `Bearer ${token}` },
+    authentication,
+    token,
   });
   return { state: "ok", ...payload };
 }
@@ -61,6 +65,7 @@ export async function listPolicySnapshots({
  */
 export async function publishPolicySnapshot({
   controlApiUrl,
+  authentication,
   token,
   reason,
   headEtag,
@@ -72,9 +77,10 @@ export async function publishPolicySnapshot({
     `${controlApiUrl}/policy-snapshots/publish`,
     {
       method: "POST",
+      authentication,
+      token,
       signal,
       headers: {
-        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
         "If-Match": requireStrongEtag(headEtag, "head"),
         "If-Policy-Candidate-Match": requireStrongEtag(candidateEtag, "candidate"),
@@ -98,6 +104,7 @@ export async function publishPolicySnapshot({
  */
 export async function rollbackPolicySnapshot({
   controlApiUrl,
+  authentication,
   token,
   policySnapshotId,
   reason,
@@ -110,9 +117,10 @@ export async function rollbackPolicySnapshot({
     `${controlApiUrl}/policy-snapshots/${snapshotId}/rollback`,
     {
       method: "POST",
+      authentication,
+      token,
       signal,
       headers: {
-        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
         "If-Match": requireStrongEtag(headEtag, "head"),
         "X-Request-ID": requireRequestId(requestId),
@@ -148,7 +156,7 @@ export function createPolicySnapshotRequestId() {
  * 后一种情况必须保留原 request_id 才能安全重试。
  */
 async function policySnapshotRequest(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await authenticatedResourceFetch(url, options);
   const payload = await readJson(response);
   if (!response.ok) {
     // 只暴露后端白名单错误字段，不把响应头、请求正文或可能含 DSL 的内部细节拼进页面。

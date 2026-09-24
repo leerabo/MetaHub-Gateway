@@ -192,11 +192,11 @@ test("strict clients reject top-level expansion and public SDK owner drift", asy
 
 test("Developer and Platform render public lifecycle proof without private keys or internal routes", () => {
   const developerHtml = renderDeveloperContracts(developerState());
-  assert.match(developerHtml, /API versions and SDKs/u);
-  assert.match(developerHtml, /Migration guide/u);
+  assert.match(developerHtml, /API 版本与 SDK/u);
+  assert.match(developerHtml, /迁移指南/u);
   assert.match(developerHtml, /api-v1-to-v1\.1/u);
   assert.match(developerHtml, /data-developer-sdk-download/u);
-  assert.match(developerHtml, /passed \/ passed/u);
+  assert.match(developerHtml, /通过 \/ 通过/u);
   assert.doesNotMatch(developerHtml, /private[_ -]?key|\/platform\/developer-contracts|Authorization|Bearer/iu);
 
   const root = { innerHTML: "" };

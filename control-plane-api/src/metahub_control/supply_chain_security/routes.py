@@ -114,6 +114,12 @@ async def _reader(request: Request):
     )
     if len(authorization) == 1 and not platform and not other_cookies:
         return await run_in_threadpool(require_developer_portal_reader, request, authorization[0])
+    if (
+        not authorization and not platform
+        and len(_cookie_values(request, WORKSPACE_SESSION_COOKIE)) == 1
+        and not _cookie_values(request, SUPPORT_SESSION_COOKIE)
+    ):
+        return await run_in_threadpool(require_developer_portal_reader, request, None)
     if not authorization and len(platform) == 1 and not other_cookies:
         if not valid_opaque_value(platform[0]):
             raise ApiError("platform.session_required")

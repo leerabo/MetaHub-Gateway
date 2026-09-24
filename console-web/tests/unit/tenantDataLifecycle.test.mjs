@@ -109,7 +109,23 @@ test("PAGE-121 owner fails closed and renderer mirrors independent permissions",
   assert.match(html, /data-tenant-data-export disabled/);
   assert.doesNotMatch(html, /data-tenant-data-download=/);
   assert.match(html, /data-tenant-data-delete disabled/);
-  assert.equal(renderTenantDataLifecycle({}, context([]), shell(context([]))), "");
+  const denied = renderTenantDataLifecycle({}, context([]), shell(context([])));
+  assert.equal(denied, "");
+});
+
+test("PAGE-121 organization settings permission opens the lifecycle overview without mutation rights", () => {
+  const organizationAdmin = context([PERMISSIONS.TENANT_SETTINGS_READ]);
+  assert.ok(tenantDataLifecycleOwner(organizationAdmin, shell(organizationAdmin)));
+  assert.equal(tenantDataLifecycleOwner(organizationAdmin, shell(organizationAdmin), "export"), null);
+  const html = renderTenantDataLifecycle(
+    { state: { lifecycle_status: "active", revision: 1, cache_generation: 0 }, exports: [], deletion_request: null },
+    organizationAdmin,
+    shell(organizationAdmin),
+  );
+  assert.match(html, /data-tenant-data-root/);
+  assert.match(html, /data-tenant-data-export disabled/);
+  assert.doesNotMatch(html, /data-tenant-data-download=/);
+  assert.match(html, /data-tenant-data-delete disabled/);
 });
 
 test("PAGE-121 state aborts and scrubs data when its owner changes", () => {

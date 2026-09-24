@@ -110,13 +110,17 @@ def require_console_user(
 
 def require_workspace_or_legacy_permissions(
     *permission_codes: str,
+    any_permission_codes: tuple[str, ...] = (),
     csrf_required: bool = False,
     monotonic_deadline: float | None = None,
     deadline_error_code: str = "infra.service_unavailable",
+    touch: bool = True,
 ) -> Callable[..., AuthContext]:
     """Build an explicit resource-route guard for one Workspace or Legacy credential."""
 
-    if not permission_codes:
+    if permission_codes and any_permission_codes:
+        raise ValueError("permission codes cannot mix all-of and any-of")
+    if not permission_codes and not any_permission_codes:
         raise ValueError("permission codes are required")
 
     def dependency(
@@ -147,6 +151,7 @@ def require_workspace_or_legacy_permissions(
                 csrf_token=csrf_token,
                 monotonic_deadline=monotonic_deadline,
                 deadline_error_code=deadline_error_code,
+                touch=touch,
             )
             request.state.workspace_session_authenticated = True
             request.state.credential_domain = "workspace"
@@ -156,8 +161,11 @@ def require_workspace_or_legacy_permissions(
                 monotonic_deadline=monotonic_deadline, deadline_error_code=deadline_error_code,
             )
             request.state.credential_domain = "legacy"
-        for permission_code in permission_codes:
-            require_permission(context, permission_code)
+        if any_permission_codes:
+            require_any_permission(context, any_permission_codes)
+        else:
+            for permission_code in permission_codes:
+                require_permission(context, permission_code)
         bind_authenticated_telemetry_tenant(request, context.user.tenant_id)
         return context
 
@@ -524,7 +532,10 @@ def require_tenant_data_reader(
 ) -> AuthContext:
     """在解析 PAGE-121 业务输入前实时校验租户数据只读权限。"""
 
-    return _require_request_permissions(request, authorization, ("tenant_data.read",))
+    # 组织 owner/admin 的租户设置读取也包含生命周期状态查看；导出、下载和注销仍使用独立权限。
+    return require_workspace_or_legacy_permissions(
+        any_permission_codes=("tenant_data.read", "tenant.settings.read"),
+    )(request, authorization)
 
 
 def require_tenant_data_exporter(
@@ -944,11 +955,7 @@ def require_cost_anomaly_reader(
     """
 
     # 统一管理员守卫同时恢复可信 tenant_id 和 actor，读接口不得自行解析客户端身份。
-    return _require_request_permissions(
-        request,
-        authorization,
-        ("billing.anomaly.read",),
-    )
+    return require_workspace_or_legacy_permissions("billing.anomaly.read")(request, authorization)
 
 
 def require_cost_anomaly_writer(
@@ -962,11 +969,7 @@ def require_cost_anomaly_writer(
     """
 
     # 写动作必须复用同一后端管理员守卫，前端隐藏按钮不能替代角色和租户校验。
-    return _require_request_permissions(
-        request,
-        authorization,
-        ("billing.anomaly.write",),
-    )
+    return require_workspace_or_legacy_permissions("billing.anomaly.write")(request, authorization)
 
 
 def require_provider_health_reader(
@@ -1439,7 +1442,7 @@ def require_dlp_reader(
     """要求当前用户可读取脱敏 DLP 规则。"""
 
     # 当前后端 permission 快照是唯一授权依据，禁止按角色名或前端可见性补权。
-    return _require_request_permissions(request, authorization, ("dlp.read",))
+    return require_workspace_or_legacy_permissions("dlp.read")(request, authorization)
 
 
 def require_dlp_writer(
@@ -1449,7 +1452,7 @@ def require_dlp_writer(
     """要求当前用户可创建和更新 DLP 规则。"""
 
     # 当前后端 permission 快照是唯一授权依据，禁止按角色名或前端可见性补权。
-    return _require_request_permissions(request, authorization, ("dlp.write",))
+    return require_workspace_or_legacy_permissions("dlp.write")(request, authorization)
 
 
 def require_intent_risk_classifier(
@@ -1629,7 +1632,7 @@ def require_policy_publisher(
     """要求当前用户可发布或回滚策略快照。"""
 
     # 当前后端 permission 快照是唯一授权依据，禁止按角色名或前端可见性补权。
-    return _require_request_permissions(request, authorization, ("policy.publish",))
+    return require_workspace_or_legacy_permissions("policy.publish")(request, authorization)
 
 
 def require_policy_template_reader(
@@ -1667,7 +1670,7 @@ def require_permission_matrix_manager(
     """要求当前用户可读取和修改租户角色权限矩阵。"""
 
     # 当前后端 permission 快照是唯一授权依据，禁止按角色名或前端可见性补权。
-    return _require_request_permissions(request, authorization, ("rbac.matrix.manage",))
+    return require_workspace_or_legacy_permissions("rbac.matrix.manage")(request, authorization)
 
 
 def require_system_config_reader(
@@ -1739,11 +1742,7 @@ def require_webhook_manager(
     """
 
     # 当前后端 permission 快照是唯一授权依据，禁止按角色名或前端可见性补权。
-    return _require_request_permissions(
-        request,
-        authorization,
-        ("webhook.manage",),
-    )
+    return require_workspace_or_legacy_permissions("webhook.manage")(request, authorization)
 
 
 def require_developer_portal_reader(
@@ -1755,12 +1754,12 @@ def require_developer_portal_reader(
     快速开始会暴露模型别名、Gateway base_url 和 Key 前缀等调用准备信息，M0 只开放给管理员和开发者。
     """
 
-    # 当前后端 permission 快照是唯一授权依据，禁止按角色名或前端可见性补权。
-    return _require_request_permissions(
-        request,
-        authorization,
-        ("developer_portal.read",),
-    )
+    # Console readers use Workspace cookies; external SDK consumers may retain
+    # a legacy Bearer. The shared guard rejects every mixed credential domain.
+    # A download writes an audit receipt and requires Workspace CSRF even on GET.
+    return require_workspace_or_legacy_permissions(
+        "developer_portal.read", csrf_required=request.url.path.endswith("/download")
+    )(request, authorization)
 
 
 def require_debug_console_user(

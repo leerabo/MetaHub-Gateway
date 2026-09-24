@@ -17,6 +17,7 @@ import {
 import { createRolePermissionPageState } from "../../src/features/role-permissions/rolePermissionPageState.js";
 import { renderRolePermissionMatrix } from "../../src/features/role-permissions/renderRolePermissionMatrix.js";
 import { renderDeveloperStart } from "../../src/features/developer-start/renderDeveloperStart.js";
+import { createI18n } from "../../src/i18n/messages.js";
 
 // 固定哈希只用于构造合法矩阵和制造 revision 漂移，不承载真实授权或租户信息。
 const HASH_A = "a".repeat(64);
@@ -125,6 +126,33 @@ function pageOwner(context = authContext(), refreshGeneration = 1) {
     refreshGeneration,
   };
 }
+
+test("Workspace matrix accepts only an authoritative matching scope and same-tenant rows", () => {
+  const owner = { identity: "workspace-session-a", workspaceId: "workspace_a", navigation: "role-permissions", refreshGeneration: 1 };
+  const payload = { ...matrixPayload(), workspace_id: "workspace_a", tenant_id: "tenant_a" };
+  for (const invalid of [
+    matrixPayload(),
+    { ...payload, workspace_id: "workspace_b" },
+    { ...payload, tenant_id: "tenant_b" },
+    { ...payload, roles: payload.roles.map((role, index) => index ? role : { ...role, tenant_id: "tenant_b" }) },
+  ]) {
+    const state = createRolePermissionPageState();
+    assert.equal(state.acceptLoad(state.beginLoad(owner), invalid, owner), false);
+    assert.equal(state.snapshot().state, "error");
+  }
+  const state = createRolePermissionPageState();
+  assert.equal(state.acceptLoad(state.beginLoad(owner), payload, owner), true);
+  const late = state.beginLoad(owner);
+  assert.equal(state.acceptLoad(late, payload, { ...owner, workspaceId: "workspace_b" }), false);
+  state.setPermission("role_4", "audit.export", false);
+  const mutation = state.beginMutation(owner);
+  assert.ok(mutation);
+  const role = { ...payload.roles[4], permission_codes: ["console.basic.read", "audit.read"], permission_revision: 2 };
+  assert.equal(state.acceptMutation(mutation, {
+    role, workspace_id: "workspace_b", tenant_id: "tenant_a", changed: true, event_id: "event_a",
+  }, owner), false);
+  assert.equal(state.snapshot().dirty, true);
+});
 
 test("permission snapshot is exact and never falls back to role", () => {
   const context = authContext();
@@ -347,8 +375,46 @@ test("PAGE-085 renderer uses permission DTO for locked and grantable DOM", () =>
   assert.match(html, /FinanceAdmin/);
   assert.match(html, /data-permission-code="audit\.export"/);
   assert.match(html, /Admin · 锁定/);
+  assert.match(html, /按权限分组查看/);
+  assert.match(html, /role-permission-category-help/);
   assert.doesNotMatch(html, /authorization_fingerprint|tenant_a|session_a/);
   assert.equal(renderRolePermissionMatrix(state.snapshot(), authContext({ permissionCodes: [PERMISSIONS.CONSOLE_BASIC_READ] })), "");
+});
+
+test("PAGE-085 defaults to one-role editing and exposes full comparison explicitly", () => {
+  const state = createRolePermissionPageState();
+  const owner = pageOwner();
+  state.acceptLoad(state.beginLoad(owner), matrixPayload(), owner);
+  assert.equal(state.snapshot().viewMode, "role");
+  const focused = renderRolePermissionMatrix(state.snapshot(), authContext());
+  assert.match(focused, /data-rbac-view-mode="role"/);
+  assert.match(focused, /对比全部角色（/);
+  assert.match(focused, /role-permission-focus/);
+  assert.doesNotMatch(focused, /data-rbac-view-mode="all"[^>]*aria-pressed="true"/);
+  state.setViewMode("all");
+  assert.equal(state.snapshot().viewMode, "all");
+  const comparison = renderRolePermissionMatrix(state.snapshot(), authContext());
+  assert.match(comparison, /data-rbac-view-mode="all"[^>]*aria-pressed="true"/);
+  assert.match(comparison, /role-permission-matrix/);
+});
+
+test("PAGE-085 English projection does not mix Chinese matrix chrome", () => {
+  const state = createRolePermissionPageState();
+  const owner = pageOwner();
+  const payload = matrixPayload();
+  payload.roles[0].name = "管理员";
+  state.acceptLoad(state.beginLoad(owner), payload, owner);
+  const html = renderRolePermissionMatrix(state.snapshot(), authContext(), createI18n("en-US"));
+  assert.match(html, /Roles and permissions/);
+  assert.match(html, /Administrator/);
+  assert.match(html, /Compare all roles/);
+  assert.doesNotMatch(html, /角色权限|权限目录|对比全部角色|当前角色|未授权|已授权|锁定/u);
+});
+
+test("PAGE-085 save commands remain after the matrix instead of covering editable cells", async () => {
+  const css = await readFile(new URL("../../src/styles/main.css", import.meta.url), "utf8");
+  const savebar = css.slice(css.indexOf(".role-permission-savebar {"), css.indexOf(".role-permission-savebar > div:first-child"));
+  assert.doesNotMatch(savebar, /position:\s*sticky|bottom:\s*0|z-index:\s*3/u);
 });
 
 test("PAGE-085 is wired into the authorized shell and navigation failures stay closed", async () => {

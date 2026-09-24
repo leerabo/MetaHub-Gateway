@@ -187,8 +187,8 @@ test("renderVirtualKeyPanel displays developer controls and one-time secret", ()
       ],
     },
     withPermissionSnapshot(
-      { user: { role: "developer" } },
-      [PERMISSIONS.VIRTUAL_KEY_READ, PERMISSIONS.VIRTUAL_KEY_WRITE],
+      { user: { role: "admin" } },
+      [PERMISSIONS.VIRTUAL_KEY_READ, PERMISSIONS.VIRTUAL_KEY_WRITE, PERMISSIONS.USER_MANAGE],
     ),
     {
       state: "ok",
@@ -197,6 +197,7 @@ test("renderVirtualKeyPanel displays developer controls and one-time secret", ()
     },
   );
 
+  assert.match(html, /<h2 id="virtual-keys-title">组织 KEY<\/h2>/u);
   assert.match(html, /create-virtual-key-form/);
   assert.match(html, /data-virtual-key-form/);
   assert.match(html, /data-virtual-key-limits-form/);

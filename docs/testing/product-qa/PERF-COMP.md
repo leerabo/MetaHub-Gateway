@@ -10,13 +10,13 @@ These assets establish a repeatable local baseline, not a production load tool. 
 | --- | --- | --- |
 | PERF-01 / PERF-09 | `tests/product_qa/performance/test_product_qa_performance.py` | isolated ASGI fan-out, empty SQLite migration, integrity, FK, request reuse, and physical close |
 | PERF-03 / PERF-06 / PERF-07 | `scripts/quality/product_qa_performance.py` | bounded loopback smoke, pressure, and post-pressure health |
-| PERF-08 / PERF-10 | `scripts/quality/product_qa_stability_gate.py` + `product_qa_stability.json` | short and four-hour stability, max observation gap, Windows sleep prevention, redacted evidence |
+| PERF-08 / PERF-10 | `scripts/quality/product_qa_continuous_stability.py` | PRD-148: at least 72 hours, completed non-diagnostic status, max observation gap, window hash chain, source revision and redacted evidence |
 | COMP-01..07 | `tests/product_qa/web/*` and `realBrowserJourneys.mjs` | browser, viewport, DPR, locale, recovery, encoding, and layout execution |
 | All 97 cases | `scripts/quality/product_qa_case_audit.py` | plan-to-evidence mapping; rejects missing, skipped, failed, stale, or sensitive evidence |
 
-## Final evidence
+## Historical evidence (2026-08-20)
 
-The final grouped artifact is `.artifacts/product-qa/20260820-132657/`.
+The historical grouped artifact is `.artifacts/product-qa/20260820-132657/`. Its four-hour window, old migrations and missing current source manifest do not satisfy PRD-148. Use the current commands in [README.md](README.md) for a new batch; do not reseal historical evidence.
 
 | Run | Requests | Successes | Errors | Result |
 | --- | ---: | ---: | ---: | --- |
@@ -27,7 +27,7 @@ The final grouped artifact is `.artifacts/product-qa/20260820-132657/`.
 
 Long stability observed 14,400.467 seconds, maximum observation gap 0.622 seconds, and `sleep_prevention_active=true`. It passed only because every response was HTTP 200 and no transport errors occurred.
 
-## Commands
+## Historical reproduction commands (not the current GA gate)
 
 ```powershell
 C:\MetaHub\.venv\Scripts\python.exe -m pytest -q --basetemp C:\MetaHub\.tmp\product-qa-perf C:\MetaHub\tests\product_qa\performance\test_product_qa_performance.py C:\MetaHub\tests\product_qa\performance\test_product_qa_stability_gate.py
@@ -37,7 +37,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\MetaHub\scripts\quali
 C:\MetaHub\.venv\Scripts\python.exe C:\MetaHub\scripts\quality\product_qa_stability_gate.py --profile long_stability --run-long --output C:\MetaHub\.artifacts\product-qa\stability-long-awake.json
 ```
 
-The long gate passes only after the 14,000-second floor, zero errors, all 2xx responses, and a maximum observation gap of 10 seconds or less. On Windows it holds `SetThreadExecutionState` during the active observation to prevent idle standby.
+The historical profile used the 14,000-second floor. The current PRD-148 audit requires 259,200 observed seconds and rejects this profile as GA evidence. Windows observation holds `SetThreadExecutionState` to prevent idle standby.
 
 ## Compatibility matrix
 

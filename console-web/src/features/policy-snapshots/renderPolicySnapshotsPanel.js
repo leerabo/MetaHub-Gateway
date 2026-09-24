@@ -233,10 +233,10 @@ function renderLoadingState() {
     <div class="policy-snapshot-heading">
       <div>
         <h2 id="policy-snapshots-title">策略发布</h2>
-        <p>正在读取当前线上版本和不可变历史。</p>
+        <p>正在读取当前版本和发布记录。</p>
       </div>
     </div>
-    <div class="policy-snapshot-empty">等待 /policy-snapshots 响应。</div>
+    <div class="policy-snapshot-empty" role="status">加载中</div>
   `;
 }
 
@@ -260,7 +260,6 @@ function renderHeading(state, current) {
     <div class="policy-snapshot-heading">
       <div>
         <h2 id="policy-snapshots-title">策略发布</h2>
-        <p>显式发布 active 策略候选，查看不可变版本历史，并只回滚上一激活版本。</p>
       </div>
       <div class="policy-snapshot-heading-meta">
         <strong>${escapeHtml(versionLabel)}</strong>
@@ -279,7 +278,7 @@ function renderCurrentSnapshot(current) {
           <h3 id="policy-snapshot-current-title">当前线上版本</h3>
           <strong>尚未发布</strong>
         </div>
-        <p>数据面在首次发布前使用“未发布基线”，不会把空值伪装成 v0。</p>
+        <p>尚未向网关发布策略。</p>
       </section>
     `;
   }
@@ -302,7 +301,7 @@ function renderCurrentSnapshot(current) {
         ${renderPair("版本来源", versionSourceLabel(current))}
       </dl>
       <div class="policy-snapshot-hash-line">
-        <span>内容 hash</span>
+        <span>内容校验值</span>
         <code>${escapeHtml(current.content_hash ?? "-")}</code>
       </div>
     </section>
@@ -317,23 +316,25 @@ function renderCandidateSummary(state, current) {
   const invalid = state.candidate_status !== "valid";
   const matches = state.candidate_matches_current === true;
   let title = "候选可发布";
-  let message = `当前 active 候选包含 ${state.candidate_policy_count ?? 0} 条策略，发布后数据面将在轮询周期内拉取。`;
+  let message = `当前有 ${state.candidate_policy_count ?? 0} 条策略待发布，网关将在发布后同步。`;
   let tone = "changed";
   if (invalid) {
     title = "候选无效";
-    message = "active 策略候选无法安全编译。请先回到策略管理修正，页面不会暴露 DSL 或内部诊断正文。";
+    message = "策略校验失败，请在安全策略中修正后再发布。";
     tone = "invalid";
   } else if (matches) {
     title = "候选与线上一致";
-    message = "当前 active 候选与线上内容 hash 一致，无需制造新版本。";
+    message = "当前配置与已发布版本一致，无需重复发布。";
     tone = "matched";
   } else if (current?.operation === "rollback") {
     title = "回滚内容与候选不同";
-    message = "回滚只改变线上快照，不修改 active Policy。下一次发布会重新上线当前候选内容。";
+    message = "回滚没有改动待发布策略。下一次发布会重新上线当前候选内容。";
     tone = "warning";
   } else if (!current) {
     title = "等待首次发布";
-    message = `已编译 ${state.candidate_policy_count ?? 0} 条 active 策略；首次发布也允许建立明确的空策略基线。`;
+    message = state.candidate_policy_count > 0
+      ? `已有 ${state.candidate_policy_count} 条启用的策略待发布。`
+      : "当前没有启用的策略，本次将发布空策略版本。";
   }
   return `
     <section class="policy-snapshot-candidate candidate-${escapeAttribute(tone)}" aria-labelledby="policy-snapshot-candidate-title">
@@ -365,7 +366,7 @@ function renderPublishForm(state) {
       <div class="policy-snapshot-section-heading">
         <div>
           <h3 id="policy-snapshot-publish-title">发布候选</h3>
-          <p>发布成功表示版本已提交；数据面将在下一轮轮询时拉取，不代表所有实例已 ACK。</p>
+          <p>发布后仍需确认网关已同步。</p>
         </div>
         ${pending ? `<span class="policy-snapshot-pending">结果待确认，重试将复用 ${escapeHtml(state.pendingOperation.requestId)}</span>` : ""}
       </div>
@@ -388,15 +389,14 @@ function renderHistory(state, history, current) {
     <section class="policy-snapshot-history" aria-labelledby="policy-snapshot-history-title">
       <div class="policy-snapshot-section-heading">
         <div>
-          <h3 id="policy-snapshot-history-title">快照历史</h3>
-          <p>版本严格递增；回滚会复制旧内容并创建新的更高版本。</p>
+          <h3 id="policy-snapshot-history-title">发布记录</h3>
         </div>
       </div>
       <div class="policy-snapshot-table" role="table" aria-label="当前租户策略快照历史">
         <div class="policy-snapshot-row policy-snapshot-row-head" role="row">
           <span>版本</span>
           <span>来源</span>
-          <span>策略 / hash</span>
+          <span>策略 / 校验值</span>
           <span>原因 / 操作者</span>
           <span>发布时间</span>
           <span>操作</span>
@@ -428,7 +428,7 @@ function renderHistoryRow(item, state, current) {
         <strong>${escapeHtml(operationLabel(item))}</strong>
         <em>${escapeHtml(versionSourceLabel(item))}</em>
       </span>
-      <span data-label="策略 / hash" class="policy-snapshot-row-hash">
+      <span data-label="策略 / 校验值" class="policy-snapshot-row-hash">
         <strong>${escapeHtml(item.policy_count)} 条策略</strong>
         <code title="${escapeAttribute(item.content_hash ?? "")}">${escapeHtml(shortHash(item.content_hash))}</code>
       </span>
@@ -459,7 +459,7 @@ function renderRollbackForm(item, state) {
     <form class="policy-snapshot-rollback-form" data-policy-snapshot-rollback-form="${escapeAttribute(item.policy_snapshot_id)}">
       <div>
         <strong>回滚到 v${escapeHtml(item.snapshot_version)} 的内容</strong>
-        <p>将创建新的单调版本；active Policy 候选保持不变，下一次发布可能再次恢复候选内容。</p>
+        <p>回滚会创建新版本，待发布策略保持不变；再次发布可能恢复回滚前的内容。</p>
       </div>
       <label>
         <span>回滚原因</span>
@@ -477,7 +477,7 @@ function renderRollbackForm(item, state) {
 function renderEmptyHistory() {
   return `
     <div class="policy-snapshot-row policy-snapshot-empty" role="row">
-      <span>尚未发布任何策略快照。</span>
+      <span>暂无发布记录。</span>
     </div>
   `;
 }
@@ -523,7 +523,7 @@ function renderPendingOperationNotice(state) {
     <div class="policy-snapshot-pending-notice" role="status">
       <div>
         <strong>${escapeHtml(operationLabel)}结果待确认</strong>
-        <span>安全重试将复用原原因、CAS 和 request_id：${escapeHtml(pending.requestId)}</span>
+        <span>提交结果暂未确认，重试将沿用原变更请求：${escapeHtml(pending.requestId)}</span>
       </div>
       <button type="button" data-policy-snapshot-abandon>放弃未决重试并刷新</button>
     </div>

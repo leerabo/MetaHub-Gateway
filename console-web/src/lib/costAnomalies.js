@@ -5,6 +5,7 @@
  */
 
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 // 查询枚举与后端 wire 合同保持一致；前端校验只减少误请求，不能替代后端 RBAC 和租户校验。
 const STATUS_VALUES = new Set(["open", "acknowledged", "dismissed", "mitigated"]);
@@ -44,6 +45,7 @@ const MAX_LIMIT_VALUE = 100_000_000;
  */
 export async function listCostAnomalies({
   controlApiUrl,
+  authentication,
   token,
   status,
   ruleType,
@@ -70,11 +72,12 @@ export async function listCostAnomalies({
   url.searchParams.set("limit", String(safeLimit));
   setOptionalParam(url, "cursor", cursor);
 
-  const response = await fetch(url.toString(), {
+  const response = await authenticatedResourceFetch(url.toString(), {
+    authentication,
+    token,
     signal,
     headers: {
       Accept: "application/json",
-      Authorization: `Bearer ${token}`,
       "X-Request-ID": operationRequestId || createCostAnomalyRequestId("list"),
       "X-Trace-ID": operationTraceId || createCostAnomalyTraceId(),
     },
@@ -94,6 +97,7 @@ export async function listCostAnomalies({
  */
 export async function applyCostAnomalyAction({
   controlApiUrl,
+  authentication,
   token,
   anomalyId,
   action,
@@ -117,13 +121,14 @@ export async function applyCostAnomalyAction({
     concurrencyLimit,
   });
   const safeIdempotencyKey = requireIdempotencyKey(idempotencyKey);
-  const response = await fetch(`${controlApiUrl}/cost-anomalies/${safeAnomalyId}/action`, {
+  const response = await authenticatedResourceFetch(`${controlApiUrl}/cost-anomalies/${safeAnomalyId}/action`, {
+    authentication,
+    token,
     method: "PATCH",
     signal,
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
       "Idempotency-Key": safeIdempotencyKey,
       "X-Request-ID": operationRequestId || createCostAnomalyRequestId("action"),
       "X-Trace-ID": operationTraceId || createCostAnomalyTraceId(),

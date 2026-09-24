@@ -22,7 +22,7 @@ from metahub_control.config_distribution.service import (
 )
 from metahub_control.platform_access.service import (
     PlatformContext,
-    authenticate_platform_session_in_transaction,
+    begin_platform_read_transaction,
 )
 from metahub_control.workspace_access.service import (
     WorkspaceSessionContext,
@@ -634,9 +634,8 @@ def list_residency_evidence(
     cursor_value = _decode_cursor(config, cursor) if cursor is not None else None
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
-        actor = authenticate_platform_session_in_transaction(
-            connection, config, session_token=session_token, touch=True
+        actor = begin_platform_read_transaction(
+            connection, config, session_token=session_token
         )
         _require_platform(actor, "platform.data_residency.read")
         where: list[str] = []

@@ -25,6 +25,7 @@ from metahub_shared.runtime.errors import ApiError
 
 from metahub_control.auth import AuthContext
 from metahub_control.auth.resource_transactions import ResourceWriteTransaction
+from metahub_control.console.gateway_url import trusted_gateway_base_url
 
 from .models import (
     JavaScriptSDKExampleResponse,
@@ -211,6 +212,7 @@ class SDKModelAliases:
 
     chat: str
     embeddings: str
+    chat_configured: bool = False
 
 
 def get_python_sdk_example_metadata(
@@ -234,7 +236,7 @@ def get_python_sdk_example_metadata(
     )
     aliases = _sdk_model_aliases(config, context)
 
-    gateway_base_url = _gateway_base_url(config)
+    gateway_base_url = _gateway_base_url(config, error_code="developer.sdk_example_unavailable")
     return PythonSDKExampleResponse(
         id=artifact_spec.example_id,
         tenant_id=context.user.tenant_id,
@@ -247,6 +249,7 @@ def get_python_sdk_example_metadata(
         download_url=artifact_spec.download_url,
         gateway_base_url=gateway_base_url,
         chat_model_alias=aliases.chat,
+        chat_model_configured=aliases.chat_configured,
         embedding_model_alias=aliases.embeddings,
         environment_variables=_python_sdk_environment_variables(
             gateway_base_url,
@@ -286,7 +289,7 @@ def get_javascript_sdk_example_metadata(
     )
     aliases = _sdk_model_aliases(config, context)
 
-    gateway_base_url = _gateway_base_url(config)
+    gateway_base_url = _gateway_base_url(config, error_code="developer.sdk_example_unavailable")
     return JavaScriptSDKExampleResponse(
         id=artifact_spec.example_id,
         tenant_id=context.user.tenant_id,
@@ -303,6 +306,7 @@ def get_javascript_sdk_example_metadata(
         download_url=artifact_spec.download_url,
         gateway_base_url=gateway_base_url,
         chat_model_alias=aliases.chat,
+        chat_model_configured=aliases.chat_configured,
         environment_variables=_javascript_sdk_environment_variables(
             gateway_base_url,
             aliases.chat,
@@ -445,7 +449,11 @@ def _select_sdk_model_aliases(
         ),
         DEFAULT_EMBEDDING_MODEL_ALIAS,
     )
-    return SDKModelAliases(chat=chat_alias, embeddings=embedding_alias)
+    return SDKModelAliases(
+        chat=chat_alias,
+        embeddings=embedding_alias,
+        chat_configured=any(capabilities.get("chat") is True for _, capabilities in parsed_rows),
+    )
 
 
 def _parse_sdk_capabilities(raw: object) -> dict[str, bool]:
@@ -1078,16 +1086,18 @@ def _select_virtual_key_prefix(connection: sqlite3.Connection, tenant_id: str, e
     return str(row["key_prefix"]) if row and row["key_prefix"] else None
 
 
-def _gateway_base_url(config: AppConfig) -> str:
+def _gateway_base_url(
+    config: AppConfig, *, error_code: str = "developer.quickstart_unavailable",
+) -> str:
     """生成 OpenAI-compatible SDK 使用的 `/v1` base_url。
 
     该值来自运行配置，不能让前端自行拼接，避免本地、测试和生产环境示例指向错误网关。
     """
 
-    base = config.gateway_api_base_url.strip().rstrip("/") or "http://localhost:8000"
-    if base.endswith("/v1"):
-        return base
-    return f"{base}/v1"
+    base, status = trusted_gateway_base_url(config)
+    if status != "ready" or base is None:
+        raise ApiError(error_code)
+    return base
 
 
 def _build_steps(tenant_id: str, state: QuickstartConfigState) -> list[QuickstartStep]:
@@ -1129,7 +1139,7 @@ def _build_steps(tenant_id: str, state: QuickstartConfigState) -> list[Quickstar
             tenant_id=tenant_id,
             order=3,
             title="复制示例代码",
-            description="选择 Python、JavaScript 或 curl 示例，设置本地环境变量后执行非流式 chat 调用。",
+            description="员工接入只需网关地址和个人 MetaHub KEY；开发者也可按需复制 Python、JavaScript 或 curl 示例。",
             status="ready",
             action_label="复制示例",
             navigation_item_id="quickstart",

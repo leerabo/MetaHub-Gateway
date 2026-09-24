@@ -392,7 +392,6 @@ async def test_audit_rows_sequences_and_triggers_survive_migration_roundtrip(
     monkeypatch, tmp_path, migrated_database
 ):
     database, app = _prepare(monkeypatch, tmp_path, migrated_database)
-    later = rollback_later_migrations(database, "0148")
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="https://testserver"
     ) as client:
@@ -403,6 +402,10 @@ async def test_audit_rows_sequences_and_triggers_survive_migration_roundtrip(
             json={"name": "Preserved Technical Key"},
         )
         assert result.status_code == 201, result.text
+    # The current WorkspaceSession/RBAC contract requires the full migration
+    # chain. Generate immutable audit facts first, then exercise the 0148
+    # down/up round-trip without operating on the older RBAC baseline.
+    later = rollback_later_migrations(database, "0148")
     with connect_database(database) as connection:
         records = [
             tuple(row)

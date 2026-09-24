@@ -2,18 +2,21 @@
  * 渲染 可观测面板 的 `renderObservabilityPanels` 界面，把后端状态转换为用户可操作的视图。
  * 边界：前端隐藏按钮只改善体验，不能替代后端 RBAC 和租户校验。
  */
+import { gatewayConnectionAddresses } from "../../lib/gatewayConnection.js";
+import { localizeConsoleStaticHtml } from "../../i18n/localizeConsoleStaticHtml.js";
+
 export function renderObservabilityPanels(exampleError, options = {}) {
   const gatewayUrl = options.gatewayUrl ?? "http://localhost:8000";
   return `
     <section class="panel api-docs-panel" aria-labelledby="api-docs-title">
-      ${renderApiDocsPanel({ gatewayUrl })}
+      ${renderApiDocsPanel({ connectionState: options.connectionState })}
     </section>
     <section class="observability-grid" aria-label="基础可观测预留">
       <section class="panel error-page-panel" aria-labelledby="error-page-title">
         ${renderErrorPagePreview(exampleError)}
       </section>
       <section class="panel gateway-debug-panel" aria-labelledby="gateway-debug-title">
-        ${renderGatewayDebugConsole(options.debugState ?? {}, { gatewayUrl })}
+        ${renderGatewayDebugConsole(options.debugState ?? {}, { gatewayUrl, i18n: options.i18n })}
       </section>
     </section>
   `;
@@ -23,44 +26,56 @@ export function renderObservabilityPanels(exampleError, options = {}) {
  * 渲染 可观测面板 的 `renderApiDocsPanel` 界面，把后端状态转换为用户可操作的视图。
  * 边界：前端隐藏按钮只改善体验，不能替代后端 RBAC 和租户校验。
  */
-export function renderApiDocsPanel({ gatewayUrl }) {
-  const baseUrl = `${String(gatewayUrl).replace(/\/$/, "")}/v1`;
+export function renderApiDocsPanel({ connectionState, canReadConnection = true } = {}) {
+  const addresses = canReadConnection && connectionState?.state === "ok"
+    ? gatewayConnectionAddresses(connectionState.gateway_base_url) : null;
+  const baseUrl = addresses?.openai;
+  const model = connectionState?.chat_model_configured === true && typeof connectionState.chat_model_alias === "string"
+    && connectionState.chat_model_alias.trim() ? connectionState.chat_model_alias : null;
+  const unavailable = !canReadConnection ? "当前账号无权读取组织接入配置。"
+    : connectionState?.state === "error" ? "接入配置暂时不可用，请重试。"
+      : !connectionState ? "正在加载接入配置..."
+        : !baseUrl ? "网关地址尚未正确配置，请联系管理员。" : "尚未配置可用模型路由，请联系管理员。";
   return `
     <div class="panel-heading api-docs-heading">
       <div>
-        <h2 id="api-docs-title">API 文档 · OpenAI-Compatible</h2>
-        <p>将 OpenAI SDK 的 base_url 指向网关，使用 Virtual Key 作为 Bearer Token。</p>
+        <h2 id="api-docs-title">API 文档 · 统一模型接口</h2>
+        <p>所有工具共用一个网关地址和个人 MetaHub KEY；按工具要求选择协议，模型列表可自动发现。</p>
       </div>
-      <code>${escapeHtml(baseUrl)}</code>
+      ${baseUrl ? `<code>${escapeHtml(baseUrl)}</code>` : ""}
     </div>
     <div class="api-docs-grid">
+      ${renderApiEndpoint("GET", "/v1/models", "模型列表（自动发现）")}
       ${renderApiEndpoint("POST", "/v1/chat/completions", "Chat Completions")}
+      ${renderApiEndpoint("POST", "/v1/responses", "OpenAI Responses（Codex）")}
+      ${renderApiEndpoint("POST", "/v1/messages", "Anthropic Messages（Claude Code）")}
       ${renderApiEndpoint("POST", "/v1/embeddings", "Embeddings")}
     </div>
-    <div class="code-examples" aria-label="SDK 示例">
+    <p>这些路径属于同一个网关，共用个人 MetaHub KEY。具体客户端的 Agent 功能需按版本验收。</p>
+    ${baseUrl && model ? `<div class="code-examples" aria-label="SDK 示例">
       <pre><code>${escapeHtml(`from openai import OpenAI
 
 client = OpenAI(
-    base_url="${baseUrl}",
-    api_key="<virtual_key>",
+    base_url=${JSON.stringify(baseUrl)},
+    api_key="<YOUR_METAHUB_KEY>",
 )
 
 response = client.chat.completions.create(
-    model="default-chat",
+    model=${JSON.stringify(model)},
     messages=[{"role": "user", "content": "你好"}],
 )`)}</code></pre>
       <pre><code>${escapeHtml(`import OpenAI from "openai";
 
 const client = new OpenAI({
-  baseURL: "${baseUrl}",
+  baseURL: ${JSON.stringify(baseUrl)},
   apiKey: process.env.METAHUB_VIRTUAL_KEY,
 });
 
 const response = await client.chat.completions.create({
-  model: "default-chat",
+  model: ${JSON.stringify(model)},
   messages: [{ role: "user", content: "你好" }],
 });`)}</code></pre>
-    </div>
+    </div>` : `<p role="status">${unavailable}</p>${canReadConnection && connectionState?.state === "error" ? '<button type="button" data-resource-retry>重试</button>' : ""}`}
   `;
 }
 
@@ -97,14 +112,14 @@ export function renderErrorPagePreview(error) {
  * 渲染 可观测面板 的 `renderGatewayDebugConsole` 界面，把后端状态转换为用户可操作的视图。
  * 边界：前端隐藏按钮只改善体验，不能替代后端 RBAC 和租户校验。
  */
-export function renderGatewayDebugConsole(state = {}, { gatewayUrl = "http://localhost:8000" } = {}) {
+export function renderGatewayDebugConsole(state = {}, { gatewayUrl = "http://localhost:8000", i18n = null } = {}) {
   // 调试台不保存 Virtual Key，也不把明文 Key 渲染进状态；刷新后需要重新输入。
   const model = state.model ?? "default-chat";
   const message = state.message ?? "你好，MetaHub";
   const streamChecked = state.stream ? "checked" : "";
   const submitLabel = state.running ? "重新发送" : "发送";
   const stopHidden = state.running && state.stream ? "" : "hidden";
-  return `
+  return localizeConsoleStaticHtml(`
     <div class="panel-heading">
       <h2 id="gateway-debug-title">OpenAI 调试台</h2>
       <p>发送一次 Chat Completions 请求，响应会返回 request_id/trace_id 便于排障。</p>
@@ -139,7 +154,7 @@ export function renderGatewayDebugConsole(state = {}, { gatewayUrl = "http://loc
       </div>
     </form>
     ${renderDebugResult(state)}
-  `;
+  `, i18n);
 }
 
 /**

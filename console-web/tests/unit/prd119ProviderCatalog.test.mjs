@@ -114,9 +114,9 @@ test("Provider page exposes official, local, and migration catalog modes without
     },
   }, auth);
 
-  assert.match(html, /官方 Provider 目录/u);
+  assert.match(html, /选择模型厂家/u);
   assert.match(html, /data-provider-catalog-create-form/u);
-  assert.match(html, /href="\/#local-models"/u);
+  assert.match(html, /href="\/console.html#workspace.gateway.private-endpoints"/u);
   assert.match(html, /仅说明迁移兼容性/u);
   assert.match(html, /data-provider-catalog-preflight-form/u);
   assert.match(html, /下一步：配置客户自持 Provider Key/u);
@@ -129,7 +129,7 @@ test("Provider page exposes official, local, and migration catalog modes without
     providerCatalog: { ...catalogResponse(), state: "ok", activeTab: "providers" },
   }, auth);
   assert.match(configured, /create-provider-form/u);
-  assert.match(configured, /aria-selected="true">已配置/u);
+  assert.match(configured, /data-provider-tab="catalog">添加模型服务/u);
 });
 
 test("Platform catalog client uses Cookie, CSRF, CAS, and no workspace authorization", async () => {

@@ -104,8 +104,29 @@ function renderHealthRow(item, probingProviderId, canProbe) {
   return `<article class="provider-health-row status-${escapeAttribute(item.effective_health_status)}">
     <div><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.provider_code)} · ${escapeHtml(item.provider_type)}</span><span class="break-anywhere">${escapeHtml(item.base_url)}</span></div>
     <dl><div><dt>状态</dt><dd>${escapeHtml(STATUS_LABELS[item.effective_health_status] ?? item.effective_health_status)}</dd></div><div><dt>最近成功</dt><dd>${formatDate(item.last_success_at)}</dd></div><div><dt>延迟</dt><dd>${item.last_probe_latency_ms == null ? "-" : `${escapeHtml(item.last_probe_latency_ms)} ms`}</dd></div><div><dt>错误</dt><dd>${escapeHtml(item.last_probe_error_code ?? "-")}</dd></div></dl>
+    ${renderHealthCaveat(item)}
     ${canProbe ? `<button type="button" class="icon-button" data-provider-probe="${escapeAttribute(item.provider_id)}" title="立即探测" aria-label="立即探测 ${escapeAttribute(item.name)}" ${probing ? "disabled" : ""}>${probing ? "探测中" : "↻"}</button>` : ""}
   </article>`;
+}
+
+function renderHealthCaveat(item) {
+  const probeTotal = Number.isSafeInteger(item.probe_total) ? item.probe_total : 0;
+  const probeRate = Number.isSafeInteger(item.probe_success_rate_bps) ? item.probe_success_rate_bps : null;
+  const notices = [];
+  if (Number.isSafeInteger(item.eligible_call_count) && item.eligible_call_count === 0) {
+    notices.push("无真实调用样本，状态主要来自探测");
+  }
+  if (probeTotal > 0 && probeRate !== null && probeRate < 10000) {
+    notices.push(`探测成功率 ${formatRate(probeRate)}`);
+  }
+  return notices.length ? `<small class="provider-health-caveat" role="note">证据范围：${escapeHtml(notices.join("；"))}</small>` : "";
+}
+
+function formatRate(value) {
+  if (!Number.isSafeInteger(value) || value < 0) return "暂无数据";
+  const whole = Math.floor(value / 100);
+  const fraction = String(value % 100).padStart(2, "0").replace(/0+$/, "");
+  return `${whole}${fraction ? `.${fraction}` : ""}%`;
 }
 
 /** 生成健康状态筛选项。 */

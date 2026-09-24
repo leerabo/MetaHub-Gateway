@@ -249,7 +249,10 @@ PRD-006 后控制台先进入登录页；登录成功后仍是受控的本地启
 PRD-009 建立了最小 OpenAI-compatible API 兼容层：
 
 - `POST /v1/chat/completions`：支持基础 Chat Completions JSON 请求和 `stream=true` SSE 透传。
+- `POST /v1/responses`：将 OpenAI Responses 请求转换到同一 Chat 治理链路，供 Codex 等客户端使用。
+- `POST /v1/messages`：将 Anthropic Messages 请求转换到同一 Chat 治理链路，供 Claude Code 等客户端使用。
 - `POST /v1/embeddings`：支持基础 Embeddings JSON 请求。
+- `GET /v1/models`：使用同一 Virtual Key 返回当前租户已启用的模型别名，供客户端自动发现。
 - Virtual Key 鉴权在 `gateway-data-plane/src/metahub_gateway/auth/`，只通过 Bearer Token 哈希恢复 `tenant_id`。
 - PRD-010 后，数据面成功鉴权会更新 `virtual_keys.last_used_at`；禁用 Key 统一返回 `gateway.auth_invalid`。
 - 模型路由在 `gateway-data-plane/src/metahub_gateway/routing/`，只查当前租户数据；请求体 `model` 优先按 `model_aliases.alias + Virtual Key environment` 解析，未命中时兼容内部标准模型 ID，数据面最终转发 `provider_model_id`。

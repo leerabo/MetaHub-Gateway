@@ -6,6 +6,8 @@ import { ComplianceApiError } from "../../lib/complianceCenter.js";
 import { buildInvitationAcceptLink } from "../../lib/invitations.js";
 import {
   renderIdentityLoginPage,
+  renderIdentityLogoutPage,
+  renderIdentityAccountLoadingPage,
   renderIdentityRegistrationPage,
   renderIdentityResetConfirmPage,
   renderIdentityResetRequestPage,
@@ -14,6 +16,7 @@ import {
   renderIdentityVerificationPage,
 } from "./renderIdentityPage.js";
 import { createAccountPreferenceController } from "../account-preferences/accountPreferenceController.js";
+import { identitySection } from "./identitySections.js";
 
 const CONSENT_VERSION = "privacy-local-2026-09-09";
 
@@ -29,6 +32,11 @@ export function createIdentityPageController({
   newIdempotencyKey = defaultIdempotencyKey,
   recordWorkspaceSwitch = () => {},
   onWorkspaceCreated = null,
+  onWorkspaceReady = null,
+  onLoggedOut = null,
+  onPublicViewChange = () => {},
+  initialSection = "workspaces",
+  autoEnterWorkspace = true,
 } = {}) {
   if (!root || !api) {
     throw new TypeError("identity page requires root and api");
@@ -42,6 +50,8 @@ export function createIdentityPageController({
   let workspaceChoices = [];
   let workspaceDirectoryReady = false;
   let accountSecurityView = false;
+  let accountSection = identitySection(initialSection);
+  let enterConsolePending = autoEnterWorkspace;
   let workspaceCreating = false;
   let workspaceContext = null;
   let memberships = [];
@@ -89,6 +99,7 @@ export function createIdentityPageController({
   let pendingChallenge = null;
   let registrationPolicy = null;
   let registrationCaptcha = null;
+  let registrationDraft = { email: "", displayName: "" };
   let registrationBusy = null;
   let riskChallenge = null;
   let riskChallengeIntent = null;
@@ -97,6 +108,7 @@ export function createIdentityPageController({
   let identitySecurity = null;
   let identitySecurityBusy = false;
   let identitySecurityError = null;
+  let identitySecurityTool = null;
   let recoveryCodes = null;
   let factorDisableIndex = null;
   let conditionalAccess = null;
@@ -145,15 +157,23 @@ export function createIdentityPageController({
   });
 
   const controller = {
-    async mount({ registration = false } = {}) {
+    async mount({ registration = false, reset = false, login = false, loginNotice = null } = {}) {
       destroyed = false;
       bindInteractions();
       bindContextChannel();
       if (registration) return controller.showRegistration();
-      return loadProtectedState();
+      if (reset) return controller.showReset();
+      if (login) {
+        renderIdentityLoginPage(root, { error: loginNotice });
+        return true;
+      }
+      if (autoEnterWorkspace) renderIdentityLoginPage(root);
+      else renderIdentityAccountLoadingPage(root);
+      return loadProtectedState("", null, { preserveLogin: autoEnterWorkspace });
     },
     async login({ email, password }) {
       const ticket = beginRequest();
+      enterConsolePending = autoEnterWorkspace && accountSection === "workspaces";
       pendingChallenge = null;
       riskChallenge = null;
       riskChallengeIntent = null;
@@ -249,10 +269,12 @@ export function createIdentityPageController({
       return loadProtectedState();
     },
     showLogin() {
+      onPublicViewChange("login");
       clearToLogin();
       return true;
     },
-    async showRegistration() {
+    async showRegistration({ preserveDraft = false } = {}) {
+      onPublicViewChange("register");
       const ticket = beginRequest();
       scrubSensitiveInputs();
       scrubProtectedState();
@@ -261,24 +283,33 @@ export function createIdentityPageController({
       riskChallengeIntent = null;
       registrationPolicy = null;
       registrationCaptcha = null;
+      if (!preserveDraft) registrationDraft = { email: "", displayName: "" };
       if (typeof api.registrationPolicy !== "function") {
         renderIdentityRegistrationPage(root);
         return true;
       }
-      renderIdentityRegistrationPage(root, { busy: true, loading: true });
+      // Keep the form readable and editable while the platform-owned policy loads.
+      // The submit action remains gated until the policy is known.
+      renderIdentityRegistrationPage(root, { policyLoading: true });
       try {
-        const policy = await api.registrationPolicy({ signal: ticket.signal });
+        const policy = await withIdentitySetupDeadline(
+          (signal) => api.registrationPolicy({ signal }), ticket.signal,
+        );
         if (!isCurrent(ticket)) return false;
         registrationPolicy = policy;
         if (registrationPolicy.human_verification) {
-          const captcha = await api.registrationCaptcha({ signal: ticket.signal });
+          const captcha = await withIdentitySetupDeadline(
+            (signal) => api.registrationCaptcha({ signal }), ticket.signal,
+          );
           if (!isCurrent(ticket)) return false;
           registrationCaptcha = captcha;
         }
-        renderIdentityRegistrationPage(root, { policy: registrationPolicy, captcha: registrationCaptcha });
+        renderIdentityRegistrationPage(root, { policy: registrationPolicy, captcha: registrationCaptcha,
+          email: registrationDraft.email, displayName: registrationDraft.displayName });
       } catch (error) {
         if (!isCurrent(ticket) || isAbort(error)) return false;
-        renderIdentityRegistrationPage(root, { error: safePageError(error), unavailable: true });
+        renderIdentityRegistrationPage(root, { error: safePageError(error), unavailable: true,
+          email: registrationDraft.email, displayName: registrationDraft.displayName });
       }
       return true;
     },
@@ -303,6 +334,7 @@ export function createIdentityPageController({
       }
     },
     showReset() {
+      onPublicViewChange("reset");
       beginRequest();
       scrubSensitiveInputs();
       scrubProtectedState();
@@ -473,15 +505,21 @@ export function createIdentityPageController({
       }
     },
     async logout() {
-      clearToLogin();
+      clearToLogin({ pending: true });
       broadcastContextInvalidation();
       try {
         await queueWrite(() => api.logout({}));
       } catch (error) {
-        if (isAbort(error)) return false;
+        if (!isExpired(error)) {
+          renderIdentityLoginPage(root, { error: safePageError(error) });
+          return false;
+        }
       } finally {
         broadcastContextInvalidation();
       }
+      // 成功注销但没有导航回调时，仍保持公开登录入口；有回调时该渲染只存在于跳转前的同一帧。
+      renderIdentityLoginPage(root);
+      onLoggedOut?.();
       return true;
     },
     async revokeSession(index) {
@@ -547,8 +585,23 @@ export function createIdentityPageController({
         return false;
       }
     },
+    toggleSecurityTool(tool) {
+      if (!account || !currentSession || accountSection !== "security" || identitySecurityBusy
+        || !new Set(["enrollment", "recovery", "devices"]).has(tool)) return false;
+      if (tool === "recovery" && identitySecurity?.recovery_challenge) return false;
+      if (tool === "enrollment" && currentSession.assurance_level === "recovery") return false;
+      identitySecurityTool = identitySecurityTool === tool ? null : tool;
+      mfaEnrollment = null;
+      recoveryCodes = null;
+      factorDisableIndex = null;
+      scrubSensitiveInputs();
+      renderSecurity();
+      root.querySelector?.(`[data-security-tool="${tool}"]`)?.focus?.({ preventScroll: true });
+      return true;
+    },
     setMfaEnrollmentMethod(method) {
       if (!new Set(["totp", "webauthn", "recovery_codes"]).has(method)) return false;
+      identitySecurityTool = "enrollment";
       mfaEnrollmentMethod = method;
       mfaEnrollment = null;
       factorDisableIndex = null;
@@ -832,15 +885,14 @@ export function createIdentityPageController({
     showWorkspaceCreate() {
       if (workspaceCreating) return false;
       accountSecurityView = false;
+      accountSection = "workspaces";
+      enterConsolePending = false;
       clearInvitationSecret();
       invitationResult = null;
       workspaceView = "create";
       workspaceDraft = {
         kind: "organization",
         name: "",
-        slug: "",
-        region: "cn-north-1",
-        serviceMode: "internal_only",
         idempotencyKey: newIdempotencyKey(),
         requestFingerprint: null,
       };
@@ -864,13 +916,31 @@ export function createIdentityPageController({
     },
     showAccountSecurity() {
       if (workspaceCreating) return false;
-      accountSecurityView = true;
+      return controller.showAccountSection("security");
+    },
+    async showAccountSection(value) {
+      if (workspaceCreating) return false;
+      accountSection = identitySection(value);
+      identitySecurityTool = null;
+      accountSecurityView = accountSection !== "workspaces";
+      enterConsolePending = false;
+      const ticket = beginRequest();
+      scrubSensitiveInputs();
+      scrubWorkspaceScope();
+      mfaEnrollment = null;
+      recoveryCodes = null;
+      factorDisableIndex = null;
+      accountPreferenceController.leave();
+      notificationCenterOpen = false;
+      if (!account || !currentSession) return false;
       renderSecurity();
-      return true;
+      return loadProtectedState("", ticket);
     },
     showOrganizationStart() {
       if (workspaceCreating) return false;
       accountSecurityView = false;
+      accountSection = "workspaces";
+      enterConsolePending = false;
       renderSecurity();
       return true;
     },
@@ -916,6 +986,23 @@ export function createIdentityPageController({
         workspaceDraft = null;
         workspaceCreating = false;
         autoSwitchAttempted = false;
+        if (typeof onWorkspaceCreated === "function" && typeof api.switchWorkspace === "function") {
+          await queueWrite(() => api.switchWorkspace({
+            workspaceId: result.workspace.workspace_id, signal: ticket.signal,
+          }));
+          if (!isCurrent(ticket)) return false;
+          const session = await api.workspaceSession({ signal: ticket.signal });
+          if (!isCurrent(ticket)) return false;
+          if (session.context?.workspace_id !== result.workspace.workspace_id
+            || session.context?.role !== "owner" || !validWorkspaceAuthorization(session.authorization)) {
+            throw workspaceAuthorizationDriftError();
+          }
+          autoSwitchAttempted = true;
+          broadcastContextInvalidation();
+          // The console independently verifies navigation permissions before rendering private data.
+          onWorkspaceCreated();
+          return true;
+        }
         const loaded = await loadWorkspaceAccess(
           ticket, kind === "organization" ? "组织已创建。" : "空间已创建。", null,
           true, typeof onWorkspaceCreated === "function" ? result.workspace.workspace_id : null,
@@ -938,6 +1025,7 @@ export function createIdentityPageController({
         return false;
       }
       const startedAt = monotonicNow();
+      enterConsolePending = accountSection === "workspaces";
       const ticket = beginRequest();
       scrubWorkspaceScope();
       renderSecurity({ feedback: "正在进入空间…" });
@@ -2722,7 +2810,7 @@ export function createIdentityPageController({
     root.querySelector?.("[data-onboarding-step-panel]")?.focus?.({ preventScroll: true });
   }
 
-  async function loadProtectedState(feedback = "", existingTicket = null) {
+  async function loadProtectedState(feedback = "", existingTicket = null, { preserveLogin = false } = {}) {
     const ticket = existingTicket ?? beginRequest();
     try {
       const me = await api.me({ signal: ticket.signal });
@@ -2730,15 +2818,17 @@ export function createIdentityPageController({
       account = me.account;
       currentSession = me.current_session;
       sessions = [currentSession];
-      const loaded = await loadSessions(ticket, feedback, null);
-      if (loaded && isCurrent(ticket) && enterAccountPreferences()) {
-        void accountPreferenceController.load();
-      }
-      return loaded;
+      return loadSessions(ticket, feedback, null);
     } catch (error) {
       if (!isCurrent(ticket) || isAbort(error)) return false;
       if (isExpired(error)) {
-        clearToLogin();
+        if (preserveLogin && root.querySelector?.("[data-identity-login-form]")) {
+          // An anonymous session check must not discard an in-progress login.
+          beginRequest();
+          scrubProtectedState();
+        } else {
+          clearToLogin();
+        }
       } else if (account) {
         renderSecurity({ error: safePageError(error) });
       } else {
@@ -3580,6 +3670,8 @@ export function createIdentityPageController({
       workspaceContext = null;
       memberships = [];
       navigationItems = [];
+      await loadAccountSection(ticket);
+      if (!isCurrent(ticket)) return false;
       renderSecurity({ feedback, error: previousError });
       return true;
     }
@@ -3603,6 +3695,8 @@ export function createIdentityPageController({
 
     if (typeof api.workspaceSession !== "function") {
       scrubWorkspaceAuthorization();
+      await loadAccountSection(ticket);
+      if (!isCurrent(ticket)) return false;
       renderSecurity({ feedback, error: previousError });
       return true;
     }
@@ -3661,6 +3755,8 @@ export function createIdentityPageController({
 
     if (sessionResult === null) {
       scrubWorkspaceAuthorization();
+      await loadAccountSection(ticket);
+      if (!isCurrent(ticket)) return false;
       renderSecurity({ feedback, error: previousError });
       return true;
     }
@@ -3726,14 +3822,23 @@ export function createIdentityPageController({
     }
 
     try {
+      if (!validWorkspaceAuthorization(sessionResult.authorization)) {
+        throw workspaceAuthorizationDriftError();
+      }
+      if (enterConsolePending && typeof onWorkspaceReady === "function"
+        && !previousError && !invitationToken && currentSession?.assurance_level !== "recovery") {
+        enterConsolePending = false;
+        onWorkspaceReady();
+        return true;
+      }
       const [membershipResult, navigationResult, onboardingOutcome] = await Promise.all([
-        typeof api.memberships === "function"
+        ["members", "access"].includes(accountSection) && typeof api.memberships === "function"
           ? api.memberships({ signal: ticket.signal })
           : Promise.resolve({ memberships: [] }),
         typeof api.workspaceNavigation === "function"
           ? api.workspaceNavigation({ signal: ticket.signal })
           : Promise.resolve(null),
-        typeof api.onboarding === "function"
+        accountSection === "onboarding" && typeof api.onboarding === "function"
           ? api.onboarding({ signal: ticket.signal }).then(
             (value) => ({ value, error: null }),
             (error) => ({ value: null, error }),
@@ -3784,19 +3889,7 @@ export function createIdentityPageController({
       }
       // The destination console loads its own panels after this authorization check.
       if (createdWorkspaceId === workspaceContext.workspace_id) return true;
-      await Promise.all([
-        loadWorkspaceBilling(ticket, null, "", { render: false }),
-        loadWorkspaceInvoices(ticket, "", { render: false }),
-        loadBusinessVerification(ticket, "", { render: false }),
-        loadEnterpriseIdentity(ticket, "", { render: false }),
-        loadScimDirectory(ticket, "", { render: false }),
-        loadConditionalAccess(ticket, "", { render: false }),
-        loadDataGovernance(ticket, "", { render: false }),
-        loadPrivacy(ticket, "", { render: false }),
-        loadComplianceReports(ticket, "", { render: false }),
-        loadMachineIdentity(ticket, "", { render: false }),
-        loadNotificationCenter(ticket, { render: false }),
-      ]);
+      await loadAccountSection(ticket);
       if (!isCurrent(ticket)) return false;
       renderSecurity({ feedback, error: previousError });
       return true;
@@ -3814,6 +3907,26 @@ export function createIdentityPageController({
       }
       renderSecurity({ feedback, error: safePageError(error) });
       return false;
+    }
+  }
+
+  async function loadAccountSection(ticket) {
+    if (!isCurrent(ticket)) return false;
+    const options = { render: false };
+    switch (accountSection) {
+      case "preferences":
+        return enterAccountPreferences() ? accountPreferenceController.load() : false;
+      case "billing": return loadWorkspaceBilling(ticket, null, "", options);
+      case "invoices": return loadWorkspaceInvoices(ticket, "", options);
+      case "business": return loadBusinessVerification(ticket, "", options);
+      case "enterprise": return loadEnterpriseIdentity(ticket, "", options);
+      case "scim": return loadScimDirectory(ticket, "", options);
+      case "access": return loadConditionalAccess(ticket, "", options);
+      case "governance": return loadDataGovernance(ticket, "", options);
+      case "privacy": return loadPrivacy(ticket, "", options);
+      case "compliance": return loadComplianceReports(ticket, "", options);
+      case "machines": return loadMachineIdentity(ticket, "", options);
+      default: return true;
     }
   }
 
@@ -3864,18 +3977,20 @@ export function createIdentityPageController({
     return operation;
   }
 
-  function clearToLogin() {
+  function clearToLogin({ pending = false } = {}) {
     const ticket = beginRequest();
     scrubSensitiveInputs();
     pendingChallenge = null;
     riskChallenge = null;
     riskChallengeIntent = null;
     scrubProtectedState();
-    renderIdentityLoginPage(root);
+    if (pending) renderIdentityLogoutPage(root);
+    else renderIdentityLoginPage(root);
     return ticket;
   }
 
   function applyIdentityResult(result) {
+    onPublicViewChange(null);
     account = result.account;
     currentSession = result.current_session;
     sessions = [currentSession];
@@ -3961,6 +4076,7 @@ export function createIdentityPageController({
       workspaceDraft,
       workspaceDirectoryReady,
       accountSecurityView,
+      accountSection,
       workspaceCreating,
       hasPendingInvitation: Boolean(invitationToken),
       invitationResult,
@@ -3970,6 +4086,7 @@ export function createIdentityPageController({
       identitySecurity,
       identitySecurityBusy,
       identitySecurityError,
+      identitySecurityTool,
       accountPreferenceState: accountPreferenceController.snapshot(),
       recoveryCodes,
       factorDisableIndex,
@@ -3990,6 +4107,7 @@ export function createIdentityPageController({
     identitySecurity = null;
     identitySecurityBusy = false;
     identitySecurityError = null;
+    identitySecurityTool = null;
     recoveryCodes = null;
     factorDisableIndex = null;
     platformAccess = false;
@@ -4355,9 +4473,6 @@ export function createIdentityPageController({
         await controller.createWorkspace({
           kind: fields.get("kind"),
           name: fields.get("name"),
-          slug: fields.get("slug"),
-          region: fields.get("region"),
-          serviceMode: fields.get("serviceMode"),
         });
       } else if (form?.matches?.("[data-membership-update-form]")) {
         event.preventDefault();
@@ -4525,6 +4640,9 @@ export function createIdentityPageController({
         await controller.revokeSession(button.dataset.sessionIndex);
       } else if (button.dataset.identityAction === "set-mfa-method") {
         controller.setMfaEnrollmentMethod(button.dataset.mfaMethod);
+      } else if (button.dataset.identityAction === "toggle-security-tool") {
+        event.preventDefault();
+        controller.toggleSecurityTool(button.dataset.securityTool);
       } else if (button.dataset.identityAction === "close-recovery-codes") {
         controller.closeRecoveryCodes();
       } else if (button.dataset.identityAction === "select-factor-disable") {
@@ -4563,6 +4681,8 @@ export function createIdentityPageController({
         await controller.refreshCaptcha();
       } else if (button.dataset.identityAction === "show-register") {
         controller.showRegistration();
+      } else if (button.dataset.identityAction === "retry-registration") {
+        controller.showRegistration({ preserveDraft: true });
       } else if (button.dataset.identityAction === "show-reset") {
         controller.showReset();
       } else if (button.dataset.identityAction === "show-login") {
@@ -4575,6 +4695,8 @@ export function createIdentityPageController({
         controller.showWorkspaceCreate();
       } else if (button.dataset.identityAction === "show-account-security") {
         controller.showAccountSecurity();
+      } else if (button.dataset.identityAction === "reload-account-section") {
+        await controller.showAccountSection(accountSection);
       } else if (button.dataset.identityAction === "show-organization-start") {
         controller.showOrganizationStart();
       } else if (button.dataset.identityAction === "cancel-workspace-create") {
@@ -4676,6 +4798,16 @@ export function createIdentityPageController({
       }
     });
     root.addEventListener?.("input", (event) => {
+      // Once typing starts, a late session probe must not replace the active form.
+      if (event.target?.closest?.("[data-identity-login-form]")) {
+        beginRequest();
+      }
+      if (event.target?.closest?.("[data-identity-registration-form]")) {
+        const field = event.target;
+        if (field.name === "email" || field.name === "displayName") {
+          registrationDraft = { ...registrationDraft, [field.name]: String(field.value ?? "") };
+        }
+      }
       if (event.target?.matches?.("[data-workspace-search]")) {
         filterWorkspaceOptions(event.target.value);
       }
@@ -4684,9 +4816,10 @@ export function createIdentityPageController({
 
   function enterAccountPreferences() {
     if (!accountPreferenceEnabled) return false;
-    const accountId = String(account?.account_id ?? "");
     const sessionId = String(currentSession?.session_id ?? "");
-    return accountPreferenceController.enter({ accountId, sessionId });
+    // The public identity DTO omits account IDs. A GlobalSession uniquely fences
+    // this in-memory owner across both account changes and session rotation.
+    return accountPreferenceController.enter({ accountId: sessionId, sessionId });
   }
 
   function filterWorkspaceOptions(value) {
@@ -4884,6 +5017,38 @@ function isOnboardingRevisionDrift(error) {
 
 function isAbort(error) {
   return error?.name === "AbortError";
+}
+
+// Registration policy is a prerequisite, but a stalled control API must never leave a user
+// on an endless "准备中" screen. Abort the setup request and expose a retry action instead.
+async function withIdentitySetupDeadline(request, parentSignal, timeoutMs = 8000) {
+  const controller = new AbortController();
+  let timer;
+  let abortParent;
+  const timeout = new Promise((_, reject) => {
+    const cancel = () => {
+      controller.abort();
+      reject(new IdentityApiError({
+        status: 0,
+        code: "identity.network_unavailable",
+        message: "账号服务连接超时，请检查服务状态后重试。",
+      }));
+    };
+    abortParent = () => {
+      controller.abort(parentSignal?.reason);
+      reject(parentSignal?.reason ?? new DOMException("Cancelled", "AbortError"));
+    };
+    if (parentSignal?.aborted) return abortParent();
+    parentSignal?.addEventListener("abort", abortParent, { once: true });
+    timer = setTimeout(cancel, timeoutMs);
+  });
+  try {
+    return await Promise.race([request(controller.signal), timeout]);
+  } finally {
+    clearTimeout(timer);
+    parentSignal?.removeEventListener("abort", abortParent);
+    controller.abort();
+  }
 }
 
 function defaultConfirm(message) {

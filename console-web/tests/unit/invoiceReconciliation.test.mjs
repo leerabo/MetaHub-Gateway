@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 
-import { renderIdentitySecurityPage } from "../../src/features/identity/renderIdentityPage.js";
+import { renderIdentitySecurityPage as renderAccountPage } from "../../src/features/identity/renderIdentityPage.js";
+const renderIdentitySecurityPage = (root, state) => renderAccountPage(root, { accountSection: "invoices", ...state });
 import { renderPlatformWorkspace } from "../../src/features/platform/renderPlatformPage.js";
 import {
   createPlatformInvoiceReversal,

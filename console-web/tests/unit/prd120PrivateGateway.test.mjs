@@ -18,6 +18,7 @@ import {
 } from "../../src/lib/edgeManagement.js";
 import { PlatformApiError } from "../../src/lib/platform.js";
 import { PERMISSIONS, withPermissionSnapshot } from "./permissionTestContext.mjs";
+import { workspaceNavigationOwner } from "../../src/features/workspace-navigation/workspaceNavigationStore.js";
 
 const CONTROL_URL = "http://control.local";
 const TENANT_ID = "tenant_edge_a";
@@ -30,6 +31,60 @@ const INTENT_ID = `eri_${"6".repeat(32)}`;
 const TOKEN = `erg_${"A".repeat(43)}`;
 const CHALLENGE = `ech_${"B".repeat(43)}`;
 const ALL = [PERMISSIONS.EDGE_DEPLOYMENT_READ, PERMISSIONS.EDGE_DEPLOYMENT_MANAGE];
+
+function currentWorkspaceShell(permissionCodes = ALL) {
+  const identity = { account: { status: "active" }, current_session: {
+    session_id: "workspace_edge_session", is_current: true, revoke_generation: 1,
+    expires_at: "2099-01-01T00:00:00Z",
+  } };
+  const context = { workspace_id: WORKSPACE_ID, name: "Edge workspace", kind: "organization",
+    slug: "edge", role: "admin", session_status: "active", expires_at: "2099-01-01T00:00:00Z" };
+  const authorization = { permission_codes: [...permissionCodes].sort(), permission_revision: 4,
+    membership_revision: 2, permission_fingerprint: "c".repeat(64) };
+  const owner = workspaceNavigationOwner(identity, { context, authorization });
+  return { state: "ok", workspaceNavigationContract: true, workspaceIdentity: identity,
+    workspaceContext: context, workspaceAuthorization: authorization, workspaceOwner: owner,
+    activeNavigationItemId: "private-gateways", activeRouteCode: "workspace.gateway.private-deployments",
+    navigation: { ...authorization, active_navigation_item_id: "private-gateways",
+      active_route_code: "workspace.gateway.private-deployments", navigation_items: [{
+        id: "private-gateways", route_code: "workspace.gateway.private-deployments",
+        target_section: "private-gateways", visible: true, disabled: false,
+        required_permissions: [PERMISSIONS.EDGE_DEPLOYMENT_READ],
+      }] },
+  };
+}
+
+test("current Workspace Device owner uses workspace authorization without legacy tenant/user mirrors", () => {
+  const shell = currentWorkspaceShell();
+  const owner = privateGatewayPageOwner(shell.workspaceAuthorization, shell);
+  assert.equal(owner.workspaceId, WORKSPACE_ID);
+  assert.equal(owner.tenantId, "");
+  assert.equal(owner.accountId, "");
+  assert.equal(owner.canManage, true);
+  const state = createPrivateGatewayPageState();
+  assert.equal(state.enter(owner), true);
+  const load = state.beginLoad(owner, 1);
+  assert.ok(load);
+  assert.equal(state.acceptLoad(load, {
+    deployments: [], request_id: "req_workspace_edge", trace_id: "trc_workspace_edge",
+  }, owner, 1, [], [], null, null, [], [], [], [], []), true);
+  state.finishLoad(load);
+  assert.match(renderPrivateGateways(state.snapshot(), shell.workspaceAuthorization, shell), /私有 Gateway/u);
+  assert.match(renderPrivateGateways(state.snapshot(), shell.workspaceAuthorization, shell), /使用右上角“创建部署”/u);
+});
+
+test("current Workspace Device owner fails closed on route, permission and session changes", () => {
+  const shell = currentWorkspaceShell();
+  assert.ok(privateGatewayPageOwner(shell.workspaceAuthorization, shell));
+  const noRead = currentWorkspaceShell([PERMISSIONS.EDGE_DEPLOYMENT_MANAGE]);
+  assert.equal(privateGatewayPageOwner(noRead.workspaceAuthorization, noRead), null);
+  const wrongRoute = currentWorkspaceShell();
+  wrongRoute.activeNavigationItemId = "overview";
+  assert.equal(privateGatewayPageOwner(wrongRoute.workspaceAuthorization, wrongRoute), null);
+  const revoked = currentWorkspaceShell();
+  revoked.workspaceContext.session_status = "revoked";
+  assert.equal(privateGatewayPageOwner(revoked.workspaceAuthorization, revoked), null);
+});
 
 function context(permissionCodes = ALL, fingerprint = "edge_authz_a") {
   return withPermissionSnapshot({
@@ -424,6 +479,36 @@ test("renderer escapes display text and wiring avoids Storage while Platform loa
   assert.match(sources[3], /privateGatewayPageState\.clear\(\)/u);
   assert.match(sources[4], /state\.view === "edge-fleet"[\s\S]{0,160}api\.edgeFleet/u);
   assert.match(sources[4], /state\.view === "edge-fleet"[\s\S]{0,120}state\.edgeFleet = null/u);
+});
+
+test("renderer keeps Private Gateway first-use facts separate from low-frequency operations", () => {
+  const auth = context();
+  const owner = privateGatewayPageOwner(auth, shell(auth));
+  const state = createPrivateGatewayPageState();
+  state.enter(owner);
+  const load = state.beginLoad(owner, 1);
+  state.acceptLoad(load, listPayload(), owner, 1);
+  state.finishLoad(load);
+
+  const html = renderPrivateGateways(state.snapshot(), auth, shell(auth));
+  assert.match(html, /data-private-gateway-operation-group="runtime"/u);
+  assert.match(html, /data-private-gateway-operation-group="maintenance"/u);
+  assert.match(html, /运行与交付/u);
+  assert.match(html, /维护与治理/u);
+  assert.doesNotMatch(html, /data-private-gateway-operation-group="runtime" open/u);
+  assert.doesNotMatch(html, /data-private-gateway-operation-group="maintenance" open/u);
+  assert.match(html, /data-private-gateway-revoke/u);
+});
+
+test("installer keeps the active configuration visible while requirements remain progressive", async () => {
+  const source = await readFile(
+    new URL("../../src/features/private-gateways/renderPrivateGateways.js", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /data-private-gateway-installer-environment/u);
+  assert.match(source, /data-private-gateway-installer-requirements/u);
+  assert.match(source, /<details class="private-gateway-installer-requirements"/u);
+  assert.doesNotMatch(source, /private-gateway-installer-requirements" open/u);
 });
 
 let previousFetch;

@@ -449,6 +449,11 @@ test("PRD-138 sources retain fixed routes, responsive layout, and no secret pers
     "/platform/launch-gates/{launch_gate_id}/evidence",
     "/platform/launches",
     "/platform/launches/{launch_candidate_id}/rollback",
+    "/platform/ga-gates",
+    "/platform/ga-gates/{ga_gate_id}/evidence",
+    "/platform/ga-launches",
+    "/platform/ga-launches/{ga_launch_id}/rollback",
+    "/platform/ga-launches/{ga_launch_id}/review",
   ]);
   assert.doesNotMatch(`${client}\n${state}\n${renderer}\n${routes}\n${models}\n${migration}`,
     /general_availability/u);

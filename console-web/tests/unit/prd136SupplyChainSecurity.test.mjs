@@ -165,10 +165,10 @@ test("Developer and Platform release views expose gate, SLA, exception, and patc
     sdk_releases: [publishedSdk()],
     supply_chain: supplyChain,
   });
-  assert.match(developerHtml, /Supply chain evidence/u);
-  assert.match(developerHtml, /client passed/u);
+  assert.match(developerHtml, /供应链安全证据/u);
+  assert.match(developerHtml, /客户端 通过/u);
   assert.match(developerHtml, /CVE-2026-0136/u);
-  assert.match(developerHtml, /cloud\/edge N\/N-1 passed/u);
+  assert.match(developerHtml, /云端及边缘当前和上一版本验证通过/u);
   assert.match(developerHtml, /data-developer-security-download/u);
   assert.doesNotMatch(developerHtml, /component_name|repository_url|private[_ -]?key/iu);
 
@@ -271,7 +271,7 @@ test("PRD-136 source keeps fixed APIs, request ownership, responsive layouts, an
   assert.match(main, /developerContractSecurityController[\s\S]*refreshId !== refreshSequence/u);
   assert.match(platformMain, /getPlatformReleaseWorkspace[\s\S]*supplyChainException/u);
   assert.match(state, /applySupplyChainException[\s\S]*developerContractWrite/u);
-  assert.match(developerRender, /proof_missing[\s\S]*Install blocked/u);
+  assert.match(developerRender, /proof_missing[\s\S]*暂不可安装/u);
   assert.match(platformRender, /platform\.supply_chain\.exception[\s\S]*platform\.supply_chain\.approve/u);
   assert.match(css, /@media \(max-width: 420px\)[\s\S]*developer-security/u);
   assert.match(platformCss, /@media \(max-width: 600px\)[\s\S]*platform-supply-chain/u);

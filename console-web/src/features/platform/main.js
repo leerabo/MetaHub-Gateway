@@ -30,6 +30,7 @@ import {
   suspendPlatformWorkspace,
   updatePlatformOperator,
 } from "../../lib/platform.js";
+import { installUserFacingTextGuard } from "../../lib/userFacingTextGuard.js";
 import {
   createPlatformBillingAdjustment,
   getPlatformMeteringState,
@@ -172,6 +173,12 @@ import {
   commandLaunchWave,
   createLaunchCandidate,
   decideLaunchCandidate,
+  getGaGates,
+  launchGa,
+  requestGaRollback,
+  submitGaEvidence,
+  submitGaReview,
+  verifyGaRollback,
   getLaunchGates,
   requestLaunchRollback,
   reviewLaunchCandidate,
@@ -221,6 +228,7 @@ import {
   listPlatformCommercialSubscriptions,
 } from "../../lib/platformCommercialAccounting.js";
 import { createPlatformPageController } from "./platformPageState.js";
+import { serviceOrigin } from "../../lib/runtimeOrigins.js";
 import {
   getPlatformConsoleOverview,
   listPlatformConsoleApprovals,
@@ -252,11 +260,9 @@ async function getPlatformReleaseWorkspace({ controlApiUrl, signal } = {}) {
 }
 
 const root = globalThis.document?.querySelector("#platform-app");
+if (root) installUserFacingTextGuard(root);
 if (root) {
-  const hostname = globalThis.window.location.hostname;
-  const controlApiUrl = new Set(["localhost", "127.0.0.1", "::1"]).has(hostname)
-    ? `${globalThis.window.location.protocol}//${hostname}:8001`
-    : globalThis.window.location.origin;
+  const controlApiUrl = serviceOrigin(globalThis.window.location, 8001);
   createPlatformPageController({
     root,
     api: {
@@ -514,6 +520,12 @@ if (root) {
       startSecurityAssessment: (input) => startSecurityAssessment({ controlApiUrl, ...input }),
       securityRemediation: (input) => applySecurityRemediation({ controlApiUrl, ...input }),
       launchGates: (input) => getLaunchGates({ controlApiUrl, ...input }),
+      gaLaunchGates: (input) => getGaGates({ controlApiUrl, ...input }),
+      submitGaEvidence: (input) => submitGaEvidence({ controlApiUrl, ...input }),
+      launchGa: (input) => launchGa({ controlApiUrl, ...input }),
+      requestGaRollback: (input) => requestGaRollback({ controlApiUrl, ...input }),
+      verifyGaRollback: (input) => verifyGaRollback({ controlApiUrl, ...input }),
+      submitGaReview: (input) => submitGaReview({ controlApiUrl, ...input }),
       createLaunchCandidate: (input) => createLaunchCandidate({ controlApiUrl, ...input }),
       submitLaunchEvidence: (input) => submitLaunchEvidence({ controlApiUrl, ...input }),
       decideLaunchCandidate: (input) => decideLaunchCandidate({ controlApiUrl, ...input }),

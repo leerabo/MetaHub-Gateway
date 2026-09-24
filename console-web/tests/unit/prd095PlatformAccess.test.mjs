@@ -134,6 +134,7 @@ test("PRD-095 identity controller removes MFA secrets and shows only projected p
   let mfaActive = false;
   const seen = [];
   const controller = createIdentityPageController({
+    initialSection: "security",
     root,
     channelFactory: () => null,
     api: {
@@ -327,9 +328,9 @@ test("PRD-095 controller uses backend permissions and scrubs sensitive inputs", 
   assert.equal(await controller.mount(), true);
   assert.match(root.innerHTML, /class="platform-shell"/u);
   assert.match(root.innerHTML, /操作员/u);
-  assert.match(root.innerHTML, /支持授权/u);
-  assert.match(root.innerHTML, /Billing/u);
-  assert.match(root.innerHTML, /Customer success/u);
+  assert.match(root.innerHTML, /支持协作/u);
+  assert.match(root.innerHTML, /账单与计量/u);
+  assert.match(root.innerHTML, /客户成功/u);
   controller.selectView("workspaces");
   assert.match(root.innerHTML, /<h1>Workspace 目录<\/h1>/u);
   assert.match(root.innerHTML, /没有符合条件的 Workspace/u);
@@ -460,7 +461,7 @@ test("PRD-095 renderer escapes server text and defines stable responsive layouts
   const state = {
     ...pageState(),
     session: sessionPayload({ display_name: '<img src=x onerror="unsafe()">' }),
-    navigation: [{ id: "operators", label: "<script>unsafe()</script>" }],
+    navigation: [{ id: "unknown-view", label: "<script>unsafe()</script>" }],
   };
   renderPlatformWorkspace(root, state);
   assert.doesNotMatch(root.innerHTML, /<script>|<img/u);
@@ -473,6 +474,95 @@ test("PRD-095 renderer escapes server text and defines stable responsive layouts
   assert.match(css, /@media \(max-width: 600px\)/u);
   assert.match(css, /min-width: 320px/u);
   assert.match(css, /overflow-x: auto/u);
+});
+
+test("Platform first navigation from overview hydrates core pages without a manual refresh", async () => {
+  const calls = [];
+  const root = createRoot();
+  const session = sessionPayload();
+  session.context.permissions.push("platform.console.overview.read", "platform.workspace.directory.read");
+  const controller = createPlatformPageController({ root, api: workingApi({
+    session: async () => session,
+    navigation: async () => ({ items: [{ id: "overview", label: "Overview" }, ...navigationPayload().items] }),
+    consoleOverview: async () => ({ domain: "platform", status: "ready", generation: 1,
+      navigation_epoch: 1, permission_revision: 1, permission_fingerprint: "a".repeat(64), sections: [] }),
+    operators: async () => { calls.push("operators"); return operatorListPayload(); },
+    workspaces: async () => { calls.push("workspaces"); return { items: [], has_more: false }; },
+    audit: async () => { calls.push("audit"); return auditPayload(); },
+  }) });
+  assert.equal(await controller.mount(), true);
+  assert.deepEqual(calls, []);
+  assert.equal(await controller.selectView("operators"), true);
+  assert.match(root.innerHTML, /Platform Owner/u);
+  assert.equal(await controller.selectView("workspaces"), true);
+  assert.equal(await controller.selectView("audit"), true);
+  assert.deepEqual(calls, ["operators", "workspaces", "audit"]);
+  await controller.selectView("operators");
+  assert.deepEqual(calls, ["operators", "workspaces", "audit"]);
+  controller.destroy();
+});
+
+test("Platform navigation clears old errors and cancels a late core-page response", async () => {
+  const root = createRoot();
+  let release;
+  let reads = 0;
+  const session = sessionPayload();
+  const controller = createPlatformPageController({ root, api: workingApi({
+    navigation: async () => ({ items: [{ id: "overview", label: "Overview" }, ...navigationPayload().items] }),
+    operators: async () => {
+      reads += 1;
+      if (reads === 1) throw new PlatformApiError({ status: 503, message: "Operator lookup unavailable" });
+      if (reads === 2) return new Promise((resolve) => { release = resolve; });
+      return operatorListPayload({ display_name: "Fresh operator" });
+    },
+    session: async () => session,
+  }) });
+  await controller.mount();
+  assert.equal(await controller.selectView("operators"), false);
+  assert.match(root.innerHTML, /Operator lookup unavailable/u);
+  await controller.selectView("audit");
+  assert.doesNotMatch(root.innerHTML, /Operator lookup unavailable/u);
+  const stale = controller.selectView("operators");
+  assert.match(root.innerHTML, /正在刷新/u);
+  await controller.selectView("audit");
+  release(operatorListPayload({ display_name: "Stale operator" }));
+  assert.equal(await stale, false);
+  assert.doesNotMatch(root.innerHTML, /Stale operator|正在刷新/u);
+  await controller.selectView("operators");
+  assert.match(root.innerHTML, /Fresh operator/u);
+  controller.destroy();
+});
+
+test("Platform compact navigation closes after selection and retains authority for legacy routes", async () => {
+  const root = createRoot();
+  const controller = createPlatformPageController({ root, api: workingApi({
+    navigation: async () => ({ items: [...navigationPayload().items,
+      { id: "provider-engineering", label: "Provider engineering" }] }),
+  }) });
+  await controller.mount();
+  assert.doesNotMatch(root.innerHTML, /data-platform-view="providers"/u);
+  assert.match(root.innerHTML, /data-platform-view="provider-engineering"/u);
+  controller.toggleNavigation();
+  assert.match(root.innerHTML, /aria-expanded="true"/u);
+  await controller.selectView("audit");
+  assert.match(root.innerHTML, /aria-expanded="false"/u);
+  await controller.selectView("providers");
+  assert.match(root.innerHTML, /data-platform-view="provider-engineering" class="is-active"/u);
+  controller.destroy();
+  const legacy = createPlatformPageController({ root, api: workingApi() });
+  await legacy.mount();
+  await legacy.selectView("providers");
+  assert.match(root.innerHTML, /data-platform-view="providers" class="is-active"/u);
+  assert.doesNotMatch(root.innerHTML, /data-platform-view="provider-engineering"/u);
+  legacy.destroy();
+});
+
+test("Platform loading feedback stays visible after successful authentication", () => {
+  const root = createRoot();
+  renderPlatformWorkspace(root, { ...pageState(), loading: true, feedback: "平台身份已验证。" });
+  assert.match(root.innerHTML, /aria-busy="true"/u);
+  assert.match(root.innerHTML, /正在刷新/u);
+  assert.doesNotMatch(root.innerHTML, /平台身份已验证/u);
 });
 
 function workingApi(overrides = {}) {

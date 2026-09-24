@@ -15,6 +15,7 @@ from metahub_assurance_runner.resources import (
     ResourceUnavailable,
 )
 from metahub_shared.config_distribution import canonical_json_bytes
+from metahub_shared.db.connection import _close_idle_database_connections
 from metahub_shared.observability import TelemetryBuffer
 
 TENANT = "ten_" + "1" * 32
@@ -71,6 +72,43 @@ def _observe(inspector, before):
             (None, "4xx", 2),
         ),
     )
+
+
+def test_repeated_telemetry_flushes_reuse_one_handle_and_persist_every_batch(
+    inspector, monkeypatch,
+):
+    real_connect = sqlite3.connect
+    opened = []
+
+    def counted_connect(*args, **kwargs):
+        connection = real_connect(*args, **kwargs)
+        opened.append(connection)
+        return connection
+
+    _close_idle_database_connections()
+    monkeypatch.setattr(sqlite3, "connect", counted_connect)
+    try:
+        buffer = inspector.telemetry_runtime
+        for _ in range(20):
+            assert buffer.enqueue_http(
+                operation_code="other", status_code=200, duration_ms=10,
+                request_id="private-request", trace_id="private-trace", tenant_owner=TENANT,
+            )
+            assert buffer.flush_once()
+        assert len(opened) == 1
+        assert buffer.snapshot().persisted == 20
+        assert buffer.snapshot().backend_failures == 0
+        with closing(inspector._read()) as connection:
+            assert connection.execute(
+                "SELECT SUM(total_count) FROM sli_time_buckets",
+            ).fetchone()[0] == 20
+            assert connection.execute(
+                "SELECT source_watermark FROM telemetry_ingest_head",
+            ).fetchone()[0] == 20
+    finally:
+        _close_idle_database_connections()
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        opened[0].execute("SELECT 1")
 
 
 def test_exact_flush_counts_hashes_and_private_observation(inspector):

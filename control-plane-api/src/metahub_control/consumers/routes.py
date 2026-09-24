@@ -13,7 +13,7 @@ from .models import (
     CreateConsumerRequest,
     UpdateConsumerRequest,
 )
-from .service import list_consumers, save_consumer
+from .service import archive_consumer, list_consumers, save_consumer
 
 router = APIRouter(prefix="/consumers", tags=["consumers"])
 Reader = Annotated[
@@ -62,6 +62,19 @@ def patch_consumer(
         context,
         payload,
         consumer_id=consumer_id,
+        audit_request_meta=build_audit_request_meta(request),
+        request_id=request.state.request_id,
+        trace_id=request.state.trace_id,
+    )
+
+
+@router.delete("/{consumer_id}", response_model=ConsumerResponse)
+def delete_consumer(consumer_id: str, request: Request, context: Writer):
+    """移除员工档案：保留审计和历史用量，立即停用其关联 KEY。"""
+    return archive_consumer(
+        request.app.state.config,
+        context,
+        consumer_id,
         audit_request_meta=build_audit_request_meta(request),
         request_id=request.state.request_id,
         trace_id=request.state.trace_id,

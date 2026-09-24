@@ -3,6 +3,7 @@ import { icon } from "../public-home/icons.js";
 export function installIdentityAccessExperience(root, {
   documentObject = globalThis.document,
   loadScene = () => import("../public-home/gatewayScene.js"),
+  activationSelector = ".identity-login-form",
 } = {}) {
   const view = documentObject.defaultView ?? globalThis;
   const host = documentObject.querySelector("[data-access-scene]");
@@ -15,7 +16,7 @@ export function installIdentityAccessExperience(root, {
   let generation = 0;
   function eligible() {
     if (disposed || !host || !toggle || reduced.matches || documentObject.hidden
-      || !root.querySelector(".identity-login-form")) return false;
+      || !root.querySelector(activationSelector)) return false;
     const bounds = host.getBoundingClientRect();
     return bounds.width > 0 && bounds.height > 0;
   }

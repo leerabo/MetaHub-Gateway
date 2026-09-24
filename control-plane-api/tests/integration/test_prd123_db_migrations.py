@@ -269,5 +269,5 @@ def test_reference_fact_blocks_down(migrated_0114: tuple[Path, Path]) -> None:
 
 def test_fresh_schema_installs_current_head(tmp_path: Path) -> None:
     database_url = _url(tmp_path / "fresh.sqlite3")
-    assert apply_migrations(database_url).applied[-1] == "0122"
+    assert apply_migrations(database_url).applied[-1] == "0156"
     _healthy(database_url)

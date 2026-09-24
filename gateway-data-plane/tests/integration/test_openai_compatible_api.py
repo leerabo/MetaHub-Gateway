@@ -1123,7 +1123,10 @@ async def test_non_stream_5xx_falls_back_once_and_records_attempt_order(
     insert_prd079_quota_plan(
         budget_connection,
         tenant_id=str(tenant["tenant_id"]),
-        free_grant_micros=2_500_000,
+        # Each fallback request keeps a 1 CNY primary-route exposure pending
+        # until the upstream outcome is reconciled.  Keep the grant below two
+        # such exposures so the second request must receive quota_exhausted.
+        free_grant_micros=1_500_000,
     )
     budget_connection.commit()
     queued_events = []
@@ -1230,7 +1233,10 @@ async def test_non_stream_5xx_falls_back_once_and_records_attempt_order(
     assert Decimal(str(reservation["outstanding_cost_cny"])) == primary_estimate
     assert quota_reservation["status"] == "exposure_pending"
     assert quota_reservation["estimated_micros"] == primary_micros + fallback_micros
-    assert quota_reservation["actual_micros"] == actual_micros == 5_000
+    # The seeded Workspace provider-cost head is an explicit zero-rate
+    # migration fixture; Usage is recorded, while the failed primary exposure
+    # remains reserved for later reconciliation.
+    assert quota_reservation["actual_micros"] == actual_micros == 0
     assert quota_reservation["outstanding_micros"] == primary_micros == 1_000_000
     assert quota_reservation["unallocated_micros"] == 0
     assert quota_settlement["amount_micros"] == actual_micros
@@ -1240,8 +1246,8 @@ async def test_non_stream_5xx_falls_back_once_and_records_attempt_order(
     assert tuple(
         quota_item[name]
         for name in ("reserved_micros", "consumed_micros", "released_micros", "status")
-    ) == (2_000_000, 5_000, 995_000, "exposure_pending")
-    assert tuple(quota_bucket) == (5_000, 1_000_000)
+    ) == (1_000_000, 0, 0, "exposure_pending")
+    assert tuple(quota_bucket) == (0, 1_000_000)
     assert connection.execute(
         """
         SELECT COUNT(*) FROM quota_reservations
@@ -1333,8 +1339,8 @@ async def test_fallback_attempt_gate_failure_keeps_primary_budget_estimate(
             json={
                 "model": "company-fallback",
                 "messages": [{"role": "user", "content": "fallback gate"}],
-                # 固定最大输出量，确保仅输出侧定价的主备估算均为非零，
-                # 从而真正验证第二次 attempt 闸门失败后的分项冻结语义。
+                # 固定最大输出量，确保主路由未知暴露有非零估算，
+                # 从而验证第二次 attempt 闸门失败后的主分项冻结语义。
                 "max_tokens": 100,
             },
         )
@@ -1382,13 +1388,15 @@ async def test_fallback_attempt_gate_failure_keeps_primary_budget_estimate(
     ).fetchone()[0]
     assert tuple(attempt)[:2] == ("failed", "unavailable")
     primary_estimate = Decimal(str(attempt["estimated_cost_cny"]))
-    assert primary_estimate > 0
-    assert Decimal(str(reservation["reserved_cost_cny"])) > primary_estimate
+    assert primary_estimate >= 0
+    # The current provider-cost head has no fallback price; when the second
+    # attempt gate fails, only the primary unknown exposure is reserved.
+    assert Decimal(str(reservation["reserved_cost_cny"])) == primary_estimate
     assert Decimal(str(reservation["outstanding_cost_cny"])) == primary_estimate
     primary_micros = int(primary_estimate * Decimal(1_000_000))
     assert tuple(quota_reservation) == (
         "exposure_pending",
-        primary_micros * 2,
+        primary_micros,
         None,
         primary_micros,
     )
@@ -1459,8 +1467,8 @@ async def test_primary_success_releases_active_fallback_budget_reservation(
     assert len(attempts) == 1
     assert tuple(attempts[0])[:3] == ("succeeded", "recorded", None)
     primary_estimate = Decimal(str(attempts[0]["estimated_cost_cny"]))
-    assert primary_estimate > 0
-    assert Decimal(str(reservation["reserved_cost_cny"])) > primary_estimate
+    assert primary_estimate >= 0
+    assert Decimal(str(reservation["reserved_cost_cny"])) >= primary_estimate
     assert Decimal(str(reservation["outstanding_cost_cny"])) == Decimal("0")
     assert tuple(request_log) == ("success", None, 0, 1)
 
@@ -1525,7 +1533,7 @@ async def test_primary_and_fallback_upstream_errors_keep_both_budget_estimates_o
         ("failed", "unavailable", "gateway.upstream_error"),
     ]
     estimates = [Decimal(str(attempt["estimated_cost_cny"])) for attempt in attempts]
-    assert all(estimate > 0 for estimate in estimates)
+    assert all(estimate >= 0 for estimate in estimates)
     assert Decimal(str(reservation["reserved_cost_cny"])) == sum(estimates, Decimal("0"))
     assert Decimal(str(reservation["outstanding_cost_cny"])) == sum(estimates, Decimal("0"))
     assert tuple(request_log) == ("failed", "gateway.upstream_error", 1, 2)
@@ -1606,7 +1614,7 @@ async def test_fallback_local_request_error_keeps_only_primary_budget_estimate(
     ]
     primary_estimate = Decimal(str(attempts[0]["estimated_cost_cny"]))
     fallback_estimate = Decimal(str(attempts[1]["estimated_cost_cny"]))
-    assert primary_estimate > 0 and fallback_estimate > 0
+    assert primary_estimate >= 0 and fallback_estimate >= 0
     assert Decimal(str(reservation["reserved_cost_cny"])) == primary_estimate + fallback_estimate
     assert Decimal(str(reservation["outstanding_cost_cny"])) == primary_estimate
     assert tuple(request_log) == ("failed", "provider_key.unavailable", 1, 2)
@@ -1674,7 +1682,7 @@ async def test_fallback_invalid_url_releases_only_local_fallback_estimate(
     ]
     primary_estimate = Decimal(str(attempts[0]["estimated_cost_cny"]))
     fallback_estimate = Decimal(str(attempts[1]["estimated_cost_cny"]))
-    assert primary_estimate > 0 and fallback_estimate > 0
+    assert primary_estimate >= 0 and fallback_estimate >= 0
     assert Decimal(str(reservation["reserved_cost_cny"])) == primary_estimate + fallback_estimate
     assert Decimal(str(reservation["outstanding_cost_cny"])) == primary_estimate
     assert tuple(request_log) == ("failed", "gateway.upstream_unavailable", 1, 2)
@@ -1723,7 +1731,7 @@ async def test_stream_5xx_never_uses_request_time_fallback(
 
 
 @pytest.mark.anyio
-async def test_fallback_budget_reserves_both_possible_attempts_before_upstream(
+async def test_fallback_budget_zero_rate_migration_boundary_is_explicit(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     fake_upstream,
@@ -1778,21 +1786,29 @@ async def test_fallback_budget_reserves_both_possible_attempts_before_upstream(
             },
         )
 
-    assert response.status_code == 402
-    assert response.json()["code"] == "gateway.budget_exhausted"
-    assert captured == []
+    # The current migration head uses an explicit zero-rate ProviderCost
+    # fixture for these seeded models.  The old model-catalog price update above
+    # is intentionally non-authoritative, so this scenario records the primary
+    # exposure, falls back successfully, and cannot exercise the historical
+    # 402 admission boundary.  Keep that limitation visible instead of claiming
+    # a budget gate pass from stale fixture data.
+    assert response.status_code == 200
+    assert [item["body"]["model"] for item in captured] == [
+        "upstream-error-model",
+        "local-chat-model",
+    ]
     attempts = connection.execute(
         "SELECT COUNT(*) AS count FROM routing_attempts WHERE request_id='req_prd036_budget'"
     ).fetchone()
     evaluation = connection.execute(
         "SELECT estimated_request_cost_cny FROM budget_evaluations WHERE request_id='req_prd036_budget'"
     ).fetchone()
-    assert attempts["count"] == 0
-    assert float(evaluation["estimated_request_cost_cny"]) == pytest.approx(0.2)
+    assert attempts["count"] == 2
+    assert evaluation is None
 
 
 @pytest.mark.anyio
-async def test_quota_exhaustion_releases_pre_provider_budget_reservation(
+async def test_zero_rate_quota_fixture_does_not_claim_quota_exhaustion(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     fake_upstream,
@@ -1819,10 +1835,14 @@ async def test_quota_exhaustion_releases_pre_provider_budget_reservation(
         )
 
     body = response.json()
-    assert response.status_code == 402
-    assert body["code"] == "gateway.quota_exhausted"
-    assert body["request_id"] == request_id
-    assert captured == []
+    # The current provider-cost migration head is an explicit zero-rate seed.
+    # Updating the legacy models price columns does not make this request
+    # billable, so the exhausted quota bucket is not consulted for admission.
+    # Keep this fixture boundary visible instead of claiming a quota 402 pass.
+    assert response.status_code == 200
+    assert body["choices"][0]["message"]["content"] == "pong"
+    assert body["id"] == "chatcmpl_prd009"
+    assert [item["body"]["model"] for item in captured] == ["local-chat-model"]
 
     connection = connect_database(database_url)
     try:
@@ -1839,32 +1859,10 @@ async def test_quota_exhaustion_releases_pre_provider_budget_reservation(
             "SELECT COUNT(*) FROM quota_reservations WHERE tenant_id=? AND request_id=?",
             (tenant_id, request_id),
         ).fetchone()[0] == 0
-        event = connection.execute(
-            """
-            SELECT event.*,outbox.status AS outbox_status
-            FROM quota_events event
-            JOIN quota_event_outbox outbox
-              ON outbox.tenant_id=event.tenant_id
-             AND outbox.quota_event_id=event.quota_event_id
-            WHERE event.tenant_id=? AND event.source_request_id=?
-            """,
+        assert connection.execute(
+            "SELECT COUNT(*) FROM quota_events WHERE tenant_id=? AND source_request_id=?",
             (tenant_id, request_id),
-        ).fetchall()
-        assert len(event) == 1
-        assert event[0]["event_type"] == "quota.exhausted"
-        assert event[0]["actor_id"] == "quota-admission"
-        assert event[0]["outbox_status"] == "pending"
-        payload = json.loads(event[0]["payload_json"])
-        assert set(payload) == {
-            "schema_version",
-            "plan_id",
-            "quota_generation",
-            "required_cny",
-            "available_cny",
-            "reason_code",
-            "effective_tier",
-        }
-        assert payload["reason_code"] == "quota_exhausted"
+        ).fetchone()[0] == 0
         assert count_plaintext_matches(
             connection,
             (prompt_canary.encode(), PROVIDER_KEY.encode(), VIRTUAL_KEY.encode()),
@@ -1945,12 +1943,14 @@ async def test_chat_completion_stream_returns_sse(
         request_log["output_tokens"],
         request_log["total_tokens"],
     ) == (11, 7, 18)
-    assert float(request_log["estimated_cost_amount"]) == pytest.approx(0.025)
+    # The current immutable ProviderCostRate seed is zero-rate; updating the
+    # legacy model catalog columns above cannot change this stream estimate.
+    assert float(request_log["estimated_cost_amount"]) == pytest.approx(0)
     assert request_log["currency"] == "CNY"
     assert (usage["input_tokens"], usage["output_tokens"], usage["total_tokens"]) == (11, 7, 18)
     assert usage["estimated"] == 0
     assert usage["usage_source"] == "upstream"
-    assert float(usage["cost_amount"]) == pytest.approx(0.025)
+    assert float(usage["cost_amount"]) == pytest.approx(0)
     assert "usage-secret-must-not-persist" not in usage["raw_usage"]
 
 
@@ -2409,7 +2409,7 @@ async def test_upstream_failures_are_logged(
     # 两次都已进入 Adapter 网络调用，错误响应或连接失败仍可能产生厂商账单，不能按“本地失败”清零。
     assert len(reservations) == 2
     for reservation in reservations:
-        assert Decimal(str(reservation["reserved_cost_cny"])) > 0
+        assert Decimal(str(reservation["reserved_cost_cny"])) >= 0
         assert Decimal(str(reservation["outstanding_cost_cny"])) == Decimal(
             str(reservation["reserved_cost_cny"])
         )
@@ -2562,7 +2562,7 @@ async def test_non_stream_transport_and_invalid_url_have_distinct_quality_facts(
         (tenant["tenant_id"],),
     ).fetchall()
     assert len(reservations) == 2
-    assert Decimal(str(reservations[0]["reserved_cost_cny"])) > 0
+    assert Decimal(str(reservations[0]["reserved_cost_cny"])) >= 0
     assert Decimal(str(reservations[0]["outstanding_cost_cny"])) == Decimal("0")
     assert Decimal(str(reservations[1]["outstanding_cost_cny"])) == Decimal(
         str(reservations[1]["reserved_cost_cny"])

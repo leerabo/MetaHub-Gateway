@@ -750,19 +750,9 @@ _DEVELOPER = {
 _VIEWER = {
     "console.basic.read",
     "dashboard.read",
-    "chat.use",
-    "prompt_template.use",
-    "file.read",
-    "file.write",
-    "file.security.scan",
-    "partner_portal.read",
-    "partner_customer.manage",
-    "partner_branding.manage",
-    "partner_commission.export",
-    "partner_delivery.download",
-    "enterprise_sso.read",
-    "scim.read",
-    "conditional_access.read",
+    "environment.read",
+    "virtual_key.read",
+    "virtual_key.write",
 }
 _FINANCE = {
     "console.basic.read",

@@ -75,6 +75,7 @@ RETIRED_SOURCE_IDS = frozenset(
         "adapter-specs",
         "adapter-contract-runs",
         "competitor-comparison",
+        "environments",
     }
 )
 
@@ -200,7 +201,10 @@ CONTRACT_SPECS: tuple[ContractSpec, ...] = (
     _spec(
         "environments",
         "D06",
-        "primary",
+        # 租户运行环境由 SaaS 平台运维配置；Workspace 用户只消费已配置的路由和模型。
+        # ``platform_internal`` is represented by the established internal-only
+        # catalog disposition until the persisted contract enum is versioned.
+        "retired_internal",
         "workspace.settings.deployments",
         "workspace",
         ("environment.read",),
@@ -612,6 +616,8 @@ CONTRACT_SPECS: tuple[ContractSpec, ...] = (
         "primary",
         "workspace.settings.data-management",
         "workspace",
+        # Data lifecycle is a dedicated governance responsibility. Ordinary
+        # Workspace owners/admins must not see a page they cannot operate.
         ("tenant_data.read",),
         121,
     ),
@@ -768,16 +774,16 @@ ROLE_TASK_SPECS: tuple[RoleTaskSpec, ...] = (
     RoleTaskSpec(
         "project_key_ready",
         ("owner", "admin", "developer"),
-        ("project.read", "virtual_key.read"),
-        "workspace.gateway.projects",
-        "projects",
+        ("virtual_key.read",),
+        "workspace.gateway.virtual-keys",
+        "consumer_keys",
         50,
     ),
     RoleTaskSpec(
         "first_gateway_call",
         ("owner", "admin", "developer"),
-        ("billing.usage.read",),
-        "workspace.finance.usage",
+        ("developer_portal.read",),
+        "workspace.developer.sdk",
         "usage",
         60,
     ),

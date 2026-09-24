@@ -8,6 +8,8 @@ import {
   permissionRevision,
   PERMISSIONS,
 } from "../../lib/permissions.js";
+import { workspaceConsoleSessionFromShell } from "../../lib/workspaceConsoleSession.js";
+import { workspaceResourcePageOwner } from "../../lib/workspaceResourcePage.js";
 
 const PAGE_ID = "private-gateways";
 const DEPLOYMENT_ID = /^edp_[0-9a-f]{32}$/u;
@@ -176,6 +178,9 @@ export function privateGatewayReadIdentitySnapshot(authContext) {
 }
 
 export function privateGatewayPageOwner(authContext, consoleShellState) {
+  if (consoleShellState?.workspaceNavigationContract === true) {
+    return workspacePrivateGatewayPageOwner(authContext, consoleShellState);
+  }
   const readIdentity = privateGatewayReadIdentitySnapshot(authContext);
   const manageIdentity = hasPermission(authContext, PERMISSIONS.EDGE_DEPLOYMENT_MANAGE)
     ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_DEPLOYMENT_MANAGE)
@@ -354,6 +359,91 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     canReadOfflineBundles: Boolean(offlineReadIdentity),
     canTransferOfflineBundles: Boolean(offlineReadIdentity && offlineTransferIdentity),
     canResolveOfflineConflicts: Boolean(offlineReadIdentity && offlineResolveIdentity),
+  });
+}
+
+// Current Workspace sessions expose authorization and workspace ownership,
+// while legacy tenant/user mirrors are intentionally absent.
+function workspacePrivateGatewayPageOwner(authContext, consoleShellState) {
+  const session = workspaceConsoleSessionFromShell(consoleShellState);
+  if (!session
+    || JSON.stringify(permissionCodesFromAuthContext(authContext))
+      !== JSON.stringify(permissionCodesFromAuthContext(session.context))
+    || permissionRevision(authContext) !== session.context.permission_revision
+    || String(authContext?.permission_fingerprint ?? "")
+      !== session.context.permission_fingerprint) return null;
+  const resource = workspaceResourcePageOwner(session, consoleShellState, {
+    navigationId: PAGE_ID,
+    permissions: [PERMISSIONS.EDGE_DEPLOYMENT_READ],
+  });
+  if (!resource) return null;
+  const identity = (permission) => hasPermission(session.context, permission)
+    ? JSON.stringify([resource.key, permission]) : "";
+  const r = identity(PERMISSIONS.EDGE_DEPLOYMENT_READ);
+  const m = identity(PERMISSIONS.EDGE_DEPLOYMENT_MANAGE);
+  const br = identity(PERMISSIONS.DEPLOYMENT_BRANDING_READ);
+  const bm = identity(PERMISSIONS.DEPLOYMENT_BRANDING_MANAGE);
+  const tr = identity(PERMISSIONS.EDGE_TELEMETRY_READ);
+  const tm = identity(PERMISSIONS.EDGE_TELEMETRY_MANAGE);
+  const ur = identity(PERMISSIONS.EDGE_USAGE_READ);
+  const sr = identity(PERMISSIONS.EDGE_SECRET_REFERENCE_READ);
+  const ir = identity(PERMISSIONS.EDGE_INSTALLER_READ);
+  const im = identity(PERMISSIONS.EDGE_INSTALLATION_MANAGE);
+  const vr = identity(PERMISSIONS.EDGE_VALIDATION_READ);
+  const vm = identity(PERMISSIONS.EDGE_VALIDATION_MANAGE);
+  const da = identity(PERMISSIONS.EDGE_DELIVERY_ACCEPT);
+  const sbr = identity(PERMISSIONS.EDGE_SUPPORT_BUNDLE_READ);
+  const hr = identity(PERMISSIONS.EDGE_HEALTH_READ);
+  const dr = identity(PERMISSIONS.EDGE_DIAGNOSTIC_READ);
+  const dpa = identity(PERMISSIONS.EDGE_DIAGNOSTIC_APPROVE);
+  const urd = identity(PERMISSIONS.EDGE_UPGRADE_READ);
+  const um = identity(PERMISSIONS.EDGE_UPGRADE_MANAGE);
+  const rb = identity(PERMISSIONS.EDGE_ROLLBACK_MANAGE);
+  const lr = identity(PERMISSIONS.EDGE_LICENSE_READ);
+  const lrf = identity(PERMISSIONS.EDGE_LICENSE_REFRESH);
+  const lim = identity(PERMISSIONS.EDGE_LICENSE_IMPORT);
+  const bkr = identity(PERMISSIONS.EDGE_BACKUP_READ);
+  const bkc = identity(PERMISSIONS.EDGE_BACKUP_CREATE);
+  const dm = identity(PERMISSIONS.EDGE_DRILL_MANAGE);
+  const ra = identity(PERMISSIONS.EDGE_RESTORE_APPROVE);
+  const obr = identity(PERMISSIONS.EDGE_OFFLINE_BUNDLE_READ);
+  const obt = identity(PERMISSIONS.EDGE_OFFLINE_BUNDLE_TRANSFER);
+  const obrk = identity(PERMISSIONS.EDGE_OFFLINE_CONFLICT_RESOLVE);
+  return Object.freeze({
+    page: PAGE_ID, workspaceId: session.owner.workspaceId, tenantId: "",
+    readIdentity: r, manageIdentity: m, brandingReadIdentity: br,
+    brandingManageIdentity: bm, telemetryReadIdentity: tr,
+    telemetryManageIdentity: tm, usageReadIdentity: ur, secretReadIdentity: sr,
+    installerReadIdentity: ir, installationManageIdentity: im,
+    validationReadIdentity: vr, validationManageIdentity: vm,
+    deliveryAcceptIdentity: da, supportBundleReadIdentity: sbr,
+    healthReadIdentity: hr, diagnosticReadIdentity: dr,
+    diagnosticApproveIdentity: dpa, upgradeReadIdentity: urd,
+    upgradeManageIdentity: um, rollbackManageIdentity: rb,
+    licenseReadIdentity: lr, licenseRefreshIdentity: lrf,
+    licenseImportIdentity: lim, backupReadIdentity: bkr,
+    backupCreateIdentity: bkc, drillManageIdentity: dm,
+    restoreApproveIdentity: ra, offlineReadIdentity: obr,
+    offlineTransferIdentity: obt, offlineResolveIdentity: obrk,
+    accountId: "", role: session.owner.role, workspaceSession: true,
+    navigationOwner: resource.key,
+    canManage: Boolean(m), canReadBranding: Boolean(br),
+    canManageBranding: Boolean(br && bm), canReadTelemetry: Boolean(tr),
+    canManageTelemetry: Boolean(tm), canReadUsage: Boolean(ur),
+    canReadSecrets: Boolean(sr), canManageSecrets: false,
+    canReadInstallers: Boolean(ir), canManageInstallations: Boolean(ir && im),
+    canReadValidations: Boolean(vr), canManageValidations: Boolean(vr && vm),
+    canAcceptDelivery: Boolean(vr && da), canReadSupportBundles: Boolean(sbr),
+    canManageSupportBundles: false, canReadHealth: Boolean(hr),
+    canReadDiagnostics: Boolean(hr && dr),
+    canApproveDiagnostics: Boolean(hr && dr && dpa), canReadUpgrades: Boolean(urd),
+    canManageUpgrades: Boolean(urd && um), canRollbackUpgrades: Boolean(urd && rb),
+    canReadLicenses: Boolean(lr), canRefreshLicenses: Boolean(lr && lrf),
+    canImportLicenses: Boolean(lr && lim), canReadBackups: Boolean(bkr),
+    canCreateBackups: Boolean(bkr && bkc), canManageDrills: Boolean(bkr && dm),
+    canApproveRestores: Boolean(bkr && ra), canReadOfflineBundles: Boolean(obr),
+    canTransferOfflineBundles: Boolean(obr && obt),
+    canResolveOfflineConflicts: Boolean(obr && obrk),
   });
 }
 
@@ -1902,7 +1992,9 @@ export function createPrivateGatewayPageState({
     if (["create", "rotate"].includes(operation.action)) {
       if (!validSecretReference(response)
         || response.deployment_id !== operation.deploymentId
-        || response.tenant_id !== owner.tenantId) return false;
+        || (owner.tenantId
+          ? response.tenant_id !== owner.tenantId
+          : response.workspace_id !== owner.workspaceId)) return false;
       secretReferences = Object.freeze([
         response,
         ...secretReferences.filter((item) => item.reference_id !== response.reference_id),
@@ -2105,9 +2197,10 @@ export function createPrivateGatewayPageState({
 export function isPrivateGatewayAbortError(error) { return error?.name === "AbortError"; }
 
 function ownerKeyFor(owner) {
-  if (!owner || owner.page !== PAGE_ID || !owner.tenantId || !owner.readIdentity || !owner.navigationOwner) return "";
+  if (!owner || owner.page !== PAGE_ID || !(owner.tenantId || owner.workspaceId)
+    || !owner.readIdentity || !owner.navigationOwner) return "";
   return JSON.stringify([
-    owner.page, owner.tenantId, owner.readIdentity, owner.manageIdentity,
+    owner.page, owner.tenantId, owner.workspaceId, owner.readIdentity, owner.manageIdentity,
     owner.telemetryReadIdentity, owner.telemetryManageIdentity, owner.usageReadIdentity,
     owner.secretReadIdentity, owner.accountId, owner.role,
     owner.installerReadIdentity, owner.installationManageIdentity,
@@ -2435,7 +2528,9 @@ function validSecretResponse(response, deployments, required, owner) {
   const seen = new Set();
   return response.references.every((reference) => {
     if (!validSecretReference(reference) || seen.has(reference.reference_id)
-      || reference.tenant_id !== owner.tenantId
+      || (owner.tenantId
+        ? reference.tenant_id !== owner.tenantId
+        : reference.workspace_id !== owner.workspaceId)
       || deploymentMap.get(reference.deployment_id) !== reference.workspace_id) return false;
     seen.add(reference.reference_id);
     return true;

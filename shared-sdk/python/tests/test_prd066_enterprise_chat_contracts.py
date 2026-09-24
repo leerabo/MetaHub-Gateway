@@ -105,7 +105,7 @@ def test_chat_permission_catalog_revision_and_default_role_boundaries() -> None:
     assert permission_matrix_sha256(
         ROLE_GRANTABLE_PERMISSIONS["viewer"] & legacy_permission_codes
     ) == (
-        "33a1c60b27b9536355aa1e93807771d840b8609d74db52349137a94965ae42f9"
+        "4dc0ae3ce438a1ea54159d946e0ec051eaab00b08939eeb1fd4616d9ea2dab24"
     )
 
 

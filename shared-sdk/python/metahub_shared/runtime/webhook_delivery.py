@@ -303,7 +303,10 @@ def _send_once(config: AppConfig, endpoint: sqlite3.Row, body: bytes) -> dict[st
     started = time.perf_counter()
     http_status: int | None = None
     try:
-        secret = decrypt_secret(str(endpoint["encrypted_secret"]))
+        secret = decrypt_secret(
+            str(endpoint["encrypted_secret"]),
+            encryption_secret=config.provider_key_encryption_secret,
+        )
         timestamp = int(time.time())
         headers = {
             "Content-Type": "application/json",

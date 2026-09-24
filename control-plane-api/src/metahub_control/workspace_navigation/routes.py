@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import secrets
+import time
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request, Response
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import (
-    clear_identity_cookies_on_error,
+    clear_identity_cookies_on_auth_error,
     clear_workspace_cookies_on_error,
 )
 from pydantic import ValidationError
@@ -65,6 +67,8 @@ from .service import (
 
 router = APIRouter(tags=["workspace-navigation"])
 _MAX_BODY_BYTES = 4_096
+_NAVIGATION_AUTH_DEADLINE_SECONDS = 2.0
+_TASK_HOME_RETRY_DELAYS_SECONDS = (0.075, 0.15)
 _IDEMPOTENCY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
 _IF_MATCH = re.compile(r'^"(0|[1-9][0-9]{0,9})"$')
 _TOOL_CODE = re.compile(r"^[a-z][a-z0-9_-]{2,79}$")
@@ -96,6 +100,15 @@ def require_workspace_navigation(request: Request) -> WorkspaceSessionContext:
             "workspace_session.required",
         ),
         csrf_token=csrf,
+        # Navigation is a read-heavy boundary used during logout and account
+        # transitions. A stale page-view writer must not make auth wait for
+        # SQLite's process-wide 30-second lock timeout.
+        monotonic_deadline=time.monotonic() + _NAVIGATION_AUTH_DEADLINE_SECONDS,
+        deadline_error_code="workspace_session.unavailable",
+        # Navigation is read-heavy and immediately followed by its own
+        # audited transaction for page visits. Avoid touching last_seen here,
+        # which would promote every concurrent tab load to BEGIN IMMEDIATE.
+        touch=False,
     )
     permission = _workspace_permission(request)
     if (
@@ -106,8 +119,29 @@ def require_workspace_navigation(request: Request) -> WorkspaceSessionContext:
     return context
 
 
+def require_workspace_page_visit(request: Request) -> None:
+    """Validate transport credentials before the single page-visit transaction.
+
+    Page-view telemetry performs its authoritative Workspace/session and
+    permission checks inside ``record_workspace_page_visit``.  Repeating the
+    full dependency authentication here opens a second SQLite transaction for
+    every beacon and can make logout compete with stale telemetry.
+    """
+    clear_workspace_cookies_on_error(request)
+    if (
+        _raw_headers(request, b"authorization")
+        or _cookie_values(request, PLATFORM_SESSION_COOKIE)
+        or _cookie_values(request, PLATFORM_CSRF_COOKIE)
+        or _cookie_values(request, SUPPORT_SESSION_COOKIE)
+    ):
+        raise ApiError("workspace_session.credential_conflict")
+    _require_origin(request, "platform.origin_invalid")
+    _required_csrf(request, WORKSPACE_CSRF_COOKIE, "workspace_session.csrf_invalid")
+    _required_cookie(request, WORKSPACE_SESSION_COOKIE, "workspace_session.required")
+
+
 def require_identity_navigation(request: Request) -> AuthenticatedIdentity:
-    clear_identity_cookies_on_error(request)
+    clear_identity_cookies_on_auth_error(request)
     if (
         _raw_headers(request, b"authorization")
         or _cookie_values(request, PLATFORM_SESSION_COOKIE)
@@ -166,13 +200,27 @@ async def workspace_getting_started_route(
     ],
 ) -> GettingStartedResponse:
     _reject_query(request, "workspace_session.request_invalid")
-    result = await run_in_threadpool(
-        get_workspace_getting_started,
-        request.app.state.config,
-        session_token=_workspace_token(request),
-        request_id=_request_id(request),
-        trace_id=_trace_id(request),
-    )
+    # Task-home hydration and page-view telemetry both persist audit facts in
+    # SQLite. During a real route transition the telemetry writer can briefly
+    # hold the writer lock; retry only this transient availability error so a
+    # valid session does not surface a false 503 to the user. Authorization,
+    # validation and all other errors remain fail-closed and are not retried.
+    result = None
+    for attempt, delay in enumerate((*_TASK_HOME_RETRY_DELAYS_SECONDS, None)):
+        try:
+            result = await run_in_threadpool(
+                get_workspace_getting_started,
+                request.app.state.config,
+                session_token=_workspace_token(request),
+                request_id=_request_id(request),
+                trace_id=_trace_id(request),
+            )
+            break
+        except ApiError as exc:
+            if exc.code != "workspace_session.unavailable" or delay is None:
+                raise
+            await asyncio.sleep(delay)
+    assert result is not None
     response.headers["ETag"] = _etag(
         result.contract_generation,
         result.task_generation,
@@ -287,7 +335,7 @@ async def open_workspace_advanced_tool_route(
 async def workspace_page_visit_route(
     request: Request,
     response: Response,
-    _context: Annotated[WorkspaceSessionContext, Depends(require_workspace_navigation)],
+    _context: Annotated[None, Depends(require_workspace_page_visit)],
 ) -> WorkspacePageVisitResponse:
     _reject_query(request, "workspace_session.request_invalid")
     payload = await _model(request, WorkspacePageVisitRequest, "workspace_session.request_invalid")

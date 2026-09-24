@@ -404,13 +404,27 @@ class _IdleConnectionPool:
         self._connections: OrderedDict[str, list[sqlite3.Connection]] = OrderedDict()
 
     def acquire(self, database: str) -> sqlite3.Connection:
+        connection: sqlite3.Connection | None = None
         with self._lock:
             available = self._connections.get(database)
             if available:
                 connection = available.pop()
                 if not available:
                     del self._connections[database]
-                return connection
+                # A warm handle retains its previous PRAGMAs.  Refresh the
+                # lock wait for this request so deadline-bound authentication
+                # cannot inherit the normal 30s timeout from an idle loan.
+                remaining = _database_remaining_seconds()
+                busy_timeout_ms = SQLITE_BUSY_TIMEOUT_MILLISECONDS
+                if remaining is not None:
+                    busy_timeout_ms = max(1, min(busy_timeout_ms, int(remaining * 1000)))
+                try:
+                    connection.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
+                except sqlite3.Error:
+                    connection.close()
+                    connection = None
+                if connection is not None:
+                    return connection
         # Overflow requests open independently instead of blocking the event loop while
         # another request owns every warm handle.
         return _open_sqlite_connection(database, check_same_thread=False)
@@ -420,10 +434,15 @@ class _IdleConnectionPool:
             if connection.in_transaction:
                 connection.rollback()
             connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA query_only=OFF")
-            connection.execute("PRAGMA read_uncommitted=OFF")
-            connection.execute("PRAGMA recursive_triggers=OFF")
-            connection.execute("PRAGMA foreign_keys=ON")
+            # SQLite expires prepared statements when some boolean pragmas are
+            # assigned, even if the value is unchanged. Check the actual state so
+            # clean loans retain compiled queries, while dirty loans are restored.
+            for pragma, expected in (
+                ("query_only", 0), ("read_uncommitted", 0),
+                ("recursive_triggers", 0), ("foreign_keys", 1),
+            ):
+                if connection.execute(f"PRAGMA {pragma}").fetchone()[0] != expected:
+                    connection.execute(f"PRAGMA {pragma}={expected}")
             connection.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MILLISECONDS}")
             connection.execute("SELECT 1").fetchone()
         except sqlite3.Error:
@@ -457,6 +476,8 @@ class _IdleConnectionPool:
 
 
 _IDLE_CONNECTION_POOL = _IdleConnectionPool()
+_SQLITE_WAL_LOCK = threading.Lock()
+_SQLITE_WAL_DATABASES: set[str] = set()
 
 
 def _close_idle_database_connections() -> None:
@@ -883,30 +904,83 @@ def _open_sqlite_connection(
     *,
     check_same_thread: bool,
 ) -> sqlite3.Connection:
+    # Authentication and other deadline-bound reads must not inherit the
+    # process-wide 30s SQLite lock wait.  Resolve the remaining request budget
+    # before opening the handle and apply it to both connect() and PRAGMA so a
+    # writer holding BEGIN IMMEDIATE cannot stretch a 60ms/250ms endpoint into
+    # a multi-hundred-millisecond response.
+    remaining = _database_remaining_seconds()
+    connect_timeout = SQLITE_BUSY_TIMEOUT_SECONDS
+    if remaining is not None:
+        connect_timeout = max(0.001, min(connect_timeout, remaining))
     connection = sqlite3.connect(
         database,
-        timeout=SQLITE_BUSY_TIMEOUT_SECONDS,
+        timeout=connect_timeout,
         check_same_thread=check_same_thread,
         factory=_SqliteConnection,
     )
-    connection.row_factory = sqlite3.Row
-    connection.create_function(
-        "metahub_sha256",
-        1,
-        _metahub_sha256,
-        deterministic=True,
-    )
-    connection.create_function(
-        "metahub_password_hash_algorithm",
-        1,
-        _metahub_password_hash_algorithm,
-        deterministic=True,
-    )
-    connection.execute("PRAGMA foreign_keys = ON")
-    # Multi-workspace credential projection intentionally fans out from one User trigger.
-    # Recursive trigger execution would re-enter the global credential revision transition.
-    connection.execute("PRAGMA recursive_triggers = OFF")
-    connection.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MILLISECONDS}")
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.create_function(
+            "metahub_sha256",
+            1,
+            _metahub_sha256,
+            deterministic=True,
+        )
+        connection.create_function(
+            "metahub_password_hash_algorithm",
+            1,
+            _metahub_password_hash_algorithm,
+            deterministic=True,
+        )
+        # Install the request budget before any SQLite pragma that can need a
+        # lock.  In the scheduler profile, control and gateway are separate
+        # processes sharing one database; a first connection in either process
+        # may still be promoting the journal to WAL.
+        busy_timeout_ms = SQLITE_BUSY_TIMEOUT_MILLISECONDS
+        if remaining is not None:
+            busy_timeout_ms = max(1, min(busy_timeout_ms, int(remaining * 1000)))
+        connection.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
+        connection.execute("PRAGMA foreign_keys = ON")
+        # The local scheduler profile has many short-lived writers while health and
+        # console reads must remain available. WAL lets readers keep their snapshot
+        # while a writer commits, avoiding rollback-journal read starvation.
+        if database != ":memory:":
+            # Do not let a deadline-bound request wait behind another thread's
+            # cross-process WAL promotion.  A later non-deadline connection can
+            # finish the promotion; reads and writes remain valid in rollback
+            # journal mode in the meantime.
+            lock_timeout = None if remaining is None else max(0.0, remaining)
+            acquired = _SQLITE_WAL_LOCK.acquire(timeout=lock_timeout) if lock_timeout is not None else _SQLITE_WAL_LOCK.acquire()
+            if acquired:
+                try:
+                    if database not in _SQLITE_WAL_DATABASES:
+                        journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+                        if str(journal_mode).casefold() != "wal":
+                            if remaining is None:
+                                connection.execute("PRAGMA journal_mode=WAL").close()
+                            else:
+                                journal_mode = "deadline-deferred"
+                        if str(journal_mode).casefold() == "wal":
+                            if int(connection.execute("PRAGMA synchronous").fetchone()[0]) != 1:
+                                connection.execute("PRAGMA synchronous=NORMAL")
+                            _SQLITE_WAL_DATABASES.add(database)
+                finally:
+                    _SQLITE_WAL_LOCK.release()
+        # Multi-workspace credential projection intentionally fans out from one User trigger.
+        # Recursive trigger execution would re-enter the global credential revision transition.
+        connection.execute("PRAGMA recursive_triggers = OFF")
+        # SQLite defers parsing the schema until the first schema-dependent statement.
+        # BEGIN IMMEDIATE does not load it: a cold worker otherwise holds the sole
+        # writer while parsing thousands of tables/triggers before its first read.
+        # For deadline-bound authentication, defer that parse until the caller has
+        # installed its progress handler; otherwise a cold schema load can consume
+        # the entire short budget before authentication begins.
+        if remaining is None:
+            connection.execute("SELECT 1 FROM sqlite_schema LIMIT 1").close()
+    except BaseException:
+        connection.close()
+        raise
     return connection
 
 

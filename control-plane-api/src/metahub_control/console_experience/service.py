@@ -1387,7 +1387,16 @@ def _b64encode(value: bytes) -> str:
 
 
 def _b64decode(value: str) -> bytes:
-    return base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
+    decoded = base64.b64decode(
+        value + "=" * (-len(value) % 4), altchars=b"-_", validate=True
+    )
+    # Reject non-canonical encodings.  Base64url leaves unused low bits in the
+    # final sextet for values whose byte length is not divisible by three; an
+    # attacker could otherwise alter a signed cursor string while preserving
+    # the decoded signature bytes.
+    if _b64encode(decoded) != value:
+        raise ValueError
+    return decoded
 
 
 def _platform_approval_watermark(connection: sqlite3.Connection) -> str:

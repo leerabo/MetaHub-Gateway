@@ -9,8 +9,10 @@ import {
   workspaceOnboardingHref,
 } from "../../src/lib/workspaces.js";
 import { WORKSPACE_SOURCE_ROUTE_REGISTRY } from "../../src/lib/workspaceNavigation.js";
-import { createIdentityPageController } from "../../src/features/identity/identityPageState.js";
-import { renderIdentitySecurityPage } from "../../src/features/identity/renderIdentityPage.js";
+import { createIdentityPageController as createAccountController } from "../../src/features/identity/identityPageState.js";
+const createIdentityPageController = (options) => createAccountController({ initialSection: "onboarding", ...options });
+import { renderIdentitySecurityPage as renderAccountPage } from "../../src/features/identity/renderIdentityPage.js";
+const renderIdentitySecurityPage = (root, state) => renderAccountPage(root, { accountSection: "onboarding", ...state });
 
 const CONTROL_URL = "http://control.local";
 const WORKSPACE_ID = `wsp_${"1".repeat(32)}`;
@@ -141,6 +143,8 @@ test("PRD-097 controller renders eight steps and reuses an uncertain mutation ke
 
   assert.equal(await controller.mount(), true);
   assert.match(root.innerHTML, /初始化中心/u);
+  assert.match(root.innerHTML, /<details class="identity-onboarding-steps-details">/u);
+  assert.match(root.innerHTML, /查看全部初始化步骤（0\/8）/u);
   assert.equal((root.innerHTML.match(/data-onboarding-step-index=/gu) ?? []).length, 8);
   assert.equal(await controller.confirmOnboardingStep(), false);
   assert.equal(await controller.confirmOnboardingStep(), true);
@@ -177,7 +181,7 @@ test("PRD-097 all onboarding links resolve to registered console pages", () => {
     renderIdentitySecurityPage(root, {
       ...securityState({ onboarding }), onboardingSelectedStepId: step.id,
     });
-    assert.ok(root.innerHTML.includes(`class="identity-quiet-command identity-onboarding-link" href="${href}"`));
+    assert.ok(root.innerHTML.includes(`class="identity-primary identity-onboarding-link" href="${href}"`));
     assert.doesNotMatch(root.innerHTML, /href="\/#workspace-/u);
   }
 });

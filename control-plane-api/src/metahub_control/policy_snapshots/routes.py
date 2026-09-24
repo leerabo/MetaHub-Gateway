@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+import json
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
 from fastapi.responses import Response as FastAPIResponse
+from metahub_shared.runtime.errors import ApiError
 
 from metahub_control.audit import build_audit_request_meta
 from metahub_control.auth import (
     AuthContext,
     require_internal_service_token,
     require_policy_publisher,
-    require_policy_reader,
 )
+from metahub_control.auth.dependencies import require_workspace_or_legacy_permissions
 
 from .models import (
     PolicySnapshotCurrentResponse,
@@ -30,13 +32,23 @@ from .service import (
 )
 
 router = APIRouter(tags=["policy-snapshots"])
+SNAPSHOT_WRITE_OPENAPI = {
+    "requestBody": {
+        "required": True,
+        "content": {
+            "application/json": {"schema": PublishPolicySnapshotRequest.model_json_schema()}
+        },
+    }
+}
 
 
 @router.get("/policy-snapshots/current", response_model=PolicySnapshotCurrentResponse)
 async def get_policy_snapshot_current(
     request: Request,
     response: Response,
-    context: Annotated[AuthContext, Depends(require_policy_reader)],
+    context: Annotated[
+        AuthContext, Depends(require_workspace_or_legacy_permissions("policy.read"))
+    ],
 ) -> PolicySnapshotCurrentResponse:
     """读取当前 head 与 active 候选；未知 query 由服务层拒绝。"""
 
@@ -58,7 +70,9 @@ async def get_policy_snapshot_current(
 async def get_policy_snapshot_history(
     request: Request,
     response: Response,
-    context: Annotated[AuthContext, Depends(require_policy_reader)],
+    context: Annotated[
+        AuthContext, Depends(require_workspace_or_legacy_permissions("policy.read"))
+    ],
     limit: Annotated[str | None, Query()] = None,
     offset: Annotated[str | None, Query()] = None,
 ) -> PolicySnapshotListResponse:
@@ -80,9 +94,9 @@ async def get_policy_snapshot_history(
     "/policy-snapshots/publish",
     response_model=PolicySnapshotMutationResponse,
     status_code=status.HTTP_201_CREATED,
+    openapi_extra=SNAPSHOT_WRITE_OPENAPI,
 )
 async def post_policy_snapshot_publish(
-    payload: PublishPolicySnapshotRequest,
     request: Request,
     response: Response,
     context: Annotated[AuthContext, Depends(require_policy_publisher)],
@@ -94,6 +108,7 @@ async def post_policy_snapshot_publish(
     """在一个写事务内执行 head+candidate 双 CAS 并发布不可变快照。"""
 
     _set_no_store(response)
+    payload = await _read_snapshot_request(request)
     result = publish_policy_snapshot(
         request.app.state.config,
         context,
@@ -112,10 +127,10 @@ async def post_policy_snapshot_publish(
     "/policy-snapshots/{policy_snapshot_id}/rollback",
     response_model=PolicySnapshotMutationResponse,
     status_code=status.HTTP_201_CREATED,
+    openapi_extra=SNAPSHOT_WRITE_OPENAPI,
 )
 async def post_policy_snapshot_rollback(
     policy_snapshot_id: str,
-    payload: PublishPolicySnapshotRequest,
     request: Request,
     response: Response,
     context: Annotated[AuthContext, Depends(require_policy_publisher)],
@@ -124,6 +139,7 @@ async def post_policy_snapshot_rollback(
     """复制当前上一版生成新单调版本，绝不把 head 数字直接倒退。"""
 
     _set_no_store(response)
+    payload = await _read_snapshot_request(request)
     result = rollback_policy_snapshot(
         request.app.state.config,
         context,
@@ -156,6 +172,39 @@ async def get_internal_policy_snapshot_current(
         request_id=_request_id(request),
         trace_id=_trace_id(request),
     )
+
+
+async def _read_snapshot_request(request: Request) -> PublishPolicySnapshotRequest:
+    """Bound the reason body after authentication, without exposing parser inputs."""
+    content_type = request.headers.get("content-type", "").partition(";")[0].strip().lower()
+    if content_type != "application/json":
+        raise ApiError("policy_snapshot.payload_invalid")
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > 4096:
+            raise ApiError("policy_snapshot.payload_invalid")
+        body.extend(chunk)
+    try:
+        payload = json.loads(
+            bytes(body).decode("utf-8"), object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_constant,
+        )
+        if not isinstance(payload, dict):
+            raise ValueError
+        return PublishPolicySnapshotRequest.model_validate(payload)
+    except (ValueError, TypeError, RecursionError):
+        raise ApiError("policy_snapshot.payload_invalid") from None
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    payload = dict(pairs)
+    if len(payload) != len(pairs):
+        raise ValueError
+    return payload
+
+
+def _reject_json_constant(_value: str) -> None:
+    raise ValueError
 
 
 def _set_no_store(response: Response) -> None:

@@ -19,7 +19,8 @@ export function renderInvitationAcceptancePage(state = {}) {
     return pageShell(`
       <div class="invitation-public-result" role="status">
         <span class="invitation-result-kicker">邀请已接受</span>
-        <h1>已加入团队</h1>
+        <h1>已加入组织</h1>
+        ${feedback}
         <dl>
           <div><dt>账号</dt><dd>${escapeHtml(state.user?.email ?? "-")}</dd></div>
           <div><dt>角色</dt><dd>${escapeHtml(ROLE_LABELS[state.user?.role] ?? state.user?.role ?? "-")}</dd></div>
@@ -38,11 +39,19 @@ export function renderInvitationAcceptancePage(state = {}) {
       </div>
     `);
   }
+  if (status === "loading") return pageShell('<h1>接受邀请</h1><p role="status">正在读取邀请...</p>');
+  if (status === "preview-error") return pageShell(`<h1>邀请暂不可用</h1>${feedback}
+    <button type="button" data-invitation-preview-retry>重试</button><a href="/">返回首页</a>`);
   const submitting = status === "submitting";
   return pageShell(`
     <div class="invitation-public-heading">
-      <span class="invitation-result-kicker">团队邀请</span>
+      <span class="invitation-result-kicker">后台成员邀请</span>
       <h1>接受邀请</h1>
+      ${state.invitation ? `<dl class="invitation-recipient">
+        <div><dt>受邀邮箱</dt><dd>${escapeHtml(state.invitation.email)}</dd></div>
+        <div><dt>组织</dt><dd>${escapeHtml(state.invitation.workspace_name)}</dd></div>
+        <div><dt>职责</dt><dd>${escapeHtml(ROLE_LABELS[state.invitation.role] ?? state.invitation.role)}</dd></div>
+      </dl>` : ""}
     </div>
     <form class="invitation-accept-form" id="invitation-accept-form">
       <label>
@@ -57,7 +66,7 @@ export function renderInvitationAcceptancePage(state = {}) {
         <span>确认密码</span>
         <input name="confirmPassword" type="password" minlength="8" maxlength="256" autocomplete="new-password" required ${submitting ? "disabled" : ""} />
       </label>
-      <button type="submit" ${submitting ? "disabled aria-busy=\"true\"" : ""}>${submitting ? "正在加入" : "加入团队"}</button>
+      <button type="submit" ${submitting ? "disabled aria-busy=\"true\"" : ""}>${submitting ? "正在加入" : "加入并登录"}</button>
       ${feedback}
     </form>
   `);

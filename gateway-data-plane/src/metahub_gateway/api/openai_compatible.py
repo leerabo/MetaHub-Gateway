@@ -51,6 +51,7 @@ from metahub_shared.session_risk import (
 )
 from starlette.datastructures import Headers
 
+from metahub_gateway.api.protocol_streams import adapt_protocol_stream as _adapt_protocol_stream
 from metahub_gateway.auth.virtual_key import GatewayAuthContext, authenticate_virtual_key
 from metahub_gateway.batch import (
     RealtimeGatewayLease,
@@ -148,6 +149,8 @@ from metahub_gateway.routing.attempts import (
 from metahub_gateway.routing.models import (
     GatewayRoute,
     GatewayRoutePlan,
+    list_public_model_aliases,
+    resolve_default_model_alias,
     resolve_model_route_plan,
     resolve_policy_target_route,
     validate_requested_model_authority,
@@ -180,6 +183,10 @@ from metahub_gateway.usage.ledger import (
 
 logger = logging.getLogger("metahub.gateway")
 router = APIRouter(prefix="/v1", tags=["openai-compatible"])
+# 员工接入页交付的是一个不带协议后缀的网关服务地址。保留 /v1 正式兼容入口的同时，
+# 公开根路径别名让只会把 ``/chat/completions``、``/responses`` 或 ``/messages``
+# 追加到 Base URL 的客户端也能复用同一个地址和同一把 MetaHub KEY。
+unversioned_router = APIRouter(tags=["unversioned-gateway-compatible"])
 
 # ASGI 取消通常表示客户端已放弃尚未返回的 HTTP 请求；该固定码只进入安全审计事实，
 # CancelledError 本身仍原样传播给服务器，不得转换成一个虚假的普通 JSON 响应。
@@ -368,6 +375,110 @@ async def chat_completions(request: Request):
     return await _handle_gateway_request(request, endpoint="chat/completions", request_kind="chat")
 
 
+@unversioned_router.post("/chat/completions", include_in_schema=False)
+async def unversioned_chat_completions(request: Request):
+    """根地址别名：兼容把 Chat Completions 路径直接追加到网关服务地址的客户端。"""
+
+    return await chat_completions(request)
+
+
+@router.post("/responses")
+async def responses(request: Request):
+    """OpenAI Responses-compatible facade over the canonical Chat pipeline.
+
+    The Gateway keeps one authentication and accounting path while accepting the
+    protocol used by Codex and newer OpenAI clients.  The employee still receives
+    the same Base URL and personal MetaHub KEY; this facade only translates the
+    request/response envelope and never forwards the employee key upstream.
+    """
+
+    payload = await _read_json_body(request)
+    chat_payload = _responses_to_chat_payload(payload)
+    response = await _handle_translated_request(
+        request,
+        chat_payload,
+        endpoint="chat/completions",
+        audit_endpoint="responses",
+    )
+    return _adapt_protocol_response(response, protocol="responses", request_payload=payload)
+
+
+@unversioned_router.post("/responses", include_in_schema=False)
+async def unversioned_responses(request: Request):
+    """根地址别名：Codex/Responses 客户端可直接复用统一网关地址。"""
+
+    return await responses(request)
+
+
+@router.post("/messages")
+async def messages(request: Request):
+    """Anthropic Messages-compatible facade over the canonical Chat pipeline.
+
+    ``x-api-key`` and Bearer authentication are both accepted by the shared
+    virtual-key authenticator.  Anthropic clients can therefore use the same
+    employee KEY and gateway address without receiving a provider credential.
+    """
+
+    payload = await _read_json_body(request)
+    chat_payload = _anthropic_to_chat_payload(payload)
+    response = await _handle_translated_request(
+        request,
+        chat_payload,
+        endpoint="chat/completions",
+        audit_endpoint="messages",
+        auth_header=(
+            request.headers.get("Authorization")
+            or (
+                f"Bearer {request.headers.get('x-api-key')}"
+                if request.headers.get("x-api-key")
+                else None
+            )
+        ),
+    )
+    return _adapt_protocol_response(response, protocol="anthropic", request_payload=payload)
+
+
+@unversioned_router.post("/messages", include_in_schema=False)
+async def unversioned_messages(request: Request):
+    """根地址别名：兼容把 Anthropic Messages 路径直接追加到网关服务地址的客户端。"""
+
+    return await messages(request)
+
+
+@router.get("/models")
+async def models(request: Request) -> JSONResponse:
+    """OpenAI 模型发现兼容入口。
+
+    很多桌面客户端会先请求 ``GET /v1/models`` 再发送 Chat 请求；该入口复用个人
+    MetaHub KEY 鉴权，只返回当前租户的公开别名，因此员工无需配置环境变量或额外账号。
+    """
+
+    auth_context = authenticate_virtual_key(_config(request), request.headers.get("Authorization"))
+    _ensure_environment_active(auth_context)
+    data = list_public_model_aliases(
+        _config(request),
+        tenant_id=auth_context.tenant_id,
+        environment=auth_context.environment,
+        environment_id=auth_context.environment_id,
+    )
+    return JSONResponse(
+        content={
+            "object": "list",
+            "data": list(data),
+            "request_id": _request_id(request),
+            "trace_id": _trace_id(request),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@unversioned_router.get("/models", include_in_schema=False)
+async def unversioned_models(request: Request) -> JSONResponse:
+    """根地址别名：模型发现与 /v1/models 使用同一员工身份和目录。"""
+
+    return await models(request)
+
+
 @router.post("/embeddings")
 async def embeddings(request: Request) -> JSONResponse:
     """实现 网关数据面 的 embeddings 逻辑，保持职责、输入边界和错误码口径清晰。
@@ -382,6 +493,524 @@ async def embeddings(request: Request) -> JSONResponse:
         # 关键异常统一映射为业务错误码，避免底层实现细节穿透到 API 响应。
         raise ApiError("gateway.stream_not_supported")
     return response
+
+
+@unversioned_router.post("/embeddings", include_in_schema=False)
+async def unversioned_embeddings(request: Request) -> JSONResponse:
+    """根地址别名：Embedding 客户端可复用统一网关服务地址。"""
+
+    return await embeddings(request)
+
+
+async def _handle_translated_request(
+    request: Request,
+    payload: dict[str, Any],
+    *,
+    endpoint: str,
+    audit_endpoint: str,
+    auth_header: str | None = None,
+) -> JSONResponse | StreamingResponse:
+    """Run a translated protocol request through the canonical request pipeline."""
+
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    body_sent = False
+
+    async def receive() -> dict[str, Any]:
+        nonlocal body_sent
+        if body_sent:
+            return await request.receive()
+        body_sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    # Reuse the original ASGI scope and headers so request IDs and tenant
+    # declarations remain identical.  Anthropic's x-api-key is normalized to the
+    # shared Bearer contract in the translated request only.
+    scope = request.scope
+    if auth_header and not request.headers.get("Authorization"):
+        scope = dict(request.scope)
+        scope["headers"] = [
+            (key, value)
+            for key, value in request.scope.get("headers", [])
+            if key.lower() != b"authorization"
+        ] + [(b"authorization", auth_header.encode("utf-8"))]
+    translated_request = Request(scope, receive)
+    return await _handle_gateway_request(
+        translated_request,
+        endpoint=endpoint,
+        request_kind="chat",
+        audit_endpoint=audit_endpoint,
+    )
+
+
+def _responses_to_chat_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Translate the supported Responses request subset to Chat Completions."""
+
+    model = payload.get("model")
+    if model is not None and (not isinstance(model, str) or not model.strip()):
+        raise ApiError("gateway.model_missing")
+    input_value = payload.get("input")
+    if input_value is None:
+        raise ApiError("gateway.input_missing")
+    messages: list[dict[str, Any]] = []
+    instructions = payload.get("instructions")
+    if isinstance(instructions, str) and instructions:
+        messages.append({"role": "system", "content": instructions})
+    if isinstance(input_value, str):
+        messages.append({"role": "user", "content": input_value})
+    elif isinstance(input_value, list):
+        for item in input_value:
+            translated = _responses_input_item_to_chat(item)
+            if translated is None:
+                raise ApiError("gateway.request_invalid")
+            if isinstance(translated, list):
+                messages.extend(translated)
+            else:
+                messages.append(translated)
+    else:
+        raise ApiError("gateway.input_missing")
+    if not messages:
+        raise ApiError("gateway.input_missing")
+    translated: dict[str, Any] = {"messages": messages}
+    if model is not None:
+        translated["model"] = model.strip()
+    for source, target in (
+        ("stream", "stream"),
+        ("temperature", "temperature"),
+        ("top_p", "top_p"),
+        ("max_output_tokens", "max_tokens"),
+    ):
+        if source in payload:
+            translated[target] = payload[source]
+    if "tools" in payload:
+        translated["tools"] = _responses_tools_to_chat(payload["tools"])
+    if "tool_choice" in payload:
+        translated["tool_choice"] = _responses_tool_choice_to_chat(payload["tool_choice"])
+    return translated
+
+
+def _anthropic_to_chat_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Translate the Anthropic Messages request subset to Chat Completions."""
+
+    model = payload.get("model")
+    messages = payload.get("messages")
+    if model is not None and (not isinstance(model, str) or not model.strip()):
+        raise ApiError("gateway.model_missing")
+    if not isinstance(messages, list) or not messages:
+        raise ApiError("gateway.messages_missing")
+    translated_messages: list[dict[str, Any]] = []
+    system = payload.get("system")
+    if system:
+        translated_messages.append(
+            {"role": "system", "content": _anthropic_text_content(system)}
+        )
+    for item in messages:
+        if not isinstance(item, dict) or not isinstance(item.get("role"), str):
+            raise ApiError("gateway.messages_missing")
+        role = item["role"]
+        content = item.get("content", "")
+        if role == "user" and isinstance(content, list):
+            text_parts: list[dict[str, Any]] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    raise ApiError("gateway.messages_missing")
+                if part.get("type") == "tool_result":
+                    translated_messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": part.get("tool_use_id"),
+                            "content": _anthropic_text_content(part.get("content", "")),
+                        }
+                    )
+                else:
+                    text_parts.append(part)
+            if text_parts:
+                translated_messages.append(
+                    {"role": role, "content": _anthropic_content_to_chat(text_parts)}
+                )
+            continue
+        if role == "assistant" and isinstance(content, list):
+            text_parts = [
+                part
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            ]
+            tool_calls = [
+                part
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "tool_use"
+            ]
+            message: dict[str, Any] = {
+                "role": role,
+                "content": _anthropic_content_to_chat(text_parts) if text_parts else None,
+            }
+            if tool_calls:
+                message["tool_calls"] = [
+                    {
+                        "id": call.get("id"),
+                        "type": "function",
+                        "function": {
+                            "name": call.get("name"),
+                            "arguments": json.dumps(call.get("input", {}), ensure_ascii=False),
+                        },
+                    }
+                    for call in tool_calls
+                ]
+            translated_messages.append(message)
+            continue
+        translated_messages.append({"role": role, "content": _anthropic_content_to_chat(content)})
+    translated: dict[str, Any] = {"messages": translated_messages}
+    if model is not None:
+        translated["model"] = model.strip()
+    for source, target in (
+        ("stream", "stream"),
+        ("temperature", "temperature"),
+        ("top_p", "top_p"),
+        ("max_tokens", "max_tokens"),
+    ):
+        if source in payload:
+            translated[target] = payload[source]
+    if "tools" in payload:
+        translated["tools"] = _anthropic_tools_to_chat(payload["tools"])
+    if "tool_choice" in payload:
+        translated["tool_choice"] = _anthropic_tool_choice_to_chat(payload["tool_choice"])
+    return translated
+
+
+def _responses_input_item_to_chat(item: object) -> dict[str, Any] | list[dict[str, Any]] | None:
+    if not isinstance(item, dict):
+        return None
+    if isinstance(item.get("role"), str):
+        return {
+            "role": item["role"],
+            "content": _responses_content_to_chat(item.get("content", item.get("input", ""))),
+        }
+    item_type = item.get("type")
+    if item_type == "message":
+        return {
+            "role": item.get("role", "user"),
+            "content": _responses_content_to_chat(item.get("content", "")),
+        }
+    if item_type == "input_text":
+        return {"role": "user", "content": item.get("text", "")}
+    if item_type == "function_call_output":
+        return {
+            "role": "tool",
+            "tool_call_id": item.get("call_id") or item.get("id"),
+            "content": _responses_content_to_chat(item.get("output", "")),
+        }
+    if item_type == "function_call":
+        return {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": item.get("call_id") or item.get("id"),
+                    "type": "function",
+                    "function": {
+                        "name": item.get("name"),
+                        "arguments": item.get("arguments", "{}"),
+                    },
+                }
+            ],
+        }
+    if item_type in {"reasoning", "compaction"}:
+        return []
+    return None
+
+
+def _responses_content_to_chat(value: object) -> object:
+    if isinstance(value, str) or value is None:
+        return value or ""
+    if not isinstance(value, list):
+        return str(value)
+    parts: list[dict[str, Any]] = []
+    for part in value:
+        if isinstance(part, str):
+            parts.append({"type": "text", "text": part})
+            continue
+        if not isinstance(part, dict):
+            raise ApiError("gateway.request_invalid")
+        part_type = part.get("type")
+        if part_type in {"input_text", "output_text", "text"}:
+            parts.append({"type": "text", "text": part.get("text", "")})
+        elif part_type == "input_image":
+            image_url = part.get("image_url") or part.get("file_id")
+            if not image_url:
+                raise ApiError("gateway.request_invalid")
+            parts.append({"type": "image_url", "image_url": {"url": image_url}})
+        else:
+            raise ApiError("gateway.request_invalid")
+    return parts
+
+
+def _responses_tools_to_chat(tools: object) -> list[dict[str, Any]]:
+    if not isinstance(tools, list):
+        raise ApiError("gateway.request_invalid")
+    converted: list[dict[str, Any]] = []
+    for tool in tools:
+        if not isinstance(tool, dict) or tool.get("type") != "function":
+            raise ApiError("gateway.request_invalid")
+        function = tool.get("function") if isinstance(tool.get("function"), dict) else tool
+        converted.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": function.get("name"),
+                    "description": function.get("description"),
+                    "parameters": function.get("parameters", {}),
+                },
+            }
+        )
+    return converted
+
+
+def _responses_tool_choice_to_chat(value: object) -> object:
+    if isinstance(value, dict) and value.get("type") == "function":
+        return {"type": "function", "function": {"name": value.get("name")}}
+    return value
+
+
+def _anthropic_text_content(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "".join(
+            str(part.get("text", ""))
+            for part in value
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return str(value)
+
+
+def _anthropic_content_to_chat(value: object) -> object:
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, list):
+        return _anthropic_text_content(value)
+    parts: list[dict[str, Any]] = []
+    for part in value:
+        if not isinstance(part, dict):
+            raise ApiError("gateway.messages_missing")
+        if part.get("type") == "text":
+            parts.append({"type": "text", "text": part.get("text", "")})
+        elif part.get("type") == "image":
+            source = part.get("source")
+            if not isinstance(source, dict) or not source.get("data"):
+                raise ApiError("gateway.request_invalid")
+            media_type = source.get("media_type", "image/png")
+            parts.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{media_type};base64,{source['data']}"
+                    },
+                }
+            )
+        else:
+            raise ApiError("gateway.request_invalid")
+    return parts
+
+
+def _anthropic_tools_to_chat(tools: object) -> list[dict[str, Any]]:
+    if not isinstance(tools, list):
+        raise ApiError("gateway.request_invalid")
+    converted: list[dict[str, Any]] = []
+    for tool in tools:
+        if not isinstance(tool, dict) or not isinstance(tool.get("name"), str):
+            raise ApiError("gateway.request_invalid")
+        converted.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool.get("description"),
+                    "parameters": tool.get("input_schema", {}),
+                },
+            }
+        )
+    return converted
+
+
+def _anthropic_tool_choice_to_chat(value: object) -> object:
+    if not isinstance(value, dict):
+        return value
+    choice_type = value.get("type")
+    if choice_type == "any":
+        return "required"
+    if choice_type == "tool":
+        return {"type": "function", "function": {"name": value.get("name")}}
+    if choice_type in {"auto", "none"}:
+        return choice_type
+    return value
+
+
+def _adapt_protocol_response(
+    response: JSONResponse | StreamingResponse,
+    *,
+    protocol: str,
+    request_payload: dict[str, Any],
+) -> JSONResponse | StreamingResponse:
+    """Adapt canonical OpenAI output to Responses or Anthropic envelopes."""
+
+    if isinstance(response, StreamingResponse):
+        return _adapt_protocol_stream(
+            response,
+            protocol=protocol,
+            model=request_payload.get("model"),
+        )
+    try:
+        payload = json.loads(response.body.decode("utf-8"))
+    except (AttributeError, UnicodeDecodeError, json.JSONDecodeError):
+        raise ApiError("gateway.request_invalid") from None
+    if protocol == "responses":
+        adapted = _to_responses_payload(payload, request_payload)
+    else:
+        adapted = _to_anthropic_payload(payload, request_payload)
+    headers = dict(response.headers)
+    headers.pop("content-length", None)
+    headers.pop("content-type", None)
+    return JSONResponse(content=adapted, headers=headers)
+
+
+def _to_responses_payload(
+    payload: dict[str, Any], request_payload: dict[str, Any]
+) -> dict[str, Any]:
+    choice = (payload.get("choices") or [{}])[0]
+    message = choice.get("message") if isinstance(choice, dict) else {}
+    message = message if isinstance(message, dict) else {}
+    text = _message_text(message.get("content", ""))
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    output: list[dict[str, Any]] = []
+    if text:
+        output.append(
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": text}],
+            }
+        )
+    for call in _openai_tool_calls(message.get("tool_calls")):
+        output.append(call)
+    if not output:
+        output.append(
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": ""}],
+            }
+        )
+    finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
+    return {
+        "id": f"resp_{payload.get('id', _request_id_from_payload(payload))}",
+        "object": "response",
+        "status": "incomplete" if finish_reason == "length" else "completed",
+        "model": payload.get("model") or request_payload.get("model"),
+        "output": output,
+        "output_text": text,
+        "usage": {
+            "input_tokens": usage.get("prompt_tokens", 0),
+            "output_tokens": usage.get("completion_tokens", 0),
+            "total_tokens": usage.get("total_tokens", 0),
+        },
+        "request_id": payload.get("request_id"),
+        "trace_id": payload.get("trace_id"),
+    }
+
+
+def _to_anthropic_payload(
+    payload: dict[str, Any], request_payload: dict[str, Any]
+) -> dict[str, Any]:
+    choice = (payload.get("choices") or [{}])[0]
+    message = choice.get("message") if isinstance(choice, dict) else {}
+    message = message if isinstance(message, dict) else {}
+    text = _message_text(message.get("content", ""))
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    content: list[dict[str, Any]] = []
+    if text:
+        content.append({"type": "text", "text": text})
+    content.extend(_openai_tool_calls_to_anthropic(message.get("tool_calls")))
+    finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
+    return {
+        "id": f"msg_{payload.get('id', _request_id_from_payload(payload))}",
+        "type": "message",
+        "role": "assistant",
+        "model": payload.get("model") or request_payload.get("model"),
+        "content": content or [{"type": "text", "text": ""}],
+        "stop_reason": (
+            "tool_use" if finish_reason == "tool_calls" else
+            "max_tokens" if finish_reason == "length" else "end_turn"
+        ),
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": usage.get("prompt_tokens", 0),
+            "output_tokens": usage.get("completion_tokens", 0),
+        },
+    }
+
+
+def _message_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            part.get("text", "")
+            if isinstance(part, dict)
+            else str(part)
+            for part in content
+            if isinstance(part, (str, dict))
+            and (not isinstance(part, dict) or part.get("type") != "refusal")
+        )
+    return ""
+
+
+def _openai_tool_calls(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    output: list[dict[str, Any]] = []
+    for call in value:
+        if not isinstance(call, dict):
+            continue
+        function = call.get("function") if isinstance(call.get("function"), dict) else {}
+        output.append(
+            {
+                "type": "function_call",
+                "id": call.get("id"),
+                "call_id": call.get("id"),
+                "name": function.get("name"),
+                "arguments": function.get("arguments", "{}"),
+                "status": "completed",
+            }
+        )
+    return output
+
+
+def _openai_tool_calls_to_anthropic(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    output: list[dict[str, Any]] = []
+    for call in value:
+        if not isinstance(call, dict):
+            continue
+        function = call.get("function") if isinstance(call.get("function"), dict) else {}
+        try:
+            arguments = json.loads(function.get("arguments", "{}"))
+        except (TypeError, json.JSONDecodeError):
+            arguments = {}
+        output.append(
+            {
+                "type": "tool_use",
+                "id": call.get("id"),
+                "name": function.get("name"),
+                "input": arguments,
+            }
+        )
+    return output
+
+
+def _request_id_from_payload(payload: dict[str, Any]) -> str:
+    return str(payload.get("request_id") or "unknown")
+
+
 
 
 async def _handle_gateway_request(
@@ -584,6 +1213,19 @@ async def _handle_gateway_request(
             else await _read_json_body(request)
         )
         request_model = _model_alias(payload)
+        # 员工 KEY 已经绑定到明确的消费者身份；兼容部分不携带 model 字段的工具，
+        # 直接使用租户启用的默认入口。未绑定 KEY 仍保留严格的 model_missing 合同。
+        if request_model is None:
+            if auth_context.consumer_id:
+                request_model = resolve_default_model_alias(
+                    config,
+                    tenant_id=auth_context.tenant_id,
+                    environment=auth_context.environment,
+                    environment_id=auth_context.environment_id,
+                    request_kind=request_kind,
+                )
+            if not request_model:
+                raise ApiError("gateway.model_missing")
         # 只更新安全模型元数据，不能重建上下文而丢失 claim 已冻结的快照版本和状态。
         request_log_context = replace(request_log_context, request_model=request_model)
         _validate_payload(request_kind, payload)
@@ -4958,12 +5600,14 @@ async def _read_json_body(request: Request) -> dict[str, Any]:
     return body
 
 
-def _model_alias(payload: dict[str, Any]) -> str:
+def _model_alias(payload: dict[str, Any]) -> str | None:
     """从 OpenAI-compatible 请求体中提取用户请求的模型别名。"""
 
     model = payload.get("model")
+    if model is None:
+        return None
     if not isinstance(model, str) or not model.strip():
-        # 路由和模型判断决定实际上游调用，必须保持可解释和可追踪。
+        # 空字符串仍视为调用方显式传入的非法模型，不能静默切换默认路由。
         raise ApiError("gateway.model_missing")
     return model.strip()
 

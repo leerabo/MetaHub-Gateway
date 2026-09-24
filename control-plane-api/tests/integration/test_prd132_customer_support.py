@@ -396,6 +396,14 @@ async def test_attachment_quarantine_scan_and_timeout(
         "require_transaction_permission",
         lambda *_args, **_kwargs: file_actor,
     )
+    # File creation revalidates the WorkspaceSession inside its transaction.
+    # This fixture intentionally uses the in-memory owner context, so bind the
+    # same context to the file service before exercising quarantine behavior.
+    monkeypatch.setattr(
+        file_service,
+        "authenticate_workspace_session_in_transaction",
+        lambda *_args, **_kwargs: owner,
+    )
     file_result, _events = file_service.create_file(
         config,
         file_actor,

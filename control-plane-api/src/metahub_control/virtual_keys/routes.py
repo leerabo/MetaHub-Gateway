@@ -34,9 +34,13 @@ from .service import (
 
 router = APIRouter(prefix="/virtual-keys", tags=["virtual-keys"])
 
+# These services use synchronous database connections. FastAPI runs ordinary
+# handlers in its worker pool so a writer waiting for a lock cannot stall the
+# event loop, including the work that must finish before that lock is released.
+
 
 @router.get("", response_model=VirtualKeyListResponse)
-async def get_virtual_keys(
+def get_virtual_keys(
     request: Request,
     context: Annotated[
         AuthContext,
@@ -57,13 +61,15 @@ async def get_virtual_keys(
         status=status_filter,
         environment_id=environment_id,
         environment=environment,
+        personal_only=_personal_only(context),
+        user_id=context.user.user_id,
         request_id=_request_id(request),
         trace_id=_trace_id(request),
     )
 
 
 @router.post("", response_model=CreateVirtualKeyResponse, status_code=status.HTTP_201_CREATED)
-async def post_virtual_key(
+def post_virtual_key(
     payload: CreateVirtualKeyRequest,
     request: Request,
     context: Annotated[
@@ -80,6 +86,7 @@ async def post_virtual_key(
         audit_request_meta=build_audit_request_meta(request),
         request_id=_request_id(request),
         trace_id=_trace_id(request),
+        personal_only=_personal_only(context),
     )
 
 
@@ -100,11 +107,12 @@ def post_virtual_key_rotation(
         audit_request_meta=build_audit_request_meta(request),
         request_id=_request_id(request),
         trace_id=_trace_id(request),
+        personal_only=_personal_only(context),
     )
 
 
 @router.patch("/{virtual_key_id}", response_model=VirtualKeyResponse)
-async def patch_virtual_key(
+def patch_virtual_key(
     virtual_key_id: str,
     payload: UpdateVirtualKeyRequest,
     request: Request,
@@ -123,11 +131,12 @@ async def patch_virtual_key(
         audit_request_meta=build_audit_request_meta(request),
         request_id=_request_id(request),
         trace_id=_trace_id(request),
+        personal_only=_personal_only(context),
     )
 
 
 @router.patch("/{virtual_key_id}/limits", response_model=VirtualKeyResponse)
-async def patch_virtual_key_limits(
+def patch_virtual_key_limits(
     virtual_key_id: str,
     payload: UpdateVirtualKeyLimitsRequest,
     request: Request,
@@ -149,11 +158,16 @@ async def patch_virtual_key_limits(
         audit_request_meta=build_audit_request_meta(request),
         request_id=_request_id(request),
         trace_id=_trace_id(request),
+        personal_only=_personal_only(context),
     )
 
 
+def _personal_only(context: AuthContext) -> bool:
+    return "user.manage" not in context.permission_codes
+
+
 @router.delete("/{virtual_key_id}", response_model=VirtualKeyResponse)
-async def delete_virtual_key(
+def delete_virtual_key(
     virtual_key_id: str,
     request: Request,
     context: Annotated[
@@ -173,6 +187,7 @@ async def delete_virtual_key(
         audit_request_meta=build_audit_request_meta(request),
         request_id=_request_id(request),
         trace_id=_trace_id(request),
+        personal_only=_personal_only(context),
     )
 
 

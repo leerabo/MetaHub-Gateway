@@ -1589,7 +1589,12 @@ def _b64(value: bytes) -> str:
 
 
 def _unb64(value: str) -> bytes:
-    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    decoded = base64.b64decode(
+        value + "=" * (-len(value) % 4), altchars=b"-_", validate=True
+    )
+    if _b64(decoded) != value:
+        raise ValueError
+    return decoded
 
 
 def _id(prefix: str) -> str:

@@ -76,12 +76,37 @@ async def test_local_signup_creates_owner_and_switches_without_mailbox_proof(
             "Origin": ORIGIN, "Idempotency-Key": "local-workspace-no-csrf-001",
         })
         assert no_csrf.status_code == 403
-        created = await client.post("/workspaces", json=BODY, headers=headers)
+        name_only = {"kind": "organization", "name": "研发团队"}
+        created = await client.post("/workspaces", json=name_only, headers=headers)
         assert created.status_code == 201, created.text
         workspace_id = created.json()["workspace"]["workspace_id"]
-        replay = await client.post("/workspaces", json=BODY, headers=headers)
+        workspace = created.json()["workspace"]
+        assert workspace["name"] == "研发团队"
+        assert workspace["slug"] == "org-" + workspace_id[4:]
+        assert workspace["region"] == app.state.config.workspace_allowed_regions[0]
+        assert workspace["service_mode"] == "internal_only"
+        app.state.config = app.state.config.model_copy(update={
+            "workspace_allowed_regions": tuple(
+                reversed(app.state.config.workspace_allowed_regions)
+            ),
+        })
+        replay = await client.post("/workspaces", json=name_only, headers=headers)
         assert replay.status_code == 201, replay.text
         assert replay.json()["workspace"]["workspace_id"] == workspace_id
+        assert replay.json()["workspace"]["region"] == workspace["region"]
+        conflict = await client.post(
+            "/workspaces", json={**name_only, "name": "另一团队"}, headers=headers,
+        )
+        assert conflict.status_code == 409
+        for invalid in (
+            {"slug": ""}, {"slug": None}, {"slug": "组织"}, {"slug": "admin"},
+            {"region": ""}, {"region": None}, {"region": "not-available"},
+            {"service_mode": ""}, {"service_mode": None}, {"service_mode": "invalid"},
+            {"owner": "platform_admin"},
+        ):
+            rejected = await client.post("/workspaces", json={**name_only, **invalid},
+                headers={**headers, "Idempotency-Key": "invalid-name-only-request-001"})
+            assert rejected.status_code == 422, (tuple(invalid), rejected.status_code)
         choices = await client.get("/identity/workspaces")
         assert choices.json()["workspaces"][0]["role"] == "owner"
         opened = await client.post(

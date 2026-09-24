@@ -8,8 +8,10 @@ import {
   releaseWorkspaceLegalHold,
   updateWorkspaceDataGovernance,
 } from "../../src/lib/dataGovernance.js";
-import { createIdentityPageController } from "../../src/features/identity/identityPageState.js";
-import { renderIdentitySecurityPage } from "../../src/features/identity/renderIdentityPage.js";
+import { createIdentityPageController as createAccountController } from "../../src/features/identity/identityPageState.js";
+const createIdentityPageController = (options) => createAccountController({ initialSection: "governance", ...options });
+import { renderIdentitySecurityPage as renderAccountPage } from "../../src/features/identity/renderIdentityPage.js";
+const renderIdentitySecurityPage = (root, state) => renderAccountPage(root, { accountSection: "governance", ...state });
 import { createPlatformPageController } from "../../src/features/platform/platformPageState.js";
 
 const WORKSPACE_ID = `wsp_${"1".repeat(32)}`;

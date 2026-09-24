@@ -93,19 +93,20 @@ function renderWorkspaceProfile(state, authContext, context) {
   const canEdit = context.role === "owner" && workspace.status === "active";
   return `${heading}
     <form class="tenant-form" id="workspace-profile-form">
-      <dl class="tenant-meta">
-        ${renderMeta("类型", workspace.kind === "organization" ? "组织" : "个人空间")}
-        ${renderMeta("区域", workspace.region)}
-        ${renderMeta("服务模式", workspace.service_mode === "internal_only" ? "内部使用" : "对外服务")}
-        ${renderMeta("开发环境", workspace.environment?.code ?? "-")}
-        ${renderMeta("资料状态", workspace.profile_state === "confirmed" ? "已确认" : "待确认")}
-      </dl>
       <label><span>名称</span><input name="workspaceName" value="${escapeAttribute(workspace.name)}" maxlength="${workspace.kind === "personal" ? 120 : 160}" required ${canEdit ? "" : "disabled"} /></label>
       <div class="tenant-actions">
         ${canEdit ? '<button type="submit">保存资料</button>' : ""}
         <span class="tenant-feedback" role="status">${canEdit ? "" : "仅组织所有者可修改资料"}</span>
       </div>
-    </form>`;
+    </form>
+    <details class="workspace-system-details">
+      <summary>系统信息（只读）</summary>
+      <dl class="tenant-meta">
+        ${renderMeta("部署区域", workspace.region)}
+        ${renderMeta("服务范围", workspace.service_mode === "internal_only" ? "组织内部" : "对外服务")}
+        ${renderMeta("默认环境", workspace.environment?.code ?? "-")}
+      </dl>
+    </details>`;
 }
 
 /**

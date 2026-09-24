@@ -183,7 +183,7 @@ test("PRD-053 action client emits exact body and idempotency header", async (t) 
     "http://control.local/cost-anomalies/can_0123456789abcdef0123456789abcdef/action",
   );
   assert.equal(calls[0].options.method, "PATCH");
-  assert.equal(calls[0].options.headers["Idempotency-Key"], "ca_action_12345678");
+  assert.equal(new Headers(calls[0].options.headers).get("Idempotency-Key"), "ca_action_12345678");
   assert.deepEqual(JSON.parse(calls[0].options.body), {
     action: "apply_temporary_rate_limit",
     duration_minutes: 30,
@@ -347,8 +347,9 @@ test("PRD-053 renderer is permission-driven and escapes all dynamic evidence", (
   }, authContext());
 
   assert.match(html, /成本异常检测/);
-  assert.match(html, /PAGE-077/);
-  assert.match(html, /PAGE-078/);
+  assert.match(html, /成本异常记录/);
+  assert.match(html, /待处理告警/);
+  assert.doesNotMatch(html, /PAGE-077|PAGE-078|FinOps Governance/);
   assert.equal(html.includes("&lt;script&gt;alert(1)&lt;/script&gt;"), true);
   assert.doesNotMatch(html, /<script>/);
   assert.doesNotMatch(html, /<img src=x/);

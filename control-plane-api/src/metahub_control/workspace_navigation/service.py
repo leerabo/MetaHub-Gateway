@@ -6,14 +6,16 @@ import hashlib
 import hmac
 import json
 import sqlite3
+import time
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from metahub_shared.db.connection import connect_database
+from metahub_shared.db.connection import connect_database, database_operation_deadline
 from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
+from metahub_control.auth.service import authentication_database_deadline
 from metahub_control.identity.service import authenticate_global_session_in_transaction
 from metahub_control.workspace_access.service import (
     WorkspaceActorPermissionSnapshot,
@@ -47,11 +49,19 @@ from .models import (
     WorkspacePageVisitResponse,
 )
 
+
 _CONTRACT_VERSION = "workspace-navigation-v1"
 _SOURCE_CATALOG_VERSION = "console-navigation-0137"
+# Page-view telemetry is best-effort and must never hold an authentication
+# boundary behind SQLite writer admission. Keep its total writer wait below
+# the console logout/navigation budget; normal uncontended writes are unchanged.
+_PAGE_VISIT_WRITE_DEADLINE_SECONDS = 2.0
 _PUBLIC_PLACEMENTS = frozenset(
     {"primary", "detail", "advanced", "account", "developer_center", "task_home"}
 )
+_SIDEBAR_PLACEMENTS = frozenset({"primary", "task_home", "developer_center"})
+_LEGACY_PLATFORM_INTERNAL_SOURCE_ID = "environments"
+_LEGACY_TENANT_DATA_SOURCE_ID = "tenant-data-lifecycle"
 
 
 def get_workspace_navigation(
@@ -70,7 +80,11 @@ def get_workspace_navigation(
         projection = _ensure_projection(connection, contract)
         visible = _visible_specs(connection, projection, actor.permission_codes)
         primary = tuple(item for item in visible if item.placement in {"primary", "task_home"})
-        visible_groups = {item.group_code for item in primary if item.group_code is not None}
+        primary_groups = {item.group_code for item in primary if item.group_code is not None}
+        visible_groups = {
+            item.group_code for item in visible
+            if item.placement in _SIDEBAR_PLACEMENTS and item.group_code is not None
+        }
         preference = _preference_projection(connection, actor, contract, primary, visible_groups)
         groups = tuple(
             NavigationGroup(
@@ -84,13 +98,14 @@ def get_workspace_navigation(
                         description_key=item.description_key,
                         kind="task_home" if item.placement == "task_home" else "primary",
                         order=item.order,
+                        required_permissions=item.permissions,
                     )
                     for item in primary
                     if item.group_code == group_code
                 ),
             )
             for group_code in GROUP_CODES
-            if group_code in visible_groups
+            if group_code in primary_groups
         )
         item_set_digest = _keyed_digest(
             config,
@@ -155,10 +170,12 @@ def get_workspace_navigation(
         connection.commit()
         return result
     except ApiError:
-        _rollback(connection)
+        if connection is not None:
+            _rollback(connection)
         raise
     except (sqlite3.Error, DbError, TypeError, ValueError, KeyError):
-        _rollback(connection)
+        if connection is not None:
+            _rollback(connection)
         raise ApiError("workspace_session.unavailable") from None
     finally:
         connection.close()
@@ -191,14 +208,15 @@ def get_workspace_getting_started(
                 action_route_code=row["action_route_code"],
                 action_enabled=(
                     row["action_route_code"] is not None
-                    and row["status"] in {"ready", "needs_attention"}
+                    and row["status"] in {"ready", "needs_attention", "completed"}
                 ),
                 source_freshness=str(row["freshness"]),
             )
             for row in task_rows
         )
         next_task = next(
-            (task.task_code for task in tasks if task.action_enabled),
+            (task.task_code for task in tasks
+             if task.action_enabled and task.status != "completed"),
             None,
         )
         navigation_epoch = _current_navigation_epoch(connection, actor.membership_id)
@@ -236,10 +254,12 @@ def get_workspace_getting_started(
         connection.commit()
         return result
     except ApiError:
-        _rollback(connection)
+        if connection is not None:
+            _rollback(connection)
         raise
     except (sqlite3.Error, DbError, TypeError, ValueError, KeyError):
-        _rollback(connection)
+        if connection is not None:
+            _rollback(connection)
         raise ApiError("workspace_session.unavailable") from None
     finally:
         connection.close()
@@ -343,7 +363,7 @@ def change_navigation_preference(
         visible_groups = {
             item.group_code
             for item in visible
-            if item.placement in {"primary", "task_home"} and item.group_code is not None
+            if item.placement in _SIDEBAR_PLACEMENTS and item.group_code is not None
         }
         if (
             "last_primary_route_code" in patch.model_fields_set
@@ -674,27 +694,88 @@ def record_workspace_page_visit(
     request_id: str,
     trace_id: str,
 ) -> WorkspacePageVisitResponse:
-    connection = _connect(config, "workspace_session.unavailable")
+    connection = None
     try:
-        connection.execute("BEGIN IMMEDIATE")
-        actor, spec = _page_visit_authority(connection, config, session_token, payload)
-        event_id = "cpe_" + _idempotency_hmac(
-            config, "page-visit", actor.workspace_session_id, idempotency_key,
-        )
-        request_sha256 = _sha(payload.model_dump(mode="json"))
-        replay = connection.execute(
-            "SELECT visit_request_sha256 FROM console_page_events WHERE event_id=?",
-            (event_id,),
-        ).fetchone()
-        if replay is not None:
-            if not hmac.compare_digest(str(replay["visit_request_sha256"]), request_sha256):
-                raise ApiError("identity.idempotency_conflict")
-        else:
+        # Page visits are best-effort telemetry from navigation and unload
+        # beacons. Do the authority and replay preflight in a deferred read
+        # transaction, then acquire the writer only for the final authority
+        # check and INSERT. Navigation reads also persist audit facts, so
+        # holding BEGIN IMMEDIATE across the preflight made otherwise harmless
+        # beacons compete with the main page load for the same SQLite writer.
+        deadline = time.monotonic() + _PAGE_VISIT_WRITE_DEADLINE_SECONDS
+        with database_operation_deadline(deadline):
+            connection = _connect(config, "workspace_session.unavailable")
+            connection.execute("BEGIN")
+            actor, spec = _page_visit_authority(
+                connection, config, session_token, payload, monotonic_deadline=deadline,
+            )
+            event_id = "cpe_" + _idempotency_hmac(
+                config, "page-visit", actor.workspace_session_id, idempotency_key,
+            )
+            request_sha256 = _sha(payload.model_dump(mode="json"))
+            replay = connection.execute(
+                "SELECT visit_request_sha256 FROM console_page_events WHERE event_id=?",
+                (event_id,),
+            ).fetchone()
+            if replay is not None:
+                if not hmac.compare_digest(str(replay["visit_request_sha256"]), request_sha256):
+                    raise ApiError("identity.idempotency_conflict")
+            if replay is not None:
+                # A replay does not need a writer. The preflight already
+                # authenticated the current session and verified the original
+                # request hash, so release the read snapshot immediately.
+                connection.commit()
+                return WorkspacePageVisitResponse(
+                    event_id=event_id, idempotent_replay=True,
+                    permission_fingerprint=actor.authorization_fingerprint,
+                    request_id=request_id, trace_id=trace_id,
+                )
+
+            # Release the read snapshot before writer admission. This is the
+            # important contention boundary: a navigation request can now
+            # finish its own short write without waiting behind this beacon's
+            # authentication queries.
+            connection.commit()
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise sqlite3.OperationalError("page visit writer deadline exceeded")
+                connection.execute(
+                    f"PRAGMA busy_timeout = {max(1, min(250, int(remaining * 1000)))}"
+                )
+                try:
+                    connection.execute("BEGIN IMMEDIATE")
+                    break
+                except sqlite3.OperationalError as exc:
+                    if "locked" not in str(exc).casefold() or time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.025)
+
+            final_actor, final_spec = _page_visit_authority(
+                connection, config, session_token, payload,
+                final=True, monotonic_deadline=deadline,
+            )
+            final_event_id = "cpe_" + _idempotency_hmac(
+                config, "page-visit", final_actor.workspace_session_id, idempotency_key,
+            )
+            replay = connection.execute(
+                "SELECT visit_request_sha256 FROM console_page_events WHERE event_id=?",
+                (final_event_id,),
+            ).fetchone()
+            if replay is not None:
+                if not hmac.compare_digest(str(replay["visit_request_sha256"]), request_sha256):
+                    raise ApiError("identity.idempotency_conflict")
+                connection.commit()
+                return WorkspacePageVisitResponse(
+                    event_id=final_event_id, idempotent_replay=True,
+                    permission_fingerprint=final_actor.authorization_fingerprint,
+                    request_id=request_id, trace_id=trace_id,
+                )
             event_type = {
                 "overview": "dashboard.viewed",
                 "provider-health": "status.viewed",
                 "migration-guide": "migration.guide_viewed",
-            }.get(spec.source_id, "console.page_viewed")
+            }.get(final_spec.source_id, "console.page_viewed")
             connection.execute(
                 """INSERT INTO console_page_events(
                   event_id,tenant_id,user_id,session_id,event_type,navigation_item_id,
@@ -702,28 +783,30 @@ def record_workspace_page_visit(
                   workspace_session_id,visit_request_sha256
                 ) VALUES(?,?,?,NULL,?,?,?,?,?,?,?,?,?,?)""",
                 (
-                    event_id, actor.tenant_id, actor.legacy_user_id, event_type,
-                    spec.source_id, spec.source_id, f"/#{spec.source_id}", request_id, trace_id,
-                    _json({"hash": f"#{spec.source_id}", "source": payload.source,
+                    final_event_id, final_actor.tenant_id, final_actor.legacy_user_id, event_type,
+                    final_spec.source_id, final_spec.source_id, f"/#{final_spec.source_id}", request_id, trace_id,
+                    _json({"hash": f"#{final_spec.source_id}", "source": payload.source,
                            "viewport_class": payload.viewport_class}),
-                    _db_time(_now()), actor.workspace_session_id, request_sha256,
+                    _db_time(_now()), final_actor.workspace_session_id, request_sha256,
                 ),
             )
-        _page_visit_authority(connection, config, session_token, payload)
-        connection.commit()
-        return WorkspacePageVisitResponse(
-            event_id=event_id, idempotent_replay=replay is not None,
-            permission_fingerprint=actor.authorization_fingerprint,
-            request_id=request_id, trace_id=trace_id,
-        )
+            connection.commit()
+            return WorkspacePageVisitResponse(
+                event_id=final_event_id, idempotent_replay=False,
+                permission_fingerprint=final_actor.authorization_fingerprint,
+                request_id=request_id, trace_id=trace_id,
+            )
     except ApiError:
-        _rollback(connection)
+        if connection is not None:
+            _rollback(connection)
         raise
     except (sqlite3.Error, DbError, TypeError, ValueError, KeyError):
-        _rollback(connection)
+        if connection is not None:
+            _rollback(connection)
         raise ApiError("workspace_session.unavailable") from None
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
 
 
 def _page_visit_authority(
@@ -731,8 +814,13 @@ def _page_visit_authority(
     config: AppConfig,
     session_token: str,
     payload: WorkspacePageVisitRequest,
+    *,
+    final: bool = False,
+    monotonic_deadline: float | None = None,
 ) -> tuple[WorkspaceSessionContext, ContractSpec]:
-    actor = _workspace_actor(connection, config, session_token)
+    actor = _workspace_actor(
+        connection, config, session_token, monotonic_deadline=monotonic_deadline,
+    )
     _require_workspace(actor, "workspace.navigation.read")
     session_ref = _pseudonym(config, "page-visit-session", actor.workspace_session_id)
     if (
@@ -746,6 +834,23 @@ def _page_visit_authority(
         or payload.navigation_epoch != _current_navigation_epoch(connection, actor.membership_id)
     ):
         raise ApiError("identity.revision_conflict")
+    if final:
+        # The first authority pass already verified the materialized projection.
+        # Recheck the live actor, contract snapshot and epoch after the insert,
+        # then resolve the route from the immutable catalog without rebuilding
+        # the projection and its source rows a second time.
+        spec = next(
+            (
+                item for item in CONTRACT_SPECS
+                if item.route_code == payload.route_code
+                and item.placement in {"primary", "detail", "task_home", "developer_center"}
+                and _contract_item_allowed(item, actor.permission_codes)
+            ),
+            None,
+        )
+        if spec is None:
+            raise ApiError("workspace_session.permission_denied")
+        return actor, spec
     visible = _visible_specs(
         connection, _ensure_projection(connection, contract), actor.permission_codes,
     )
@@ -759,14 +864,31 @@ def _page_visit_authority(
 
 
 def _workspace_actor(
-    connection: sqlite3.Connection, config: AppConfig, session_token: str
+    connection: sqlite3.Connection,
+    config: AppConfig,
+    session_token: str,
+    *,
+    monotonic_deadline: float | None = None,
 ) -> WorkspaceSessionContext:
-    actor = authenticate_workspace_session_in_transaction(
-        connection,
-        config,
-        session_token=session_token,
-        touch=False,
-    )
+    if monotonic_deadline is None:
+        actor = authenticate_workspace_session_in_transaction(
+            connection,
+            config,
+            session_token=session_token,
+            touch=False,
+        )
+    else:
+        with authentication_database_deadline(
+            connection,
+            monotonic_deadline=monotonic_deadline,
+            error_code="workspace_session.unavailable",
+        ):
+            actor = authenticate_workspace_session_in_transaction(
+                connection,
+                config,
+                session_token=session_token,
+                touch=False,
+            )
     if actor.membership_role == "service_account" or not actor.legacy_user_id:
         raise ApiError("workspace_session.permission_denied")
     return actor
@@ -803,12 +925,27 @@ def _ensure_contract(
         (workspace_id, tenant_id),
     ).fetchone()
     if head is not None:
+        legacy_disposition_sha = _sha(
+            [
+                (
+                    item.source_id,
+                    item.disposition,
+                    _legacy_placement(item),
+                    item.route_code,
+                )
+                for item in CONTRACT_SPECS
+                if item.source_kind == "excel"
+            ]
+        )
         if (
             head["status"] != "active"
             or head["contract_version"] != _CONTRACT_VERSION
             or int(head["item_count"]) != len(CONTRACT_SPECS)
             or not hmac.compare_digest(str(head["source_catalog_sha256"]), source_sha)
-            or not hmac.compare_digest(str(head["disposition_sha256"]), disposition_sha)
+            or (
+                not hmac.compare_digest(str(head["disposition_sha256"]), disposition_sha)
+                and not hmac.compare_digest(str(head["disposition_sha256"]), legacy_disposition_sha)
+            )
             or not hmac.compare_digest(str(head["extra_sha256"]), extra_sha)
         ):
             raise ApiError("workspace_session.unavailable")
@@ -908,10 +1045,26 @@ def _ensure_projection(connection: sqlite3.Connection, contract: sqlite3.Row) ->
             for item in public_specs
         ]
     )
+    legacy_content_sha = _sha(
+        [
+            (
+                item.source_id,
+                _legacy_placement(item),
+                item.route_code,
+                _legacy_permissions(item),
+            )
+            for item in CONTRACT_SPECS
+            if item.placement in _PUBLIC_PLACEMENTS
+            or item.source_id == _LEGACY_PLATFORM_INTERNAL_SOURCE_ID
+        ]
+    )
     if projection is not None:
         if projection["navigation_contract_snapshot_id"] != contract[
             "navigation_contract_snapshot_id"
-        ] or not hmac.compare_digest(str(projection["content_sha256"]), content_sha):
+        ] or (
+            not hmac.compare_digest(str(projection["content_sha256"]), content_sha)
+            and not hmac.compare_digest(str(projection["content_sha256"]), legacy_content_sha)
+        ):
             raise ApiError("workspace_session.unavailable")
         return projection
     stamp = _db_time(_now())
@@ -994,28 +1147,74 @@ def _visible_specs(
            ORDER BY display_order,source_navigation_id""",
         (projection_id,),
     ).fetchall()
-    if len(rows) != len(expected):
+    legacy_rows = [
+        row for row in rows
+        if row["source_navigation_id"] == _LEGACY_PLATFORM_INTERNAL_SOURCE_ID
+        and row["placement"] == "primary"
+    ]
+    if len(legacy_rows) > 1 or len(rows) - len(legacy_rows) != len(expected):
         raise ApiError("workspace_session.unavailable")
     visible: list[ContractSpec] = []
     for row in rows:
         source_id = str(row["source_navigation_id"])
+        if source_id == _LEGACY_PLATFORM_INTERNAL_SOURCE_ID and row["placement"] == "primary":
+            legacy_item = next(
+                item for item in CONTRACT_SPECS
+                if item.source_id == _LEGACY_PLATFORM_INTERNAL_SOURCE_ID
+            )
+            try:
+                legacy_permissions = tuple(json.loads(str(row["required_permissions_json"])))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                raise ApiError("workspace_session.unavailable") from None
+            if (
+                row["route_code"] != legacy_item.route_code
+                or row["group_code"] != legacy_item.group_code
+                or int(row["display_order"]) != legacy_item.order
+                or legacy_permissions != _legacy_permissions(legacy_item)
+                or row["item_sha256"]
+                != _sha(
+                    (
+                        legacy_item.source_id,
+                        legacy_item.route_code,
+                        "primary",
+                        _legacy_permissions(legacy_item),
+                    )
+                )
+            ):
+                raise ApiError("workspace_session.unavailable")
+            continue
         item = expected.get(source_id)
         try:
             permissions = tuple(json.loads(str(row["required_permissions_json"])))
         except (json.JSONDecodeError, TypeError, ValueError):
             raise ApiError("workspace_session.unavailable") from None
+        if item is None:
+            raise ApiError("workspace_session.unavailable")
+        legacy_permissions = (
+            _legacy_permissions(item)
+            if item.source_id == _LEGACY_TENANT_DATA_SOURCE_ID
+            else item.permissions
+        )
         if (
-            item is None
-            or row["route_code"] != item.route_code
+            row["route_code"] != item.route_code
             or row["placement"] != item.placement
             or row["group_code"] != item.group_code
             or int(row["display_order"]) != item.order
-            or permissions != item.permissions
-            or row["item_sha256"]
-            != _sha((item.source_id, item.route_code, item.placement, item.permissions))
+            or (permissions != item.permissions and permissions != legacy_permissions)
+            or row["item_sha256"] != _sha(
+                (
+                    item.source_id,
+                    item.route_code,
+                    item.placement,
+                    permissions,
+                )
+            )
         ):
             raise ApiError("workspace_session.unavailable")
-        if _allowed(item.permissions, permission_codes):
+        if _contract_item_allowed(item, permission_codes) or (
+            item.source_id == _LEGACY_TENANT_DATA_SOURCE_ID
+            and _allowed(legacy_permissions, permission_codes)
+        ):
             visible.append(item)
     sources = connection.execute(
         """SELECT source_code,source_revision,source_watermark,freshness
@@ -1047,6 +1246,31 @@ def _visible_specs(
 
 def _allowed(required: tuple[str, ...], granted: tuple[str, ...]) -> bool:
     return set(required) <= set(granted)
+
+
+def _contract_item_allowed(item: ContractSpec, granted: tuple[str, ...]) -> bool:
+    if item.source_id == "usage":
+        return bool({"billing.usage.read", "virtual_key.read"} & set(granted))
+    if item.source_id == _LEGACY_TENANT_DATA_SOURCE_ID:
+        # Organization owners/admins already have the tenant settings read
+        # capability. Use it for the lifecycle overview while keeping export,
+        # download and deletion on their dedicated permissions.
+        return bool({"tenant_data.read", "tenant.settings.read"} & set(granted))
+    return _allowed(item.permissions, granted)
+
+
+def _legacy_placement(item: ContractSpec) -> str:
+    return (
+        "primary"
+        if item.source_id == _LEGACY_PLATFORM_INTERNAL_SOURCE_ID
+        else item.placement
+    )
+
+
+def _legacy_permissions(item: ContractSpec) -> tuple[str, ...]:
+    if item.source_id == _LEGACY_TENANT_DATA_SOURCE_ID:
+        return ("tenant_data.read",)
+    return item.permissions
 
 
 def _preference_projection(
@@ -1183,7 +1407,7 @@ def _current_navigation_epoch(connection: sqlite3.Connection, membership_id: str
 
 _TASK_SOURCE_QUERIES = {
     "workspace_profile": (
-        "SELECT count(*) FROM workspaces WHERE workspace_id=? AND profile_state='confirmed'",
+        "SELECT count(*) FROM organization_profiles WHERE workspace_id=? AND length(trim(name))>0",
         "workspace",
     ),
     "members": (
@@ -1196,10 +1420,35 @@ _TASK_SOURCE_QUERIES = {
         "WHERE workspace_id=? AND projection_state!='unknown'",
         "workspace",
     ),
-    "providers": ("SELECT count(*) FROM providers WHERE tenant_id=?", "tenant"),
-    "models": ("SELECT count(*) FROM models WHERE tenant_id=?", "tenant"),
+    "providers": (
+        "SELECT count(*) FROM providers p WHERE p.tenant_id=? AND p.status='active' "
+        "AND p.health_status='healthy' AND (p.auth_type='none' OR EXISTS("
+        "SELECT 1 FROM provider_credentials c WHERE c.tenant_id=p.tenant_id "
+        "AND c.provider_id=p.provider_id AND c.status='active' AND length(c.encrypted_key)>0))",
+        "tenant",
+    ),
+    "models": (
+        "SELECT count(*) FROM model_aliases a JOIN models m "
+        "ON m.tenant_id=a.tenant_id AND m.model_id=a.default_model_id "
+        "JOIN providers p ON p.tenant_id=m.tenant_id AND p.provider_id=m.provider_id "
+        "WHERE a.tenant_id=? AND a.status='active' AND m.status='active' AND p.status='active' "
+        "AND p.health_status='healthy' AND (p.auth_type='none' OR EXISTS("
+        "SELECT 1 FROM provider_credentials c WHERE c.tenant_id=p.tenant_id "
+        "AND c.provider_id=p.provider_id AND c.status='active' AND length(c.encrypted_key)>0))",
+        "tenant",
+    ),
     "projects": ("SELECT count(*) FROM projects WHERE tenant_id=?", "tenant"),
-    "usage": ("SELECT count(*) FROM usage_ledger WHERE tenant_id=?", "tenant"),
+    "consumer_keys": (
+        "SELECT count(*) FROM virtual_keys k JOIN virtual_key_consumers b "
+        "ON b.tenant_id=k.tenant_id AND b.virtual_key_id=k.virtual_key_id "
+        "JOIN workspace_consumers c ON c.tenant_id=b.tenant_id AND c.consumer_id=b.consumer_id "
+        "WHERE k.tenant_id=? AND k.status='active' AND c.status='active'",
+        "tenant",
+    ),
+    "usage": (
+        "SELECT count(*) FROM request_logs WHERE tenant_id=? AND status='success'",
+        "tenant",
+    ),
     "policies": ("SELECT count(*) FROM policies WHERE tenant_id=?", "tenant"),
     "dlp": ("SELECT count(*) FROM dlp_rules WHERE tenant_id=?", "tenant"),
     "audit": ("SELECT count(*) FROM audit_logs WHERE tenant_id=?", "tenant"),
@@ -1257,12 +1506,19 @@ def _ensure_task_home(
     )
     source_digest = _sha(
         {
+            "task_action_revision": 2,
             "role": actor.membership_role,
             "membership_revision": _membership_revision(connection, actor.membership_id),
             "permission_fingerprint": actor.authorization_fingerprint,
             "contract": contract["navigation_contract_snapshot_id"],
             "facts": facts,
-            "tasks": [task.task_code for task in specs],
+            "tasks": [
+                (
+                    task.task_code, task.source_code, task.action_route_code,
+                    task.priority, task.writable,
+                )
+                for task in specs
+            ],
         }
     )
     head = connection.execute(
@@ -1331,7 +1587,7 @@ def _ensure_task_home(
             status = "not_started"
         action = (
             task.action_route_code
-            if task.writable and status in {"ready", "needs_attention"}
+            if task.writable and status in {"ready", "needs_attention", "completed"}
             else None
         )
         connection.execute(

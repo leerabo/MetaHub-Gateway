@@ -2,8 +2,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createIdentityPageController } from "../../src/features/identity/identityPageState.js";
-import { renderIdentitySecurityPage } from "../../src/features/identity/renderIdentityPage.js";
+import { createIdentityPageController as createAccountController } from "../../src/features/identity/identityPageState.js";
+const createIdentityPageController = (options) => createAccountController({ initialSection: "business", ...options });
+import { renderIdentitySecurityPage as renderAccountPage } from "../../src/features/identity/renderIdentityPage.js";
+const renderIdentitySecurityPage = (root, state) => renderAccountPage(root, { accountSection: "business", ...state });
 import { renderPlatformWorkspace } from "../../src/features/platform/renderPlatformPage.js";
 import {
   getWorkspaceBusinessVerification,

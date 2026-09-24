@@ -151,6 +151,7 @@ function renderAssistant(state, domainLabel, domain, resolveCitationNavigation =
     ${stateBlock(state?.status, state?.error)}
     <form class="console-experience-assistant" data-console-experience-assistant-form>
       <label for="${domain}-console-question">问题</label>
+      <p class="console-experience-help">这里填写你想了解的运营问题，使用自然语言即可。管理助手只为当前管理员提供只读摘要，例如“过去 7 天调用量如何？”、“最近有哪些错误？”或“哪里可以降低成本？”。</p>
       <textarea id="${domain}-console-question" data-console-experience-question
         maxlength="2000" rows="4" autocomplete="off" spellcheck="false"></textarea>
       <div class="console-experience-actions">

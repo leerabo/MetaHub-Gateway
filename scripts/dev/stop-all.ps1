@@ -44,7 +44,7 @@ foreach ($recordedPid in $recordedPids) {
   $commandLine = [string]$rootProcess.CommandLine
   $isMetaHubLauncher = (
     $commandLine -match [regex]::Escape($Root) -and
-    $commandLine -match 'scripts[\\/]dev[\\/]start-(gateway|control-api|console)\.ps1'
+    $commandLine -match 'scripts[\\/]dev[\\/]start-(gateway|control-api|status|console)\.ps1'
   )
   if (-not $isMetaHubLauncher) {
     Write-Warning "Skipped stale process record $recordedPid because it is not a MetaHub launcher."

@@ -12,11 +12,13 @@ import {
 } from "../../src/lib/consoleShell.js";
 import {
   activeNavigationItem,
+  localizeConsoleGroup,
   navigationItemsFromState,
   renderConsoleShell,
 } from "../../src/features/console-shell/renderConsoleShell.js";
 import { renderDeveloperStart } from "../../src/features/developer-start/renderDeveloperStart.js";
 import { AuthApiError } from "../../src/lib/auth.js";
+import { createI18n } from "../../src/i18n/messages.js";
 
 test("console shell client sends navigation and preference requests without tenant id", async () => {
   const calls = [];
@@ -283,6 +285,38 @@ test("renderConsoleShell groups navigation and escapes user controlled fields", 
   assert.match(html, /Trusted content/);
 });
 
+test("renderConsoleShell localizes the advanced navigation group", () => {
+  const html = renderConsoleShell({
+    authContext: { user: { display_name: "Admin", email: "admin@example.com", role: "admin" } },
+    consoleShellState: {
+      navigation: {
+        active_navigation_item_id: "error-maps",
+        navigation_items: [{
+          id: "error-maps",
+          label: "错误映射",
+          group: "advanced",
+          group_code: "advanced",
+          placement: "advanced",
+          order: 1,
+        }],
+      },
+    },
+    contentHtml: "",
+    i18n: createI18n("zh-CN"),
+  });
+  assert.match(html, /<span class="sidebar-group-label">高级工具<\/span>/u);
+  assert.doesNotMatch(html, />advanced<\/span>/u);
+});
+
+test("localizeConsoleGroup keeps internal group codes stable while localizing display text", () => {
+  const zh = createI18n("zh-CN");
+  const en = createI18n("en-US");
+  assert.equal(localizeConsoleGroup("advanced", zh), "高级工具");
+  assert.equal(localizeConsoleGroup("高级工具", zh), "高级工具");
+  assert.equal(localizeConsoleGroup("advanced", en), "Advanced tools");
+  assert.equal(localizeConsoleGroup("unknown-group", zh), "unknown-group");
+});
+
 test("renderConsoleShell restores the persisted collapsed sidebar state", () => {
   const html = renderConsoleShell({
     authContext: {
@@ -353,6 +387,44 @@ test("renderConsoleShell restores only one expanded navigation group", () => {
   assert.match(html, /data-sidebar-group-toggle="overview"[\s\S]*aria-expanded="true"/);
   assert.match(html, /data-sidebar-group-toggle="providers"[\s\S]*aria-expanded="false"/);
   assert.equal((html.match(/class="sidebar-group-items" hidden/g) ?? []).length, 1);
+});
+
+test("renderConsoleShell reveals an active deferred item inside more controls", () => {
+  const html = renderConsoleShell({
+    authContext: { user: { display_name: "Admin", email: "admin@example.com", role: "admin" } },
+    consoleShellState: {
+      sidebarExpandedGroupKey: "home",
+      navigation: {
+        active_navigation_item_id: "quickstart",
+        navigation_items: [
+          { id: "overview", label: "Overview", group: "Home", group_code: "home", order: 1 },
+          { id: "assistant", label: "Assistant", group: "Home", group_code: "home", order: 2 },
+          { id: "approvals", label: "Approvals", group: "Home", group_code: "home", order: 3 },
+          { id: "quickstart", label: "Getting started", group: "Home", group_code: "home", order: 4 },
+        ],
+      },
+    },
+    contentHtml: "<section>Content</section>",
+  });
+
+  assert.match(html, /class="sidebar-group-more" open>[\s\S]*data-console-nav="quickstart"/u);
+  assert.match(html, /data-console-nav="quickstart"[^>]*aria-current="page"/u);
+});
+
+test("deferred controls retain a stable business group hook", () => {
+  const html = renderConsoleShell({
+    authContext: { user: { display_name: "Admin", email: "admin@example.com", role: "admin" } },
+    consoleShellState: {
+      navigation: {
+        active_navigation_item_id: "usage",
+        navigation_items: [
+          { id: "usage", label: "Usage", group: "Finance", group_code: "finance", placement: "primary", sidebar_visible: false, order: 1 },
+        ],
+      },
+    },
+    contentHtml: "<section>Content</section>",
+  });
+  assert.match(html, /data-sidebar-deferred-group="finance"/u);
 });
 
 test("renderDeveloperStart renders active navigation content when shell state is present", () => {

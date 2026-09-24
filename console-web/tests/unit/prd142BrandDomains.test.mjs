@@ -227,7 +227,7 @@ test("Deployment controller loads only a visible Deployment and never owns desir
   assert.equal(controller.snapshot().branding, null);
 });
 
-test("identity public brand is safe, ephemeral, and mounted before identity state", async () => {
+test("identity public brand is safe, ephemeral, and independent of identity startup", async () => {
   const styles = new Map();
   const favicon = { href: "", setAttribute(name, value) { if (name === "href") this.href = value; } };
   const app = { aria: "", setAttribute(name, value) { if (name === "aria-label") this.aria = value; } };
@@ -258,7 +258,9 @@ test("identity public brand is safe, ephemeral, and mounted before identity stat
     readFile(new URL("../../src/features/identity/main.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/features/identity/renderIdentityPage.js", import.meta.url), "utf8"),
   ]);
-  assert.match(identityMain, /getPublicBranding\(\{ controlApiUrl \}\)[\s\S]*publicBrandingReady\.then\(\(\) => controller\.mount\(\)\)/u);
+  assert.match(identityMain, /void getPublicBranding\(\{ controlApiUrl \}\)/u);
+  assert.match(identityMain, /void controller\.mount\(/u);
+  assert.doesNotMatch(identityMain, /publicBrandingReady/u);
   assert.doesNotMatch(`${identityMain}\n${identityRenderer}`, /localStorage|sessionStorage|tenant_slug/u);
   setIdentityPublicBranding(null, documentObject);
 });

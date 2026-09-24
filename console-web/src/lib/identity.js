@@ -13,6 +13,24 @@ const SESSION_KEYS = Object.freeze([
   "trusted_device_id",
 ]);
 
+const LOGIN_REQUEST_ID = /^(?:req_|console_)[A-Za-z0-9_-]{1,120}$/u;
+
+export function identityLoginHref({ interrupted = false, requestId } = {}) {
+  const query = new URLSearchParams({ view: "login" });
+  if (interrupted) {
+    query.set("reason", "session-unavailable");
+    if (LOGIN_REQUEST_ID.test(String(requestId ?? ""))) query.set("request_id", requestId);
+  }
+  return `/identity.html?${query}`;
+}
+
+export function identityLoginNotice(searchParams) {
+  if (searchParams.get("view") !== "login" || searchParams.get("reason") !== "session-unavailable") return null;
+  const requestId = searchParams.get("request_id");
+  return { message: "当前登录状态不可用，请重新登录。",
+    requestId: LOGIN_REQUEST_ID.test(String(requestId ?? "")) ? requestId : "-" };
+}
+
 export class IdentityApiError extends Error {
   constructor({ status = 0, code, message, requestId = "-", traceId = "-" } = {}) {
     super(safeErrorText(message));

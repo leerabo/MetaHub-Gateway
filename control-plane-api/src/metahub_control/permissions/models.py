@@ -40,6 +40,8 @@ class RolePermissionInfo(BaseModel):
 class PermissionMatrixResponse(BaseModel):
     """返回当前租户完整权限目录；任何完整性异常都不得返回部分矩阵。"""
 
+    tenant_id: str
+    workspace_id: str | None = None
     catalog_revision: int
     permissions: list[PermissionInfo]
     roles: list[RolePermissionInfo]
@@ -63,6 +65,8 @@ class ReplaceRolePermissionsRequest(BaseModel):
 class RolePermissionUpdateResponse(BaseModel):
     """返回矩阵替换后的权威角色状态及是否产生真实变更。"""
 
+    tenant_id: str
+    workspace_id: str | None = None
     role: RolePermissionInfo
     changed: bool
     event_id: str | None

@@ -134,6 +134,40 @@ async def _switch(client: AsyncClient, workspace_id: str):
     return response
 
 
+@pytest.mark.anyio
+async def test_partner_handoff_revokes_workspace_cookie_domain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    migrated_database: Path,
+) -> None:
+    _database_url, app = _prepare(monkeypatch, tmp_path, migrated_database)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN,
+    ) as client:
+        await _global_login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+        workspaces = await client.get("/identity/workspaces")
+        assert workspaces.status_code == 200, workspaces.text
+        workspace_id = workspaces.json()["workspaces"][0]["workspace_id"]
+        await _switch(client, workspace_id)
+        workspace_token = client.cookies.get(WORKSPACE_SESSION_COOKIE)
+        assert workspace_token
+
+        handoff = await client.post(
+            "/identity/partner-handoffs",
+            json={},
+            headers=_csrf_headers(client, GLOBAL_CSRF_COOKIE),
+        )
+        assert handoff.status_code == 200, handoff.text
+        assert handoff.json()["handed_off"] is True
+        cookie_headers = handoff.headers.get_list("set-cookie")
+        assert any(WORKSPACE_SESSION_COOKIE in value and "Max-Age=0" in value for value in cookie_headers)
+        assert any(WORKSPACE_CSRF_COOKIE in value and "Max-Age=0" in value for value in cookie_headers)
+
+        revoked = await client.get("/workspace/session")
+        assert revoked.status_code == 401
+        assert revoked.json()["code"] == "workspace_session.required"
+
+
 async def _register_with_invitation(
     client: AsyncClient,
     *,

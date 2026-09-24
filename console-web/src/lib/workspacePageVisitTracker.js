@@ -4,16 +4,40 @@ import { workspaceResourcePageOwner } from "./workspaceResourcePage.js";
 
 export function createWorkspacePageVisitTracker({ current, recordVisit, createIdempotencyKey, onError }) {
   let active = null;
+  let transmitTimer = null;
+  let transmitTimerResolve = null;
+  const TRANSMIT_DELAY_MS = 750;
+  // A route transition aborts the browser-side fetch, but the server may still
+  // be finishing the SQLite write. Keep telemetry writers serial so a burst of
+  // navigation cannot create one stale writer per page.
+  let transmissionTail = Promise.resolve();
   const tracker = createUniquePageVisitTracker({
     targetItemId: "workspace-page",
     recordVisit: async ({ visitContext }) => {
       if (!isCurrent(visitContext)) return;
-      try {
-        await recordVisit({ visit: visitContext.body, idempotencyKey: visitContext.idempotencyKey,
-          signal: visitContext.controller.signal });
-      } catch (error) {
-        if (isCurrent(visitContext) && error?.name !== "AbortError") onError?.(error);
-      }
+      const transmit = async () => {
+        if (!isCurrent(visitContext)) return;
+        try {
+          await recordVisit({ visit: visitContext.body, idempotencyKey: visitContext.idempotencyKey,
+            signal: visitContext.controller.signal });
+        } catch (error) {
+          if (isCurrent(visitContext) && error?.name !== "AbortError") onError?.(error);
+        }
+      };
+      // Task-home and resource pages may still be materializing their first
+      // read model immediately after render. Keep best-effort telemetry out of
+      // that critical writer window; leaving the page cancels the timer.
+      const delayedTransmit = () => new Promise((resolve) => {
+        transmitTimer = globalThis.setTimeout(() => {
+          transmitTimer = null;
+          transmitTimerResolve = null;
+          void transmit().then(resolve, resolve);
+        }, TRANSMIT_DELAY_MS);
+        transmitTimerResolve = resolve;
+      });
+      const scheduled = transmissionTail.then(delayedTransmit, delayedTransmit);
+      transmissionTail = scheduled.catch(() => undefined);
+      await scheduled;
     },
   });
 
@@ -35,6 +59,12 @@ export function createWorkspacePageVisitTracker({ current, recordVisit, createId
   }
 
   function leave() {
+    if (transmitTimer !== null) {
+      globalThis.clearTimeout(transmitTimer);
+      transmitTimer = null;
+      transmitTimerResolve?.();
+      transmitTimerResolve = null;
+    }
     active?.controller.abort();
     active = null;
     tracker.leave();

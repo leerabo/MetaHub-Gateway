@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { createIdentityPageController } from "../../src/features/identity/identityPageState.js";
+import { createIdentityPageController as createAccountController } from "../../src/features/identity/identityPageState.js";
+const createIdentityPageController = (options) => createAccountController({ initialSection: "compliance", ...options });
 import { renderComplianceCenter } from "../../src/features/identity/renderComplianceCenter.js";
 import { renderPlatformWorkspace } from "../../src/features/platform/renderPlatformPage.js";
 import {

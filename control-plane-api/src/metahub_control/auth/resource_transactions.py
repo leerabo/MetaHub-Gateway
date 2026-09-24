@@ -39,6 +39,14 @@ RESOURCE_PERMISSIONS = frozenset(
         "request_log.read",
         "feedback.use",
         "developer_portal.read",
+        "dlp.read",
+        "dlp.write",
+        "webhook.manage",
+        "rbac.matrix.manage",
+        "billing.anomaly.read",
+        "billing.anomaly.write",
+        "policy.publish",
+        "policy.read",
         "request_explanation.read",
         "audit.read",
         "audit.export",
@@ -76,6 +84,14 @@ class ResourceWriteTransaction:
         try:
             self.begin()
             return self
+        except sqlite3.OperationalError as error:
+            self.__exit__(None, None, None)
+            # Lock contention is a recoverable dependency failure. Keep it in
+            # the structured API error path (including CORS and request_id).
+            primary_code = getattr(error, "sqlite_errorcode", 0) & 0xFF
+            if primary_code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                raise ApiError("infra.service_unavailable") from None
+            raise
         except BaseException:
             self.__exit__(None, None, None)
             raise

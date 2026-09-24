@@ -15,15 +15,18 @@ from uuid import uuid4
 
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
+from metahub_shared.db.schema import table_columns
 from metahub_shared.db.security import hash_secret, secret_prefix
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
 from metahub_control.audit import (
+    AuditActor,
     AuditRequestMeta,
     commit_audited_transaction,
     dispatch_audit_recorded,
     record_audit_log,
+    record_audit_log_for_actor,
 )
 from metahub_control.auth import AuthContext
 from metahub_control.auth.resource_transactions import ResourceWriteTransaction
@@ -51,6 +54,161 @@ MAX_DESCRIPTION_LENGTH = 240
 MAX_LIMIT_VALUE = 100_000_000
 
 
+def disable_virtual_keys_created_by(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    created_by: str,
+    member_account_id: str | None = None,
+    member_display_name: str | None = None,
+    member_email: str | None = None,
+    actor: AuditActor,
+    request_meta: AuditRequestMeta,
+    request_id: str,
+    trace_id: str,
+    now: str,
+) -> int:
+    """Disable every key that belongs to a removed workspace member.
+
+    A member can have either a self-created key or a legacy key created by an
+    administrator and assigned through ``virtual_key_consumers``. The caller
+    owns the surrounding transaction. Rows remain in place so usage, billing
+    and audit history keep their original references; changing the key and
+    consumer status makes every previously issued secret fail immediately.
+    """
+
+    owner_ids = [created_by]
+    if member_account_id and member_account_id != created_by:
+        owner_ids.append(member_account_id)
+    owner_placeholders = ",".join("?" for _ in owner_ids)
+    consumer_columns = set(table_columns(connection, "workspace_consumers"))
+    employee_code_clause = ""
+    employee_code_params: list[str] = []
+    if "employee_code" in consumer_columns:
+        # Older employee directories used either the login email or the global
+        # account id as employee_code. Match both forms during removal so a
+        # previously issued assignment cannot survive a membership deletion.
+        employee_codes = [value for value in (member_email, member_account_id) if value]
+        if employee_codes:
+            employee_code_clause = " OR " + " OR ".join(
+                "lower(trim(COALESCE(consumer.employee_code,'')))=lower(trim(?))"
+                for _ in employee_codes
+            )
+            employee_code_params = employee_codes
+    rows = connection.execute(
+        f"""
+        SELECT DISTINCT vk.virtual_key_id
+        FROM virtual_keys vk
+        LEFT JOIN virtual_key_consumers assignment
+          ON assignment.tenant_id=vk.tenant_id
+         AND assignment.virtual_key_id=vk.virtual_key_id
+        LEFT JOIN workspace_consumers consumer
+          ON consumer.tenant_id=assignment.tenant_id
+         AND consumer.consumer_id=assignment.consumer_id
+        WHERE vk.tenant_id=? AND vk.status='active'
+          AND (
+            vk.created_by IN ({owner_placeholders})
+            OR consumer.created_by IN ({owner_placeholders})
+            OR (
+              ? IS NOT NULL
+              AND lower(trim(consumer.display_name))=lower(trim(?))
+              AND (
+                SELECT COUNT(*)
+                FROM workspace_consumers same_name
+                WHERE same_name.tenant_id=consumer.tenant_id
+                  AND same_name.status='active'
+                  AND lower(trim(same_name.display_name))=lower(trim(?))
+              )=1
+            )
+            {employee_code_clause}
+          )
+        ORDER BY vk.virtual_key_id
+        """,
+        (
+            tenant_id,
+            *owner_ids,
+            *owner_ids,
+            member_display_name,
+            member_display_name,
+            member_display_name,
+            *employee_code_params,
+        ),
+    ).fetchall()
+
+    disabled = 0
+    for row in rows:
+        virtual_key_id = str(row["virtual_key_id"])
+        before = _load_virtual_key(connection, tenant_id, virtual_key_id)
+        changed = connection.execute(
+            """
+            UPDATE virtual_keys
+            SET status='disabled', credential_revision=credential_revision+1,
+                disabled_at=?, disabled_by=?, updated_at=?
+            WHERE tenant_id=? AND virtual_key_id=? AND status='active'
+            """,
+            (now, actor.user_id, now, tenant_id, virtual_key_id),
+        ).rowcount
+        if changed != 1:
+            continue
+        after = _load_virtual_key(connection, tenant_id, virtual_key_id)
+        record_audit_log_for_actor(
+            connection,
+            actor,
+            action="virtual_key.updated",
+            object_type="virtual_key",
+            object_id=virtual_key_id,
+            object_name=f"{after.name} / {after.key_prefix}",
+            before_summary=_virtual_key_audit_summary(before),
+            after_summary=_virtual_key_audit_summary(after),
+            request_meta=request_meta,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+        disabled += 1
+
+    # Disable the historical assignment as well. Gateway authentication checks
+    # this status on every request, while the key row remains for accounting.
+    consumer_owner_clause = f"created_by IN ({owner_placeholders})"
+    consumer_name_clause = (
+        "lower(trim(display_name))=lower(trim(?))"
+        " AND (SELECT COUNT(*) FROM workspace_consumers same_name "
+        "WHERE same_name.tenant_id=workspace_consumers.tenant_id "
+        "AND same_name.status='active' "
+        "AND lower(trim(same_name.display_name))=lower(trim(?)))=1"
+        if member_display_name
+        else "0"
+    )
+    consumer_employee_clause = ""
+    consumer_employee_params: list[str] = []
+    if "employee_code" in consumer_columns:
+        employee_codes = [value for value in (member_email, member_account_id) if value]
+        if employee_codes:
+            consumer_employee_clause = " OR " + " OR ".join(
+                "lower(trim(COALESCE(employee_code,'')))=lower(trim(?))"
+                for _ in employee_codes
+            )
+            consumer_employee_params = employee_codes
+    consumer_params = [now, tenant_id, *owner_ids]
+    if member_display_name:
+        consumer_params.append(member_display_name)
+        consumer_params.append(member_display_name)
+    consumer_params.extend(consumer_employee_params)
+    connection.execute(
+        f"""
+            UPDATE workspace_consumers
+            SET status='disabled', revision=revision+1, updated_at=?
+            WHERE tenant_id=? AND status='active'
+              AND (
+                {consumer_owner_clause}
+                OR {consumer_name_clause}
+                {consumer_employee_clause}
+              )
+        """,
+        consumer_params,
+    )
+    return disabled
+
+
 def list_virtual_keys(
     config: AppConfig,
     context: AuthContext,
@@ -58,6 +216,8 @@ def list_virtual_keys(
     status: str | None,
     environment_id: str | None,
     environment: str | None,
+    personal_only: bool = False,
+    user_id: str | None = None,
     request_id: str,
     trace_id: str,
 ) -> VirtualKeyListResponse:
@@ -66,10 +226,17 @@ def list_virtual_keys(
     Virtual Key 是模型调用入口凭证；列表只展示安全元数据，绝不返回 key_hash 或明文 Key。
     """
 
-    normalized_status = _normalize_optional_status(status)
+    # Disabled keys remain in immutable billing/audit history but stay out of
+    # the normal organization directory after a member is removed.
+    normalized_status = _normalize_optional_status(status) or "active"
     normalized_environment = _normalize_optional_environment(environment)
     params: list[str] = [context.user.tenant_id]
     filters: list[str] = []
+    if personal_only:
+        if not user_id:
+            raise ApiError("workspace_session.permission_denied")
+        filters.append("vk.created_by=?")
+        params.append(user_id)
     if normalized_status:
         filters.append("vk.status=?")
         params.append(normalized_status)
@@ -135,6 +302,7 @@ def create_virtual_key(
     audit_request_meta: AuditRequestMeta | None = None,
     request_id: str,
     trace_id: str,
+    personal_only: bool = False,
 ) -> CreateVirtualKeyResponse:
     """创建 Virtual Key。
 
@@ -162,6 +330,11 @@ def create_virtual_key(
             project_id, application_id = _resolve_project_binding(
                 connection, context.user.tenant_id, payload.project_id, payload.application_id
             )
+            if personal_only and payload.consumer_id is not None:
+                # Members may create their own key, but cannot issue one for
+                # another employee. Reuse the standard 403 contract so the
+                # boundary does not surface an internal-only error code.
+                raise ApiError("auth.permission_denied")
             if payload.consumer_id is not None:
                 require_active_consumer(connection, context, payload.consumer_id)
             now = _to_db_time(_utcnow())
@@ -239,12 +412,13 @@ def create_virtual_key(
 
 
 def rotate_virtual_key(
-    config, context, virtual_key_id, payload, *, audit_request_meta, request_id, trace_id
+    config, context, virtual_key_id, payload, *, audit_request_meta, request_id, trace_id, personal_only=False
 ):
     with ResourceWriteTransaction(
         _connect(config), config, context, "virtual_key.write"
     ) as transaction:
         connection, context = transaction.connection, transaction.context
+        _require_personal_key_owner(connection, context, virtual_key_id, personal_only)
         before = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
         if before.status != "active" or before.credential_revision != payload.expected_revision:
             raise ApiError("virtual_key.rotate_conflict")
@@ -289,6 +463,7 @@ def update_virtual_key(
     audit_request_meta: AuditRequestMeta | None = None,
     request_id: str,
     trace_id: str,
+    personal_only: bool = False,
 ) -> VirtualKeyResponse:
     """更新当前租户 Virtual Key 的安全元数据和状态。"""
 
@@ -308,6 +483,7 @@ def update_virtual_key(
     with ResourceWriteTransaction(_connect(config), config, context, "virtual_key.write") as transaction:
         connection = transaction.connection
         context = transaction.context
+        _require_personal_key_owner(connection, context, virtual_key_id, personal_only)
         before = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
         if environment_fields:
             # 环境变更必须同时更新权威 ID 和兼容代码，二者冲突时拒绝静默覆盖。
@@ -392,6 +568,7 @@ def update_virtual_key_limits(
     audit_request_meta: AuditRequestMeta | None = None,
     request_id: str,
     trace_id: str,
+    personal_only: bool = False,
 ) -> VirtualKeyResponse:
     """更新当前租户某把 Virtual Key 的 RPM、TPM 和并发限制。
 
@@ -419,6 +596,7 @@ def update_virtual_key_limits(
     with ResourceWriteTransaction(_connect(config), config, context, "virtual_key.write") as transaction:
         connection = transaction.connection
         context = transaction.context
+        _require_personal_key_owner(connection, context, virtual_key_id, personal_only)
         before = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
         now = _to_db_time(_utcnow())
         existing = connection.execute(
@@ -501,6 +679,7 @@ def disable_virtual_key(
     audit_request_meta: AuditRequestMeta | None = None,
     request_id: str,
     trace_id: str,
+    personal_only: bool = False,
 ) -> VirtualKeyResponse:
     """软禁用 Virtual Key。
 
@@ -510,6 +689,7 @@ def disable_virtual_key(
     with ResourceWriteTransaction(_connect(config), config, context, "virtual_key.write") as transaction:
         connection = transaction.connection
         context = transaction.context
+        _require_personal_key_owner(connection, context, virtual_key_id, personal_only)
         before = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
         if before.status != "disabled":
             now = _to_db_time(_utcnow())
@@ -612,6 +792,17 @@ def _connect(config: AppConfig) -> sqlite3.Connection:
     except DbError as exc:
         # 关键异常统一映射为业务错误码，避免底层实现细节穿透到 API 响应。
         raise ApiError(exc.code, message=exc.message, suggestion=exc.suggestion) from exc
+
+
+def _require_personal_key_owner(connection: sqlite3.Connection, context: AuthContext, virtual_key_id: str, personal_only: bool) -> None:
+    if not personal_only:
+        return
+    row = connection.execute(
+        "SELECT created_by FROM virtual_keys WHERE tenant_id=? AND virtual_key_id=?",
+        (context.user.tenant_id, virtual_key_id),
+    ).fetchone()
+    if row is None or row["created_by"] != context.user.user_id:
+        raise ApiError("virtual_key.not_found")
 
 
 def _load_virtual_key(connection: sqlite3.Connection, tenant_id: str, virtual_key_id: str) -> VirtualKeyInfo:

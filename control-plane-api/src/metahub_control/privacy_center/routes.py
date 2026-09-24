@@ -17,6 +17,10 @@ from metahub_control.platform_access.constants import (
     PLATFORM_SESSION_COOKIE,
     SUPPORT_SESSION_COOKIE,
 )
+from metahub_control.platform_access.service import (
+    authenticate_platform_session_context,
+    platform_session_matches_global_cookie,
+)
 from metahub_control.saas_billing.routes import (
     _cookie_values,
     _private,
@@ -307,7 +311,6 @@ def _identity_credentials(request: Request, *, write: bool) -> _IdentityCredenti
 def _platform_credentials(request: Request) -> str:
     if (
         _raw_headers(request, b"authorization")
-        or _cookie_values(request, GLOBAL_SESSION_COOKIE)
         or _cookie_values(request, WORKSPACE_SESSION_COOKIE)
         or _cookie_values(request, SUPPORT_SESSION_COOKIE)
     ):
@@ -317,6 +320,21 @@ def _platform_credentials(request: Request) -> str:
         raise ApiError("platform.session_required")
     if not valid_opaque_value(values[0]):
         raise ApiError("platform.session_invalid")
+    global_values = _cookie_values(request, GLOBAL_SESSION_COOKIE)
+    global_csrf_values = _cookie_values(request, GLOBAL_CSRF_COOKIE)
+    if global_values or global_csrf_values:
+        if len(global_values) != 1 or len(global_csrf_values) > 1:
+            raise ApiError("privacy.credential_conflict")
+        try:
+            context = authenticate_platform_session_context(
+                request.app.state.config, values[0]
+            )
+        except ApiError:
+            raise ApiError("privacy.credential_conflict") from None
+        if not platform_session_matches_global_cookie(
+            request.app.state.config, context, global_values[0]
+        ):
+            raise ApiError("privacy.credential_conflict")
     return values[0]
 
 

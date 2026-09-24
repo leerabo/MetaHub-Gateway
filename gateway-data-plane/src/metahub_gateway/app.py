@@ -12,7 +12,10 @@ from metahub_shared.runtime.fastapi_app import create_service_app
 
 from metahub_gateway.api.internal_batch import router as internal_batch_router
 from metahub_gateway.api.internal_chat import router as internal_chat_router
-from metahub_gateway.api.openai_compatible import router as openai_compatible_router
+from metahub_gateway.api.openai_compatible import (
+    router as openai_compatible_router,
+    unversioned_router as unversioned_openai_compatible_router,
+)
 from metahub_gateway.cache_affinity import install_cache_affinity_recovery
 from metahub_gateway.database_runtime import GatewayDatabasePoolMiddleware
 from metahub_gateway.error_maps import install_provider_error_map_cache
@@ -49,11 +52,15 @@ app = create_service_app(
         "X-MetaHub-Session-ID",
         "X-MetaHub-Turn-ID",
         "X-Provider-Connection-ID",
+        # Anthropic-compatible clients send the same employee KEY in x-api-key;
+        # the public Messages facade normalizes it to the shared Bearer contract.
+        "x-api-key",
     ),
     extra_cors_expose_headers=("X-CSRF-Token",),
     cors_allow_credentials=True,
 )
 app.include_router(openai_compatible_router)
+app.include_router(unversioned_openai_compatible_router)
 app.include_router(internal_chat_router)
 app.include_router(internal_batch_router)
 app.include_router(feedback_router)

@@ -81,7 +81,7 @@ def _config(database_url: str) -> AppConfig:
 def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     database = tmp_path_factory.mktemp("prd130-service-base") / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0122"
+    assert apply_migrations(database_url).applied[-1] == "0156"
     apply_seed_data(database_url)
     return database
 

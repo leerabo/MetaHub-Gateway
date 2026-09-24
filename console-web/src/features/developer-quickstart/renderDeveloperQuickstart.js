@@ -1,6 +1,6 @@
 /**
  * 渲染开发者快速开始页。
- * 页面只展示安全占位和脱敏 Key 前缀；真实 Virtual Key 明文只能由用户本地环境变量保存。
+ * 页面只展示安全占位和脱敏 Key 前缀；成员在组织空间自行创建个人 KEY，环境变量只是部分客户端的可选保存方式。
  */
 export function renderDeveloperQuickstart(state) {
   if (!state) {
@@ -17,7 +17,7 @@ export function renderDeveloperQuickstart(state) {
       <div class="panel-heading quickstart-heading">
         <div>
           <h2 id="quickstart-title">5分钟快速接入</h2>
-          <p>复制示例到本地执行一次非流式 chat 调用；Virtual Key 只通过环境变量读取。</p>
+          <p>复制示例到本地执行一次非流式 chat 调用；使用你在组织空间创建的个人 MetaHub KEY。环境变量仅是部分客户端的可选保存方式。</p>
         </div>
         <span class="quickstart-badge">${escapeHtml(state.request_id ?? "-")}</span>
       </div>
@@ -77,7 +77,7 @@ function renderSummaryItem(label, value) {
 }
 
 /**
- * 渲染 Virtual Key 安全状态，只展示环境变量名或脱敏前缀。
+ * 渲染 Virtual Key 安全状态，只展示环境变量名或脱敏前缀，不要求员工填写环境变量。
  */
 function renderKeyState(state) {
   const status = state.has_active_virtual_key ? "已有 active Key" : "需要创建 Key";

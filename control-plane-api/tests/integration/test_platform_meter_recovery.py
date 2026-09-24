@@ -101,6 +101,25 @@ def counts(database):
                                       "WHERE projection_code='usage_ledger_v1'").fetchone()[0]}
 
 
+def rollback_after(database, target_version):
+    """Expose a historical migration only after current later migrations roll back."""
+    with closing(connect_database(database)) as db:
+        original_versions = [row[0] for row in db.execute(
+            "SELECT version FROM schema_migrations WHERE status='applied' ORDER BY version"
+        )]
+    assert target_version in original_versions
+    rolled_back = []
+    while True:
+        with closing(connect_database(database)) as db:
+            head = db.execute(
+                "SELECT version FROM schema_migrations WHERE status='applied' "
+                "ORDER BY version DESC LIMIT 1"
+            ).fetchone()[0]
+        if head == target_version:
+            return original_versions, rolled_back
+        rolled_back.append(rollback_last_migration(database).rolled_back)
+
+
 def test_archive_preserves_source_and_advances_exactly_one_with_replay(subject):
     database, app, workspace_id, tenant_id = subject
     usage_id = failed_head(subject)
@@ -130,6 +149,7 @@ def test_archive_preserves_source_and_advances_exactly_one_with_replay(subject):
             with pytest.raises(sqlite3.IntegrityError):
                 db.execute(sql)
             db.rollback()
+    rollback_after(database, "0149")
     with pytest.raises(DbError) as caught:
         rollback_last_migration(database, expected_version="0149")
     assert caught.value.code == "db.migration_failed"
@@ -304,13 +324,15 @@ async def test_subscription_era_gap_cannot_be_archived_even_by_direct_insert(sub
 
 def test_migration_pristine_down_and_up(subject):
     database, *_ = subject
-    rollback_last_migration(database, expected_version="0149")
+    original_versions, rolled_back = rollback_after(database, "0149")
+    assert rolled_back == list(reversed([version for version in original_versions if version > "0149"]))
+    assert rollback_last_migration(database, expected_version="0149").rolled_back == "0149"
     with closing(connect_database(database)) as db:
         assert db.execute("SELECT 1 FROM sqlite_schema WHERE name='platform_meter_recovery_actions'").fetchone() is None
         assert db.execute("SELECT COUNT(*) FROM tenant_deletion_table_manifest "
                           "WHERE source_table='platform_meter_recovery_actions'").fetchone()[0] == 0
     result = apply_migrations(database)
-    assert len(result.applied) == 1
+    assert result.applied == [version for version in original_versions if version >= "0149"]
     assert counts(database)["platform_meter_recovery_actions"] == 0
 
 

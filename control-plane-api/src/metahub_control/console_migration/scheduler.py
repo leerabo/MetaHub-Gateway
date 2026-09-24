@@ -38,9 +38,19 @@ from .manifest import (
 logger = logging.getLogger("metahub.control.console_migration.scheduler")
 ContextFactory = Callable[[FastAPI], AbstractAsyncContextManager[None]]
 DEFAULT_LEASE_SECONDS = 15.0
-DEFAULT_POLL_SECONDS = 1.0
+# Lease renewal is bounded by one third of the default 15 second lease. Five
+# seconds keeps the registry responsive while avoiding a continuous SQLite
+# writer stream that can starve health reads on the local trial database.
+DEFAULT_POLL_SECONDS = 5.0
 DEFAULT_SHUTDOWN_SECONDS = 10.0
 SLOW_DATABASE_SECONDS = 0.5
+# 观测行是后台诊断事实，不应为争用业务写锁等待整个通用 SQLite 超时。
+# 观测失败会按既有 dependency_unavailable 计数并在下一轮重试；业务请求不能被这条非关键写入拖住。
+OBSERVATION_BUSY_TIMEOUT_MILLISECONDS = 100
+# Registry lease writes are maintenance traffic. A long SQLite busy wait can
+# block the coordinator worker for the whole HTTP read timeout. Fail fast and
+# retry on the next coordinator tick while the current lease is still valid.
+COORDINATOR_BUSY_TIMEOUT_MILLISECONDS = 750
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +77,7 @@ class _CoordinatorStats:
     persisted_count: int = 0
     backend_failure_count: int = 0
     shutdown_timeout_count: int = 0
+    renewal_retry_after: float = 0.0
 
 
 @dataclass(slots=True)
@@ -218,6 +229,9 @@ async def _coordinator_loop(
             if observation_task is not None and observation_task.done():
                 observation_task.result()
                 observation_task = None
+            # A disabled local scheduler profile has no active lease or registry
+            # binding; avoid starting the diagnostic writer in that mode because
+            # it would still contend on SQLite despite doing no useful work.
             if observation_task is None:
                 observation_task = asyncio.create_task(
                     _observe(app, replica_code, active, stats),
@@ -245,6 +259,8 @@ async def _renew_active(
     stats: _CoordinatorStats,
     lease_seconds: float,
 ) -> None:
+    if monotonic() < stats.renewal_retry_after:
+        return
     children = sorted(
         tuple(active.items()),
         key=lambda item: min(lease.deadline for lease in item[1].leases),
@@ -267,11 +283,29 @@ async def _renew_active(
     except ApiError as exc:
         results = (exc,) * len(children)
     expired = []
+    now = datetime.now(UTC)
     for (key, child), renewed in zip(children, results, strict=True):
         scheduler_code, _queue_code = key
         if isinstance(renewed, ApiError):
             stats.backend_failure_count += 1
             _warning(scheduler_code, renewed.code)
+            # Lock contention is transient. Keep a child alive while its last
+            # proof remains valid; once it expires, stop it to preserve fences.
+            if (
+                renewed.code == "console_migration.dependency_unavailable"
+                and all(lease.deadline > now for lease in child.leases)
+            ):
+                # This function is also called between every context install.
+                # Avoid an immediate retry for each binding after a busy result,
+                # while ensuring the delay never extends past a lease deadline.
+                remaining = min((lease.deadline - now).total_seconds()
+                                for lease in child.leases)
+                retry_at = monotonic() + min(1.0, remaining)
+                if stats.renewal_retry_after <= monotonic():
+                    stats.renewal_retry_after = retry_at
+                else:
+                    stats.renewal_retry_after = min(stats.renewal_retry_after, retry_at)
+                continue
             renewed = None
         if renewed is None:
             stats.dropped_count += 1
@@ -418,6 +452,7 @@ def _claim_scheduler_leases(
         raise ApiError("console_migration.contract_not_ready")
     connection = _connect(config)
     try:
+        _configure_coordinator_connection(connection)
         connection.execute("BEGIN IMMEDIATE")
         registry_generation = _validate_registry(connection, definition)
         _validate_queue_contracts(connection, scheduler_code)
@@ -535,6 +570,7 @@ def renew_scheduler_leases(
         return None
     connection = _connect(config)
     try:
+        _configure_coordinator_connection(connection)
         connection.execute("BEGIN IMMEDIATE")
         renewed = _renew_leases_in_transaction(
             connection, config, leases, replica_code=replica_code,
@@ -573,6 +609,7 @@ def _renew_scheduler_lease_batch(
         raise ApiError("console_migration.contract_not_ready")
     connection = _connect(config)
     try:
+        _configure_coordinator_connection(connection)
         connection.execute("BEGIN IMMEDIATE")
         results = []
         for leases in groups:
@@ -688,6 +725,7 @@ def release_scheduler_leases(
     _lease_scheduler_code(leases)
     connection = _connect(config)
     try:
+        _configure_coordinator_connection(connection)
         connection.execute("BEGIN IMMEDIATE")
         now = _database_now(connection)
         released = 0
@@ -876,6 +914,11 @@ def _write_observation(
     try:
         connection = _connect(config)
         stage = "begin"
+        if getattr(connection, "backend", "sqlite") == "sqlite":
+            # 只收紧观测连接；租约与业务事务继续使用共享数据库的正常等待预算。
+            connection.execute(
+                f"PRAGMA busy_timeout={OBSERVATION_BUSY_TIMEOUT_MILLISECONDS}"
+            )
         connection.execute("BEGIN IMMEDIATE")
         stage = "write"
         connection.execute(
@@ -1035,6 +1078,13 @@ def _connect(config: AppConfig) -> sqlite3.Connection:
         return connect_database(config.database_url)
     except DbError:
         raise ApiError("console_migration.dependency_unavailable") from None
+
+
+def _configure_coordinator_connection(connection: sqlite3.Connection) -> None:
+    if getattr(connection, "backend", "sqlite") == "sqlite":
+        connection.execute(
+            f"PRAGMA busy_timeout={COORDINATOR_BUSY_TIMEOUT_MILLISECONDS}"
+        )
 
 
 def _rollback(connection: sqlite3.Connection) -> None:

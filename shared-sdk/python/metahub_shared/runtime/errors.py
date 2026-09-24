@@ -6459,6 +6459,12 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         "Use limit 1..100 and offset 0..10000.",
         owner="provider_health",
     ),
+    "provider_health.catalog_unsupported": ErrorSpec(
+        422,
+        "This provider does not support automatic model discovery.",
+        "Enter the provider model name manually.",
+        owner="provider_health",
+    ),
     "provider_health.probe_in_progress": ErrorSpec(
         409,
         "Provider probe is already in progress.",

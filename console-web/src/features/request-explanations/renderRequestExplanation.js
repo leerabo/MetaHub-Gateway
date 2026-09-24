@@ -5,6 +5,7 @@
  */
 
 import { hasPermission, PERMISSIONS } from "../../lib/permissions.js";
+import { icon } from "../public-home/icons.js";
 
 // 状态标签只翻译后端白名单枚举，未知值继续走安全回退且不参与权限或决策推导。
 const STATE_LABELS = Object.freeze({
@@ -327,7 +328,7 @@ const SUMMARY_FIELDS = Object.freeze([
  * 渲染 PAGE-079。
  * 前端角色判断只用于零 DOM/零预取体验；真实权限、租户隔离和字段脱敏仍由后端 GET 强制执行。
  */
-export function renderRequestExplanationPanel(state, authContext) {
+export function renderRequestExplanationPanel(state, authContext, i18n) {
   if (!hasPermission(authContext, PERMISSIONS.REQUEST_EXPLANATION_READ)) {
     return "";
   }
@@ -335,18 +336,19 @@ export function renderRequestExplanationPanel(state, authContext) {
   return `
     <div class="request-explanation-heading">
       <div>
-        <h2 id="request-explanations-title">请求解释</h2>
+        <h2 id="request-explanations-title">${escapeHtml(t(i18n, "title", "请求解释"))}</h2>
       </div>
-      ${renderTopStatus(currentState)}
+      ${renderTopStatus(currentState, i18n)}
     </div>
-    ${renderQueryForm(currentState)}
-    ${renderExplanationState(currentState)}
+    ${renderQueryForm(currentState, i18n)}
+    ${renderExplanationState(currentState, i18n)}
   `;
 }
 
 /** 查询表单只提交 source_request_id，不包含 tenant、actor 或 raw/include 参数。 */
-function renderQueryForm(state) {
+function renderQueryForm(state, i18n) {
   const requestId = state?.draftRequestId ?? state?.requestId ?? "";
+  const invalid = isInputError(state);
   return `
     <form id="request-explanation-form" class="request-explanation-form" novalidate>
       <label>
@@ -360,66 +362,74 @@ function renderQueryForm(state) {
           spellcheck="false"
           placeholder="req_xxx"
           aria-describedby="request-explanation-input-error"
+          aria-invalid="${invalid}"
           data-request-explanation-focus="request-id"
         />
       </label>
       <div class="request-explanation-actions">
-        <button type="submit" data-request-explanation-focus="query">查询</button>
+        <button type="submit" data-request-explanation-focus="query">${icon("search")}<span>${escapeHtml(t(i18n, "query", "查询"))}</span></button>
         <button
           type="button"
           id="request-explanation-refresh"
           data-request-explanation-focus="refresh"
+          title="${escapeAttribute(t(i18n, "refresh", "刷新"))}"
+          aria-label="${escapeAttribute(t(i18n, "refresh", "刷新"))}"
           ${state?.requestId ? "" : "disabled"}
-        >刷新</button>
+        >${icon("rotate-cw")}</button>
         <button
           type="button"
           id="request-explanation-clear"
           data-request-explanation-focus="clear"
+          title="${escapeAttribute(t(i18n, "clear", "清空"))}"
+          aria-label="${escapeAttribute(t(i18n, "clear", "清空"))}"
           ${requestId || state?.requestId ? "" : "disabled"}
-        >清空</button>
+        >${icon("eraser")}</button>
       </div>
-      <span id="request-explanation-input-error" class="request-explanation-input-error" aria-live="polite"></span>
+      <span id="request-explanation-input-error" class="request-explanation-input-error" aria-live="polite">${invalid ? escapeHtml(t(i18n, "invalid_id", "request_id 格式不合法")) : ""}</span>
     </form>
   `;
 }
 
 /** 顶部状态只使用固定枚举，不把后端未知文本拼成 CSS class。 */
-function renderTopStatus(state) {
+function renderTopStatus(state, i18n) {
   const explanationStatus = state?.request_explanation?.status;
   const status = state.state === "ok" ? explanationStatus : state.state;
   const safeStatus = statusClass(status);
-  const label = state.state === "idle"
-    ? "等待查询"
-    : state.state === "loading"
-      ? "读取中"
-      : state.state === "error"
-        ? "读取失败"
-        : STATE_LABELS[explanationStatus] ?? "已读取";
+  const label = isInputError(state)
+    ? t(i18n, "check_id", "检查请求 ID")
+    : state.state === "idle"
+      ? t(i18n, "idle", "等待查询")
+      : state.state === "loading"
+        ? t(i18n, "loading", "读取中")
+        : state.state === "error"
+          ? t(i18n, "error", "读取失败")
+          : stateLabel(explanationStatus, i18n, t(i18n, "loaded", "已读取"));
   return `<span class="request-explanation-status status-${safeStatus}">${escapeHtml(label)}</span>`;
 }
 
 /** 按 idle/loading/error/ok 显式渲染，错误态永不复用上一条解释。 */
-function renderExplanationState(state) {
+function renderExplanationState(state, i18n) {
+  if (isInputError(state)) return "";
   if (state.state === "idle") {
-    return `<div class="request-explanation-empty">尚未选择请求。</div>`;
+    return `<div class="request-explanation-empty">${escapeHtml(t(i18n, "no_selection", "尚未选择请求。"))}</div>`;
   }
   if (state.state === "loading") {
-    return `<div class="request-explanation-empty" aria-live="polite">正在读取 ${renderCode(state.requestId)} 的解释。</div>`;
+    return `<div class="request-explanation-empty" aria-live="polite">${escapeHtml(t(i18n, "loading_request", "正在读取请求解释"))} ${renderCode(state.requestId)}</div>`;
   }
   // 错误态只展示统一消息和 operation request_id，绝不复用上一条解释或原始响应正文。
   if (state.state === "error") {
     return `
       <div class="request-explanation-body request-explanation-error-body" data-explanation-status="error">
-        <aside class="request-explanation-summary" aria-label="请求解释错误摘要">
+        <aside class="request-explanation-summary" aria-label="${escapeAttribute(t(i18n, "error_summary", "请求解释错误摘要"))}">
           <div class="request-explanation-empty error-state" role="alert">
-            <strong>${escapeHtml(state.error?.message ?? "请求解释读取失败")}</strong>
+            <strong>${escapeHtml(state.error?.message ?? t(i18n, "read_failed", "请求解释读取失败"))}</strong>
             <span>operation request_id: ${renderCode(state.error?.requestId ?? "-")}</span>
           </div>
         </aside>
-        <div class="request-explanation-evidence" aria-label="请求解释证据">
+        <div class="request-explanation-evidence" aria-label="${escapeAttribute(t(i18n, "evidence", "请求解释证据"))}">
           <div class="request-explanation-empty request-explanation-evidence-empty">
-            <strong>无可验证证据</strong>
-            <span>本次查询未返回请求解释，未保留或复用上一条请求的数据。</span>
+            <strong>${escapeHtml(t(i18n, "no_evidence", "无可验证证据"))}</strong>
+            <span>${escapeHtml(t(i18n, "query_empty", "本次查询未返回请求解释，未保留或复用上一条请求的数据。"))}</span>
           </div>
         </div>
       </div>
@@ -427,18 +437,18 @@ function renderExplanationState(state) {
   }
   const explanation = state.request_explanation;
   if (!explanation || typeof explanation !== "object") {
-    return `<div class="request-explanation-empty error-state" role="alert">请求解释响应不完整。</div>`;
+    return `<div class="request-explanation-empty error-state" role="alert">${escapeHtml(t(i18n, "response_incomplete", "请求解释响应不完整。"))}</div>`;
   }
   return `
     <div class="request-explanation-body" data-explanation-status="${escapeAttribute(statusClass(explanation.status))}">
-      <aside class="request-explanation-summary" aria-label="请求解释摘要">
-        ${renderSummary(explanation, state)}
+      <aside class="request-explanation-summary" aria-label="${escapeAttribute(t(i18n, "summary", "请求解释摘要"))}">
+        ${renderSummary(explanation, state, i18n)}
       </aside>
       <div class="request-explanation-evidence">
-        ${renderDecisionChain(explanation.decision_chain)}
+        ${renderDecisionChain(explanation.decision_chain, i18n)}
         <div class="request-explanation-sections">
           ${SECTION_DEFINITIONS.map(
-            (definition) => renderSection(explanation, definition, state.sectionDisclosure),
+            (definition) => renderSection(explanation, definition, state.sectionDisclosure, i18n),
           ).join("")}
         </div>
       </div>
@@ -447,56 +457,56 @@ function renderExplanationState(state) {
 }
 
 /** 摘要只展示稳定 ID、完整性和安全业务标量；operation 与 source ID 明确分区。 */
-function renderSummary(explanation, state) {
+function renderSummary(explanation, state, i18n) {
   const summary = objectOrEmpty(explanation.summary);
   const missing = safeStringArray(explanation.missing_sections);
   const truncated = safeStringArray(explanation.truncated_sections);
   return `
     <div class="request-explanation-summary-head">
-      <span>源请求</span>
+      <span>${escapeHtml(t(i18n, "source_request", "源请求"))}</span>
       ${renderCode(explanation.source_request_id ?? state.requestId)}
     </div>
     <dl class="request-explanation-summary-grid">
       ${renderPair("Source trace_id", explanation.source_trace_id)}
       ${renderPair("Explanation ID", explanation.request_explanation_id)}
-      ${renderPair("解释完整性", STATE_LABELS[explanation.status] ?? explanation.status)}
-      ${renderPair("证据版本", explanation.evidence_version)}
+      ${renderPair(t(i18n, "completeness", "解释完整性"), stateLabel(explanation.status, i18n))}
+      ${renderPair(t(i18n, "evidence_version", "证据版本"), explanation.evidence_version)}
       ${renderPair(
-        "查看事件",
-        explanation.view_event_status === "pending" ? "已持久化，待投递" : explanation.view_event_status,
+        t(i18n, "view_event", "查看事件"),
+        explanation.view_event_status === "pending" ? t(i18n, "view_pending", "已持久化，待投递") : explanation.view_event_status,
       )}
-      ${renderPair("采集时间", explanation.captured_at)}
+      ${renderPair(t(i18n, "captured_at", "采集时间"), explanation.captured_at)}
       ${renderPair("Operation request_id", state.request_id)}
       ${renderPair("Operation trace_id", state.trace_id)}
-      ${renderKnownFields(summary, SUMMARY_FIELDS)}
+      ${renderKnownFields(summary, SUMMARY_FIELDS, i18n)}
     </dl>
-    ${renderSectionList("缺失区块", missing, "missing")}
-    ${renderSectionList("截断区块", truncated, "truncated")}
+    ${renderSectionList(t(i18n, "missing_sections", "缺失区块"), missing, "missing", i18n)}
+    ${renderSectionList(t(i18n, "truncated_sections", "截断区块"), truncated, "truncated", i18n)}
   `;
 }
 
 /** 决策链保持服务端给出的历史顺序；前端绝不按当前配置或固定架构图重新排序。 */
-function renderDecisionChain(chain) {
+function renderDecisionChain(chain, i18n) {
   if (!Array.isArray(chain) || chain.length === 0) {
     return `
       <section class="request-explanation-chain" aria-labelledby="request-explanation-chain-title">
-        <h3 id="request-explanation-chain-title">决策链</h3>
-        <div class="request-explanation-inline-empty">当前记录没有可验证的阶段顺序。</div>
+        <h3 id="request-explanation-chain-title">${escapeHtml(t(i18n, "chain", "决策链"))}</h3>
+        <div class="request-explanation-inline-empty">${escapeHtml(t(i18n, "no_chain", "当前记录没有可验证的阶段顺序。"))}</div>
       </section>
     `;
   }
   return `
     <section class="request-explanation-chain" aria-labelledby="request-explanation-chain-title">
-      <h3 id="request-explanation-chain-title">决策链</h3>
+      <h3 id="request-explanation-chain-title">${escapeHtml(t(i18n, "chain", "决策链"))}</h3>
       <ol>
-        ${chain.map((entry, index) => renderStage(entry, index)).join("")}
+        ${chain.map((entry, index) => renderStage(entry, index, i18n)).join("")}
       </ol>
     </section>
   `;
 }
 
 /** 单阶段只读取稳定状态、原因和时间，不显示服务端未声明的任意 evidence 对象。 */
-function renderStage(entry, index) {
+function renderStage(entry, index, i18n) {
   const value = objectOrEmpty(entry);
   const stage = text(value.stage || value.name || `stage_${index + 1}`);
   const status = text(value.status || value.outcome || value.evidence_state || "unknown");
@@ -504,10 +514,10 @@ function renderStage(entry, index) {
     <li class="request-explanation-stage stage-${statusClass(status)}">
       <span class="request-explanation-stage-index">${escapeHtml(index + 1)}</span>
       <div>
-        <strong>${escapeHtml(STAGE_LABELS[stage] ?? stage)}</strong>
-        <span>${escapeHtml(STATE_LABELS[status] ?? status)}</span>
+        <strong>${escapeHtml(t(i18n, `stage.${stage}`, STAGE_LABELS[stage] ?? stage))}</strong>
+        <span>${escapeHtml(stateLabel(status, i18n))}</span>
         ${value.evidence_state
-          ? `<em>${escapeHtml(STATE_LABELS[value.evidence_state] ?? value.evidence_state)}</em>`
+          ? `<em>${escapeHtml(stateLabel(value.evidence_state, i18n))}</em>`
           : ""}
         ${value.reason_code ? `<code>${escapeHtml(value.reason_code)}</code>` : ""}
         ${value.occurred_at ? `<time>${escapeHtml(value.occurred_at)}</time>` : ""}
@@ -518,14 +528,14 @@ function renderStage(entry, index) {
 }
 
 /** 每个 details 是同级领域带，不嵌套卡片；异常/partial 默认展开，正常证据保持紧凑。 */
-function renderSection(explanation, definition, disclosure) {
+function renderSection(explanation, definition, disclosure, i18n) {
   const value = objectOrEmpty(explanation[definition.key]);
   const evidenceState = text(value.evidence_state || value.status || "not_recorded");
   const abnormal = !["complete", "allowed", "succeeded", "success", "not_applicable"].includes(evidenceState);
   const disclosureValue = objectOrEmpty(disclosure)[definition.key];
   const open = typeof disclosureValue === "boolean" ? disclosureValue : abnormal;
   const facts = Array.isArray(value.facts)
-    ? value.facts.map(renderFact).filter(Boolean).join("")
+    ? value.facts.map((fact, index) => renderFact(fact, index, i18n)).filter(Boolean).join("")
     : "";
   return `
     <details
@@ -534,17 +544,17 @@ function renderSection(explanation, definition, disclosure) {
       ${open ? "open" : ""}
     >
       <summary data-request-explanation-focus="section:${escapeAttribute(definition.key)}">
-        <span>${escapeHtml(definition.label)}</span>
-        <mark>${escapeHtml(STATE_LABELS[evidenceState] ?? evidenceState)}</mark>
+        <span>${escapeHtml(t(i18n, `section.${definition.key}`, definition.label))}</span>
+        <mark>${escapeHtml(stateLabel(evidenceState, i18n))}</mark>
       </summary>
       <div class="request-explanation-section-content">
         <dl>
-          ${renderPair("原因码", value.reason_code)}
-          ${renderPair("结果截断", value.truncated)}
+          ${renderPair(t(i18n, "field.reason_code", "原因码"), value.reason_code, i18n)}
+          ${renderPair(t(i18n, "truncated", "结果截断"), value.truncated, i18n)}
         </dl>
         ${facts
           ? `<div class="request-explanation-facts">${facts}</div>`
-          : `<div class="request-explanation-inline-empty">没有可展示的历史证据。</div>`}
+          : `<div class="request-explanation-inline-empty">${escapeHtml(t(i18n, "no_history", "没有可展示的历史证据。"))}</div>`}
       </div>
     </details>
   `;
@@ -554,7 +564,7 @@ function renderSection(explanation, definition, disclosure) {
  * 渲染一条服务端安全事实。
  * kind 决定唯一 values 白名单；未知 kind、嵌套对象和额外键全部忽略，绝不做 JSON 展开。
  */
-function renderFact(value, index) {
+function renderFact(value, index, i18n) {
   const fact = objectOrEmpty(value);
   const kind = text(fact.kind);
   const allowedKeys = FACT_VALUE_KEYS[kind];
@@ -563,15 +573,15 @@ function renderFact(value, index) {
   }
   const values = objectOrEmpty(fact.values);
   const fields = allowedKeys.map((key) => field(key, FIELD_LABELS[key] ?? key));
-  const rows = renderKnownFields(values, fields);
+  const rows = renderKnownFields(values, fields, i18n);
   return `
     <article class="request-explanation-record">
       <header>
-        <strong>#${escapeHtml(index + 1)} ${escapeHtml(FACT_LABELS[kind] ?? kind)}</strong>
+        <strong>#${escapeHtml(index + 1)} ${escapeHtml(t(i18n, `fact.${kind}`, FACT_LABELS[kind] ?? kind))}</strong>
         ${fact.fact_id ? renderCode(fact.fact_id) : ""}
       </header>
       ${fact.occurred_at ? `<time>${escapeHtml(fact.occurred_at)}</time>` : ""}
-      ${rows ? `<dl>${rows}</dl>` : `<div class="request-explanation-inline-empty">没有可展示字段。</div>`}
+      ${rows ? `<dl>${rows}</dl>` : `<div class="request-explanation-inline-empty">${escapeHtml(t(i18n, "no_fields", "没有可展示字段。"))}</div>`}
     </article>
   `;
 }
@@ -586,15 +596,15 @@ function renderEvidenceRefs(value) {
 }
 
 /** 按白名单把标量映射为 dt/dd；数组、对象和空值不会被隐式 JSON 化。 */
-function renderKnownFields(source, definitions) {
+function renderKnownFields(source, definitions, i18n) {
   return definitions
-    .map(({ key, label }) => renderPair(label, source?.[key]))
+    .map(({ key, label }) => renderPair(t(i18n, `field.${key}`, label), source?.[key], i18n))
     .filter(Boolean)
     .join("");
 }
 
 /** 单个键值对只接受 string/number/boolean，金额字符串不经过 Number 或 float 回算。 */
-function renderPair(label, value) {
+function renderPair(label, value, i18n) {
   if (
     value === null
     || value === undefined
@@ -603,21 +613,34 @@ function renderPair(label, value) {
   ) {
     return "";
   }
-  const formatted = typeof value === "boolean" ? (value ? "是" : "否") : String(value);
+  const formatted = typeof value === "boolean"
+    ? (value ? t(i18n, "yes", "是") : t(i18n, "no", "否")) : String(value);
   return `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(formatted)}</dd>`;
 }
 
 /** 缺失/截断列表使用服务端枚举标签，不接受嵌套值。 */
-function renderSectionList(label, values, kind) {
+function renderSectionList(label, values, kind, i18n) {
   if (values.length === 0) {
     return "";
   }
   return `
     <div class="request-explanation-section-list ${escapeAttribute(kind)}">
       <strong>${escapeHtml(label)}</strong>
-      <ul>${values.map((value) => `<li>${escapeHtml(STAGE_LABELS[value] ?? value)}</li>`).join("")}</ul>
+      <ul>${values.map((value) => `<li>${escapeHtml(t(i18n, `stage.${value}`, STAGE_LABELS[value] ?? value))}</li>`).join("")}</ul>
     </div>
   `;
+}
+
+function isInputError(state) {
+  return state?.state === "error" && state.error?.code === "request_explanation.request_id_invalid";
+}
+
+function t(i18n, key, fallback) {
+  return i18n?.t?.(`explanation.${key}`, {}, fallback) ?? fallback;
+}
+
+function stateLabel(value, i18n, fallback = value) {
+  return t(i18n, `state.${value}`, STATE_LABELS[value] ?? fallback);
 }
 
 /** 构造不可变字段定义，避免渲染调用点误把后端 key 当作可见标签。 */

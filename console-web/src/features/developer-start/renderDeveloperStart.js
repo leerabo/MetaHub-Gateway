@@ -6,7 +6,6 @@
 
 import {
   renderApiDocsPanel,
-  renderErrorPagePreview,
 } from "../observability/renderObservabilityPanels.js";
 import { renderBudgetPanel } from "../budgets/renderBudgetPanel.js";
 import { renderAuditLogPanel } from "../audit-logs/renderAuditLogPanel.js";
@@ -73,6 +72,7 @@ import { buildMigrationGuide, renderMigrationGuide } from "../migration-guide/re
 import { renderRolePermissionMatrix } from "../role-permissions/renderRolePermissionMatrix.js";
 import { hasEveryPermission, hasPermission, PERMISSIONS } from "../../lib/permissions.js";
 import { hasWorkspaceConsoleSession, isConsoleRefreshOwnerCurrent } from "../../lib/workspaceConsoleSession.js";
+import { localizeConsoleStaticHtml } from "../../i18n/localizeConsoleStaticHtml.js";
 
 // 开发者首页默认状态用于接口加载前的安全占位，避免把未知配置误展示为已完成。
 const DEFAULT_STATUSES = [
@@ -133,9 +133,9 @@ export function renderDeveloperStart(container, options) {
     && Array.isArray(options.consoleShellState?.navigation?.navigation_items)
     && options.consoleShellState.navigation.navigation_items.length > 0,
   );
-  const contentHtml = hasAuthorizedNavigation
+  const contentHtml = localizeConsoleStaticHtml(hasAuthorizedNavigation
     ? renderActiveContent(activeItem.id, options, statuses)
-    : renderAuthorizationUnavailable();
+    : renderAuthorizationUnavailable(), options.i18n);
 
   // PRD-018 起由统一 shell 承载导航和主内容区；业务面板仍保持原有渲染函数，降低权限与表单回归面。
   const shellHtml = renderConsoleShell({
@@ -156,8 +156,8 @@ export function renderDeveloperStart(container, options) {
 
 /**
  * Active-page hydration must not replace a sidebar that the user may already be
- * pointing at. The topbar and main content can be refreshed independently while
- * the current accordion, scroll position, focus, and pointer targets stay stable.
+ * pointing at. Keep an unchanged topbar too: replacing a logout button between
+ * pointer down and up cancels the click. Changed identity or branding still replaces it.
  */
 function renderConsoleContentPreservingSidebar(container, shellHtml, activeItemId) {
   if (typeof container?.querySelector !== "function" || !container.ownerDocument?.createElement) {
@@ -182,7 +182,7 @@ function renderConsoleContentPreservingSidebar(container, shellHtml, activeItemI
   if (!nextTopbar || !nextShell || !nextMain || nextShell.dataset.activeNavigation !== activeItemId) {
     return false;
   }
-  currentTopbar.replaceWith(nextTopbar);
+  if (!currentTopbar.isEqualNode(nextTopbar)) currentTopbar.replaceWith(nextTopbar);
   currentMain.replaceWith(nextMain);
   return true;
 }
@@ -303,7 +303,7 @@ function renderActiveContent(activeItemId, options, statuses) {
       return `<section class="panel provider-health-shell" aria-labelledby="provider-health-title">${renderProviderStatusPanel(options.providerHealthState, options.authContext)}</section>`;
     case "models":
       // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-      return renderModelsSection(options.modelsState, options.providersState, options.authContext);
+      return renderModelsSection(options.modelsState, options.providersState, options.authContext, options.workspaceTaskHomeState, options.i18n);
     case "model-prices":
       return renderWorkspaceInternalFinOps(
         options.workspaceCommercialAccountingState,
@@ -332,7 +332,7 @@ function renderActiveContent(activeItemId, options, statuses) {
       );
     case "model-aliases":
       // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-      return renderModelAliasesSection(options.modelAliasesState, options.modelsState, options.authContext, options.environmentState);
+      return renderModelAliasesSection(options.modelAliasesState, options.modelsState, options.authContext, options.environmentState, options.workspaceTaskHomeState, options.i18n);
     case "routing-policies":
       // 页面只复用 ModelAlias 的主备候选摘要；保存权限、租户隔离和 CAS 仍由 Control API 强制执行。
       return renderRoutingPoliciesSection(options.routingPoliciesState, options.authContext);
@@ -355,7 +355,7 @@ function renderActiveContent(activeItemId, options, statuses) {
       return renderProjectsSection(options.projectState, options.authContext);
     case "virtual-keys":
       // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-      return renderVirtualKeysSection(options.virtualKeysState, options.authContext, options.projectState, options.environmentState);
+      return renderVirtualKeysSection(options.virtualKeysState, options.authContext, options.projectState, options.environmentState, options.workspaceTaskHomeState, options.i18n);
     case "usage":
       // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
       return renderUsageSection(options.usageState, options.authContext, options.budgetState);
@@ -487,10 +487,10 @@ function renderActiveContent(activeItemId, options, statuses) {
       );
     case "webhooks":
       // Webhook 页面只做前端内容调度，Endpoint 权限、签名密钥和 tenant_id 边界必须由后端校验。
-      return renderWebhooksSection(options.webhookState, options.authContext);
+      return renderWebhooksSection(options.webhookState, options.authContext, options.i18n);
     case "webhook-dead-letters":
       // PAGE-083 仅消费后端授权导航和无 payload 安全 DTO；真实 RBAC、租户和状态机由 Control API 强制执行。
-      return renderWebhookDeadLettersSection(options.webhookDeadLettersState, options.authContext);
+      return renderWebhookDeadLettersSection(options.webhookDeadLettersState, options.authContext, options.i18n);
     case "request-logs":
       // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
       return renderRequestLogsSection(
@@ -505,6 +505,7 @@ function renderActiveContent(activeItemId, options, statuses) {
       return renderRequestExplanationsSection(
         options.requestExplanationState,
         options.authContext,
+        options.i18n,
       );
     case "feedback-summary":
       // PAGE-071 只消费后端按当前 Session tenant 聚合的统计；前端不会从分页行重算总计或接受 viewer 直达。
@@ -519,23 +520,30 @@ function renderActiveContent(activeItemId, options, statuses) {
       return renderAuditLogsSection(options.auditLogsState, options.authContext);
     case "role-permissions":
       // PAGE-085 只消费当前授权 owner 的矩阵快照；GET/PATCH 权限与租户边界仍由 Control API 强制执行。
-      return renderRolePermissionMatrix(options.rolePermissionState, options.authContext);
+      return renderRolePermissionMatrix(options.rolePermissionState, options.authContext, options.i18n);
     case "language-settings":
       // 语言设置页只保存当前用户偏好，真实租户和用户边界由 /user/preferences 后端接口恢复。
       return renderLanguageSettingsContent(options);
     case "quickstart":
-      return renderWorkspaceTaskHome(options.workspaceTaskHomeState);
+      return renderWorkspaceTaskHome(options.workspaceTaskHomeState, options.i18n, {
+        navigation: options.consoleShellState?.navigation,
+        workspaceContext: options.consoleShellState?.workspaceContext,
+        authContext: options.authContext,
+      });
     case "sdk-examples":
       // SDK 下载页同时保留两种语言的独立状态；真正下载仍需携带登录 Token 由后端再次校验。
       return renderSdkExamples({
         pythonState: options.sdkExampleStates?.python ?? options.pythonSdkExampleState,
         javascriptState: options.sdkExampleStates?.javascript,
         activeLanguage: options.activeSdkLanguage,
+        workspaceTaskHomeState: options.workspaceTaskHomeState,
+        i18n: options.i18n,
       });
     case "migration-guide": {
       // viewer 不应收到后端迁移入口；这里再次按角色收口，防止测试或扩展代码绕过导航直接渲染。
       const guide = buildMigrationGuide({
         consoleShellState: options.consoleShellState,
+        connectionState: options.developerConnectionState,
         environmentState: options.environmentState,
         modelAliasesState: options.modelAliasesState,
         selectedEnvironmentId: options.selectedMigrationEnvironmentId,
@@ -614,21 +622,13 @@ function renderLanguageSettingsContent(options) {
 }
 
 /**
- * 渲染 API 文档导航页，并保留统一错误响应示例。
+ * 渲染当前组织的接口与已发布契约。
  */
 function renderApiDocsContent(options) {
   return `
     <section class="panel api-docs-panel" aria-labelledby="api-docs-title">
-      ${renderApiDocsPanel({ gatewayUrl: options.gatewayUrl })}
-    </section>
-    <section class="panel error-page-panel" aria-labelledby="error-page-title">
-      ${renderErrorPagePreview({
-        code: "infra.not_found",
-        message: "Requested resource was not found.",
-        requestId: "req_example",
-        traceId: "trc_example",
-        suggestion: "Check the API path and method.",
-      })}
+      ${renderApiDocsPanel({ connectionState: options.developerConnectionState,
+    canReadConnection: hasPermission(options.authContext, PERMISSIONS.DEVELOPER_PORTAL_READ) })}
     </section>
     ${hasPermission(options.authContext, PERMISSIONS.DEVELOPER_PORTAL_READ)
     ? renderDeveloperContracts(options.developerContractState)
@@ -671,8 +671,8 @@ function renderUsersSection(usersState, authContext, invitationState) {
  * 渲染 开发者首页 的 `renderVirtualKeysSection` 界面，把后端状态转换为用户可操作的视图。
  * 边界：前端隐藏按钮只改善体验，不能替代后端 RBAC 和租户校验。
  */
-function renderVirtualKeysSection(virtualKeysState, authContext, projectState, environmentState) {
-  const html = renderVirtualKeyPanel(virtualKeysState, authContext, projectState, environmentState);
+function renderVirtualKeysSection(virtualKeysState, authContext, projectState, environmentState, workspaceTaskHomeState, i18n) {
+  const html = renderVirtualKeyPanel(virtualKeysState, authContext, projectState, environmentState, workspaceTaskHomeState, i18n);
   return html
     ? `
       <section class="panel virtual-keys-panel" aria-labelledby="virtual-keys-title">
@@ -726,8 +726,8 @@ function renderProvidersSection(providersState, authContext) {
  * 渲染 开发者首页 的 `renderModelsSection` 界面，把后端状态转换为用户可操作的视图。
  * 边界：前端隐藏按钮只改善体验，不能替代后端 RBAC 和租户校验。
  */
-function renderModelsSection(modelsState, providersState, authContext) {
-  const html = renderModelCatalogPanel(modelsState, providersState, authContext);
+function renderModelsSection(modelsState, providersState, authContext, workspaceTaskHomeState, i18n) {
+  const html = renderModelCatalogPanel(modelsState, providersState, authContext, workspaceTaskHomeState, i18n);
   return html
     ? `
       <section class="panel models-panel" aria-labelledby="models-title">
@@ -741,8 +741,8 @@ function renderModelsSection(modelsState, providersState, authContext) {
  * 渲染 开发者首页 的 `renderModelAliasesSection` 界面，把后端状态转换为用户可操作的视图。
  * 边界：前端隐藏按钮只改善体验，不能替代后端 RBAC 和租户校验。
  */
-function renderModelAliasesSection(modelAliasesState, modelsState, authContext, environmentState) {
-  const html = renderModelAliasPanel(modelAliasesState, modelsState, authContext, environmentState);
+function renderModelAliasesSection(modelAliasesState, modelsState, authContext, environmentState, workspaceTaskHomeState, i18n) {
+  const html = renderModelAliasPanel(modelAliasesState, modelsState, authContext, environmentState, workspaceTaskHomeState, i18n);
   return html
     ? `
       <section class="panel model-aliases-panel" aria-labelledby="model-aliases-title">
@@ -1035,8 +1035,8 @@ function renderWorkspaceConsoleExperienceSection(state, view, authContext) {
  * 渲染 Webhook 设置和发送记录区域。
  * 前端按角色隐藏入口只是体验优化，后端 /webhooks 仍要强制校验角色、租户、签名和发送记录边界。
  */
-function renderWebhooksSection(webhookState, authContext) {
-  const html = renderWebhookPanel(webhookState, authContext);
+function renderWebhooksSection(webhookState, authContext, i18n) {
+  const html = renderWebhookPanel(webhookState, authContext, i18n);
   return html
     ? `
       <section class="panel webhooks-panel" aria-labelledby="webhooks-title">
@@ -1050,8 +1050,8 @@ function renderWebhooksSection(webhookState, authContext) {
  * 渲染 PAGE-083 Webhook 死信工作区。
  * viewer 即使绕过导航直接调用也不会得到 DOM；读取、重放和归档权限仍由后端独立校验。
  */
-function renderWebhookDeadLettersSection(state, authContext) {
-  const html = renderWebhookDeadLetters(state, authContext);
+function renderWebhookDeadLettersSection(state, authContext, i18n) {
+  const html = renderWebhookDeadLetters(state, authContext, i18n);
   return html
     ? `
       <section class="panel webhook-dead-letters-panel" aria-labelledby="webhook-dead-letters-title">
@@ -1091,7 +1091,7 @@ function renderRequestLogsSection(requestLogsState, authContext, feedbackState, 
       <section class="panel request-logs-panel" aria-labelledby="request-logs-title">
         ${html}
         <div class="request-explanations-panel">
-          ${explanationState?.requestId ? renderRequestExplanationPanel(explanationState, authContext) : ""}
+          ${explanationState?.requestId ? renderRequestExplanationPanel(explanationState, authContext, i18n) : ""}
         </div>
       </section>
     `
@@ -1117,8 +1117,8 @@ function renderOutputSafetySection(requestLogsState, authContext, i18n) {
  * 渲染 PAGE-079 请求解释中心。
  * 前端角色门禁只保证 viewer 零 DOM；真实读取权限、同形 404 和 tenant 条件仍以后端为权威。
  */
-function renderRequestExplanationsSection(state, authContext) {
-  const html = renderRequestExplanationPanel(state, authContext);
+function renderRequestExplanationsSection(state, authContext, i18n) {
+  const html = renderRequestExplanationPanel(state, authContext, i18n);
   return html
     ? `
       <section class="panel request-explanations-panel" aria-labelledby="request-explanations-title">

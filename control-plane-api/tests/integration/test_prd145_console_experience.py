@@ -385,7 +385,9 @@ def _identity_headers(
     headers = {
         "Cookie": (
             f"{IDENTITY_SESSION_COOKIE}={runtime['identity_token']}; "
-            f"{IDENTITY_CSRF_COOKIE}={csrf}"
+            f"{IDENTITY_CSRF_COOKIE}={csrf}; "
+            f"{WORKSPACE_SESSION_COOKIE}={runtime['workspace_token']}; "
+            f"{WORKSPACE_CSRF_COOKIE}={'d' * 43}"
         ),
         "Origin": ORIGIN,
         "Sec-Fetch-Site": "same-site",

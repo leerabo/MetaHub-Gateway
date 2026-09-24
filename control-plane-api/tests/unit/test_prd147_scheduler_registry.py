@@ -42,7 +42,11 @@ from metahub_control.console_migration.scheduler import (
     renew_scheduler_leases,
     scheduler_coordinator_lifespan,
 )
-from metahub_control.platform_jobs.supervisor import install_platform_job_supervisor
+import metahub_control.platform_jobs.supervisor as supervisor_module
+from metahub_control.platform_jobs.supervisor import (
+    SchedulerInstallerBinding,
+    install_platform_job_supervisor,
+)
 from metahub_shared.db import connect_database
 from metahub_shared.db.connection import database_request_scope
 from metahub_shared.runtime.errors import ApiError
@@ -643,6 +647,40 @@ async def test_callable_only_supervisor_keeps_reverse_shutdown_compatibility() -
     assert events == ["enter:one", "enter:two", "exit:two", "exit:one"]
 
 
+@pytest.mark.anyio
+async def test_structured_supervisor_skips_registry_bindings_when_disabled(monkeypatch) -> None:
+    """本地 HTTP 可用性 profile 关闭后台调度器时不得启动 registry lease I/O。"""
+
+    app = FastAPI()
+    app.state.config = SimpleNamespace(control_background_schedulers_enabled=False)
+    captured: list[tuple[SchedulerContextBinding, ...]] = []
+
+    def installer(current_app: FastAPI) -> None:
+        @asynccontextmanager
+        async def lifespan(_active_app: FastAPI):
+            yield
+
+        current_app.router.lifespan_context = lifespan
+
+    @asynccontextmanager
+    async def coordinator(_app, bindings, *, replica_code):
+        del replica_code
+        captured.append(tuple(bindings))
+        yield
+
+    monkeypatch.setattr(supervisor_module, "scheduler_coordinator_lifespan", coordinator)
+    install_platform_job_supervisor(
+        app,
+        scheduler_installers=(
+            SchedulerInstallerBinding("status-publication", installer),
+        ),
+    )
+    async with app.router.lifespan_context(app):
+        pass
+
+    assert captured == []
+
+
 async def _wait_until(predicate, *, timeout: float = 3.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while not predicate():
@@ -746,7 +784,7 @@ async def test_slow_observation_cannot_delay_renewal_or_accumulate_snapshots(tmp
 @pytest.mark.anyio
 async def test_observation_failure_counts_once_without_mutating_worker_snapshot(monkeypatch):
     app = FastAPI()
-    app.state.config = SimpleNamespace()
+    app.state.config = SimpleNamespace(control_background_schedulers_enabled=False)
     stats = scheduler_module._CoordinatorStats(accepted_count=2)
 
     async def fail(_app, _operation, _config, _replica, snapshot, count, *, observed_at):
@@ -866,6 +904,104 @@ async def test_expired_context_cleanup_does_not_delay_other_lease_renewals(monke
     await scheduler_module._renew_active(app, "test-replica", active,
         scheduler_module._CoordinatorStats(), 15)
     assert events == ["renew:status-publication", "renew:admin-assistant", "stop:status-publication"]
+
+
+@pytest.mark.anyio
+async def test_transient_renewal_database_failure_keeps_unexpired_context(monkeypatch):
+    app = FastAPI()
+    app.state.config = SimpleNamespace()
+    queue = SCHEDULER_QUEUES_BY_SCHEDULER["status-publication"][0]
+    lease = SimpleNamespace(
+        scheduler_code="status-publication",
+        queue_code=queue.code,
+        partition_code=queue.partition_code,
+        deadline=datetime.now(UTC) + timedelta(seconds=2),
+    )
+    active = {
+        ("status-publication", queue.code): SimpleNamespace(leases=(lease,))
+    }
+
+    clock = [10.0]
+    attempts = []
+    recovered = SimpleNamespace(**vars(lease))
+    recovered.deadline += timedelta(seconds=15)
+
+    async def transient_failure(*_args, **_kwargs):
+        attempts.append(clock[0])
+        if len(attempts) == 1:
+            raise ApiError("console_migration.dependency_unavailable")
+        return ((recovered,),)
+
+    monkeypatch.setattr(scheduler_module, "_coordinator_database_call", transient_failure)
+    monkeypatch.setattr(scheduler_module, "monotonic", lambda: clock[0])
+    stats = scheduler_module._CoordinatorStats()
+    await scheduler_module._renew_active(app, "test-replica", active, stats, 15)
+
+    assert tuple(active) == (("status-publication", queue.code),)
+    assert stats.backend_failure_count == 1
+    assert stats.dropped_count == 0
+    # Calls between other context installations must not create a retry storm.
+    for _ in range(37):
+        await scheduler_module._renew_active(app, "test-replica", active, stats, 15)
+    assert attempts == [10.0]
+    clock[0] = 11.0
+    await scheduler_module._renew_active(app, "test-replica", active, stats, 15)
+    assert attempts == [10.0, 11.0]
+    assert active[("status-publication", queue.code)].leases == (recovered,)
+    assert stats.persisted_count == 1
+    assert stats.dropped_count == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("error_code,remaining", [
+    ("console_migration.dependency_unavailable", -1),
+    ("console_migration.registry_drift", 2),
+    ("console_migration.contract_not_ready", 2),
+])
+async def test_renewal_failure_stops_expired_or_invalid_authority(
+    monkeypatch, error_code, remaining,
+):
+    app = FastAPI()
+    app.state.config = SimpleNamespace()
+    queue = SCHEDULER_QUEUES_BY_SCHEDULER["status-publication"][0]
+    lease = SimpleNamespace(
+        scheduler_code="status-publication", queue_code=queue.code,
+        partition_code=queue.partition_code,
+        deadline=datetime.now(UTC) + timedelta(seconds=remaining),
+    )
+    key = (lease.scheduler_code, lease.queue_code)
+    active = {key: SimpleNamespace(leases=(lease,))}
+    stopped = []
+
+    async def failed(*_args, **_kwargs):
+        return (ApiError(error_code),)
+
+    async def stop(_app, _replica, current, expired_key, _stats):
+        stopped.append(current.pop(expired_key))
+
+    monkeypatch.setattr(scheduler_module, "_coordinator_database_call", failed)
+    monkeypatch.setattr(scheduler_module, "_stop_active", stop)
+    stats = scheduler_module._CoordinatorStats()
+    await scheduler_module._renew_active(app, "test-replica", active, stats, 15)
+    assert len(stopped) == 1 and active == {}
+    assert stats.dropped_count == stats.backend_failure_count == 1
+
+
+def test_registry_connection_setup_failure_closes_handle(tmp_path, monkeypatch):
+    config = _config(_database(tmp_path))
+    connection = scheduler_module._connect(config)
+    monkeypatch.setattr(scheduler_module, "_connect", lambda _config: connection)
+
+    def fail(_connection):
+        raise sqlite3.OperationalError("controlled setup failure")
+
+    monkeypatch.setattr(scheduler_module, "_configure_coordinator_connection", fail)
+    with pytest.raises(ApiError) as captured:
+        claim_scheduler_leases(config, scheduler_code="status-publication",
+                               replica_code="setup-failure")
+    assert captured.value.code == "console_migration.dependency_unavailable"
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        connection.execute("SELECT 1")
 
 
 @pytest.mark.anyio

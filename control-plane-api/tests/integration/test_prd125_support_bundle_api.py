@@ -557,7 +557,7 @@ async def test_support_bundle_full_upload_projection_grant_and_expiry_lifecycle(
 ) -> None:
     database = tmp_path / "control.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0122"
+    assert apply_migrations(database_url).applied[-1] == "0156"
     with monkeypatch.context() as seed_patch:
         seed_patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", _TEST_PASSWORD)
         apply_seed_data(database_url)

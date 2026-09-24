@@ -5,7 +5,7 @@ const WRITES = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const PROTECTED_HEADERS = ["authorization", "proxy-authorization", "cookie", "x-csrf-token"];
 const HEADER_NAMES = Object.freeze({
   accept: "Accept", authorization: "Authorization", "content-type": "Content-Type",
-  "x-csrf-token": "X-CSRF-Token", "x-request-id": "X-Request-ID",
+  "x-csrf-token": "X-CSRF-Token", "x-request-id": "X-Request-ID", "x-trace-id": "X-Trace-ID",
 });
 
 // Authentication selects a transport, not an authorization decision or a browser owner.
@@ -38,7 +38,7 @@ export function authenticatedResourceFetch(url, {
     headers.set("Authorization", `Bearer ${token}`);
   }
   if (!headers.has("Accept")) headers.set("Accept", "application/json");
-  return fetch(url, {
+  const init = {
     ...options,
     method: verb,
     headers: Object.fromEntries([...headers].map(([name, value]) => [HEADER_NAMES[name] ?? name, value])),
@@ -47,6 +47,16 @@ export function authenticatedResourceFetch(url, {
     redirect: "error",
     // Same-origin GET omits Origin; send only the origin for CSRF-protected exports.
     ...(workspace && verb === "GET" && csrfRequired ? { referrerPolicy: "origin" } : {}),
+  };
+  const response = fetch(url, init);
+  // Recover a transient read once; never replay writes, exports, or revoked page owners.
+  if (!workspace || !["GET", "HEAD"].includes(verb) || csrfRequired) return response;
+  return response.catch(async (error) => {
+    if (!(error instanceof TypeError) || init.signal?.aborted
+      || !["Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."].includes(error.message)) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    if (init.signal?.aborted) throw error;
+    return fetch(url, init);
   });
 }
 

@@ -23,7 +23,7 @@ export function renderSupportTickets(state, authContext, consoleShellState) {
     ?? view.items?.[0] ?? null;
   return `<div class="support-tickets" data-support-ticket-root>
     <header class="support-ticket-heading">
-      <div><p>Customer support</p><h2 id="support-tickets-title">客户支持</h2><span>工单、SLA 与安全诊断证据</span></div>
+      <div><p>客户支持</p><h2 id="support-tickets-title">客户支持</h2><span>工单、SLA 与安全诊断证据</span></div>
       <div class="support-ticket-heading-meta"><strong>${view.items?.length ?? 0}</strong><span>当前工单</span></div>
     </header>
     ${feedback(view.feedback)}
@@ -174,17 +174,17 @@ function surveyForm(ticket, busy) {
 }
 
 function createForm(busy) {
-  return `<section class="support-ticket-create"><div class="support-ticket-section-heading"><div><p>New ticket</p><h3>创建工单</h3></div><span>固定分类与优先级</span></div>
+  return `<details class="support-ticket-create"><summary><span>创建工单</span><small>固定分类与优先级</small></summary><div class="support-ticket-create-body">
     <form data-support-ticket-create-form autocomplete="off">
       <label><span>分类</span><select name="category">${Object.entries(CATEGORY_LABELS).map(([value, label]) => option(value, label)).join("")}</select></label>
       <label><span>优先级</span><select name="severity">${Object.entries(SEVERITY_LABELS).map(([value, label]) => option(value, label, "p3")).join("")}</select></label>
       <label class="span-2"><span>主题</span><input name="subject" minlength="3" maxlength="200" required /></label>
       <label class="span-2"><span>问题说明</span><textarea name="message" minlength="1" maxlength="8000" rows="4" required></textarea></label>
-      <label><span>关联对象</span><select name="related_kind" data-support-related-kind><option value="none">不关联</option><option value="request">Request</option><option value="incident">Incident</option><option value="edge_deployment">Edge Deployment</option><option value="migration">Migration</option></select></label>
+      <label><span>关联对象</span><select name="related_kind" data-support-related-kind><option value="none">不关联</option><option value="request">请求</option><option value="incident">事件</option><option value="edge_deployment">边缘部署</option><option value="migration">迁移</option></select></label>
       <label><span>关联引用</span><input name="related_reference" minlength="3" maxlength="256" disabled /></label>
       <button type="submit"${busy ? " disabled" : ""}>创建工单</button>
     </form>
-  </section>`;
+  </div></details>`;
 }
 
 function emptyDetail(owner) {

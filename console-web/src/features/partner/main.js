@@ -1,12 +1,12 @@
 import { listPartnerWorkspaces } from "../../lib/partnerChannel.js";
 import { createPartnerPageController } from "./partnerPageState.js";
+import { serviceOrigin } from "../../lib/runtimeOrigins.js";
+import { installUserFacingTextGuard } from "../../lib/userFacingTextGuard.js";
 
 const root = globalThis.document?.querySelector("#partner-app");
 if (root) {
-  const hostname = globalThis.window.location.hostname;
-  const controlApiUrl = new Set(["localhost", "127.0.0.1", "::1"]).has(hostname)
-    ? `${globalThis.window.location.protocol}//${hostname}:8001`
-    : globalThis.window.location.origin;
+  installUserFacingTextGuard(root);
+  const controlApiUrl = serviceOrigin(globalThis.window.location, 8001);
   const controller = createPartnerPageController({
     root,
     api: {

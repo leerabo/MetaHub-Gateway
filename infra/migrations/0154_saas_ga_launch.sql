@@ -181,4 +181,12 @@ CREATE TABLE ga_action_commands(
   UNIQUE(operator_id,action_code,idempotency_key_sha256)
 );
 
+-- Employee-facing identifier for the Workspace consumer directory. Empty values
+-- remain allowed for existing records and are unique per tenant when provided.
+ALTER TABLE workspace_consumers ADD COLUMN employee_code TEXT NOT NULL DEFAULT ''
+  CHECK(length(employee_code)<=80);
+CREATE UNIQUE INDEX uq_workspace_consumers_employee_code
+  ON workspace_consumers(tenant_id,employee_code)
+  WHERE employee_code!='';
+
 COMMIT;

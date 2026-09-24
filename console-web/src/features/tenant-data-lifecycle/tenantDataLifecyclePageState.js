@@ -3,7 +3,10 @@ import { hasPermission, PERMISSIONS } from "../../lib/permissions.js";
 export function tenantDataLifecycleOwner(authContext, consoleShellState, mode = "read") {
   const active = consoleShellState?.activeNavigationItemId === "tenant-data-lifecycle";
   const permission = mode === "export" ? PERMISSIONS.TENANT_DATA_EXPORT : mode === "download" ? PERMISSIONS.TENANT_DATA_DOWNLOAD : mode === "delete" ? PERMISSIONS.TENANT_DATA_DELETE : PERMISSIONS.TENANT_DATA_READ;
-  if (!active || !authContext?.user || !hasPermission(authContext, permission)) return null;
+  const readAllowed = mode === "read"
+    ? hasPermission(authContext, permission) || hasPermission(authContext, PERMISSIONS.TENANT_SETTINGS_READ)
+    : hasPermission(authContext, permission);
+  if (!active || !authContext?.user || !readAllowed) return null;
   return Object.freeze({
     tenantId: String(authContext.user.tenant_id ?? ""),
     userId: String(authContext.user.user_id ?? ""),

@@ -31,6 +31,9 @@ POLL_SECONDS = 2.0
 RECONCILIATION_INTERVAL_SECONDS = 300
 LEASE_SECONDS = 30
 SHUTDOWN_TIMEOUT_SECONDS = 10.0
+# Keep each maintenance read below the local health timeout even when SQLite is
+# contended by billing/outbox workers. The cursor still covers every table.
+INTEGRITY_TABLES_PER_PASS = 8
 _WORKER_KINDS = (
     "platform_dashboard_refresh",
     "workspace_dashboard_refresh",
@@ -67,6 +70,12 @@ _WORKER_QUEUES = {
     "workspace_navigation_outbox": "navigation-outbox",
     "navigation_reconciliation": "navigation-reconciliation",
 }
+
+# SQLite's whole-database integrity_check scales with every table and can hold the
+# file under read pressure for several seconds. Reconciliation still checks every
+# table, but advances one table per maintenance pass so health and business reads
+# do not share one long I/O burst. The cursor is process-local and resets safely.
+_INTEGRITY_TABLE_CURSOR: dict[str, int] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -1272,7 +1281,30 @@ def _verify_integrity(config: AppConfig) -> None:
     connection = _connect(config)
     try:
         foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
-        integrity = connection.execute("PRAGMA integrity_check").fetchone()
+        tables = [
+            str(row[0])
+            for row in connection.execute(
+                """SELECT name FROM sqlite_schema
+                   WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"""
+            ).fetchall()
+        ]
+        if tables:
+            database_key = str(getattr(config, "database_url", "sqlite"))
+            cursor = _INTEGRITY_TABLE_CURSOR.get(database_key, 0) % len(tables)
+            selected_tables = tables[cursor : cursor + INTEGRITY_TABLES_PER_PASS]
+            _INTEGRITY_TABLE_CURSOR[database_key] = (
+                cursor + len(selected_tables)
+            ) % len(tables)
+            integrity = None
+            for table in selected_tables:
+                table_literal = "'" + table.replace("'", "''") + "'"
+                integrity = connection.execute(
+                    f"PRAGMA integrity_check({table_literal})"
+                ).fetchone()
+                if integrity is None or integrity[0] != "ok":
+                    break
+        else:
+            integrity = connection.execute("PRAGMA integrity_check").fetchone()
         if foreign_keys or integrity is None or integrity[0] != "ok":
             raise ApiError("platform.unavailable")
     except sqlite3.Error:

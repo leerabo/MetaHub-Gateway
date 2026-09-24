@@ -1,5 +1,6 @@
 import { AuthApiError } from "./auth.js";
 import { authenticatedResourceFetch } from "./resourceAuthentication.js";
+import { withResourceMutationDeadline } from "./resourceMutationDeadline.js";
 
 // 随机源即使被浏览器扩展或测试桩固定，进程内单调序列仍保证并发管理请求不碰撞。
 let clientRequestSequence = 0;
@@ -47,9 +48,10 @@ export async function createModelAlias({
   description,
 }) {
   // 路由和模型判断决定实际上游调用，必须保持可解释和可追踪。
-  return modelAliasesRequest(`${controlApiUrl}/model-aliases`, {
+  const requestId = createModelAliasRequestId();
+  return withResourceMutationDeadline((requestSignal) => modelAliasesRequest(`${controlApiUrl}/model-aliases`, {
     method: "POST",
-    authentication, token, signal,
+    authentication, token, signal: requestSignal,
     headers: {
       "Content-Type": "application/json",
     },
@@ -61,7 +63,7 @@ export async function createModelAlias({
       fallback_model_id: fallbackModelId || undefined,
       description,
     }),
-  });
+  }, requestId), signal, { requestId });
 }
 
 /**

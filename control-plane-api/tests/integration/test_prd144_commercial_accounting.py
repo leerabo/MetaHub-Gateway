@@ -273,7 +273,7 @@ def _install_real_slo_sessions(runtime) -> tuple[str, str, str, str]:
 @pytest.fixture
 def runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     database_url = _url(tmp_path / "prd144.sqlite3")
-    assert apply_migrations(database_url).applied[-1] == "0139"
+    assert apply_migrations(database_url).applied[-1] == "0156"
     monkeypatch.setenv("METAHUB_SEED_ADMIN_PASSWORD", secrets.token_urlsafe(32))
     apply_seed_data(database_url)
     config = _config(database_url)

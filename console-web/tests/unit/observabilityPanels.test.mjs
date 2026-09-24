@@ -26,13 +26,38 @@ test("renderErrorPagePreview shows trace fields and escapes unsafe text", () => 
 });
 
 test("renderApiDocsPanel shows OpenAI compatible endpoints", () => {
-  const html = renderApiDocsPanel({ gatewayUrl: "http://gateway.local" });
+  const html = renderApiDocsPanel({ connectionState: { state: "ok", gateway_base_url: "http://gateway.local/v1",
+    chat_model_configured: true, chat_model_alias: "configured-chat" } });
 
   assert.match(html, /http:\/\/gateway.local\/v1/);
+  assert.match(html, /GET/);
+  assert.match(html, /\/v1\/models/);
   assert.match(html, /\/v1\/chat\/completions/);
   assert.match(html, /\/v1\/embeddings/);
   assert.match(html, /base_url/);
   assert.match(html, /baseURL/);
+  assert.match(html, /configured-chat/);
+  assert.doesNotMatch(html, /default-chat|localhost|\/v1\/v1/);
+});
+
+test("API docs withhold configured examples without an authorized valid connection and model", () => {
+  const ready = { state: "ok", gateway_base_url: "https://gateway.local/v1", chat_model_configured: true,
+    chat_model_alias: "private-model" };
+  for (const options of [{}, { connectionState: { ...ready, chat_model_configured: false } },
+    { connectionState: ready, canReadConnection: false },
+    { connectionState: { ...ready, gateway_base_url: "https://user:secret@gateway.local/v1" } },
+    { connectionState: { state: "error" } }]) {
+    const html = renderApiDocsPanel(options);
+    assert.doesNotMatch(html, /private-model|secret|default-chat|localhost|base_url|baseURL/);
+    assert.match(html, /role="status"/);
+  }
+});
+
+test("API examples escape model strings in code and HTML", () => {
+  const html = renderApiDocsPanel({ connectionState: { state: "ok", gateway_base_url: "https://gateway.local/v1",
+    chat_model_configured: true, chat_model_alias: 'model"\n<script>' } });
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /model\\&quot;\\n&lt;script&gt;/);
 });
 
 test("renderGatewayDebugConsole renders active form without leaking state key", () => {

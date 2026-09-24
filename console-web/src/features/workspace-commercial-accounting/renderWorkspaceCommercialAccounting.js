@@ -103,8 +103,14 @@ function emptyState(state) {
   if (state.loading?.length) {
     return '<div class="commercial-state"><strong>正在读取订阅</strong></div>';
   }
+  if (state.phase === "empty") {
+    return '<div class="commercial-state commercial-empty-subscription" role="status">'
+      + '<strong>当前 Workspace 暂无订阅</strong>'
+      + '<p>当前没有可用套餐、付款或发票记录，账单争议也无法提交。请联系平台运营开通套餐；开通后刷新此页即可查看商业账务。</p>'
+      + '</div>';
+  }
   return '<div class="commercial-state"><strong>'
-    + escapeHtml(state.phase === "empty" ? "当前 Workspace 暂无订阅" : phaseLabel(state.phase))
+    + escapeHtml(phaseLabel(state.phase))
     + '</strong></div>';
 }
 

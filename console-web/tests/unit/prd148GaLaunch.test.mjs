@@ -23,13 +23,14 @@ test("GA launched state points to post-launch review", () => {
 });
 
 test("candidate-stage GA evidence advances to the next gate before launch exists", () => {
-  const candidate = { launch_candidate_id: "lvc_" + "c".repeat(32), revision: 3 };
+  const candidate = { launch_candidate_id: "lvc_" + "c".repeat(32), revision: 3, status: "release_candidate" };
   const html = renderGaLaunchGates({
     gates,
     candidate,
-    evidence: [{ ga_gate_id: gates[0].ga_gate_id }],
+    evidence: [{ ga_gate_id: gates[0].ga_gate_id, outcome: "passed",
+      finished_at: "2026-09-12T00:00:00Z", expires_at: "2026-09-13T00:00:00Z" }],
     launch: null,
-  });
+  }, Date.parse("2026-09-12T12:00:00Z"));
   assert.match(html, /租户隔离/u);
   assert.doesNotMatch(html, /提交下一项 GA 证据：72 小时稳定性/u);
 });

@@ -276,7 +276,7 @@ test("self-service controller keeps challenge in memory and scrubs secret inputs
 
   assert.equal(await controller.verifyRegistration({ code: "123456" }), true);
   assert.deepEqual(codeInputs.map((input) => input.value), [""]);
-  assert.match(root.innerHTML, /账号保护状态/u);
+  assert.match(root.innerHTML, /data-account-section="workspaces"/u);
   assert.equal(seen[0][0], "register");
   assert.equal(seen[0][1].invitationToken, "private-invitation-token");
   assert.equal(seen[1][0], "verify");
@@ -479,8 +479,15 @@ test("security renderer escapes workspace fields and omits all internal identifi
   assert.doesNotMatch(root.innerHTML, /<Owner>|<Unsafe Workspace>/u);
   assert.match(root.innerHTML, /&lt;Owner&gt;/u);
   assert.match(root.innerHTML, /&lt;Unsafe Workspace&gt;/u);
+  renderIdentitySecurityPage(root, {
+    account: account(), accountSection: "devices",
+    currentSession: session({ session_id: SESSION_ONE, is_current: true }),
+    sessions: [session({ session_id: SESSION_ONE, is_current: true }),
+      session({ session_id: SESSION_TWO, is_current: false })],
+  });
   assert.match(root.innerHTML, /data-session-index="0"/u);
   assert.match(root.innerHTML, /data-session-index="1"/u);
+  assert.doesNotMatch(root.innerHTML, new RegExp(`${SESSION_ONE}|${SESSION_TWO}`, "u"));
 });
 
 test("workspace controller reuses a key only for an identical failed body", async () => {
@@ -603,6 +610,7 @@ test("password rotation clears fields and reloads replacement session state", as
   assert.equal(result, true);
   assert.deepEqual(passwordInputs.map((input) => input.value), ["", "", ""]);
   assert.match(root.innerHTML, /密码已更新，其他设备已退出/u);
+  await controller.showAccountSection("devices");
   assert.match(root.innerHTML, /当前没有其他设备登录/u);
   assert.doesNotMatch(root.innerHTML, new RegExp(SESSION_TWO, "u"));
 });
@@ -652,6 +660,54 @@ test("late protected responses cannot repopulate the page after logout", async (
   assert.doesNotMatch(root.innerHTML, /账号保护状态|owner@example.com/u);
 });
 
+test("login renders before session probe and typing invalidates late responses", async () => {
+  for (const expired of [false, true]) {
+    const root = createRoot();
+    const events = new Map();
+    root.addEventListener = (name, handler) => events.set(name, handler);
+    const pending = deferred();
+    let signal;
+    const controller = createIdentityPageController({ root, api: workingApi({
+      me: async (input) => {
+        signal = input.signal;
+        await pending.promise;
+        if (expired) throw new IdentityApiError({ status: 401, code: "identity.session_invalid" });
+        return accountSessionPayload();
+      },
+    }) });
+    const mounted = controller.mount();
+    assert.match(root.innerHTML, /data-identity-login-form/u);
+    assert.doesNotMatch(root.innerHTML, /disabled/u);
+    events.get("input")({ target: { closest: () => true } });
+    const current = root.innerHTML;
+    assert.equal(signal.aborted, true);
+    pending.resolve();
+    await mounted;
+    assert.equal(root.innerHTML, current);
+    controller.destroy();
+  }
+});
+
+test("organization form and client need only a name; technical defaults stay server-side", async () => {
+  const root = createRoot();
+  const controller = createIdentityPageController({ root, api: workingApi() });
+  await controller.mount();
+  controller.showWorkspaceCreate();
+  assert.match(root.innerHTML, /name="name"/u);
+  assert.doesNotMatch(root.innerHTML, /name="(?:slug|region|serviceMode)"/u);
+  controller.destroy();
+  const originalDocument = globalThis.document;
+  globalThis.document = { cookie: "__Host-metahub-global-csrf=workspace-csrf" };
+  const calls = installFetch(() => jsonResponse(workspaceDetailPayload(), { status: 201 }));
+  try {
+    await createAccountWorkspace({ controlApiUrl: CONTROL_URL, kind: "organization",
+      name: "研发团队", idempotencyKey: "name-only-workspace-0001" });
+    assert.deepEqual(JSON.parse(calls[0].options.body), { kind: "organization", name: "研发团队" });
+  } finally {
+    globalThis.document = originalDocument;
+  }
+});
+
 test("logout waits for an in-flight login before clearing the issued session", async () => {
   const root = createRoot();
   const loginDeferred = deferred();
@@ -678,6 +734,24 @@ test("logout waits for an in-flight login before clearing the issued session", a
   assert.deepEqual(operations, ["login-started", "logout-finished"]);
   assert.match(root.innerHTML, /data-identity-login-form/u);
   assert.doesNotMatch(root.innerHTML, /账号保护状态|PrivatePassword/u);
+});
+
+test("logout shows an explicit pending state until the server session is closed", async () => {
+  const root = createRoot();
+  const logoutDeferred = deferred();
+  const controller = createIdentityPageController({
+    root,
+    api: workingApi({ logout: async () => logoutDeferred.promise }),
+  });
+
+  await controller.mount();
+  const pending = controller.logout();
+  assert.match(root.innerHTML, /正在退出登录/u);
+  assert.doesNotMatch(root.innerHTML, /data-identity-login-form/u);
+
+  logoutDeferred.resolve(logoutPayload());
+  await pending;
+  assert.match(root.innerHTML, /data-identity-login-form/u);
 });
 
 test("safe page errors escape HTML and expose only request_id", async () => {
@@ -710,6 +784,7 @@ test("identity page keeps keyboard, focus, and mobile layout contracts", async (
   ]);
   const root = createRoot();
   renderIdentitySecurityPage(root, {
+    accountSection: "password",
     account: account(),
     currentSession: session({ session_id: SESSION_ONE, is_current: true }),
     sessions: [session({ session_id: SESSION_ONE, is_current: true })],
@@ -960,11 +1035,40 @@ test("stale registration setup cannot replace login or restore captcha", async (
   const controller = createIdentityPageController({ root, api: workingApi({
     registrationPolicy: () => policy.promise,
   }) });
-  const loading = controller.showRegistration();
+  const loading = controller.mount({ registration: true });
   controller.showLogin();
   policy.resolve({ human_verification: false, email_verification: false });
   assert.equal(await loading, false);
   assert.match(root.innerHTML, /data-identity-login-form/u);
+});
+
+test("registration keeps required fields usable while policy is loading", async () => {
+  const root = createRoot();
+  const policy = deferred();
+  const events = new Map();
+  root.addEventListener = (name, handler) => events.set(name, handler);
+  const controller = createIdentityPageController({ root, api: workingApi({
+    registrationPolicy: () => policy.promise,
+  }) });
+  const loading = controller.mount({ registration: true });
+  assert.match(root.innerHTML, /identity-registration-fields/iu);
+  assert.match(root.innerHTML, /正在准备本地注册验证/iu);
+  assert.doesNotMatch(root.innerHTML, /<fieldset[^>]*disabled/iu);
+  assert.match(root.innerHTML, /<button class="identity-primary" type="submit" disabled>/u);
+  events.get("input")({ target: {
+    name: "email", value: "draft@example.test",
+    closest: (selector) => selector === "[data-identity-registration-form]",
+  } });
+  events.get("input")({ target: {
+    name: "displayName", value: "Draft owner",
+    closest: (selector) => selector === "[data-identity-registration-form]",
+  } });
+  policy.resolve({ human_verification: false, email_verification: false });
+  assert.equal(await loading, true);
+  assert.match(root.innerHTML, /value="draft@example\.test"/u);
+  assert.match(root.innerHTML, /value="Draft owner"/u);
+  assert.doesNotMatch(root.innerHTML, /正在准备本地注册验证/iu);
+  assert.doesNotMatch(root.innerHTML, /<button class="identity-primary" type="submit" disabled>/u);
 });
 
 test("new accounts start with organization creation and secondary account security", async () => {
@@ -976,7 +1080,7 @@ test("new accounts start with organization creation and secondary account securi
   assert.match(root.innerHTML, /identity-organization-main/u);
   assert.match(root.innerHTML, /创建组织/u);
   assert.doesNotMatch(root.innerHTML, /账号保护状态|通知中心|空间类型|我的空间/u);
-  controller.showAccountSecurity();
+  await controller.showAccountSecurity();
   assert.match(root.innerHTML, /账号保护状态|返回组织开通/u);
   controller.showOrganizationStart();
   assert.match(root.innerHTML, /identity-organization-main/u);
@@ -1027,22 +1131,18 @@ test("organization creation prevents duplicate writes and restores failed drafts
   controller.destroy();
 });
 
-for (const scenario of ["ready", "permission-drift", "logout", "other-workspace"]) {
+for (const scenario of ["ready", "permission-drift", "logout", "other-workspace", "switch-failed"]) {
   test(`organization console entry checks authorization before redirect: ${scenario}`, async () => {
     const root = createRoot();
-    const navigationStarted = deferred();
-    const pendingNavigation = deferred();
+    const sessionStarted = deferred();
+    const pendingSession = deferred();
     let created = false;
     let switched = false;
     let redirected = 0;
     let auxiliaryReads = 0;
     const authorization = {
-      permission_codes: [], permission_revision: 1, membership_revision: 1,
+      permission_codes: [], permission_revision: scenario === "permission-drift" ? 0 : 1, membership_revision: 1,
       permission_fingerprint: "f".repeat(64),
-    };
-    const navigation = {
-      ...authorization, groups: [],
-      permission_fingerprint: (scenario === "permission-drift" ? "a" : "f").repeat(64),
     };
     const controller = createIdentityPageController({
       root, channelFactory: () => null,
@@ -1053,20 +1153,24 @@ for (const scenario of ["ready", "permission-drift", "logout", "other-workspace"
           workspaces: created ? [{ ...workspace(), role: "owner" }] : [],
         }),
         createWorkspace: async () => { created = true; return workspaceDetailPayload(); },
-        switchWorkspace: async () => { switched = true; return {}; },
+        switchWorkspace: async () => {
+          if (scenario === "switch-failed") throw new IdentityApiError({ status: 503 });
+          switched = true;
+          return {};
+        },
         workspaceSession: async () => {
           if (!switched) throw new IdentityApiError({ status: 401 });
-          return {
+          const result = {
             context: { ...workspace(), role: "owner",
               workspace_id: scenario === "other-workspace" ? "wsp_other" : WORKSPACE_ONE },
             authorization,
           };
+          sessionStarted.resolve(result);
+          return scenario === "logout" ? pendingSession.promise : result;
         },
-        memberships: async () => ({ memberships: [] }),
-        workspaceNavigation: async () => {
-          navigationStarted.resolve();
-          return scenario === "logout" ? pendingNavigation.promise : navigation;
-        },
+        memberships: async () => { auxiliaryReads++; return { memberships: [] }; },
+        workspaceNavigation: async () => { auxiliaryReads++; return {}; },
+        onboarding: async () => { auxiliaryReads++; return {}; },
         notifications: async () => { auxiliaryReads++; return {}; },
       }),
     });
@@ -1078,9 +1182,9 @@ for (const scenario of ["ready", "permission-drift", "logout", "other-workspace"
         region: "cn-north-1", serviceMode: "internal_only",
       });
       if (scenario === "logout") {
-        await navigationStarted.promise;
+        const session = await sessionStarted.promise;
         await controller.logout();
-        pendingNavigation.resolve(navigation);
+        pendingSession.resolve(session);
       }
       assert.equal(await creating, scenario === "ready");
       assert.equal(redirected, scenario === "ready" ? 1 : 0);

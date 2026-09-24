@@ -23,6 +23,10 @@ $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $artifactRoot = Join-Path $Root ".artifacts\product-qa\$stamp"
 $tempRoot = Join-Path $Root ".tmp\product-qa\$stamp"
 New-Item -ItemType Directory -Force -Path $artifactRoot, $tempRoot | Out-Null
+$evidenceScript = Join-Path $Root "scripts\quality\product_qa_evidence.py"
+$sourceStartPath = Join-Path $tempRoot "source-start.json"
+& $Python $evidenceScript start --output $sourceStartPath
+if ($LASTEXITCODE -ne 0) { throw "Product QA source capture failed" }
 $previousQaArtifactRoot = $env:METAHUB_QA_ARTIFACT_ROOT
 $env:METAHUB_QA_ARTIFACT_ROOT = $artifactRoot
 
@@ -65,6 +69,7 @@ if ($Group -in @("All", "Web")) {
     (Join-Path $Root "tests\product_qa\web\compatibilityMatrix.test.mjs"),
     (Join-Path $Root "tests\product_qa\web\csvExportEvidence.test.mjs"),
     (Join-Path $Root "tests\product_qa\web\humanMouseJourneys.test.mjs"),
+    (Join-Path $Root "tests\product_qa\web\layoutMetrics.test.mjs"),
     (Join-Path $Root "tests\product_qa\web\productQaContracts.test.mjs"),
     (Join-Path $Root "tests\product_qa\web\serviceRecoveryFlow.test.mjs")
   ) (Join-Path $artifactRoot "web.out")
@@ -143,11 +148,18 @@ $summary = [ordered]@{
 }
 $summaryPath = Join-Path $artifactRoot "summary.json"
 $summary | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $summaryPath -Encoding utf8
+& $Python $evidenceScript finish --start $sourceStartPath --evidence-dir $artifactRoot `
+  --output (Join-Path $artifactRoot "evidence-manifest.json")
+$evidenceExitCode = $LASTEXITCODE
 $env:METAHUB_QA_ARTIFACT_ROOT = $previousQaArtifactRoot
 
 $failed = @($results | Where-Object { $_.exit_code -ne 0 })
 Write-Output ("Product QA group {0}: {1}/{2} tasks passed" -f $Group, ($results.Count - $failed.Count), $results.Count)
 Write-Output ("Redacted summary: {0}" -f $summaryPath)
+if ($evidenceExitCode -ne 0) {
+  Write-Output "Product QA source changed or evidence could not be sealed; rerun the affected batch."
+  exit 1
+}
 if ($failed.Count -gt 0) {
   Write-Output ("Failed task count: {0}; inspect the task-specific artifact files." -f $failed.Count)
   exit 1

@@ -14,22 +14,23 @@ The declared catalog contains 97 cases: WB-01..08, API-01..08, BB-01..14, GR-01.
 
 ```powershell
 .\scripts\quality\run-product-qa.ps1 -Group All -RunBrowserMatrix `
-  -RunLivePerformance -RunPressure -PressureRequests 120 -PressureConcurrency 8 `
-  -PressureDurationSeconds 0
+  -RunLivePerformance -RunPressure
 ```
 
-The final run produced `15/15 tasks passed` at `.artifacts/product-qa/20260820-132657/summary.json`.
+The runner writes a new timestamped directory and an `evidence-manifest.json` binding all output files to source snapshots captured before and after the batch. Both HEAD and source bytes (including uncommitted source files) must match. Changing source during execution invalidates the batch. The pressure gate uses 600 requests by default. SQLite acceptance now requires 153 applied migrations through 0155.
+
+The `15/15` run in `.artifacts/product-qa/20260820-132657/summary.json` is historical. It lacks current source provenance and cannot certify PRD-148.
 
 After the grouped run and the dedicated long-stability window, audit every catalog case:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\quality\product_qa_case_audit.py `
-  --evidence-dir .artifacts\product-qa\20260820-132657 `
-  --long-stability .artifacts\product-qa\stability-long-awake.json `
-  --output .artifacts\product-qa\20260820-132657\case-audit.json
+  --evidence-dir <current-batch-directory> `
+  --long-stability <completed-continuous-observation-directory>\status.json `
+  --output <current-batch-directory>\case-audit.json
 ```
 
-The final audit result is `97/97 passed`. It requires zero failed gate tasks, zero skipped JUnit cases, the full 9-browser/DPR matrix, redacted evidence, and `all_108_prds_complete=false`.
+The acceptance target is `97/97 passed`; this is not a statement that the current batch has passed. The audit requires the exact 15-task set, current source and artifact hashes, zero failed gate tasks, zero skipped JUnit cases, the full 9-browser/DPR matrix, redacted evidence, and `all_108_prds_complete=false`. Missing source manifests cannot be reconstructed after a run to turn old outputs into current evidence. Passing this audit is local product QA, not independent GA approval.
 
 ## Iteration commands
 
@@ -51,15 +52,18 @@ The loopback performance samples are read-only and reject credentials, query str
 .\scripts\quality\run-product-qa.ps1 -Group Performance -RunLivePerformance -RunPressure
 ```
 
-The four-hour observation is a separate dedicated window:
+PRD-148 uses a separate 72-hour continuous observation. Start it once for the release under observation; keep an existing healthy process running:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\quality\product_qa_stability_gate.py `
-  --profile long_stability --run-long `
-  --output .artifacts\product-qa\stability-long-awake.json
+.\.venv\Scripts\python.exe scripts\quality\product_qa_continuous_stability.py `
+  --target console=http://127.0.0.1:5173/ `
+  --target control=http://127.0.0.1:8001/health `
+  --target gateway=http://127.0.0.1:8000/health `
+  --source-revision (git rev-parse HEAD) `
+  --output-dir <new-continuous-observation-directory> --duration-seconds 259200
 ```
 
-It passes only after 14,000 observed seconds, zero transport/HTTP errors, all 2xx responses, and a maximum observation gap of 10 seconds or less. On Windows the runner holds a system-required execution state to prevent idle standby.
+It passes only after at least 259,200 observed seconds, zero transport/HTTP errors, and a maximum observation gap of 10 seconds or less. The audit checks the `continuous-availability.v1` schema, source revision, completed non-diagnostic status, target counts and adjacent `windows.jsonl` hash chain. A four-hour profile, an unfinished process, or a diagnostic run cannot satisfy GA long stability. On Windows the runner holds a system-required execution state to prevent idle standby. Local HTTP availability does not establish business-flow, deployment, rollback, or independent approval facts.
 
 ## Acceptance and safety
 

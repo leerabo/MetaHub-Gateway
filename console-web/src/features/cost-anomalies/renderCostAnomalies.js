@@ -9,8 +9,8 @@ import { hasPermission, PERMISSIONS } from "../../lib/permissions.js";
 
 // 标签映射既保证中文可读性，也避免把任意枚举文本直接拼入 class 或按钮命令。
 const RULE_LABELS = Object.freeze({
-  tenant_spend_spike: "租户成本暴涨",
-  virtual_key_spend_spike: "Virtual Key 成本暴涨",
+  tenant_spend_spike: "组织成本突增",
+  virtual_key_spend_spike: "KEY 成本突增",
   virtual_key_off_hours: "非工作时段消费",
 });
 const STATUS_LABELS = Object.freeze({
@@ -83,8 +83,7 @@ export function renderCostAnomalies(state, authContext) {
     ${renderAlertCards(anomalies)}
     <section class="cost-anomaly-page" aria-labelledby="cost-anomaly-list-title">
       <div class="cost-anomaly-section-heading">
-        <div><span>PAGE-077</span><h3 id="cost-anomaly-list-title">成本异常记录</h3></div>
-        <code>request_id: ${escapeHtml(state.request_id ?? "-")}</code>
+        <div><h3 id="cost-anomaly-list-title">成本异常记录</h3></div>
       </div>
       ${renderFilters(filters)}
       <div class="cost-anomaly-workspace">
@@ -113,10 +112,9 @@ function renderHeading(state = {}) {
   return `
     <header class="cost-anomaly-heading">
       <div>
-        <span class="eyebrow">FinOps Governance</span>
         <h2 id="cost-anomaly-title">成本异常检测</h2>
       </div>
-      <div class="cost-anomaly-heading-count"><strong>${safeCount(state.total)}</strong><span>条异常事实</span></div>
+      <div class="cost-anomaly-heading-count"><strong>${safeCount(state.total)}</strong><span>条异常</span></div>
     </header>
   `;
 }
@@ -129,7 +127,7 @@ function renderSummary(summary = {}) {
       ${renderSummaryMetric("待处理", safeCount(summary.open_count))}
       ${renderSummaryMetric("严重", safeCount(summary.critical_count), "critical")}
       ${renderSummaryMetric("已限流", safeCount(summary.mitigated_count))}
-      ${renderSummaryMetric("生效覆盖", safeCount(summary.active_override_count))}
+      ${renderSummaryMetric("生效限流", safeCount(summary.active_override_count))}
       <div class="cost-anomaly-detector detector-${detectorStatus}">
         <span>${escapeHtml(DETECTOR_LABELS[detectorStatus])}</span>
         <strong>${escapeHtml(formatDateTime(summary.latest_window_end))}</strong>
@@ -157,12 +155,12 @@ function renderAlertCards(anomalies) {
   return `
     <section class="cost-anomaly-alerts" aria-labelledby="cost-anomaly-alerts-title">
       <div class="cost-anomaly-section-heading">
-        <div><span>PAGE-078</span><h3 id="cost-anomaly-alerts-title">待处理告警</h3></div>
+        <div><h3 id="cost-anomaly-alerts-title">待处理告警</h3></div>
       </div>
       <div class="cost-anomaly-alert-grid">
         ${alerts.length
           ? alerts.map(renderAlertCard).join("")
-          : `<div class="cost-anomaly-alert-empty">当前快照没有待处理告警。</div>`}
+          : `<div class="cost-anomaly-alert-empty">当前筛选下没有待处理告警。</div>`}
       </div>
     </section>
   `;
@@ -193,8 +191,8 @@ function renderFilters(filters = {}) {
       <label><span>状态</span><select name="status">${renderOptions(STATUS_LABELS, filters.status)}</select></label>
       <label><span>规则</span><select name="ruleType">${renderOptions(RULE_LABELS, filters.ruleType)}</select></label>
       <label><span>级别</span><select name="severity">${renderOptions(SEVERITY_LABELS, filters.severity)}</select></label>
-      <label><span>Environment</span><input name="environmentId" value="${escapeAttribute(filters.environmentId ?? "")}" placeholder="env_..." /></label>
-      <label><span>Virtual Key</span><input name="virtualKeyId" value="${escapeAttribute(filters.virtualKeyId ?? "")}" placeholder="vk_..." /></label>
+      <label><span>环境 ID</span><input name="environmentId" value="${escapeAttribute(filters.environmentId ?? "")}" placeholder="全部环境" /></label>
+      <label><span>KEY ID</span><input name="virtualKeyId" value="${escapeAttribute(filters.virtualKeyId ?? "")}" placeholder="全部 KEY" /></label>
       <label><span>开始时间</span><input type="datetime-local" name="fromTime" value="${escapeAttribute(toDateTimeLocal(filters.fromTime))}" /></label>
       <label><span>结束时间</span><input type="datetime-local" name="toTime" value="${escapeAttribute(toDateTimeLocal(filters.toTime))}" /></label>
       <div class="cost-anomaly-filter-actions">
@@ -262,10 +260,10 @@ function renderDetail(anomaly, canWrite) {
       ${renderInputQuality(anomaly)}
       <dl class="cost-anomaly-detail-list">
         ${renderPair("异常 ID", anomaly.cost_anomaly_id)}
-        ${renderPair("Environment", `${safeText(anomaly.environment_name)} / ${safeText(anomaly.environment_id)}`)}
+        ${renderPair("环境", `${safeText(anomaly.environment_name)} / ${safeText(anomaly.environment_id)}`)}
         ${renderPair("作用范围", displayScope(anomaly))}
-        ${renderPair("Virtual Key", displayVirtualKey(anomaly))}
-        ${renderPair("Project / Application", `${safeText(anomaly.project_id_snapshot)} / ${safeText(anomaly.application_id_snapshot)}`)}
+        ${renderPair("MetaHub KEY", displayVirtualKey(anomaly))}
+        ${renderPair("项目 / 应用", `${safeText(anomaly.project_id_snapshot)} / ${safeText(anomaly.application_id_snapshot)}`)}
         ${renderPair("检测窗口", `${formatDateTime(anomaly.window_start)} - ${formatDateTime(anomaly.window_end)}`)}
         ${renderPair("基线窗口", `${formatDateTime(anomaly.baseline_start)} - ${formatDateTime(anomaly.baseline_end)}`)}
         ${renderPair("当前成本", `${formatCostMicros(anomaly.current_cost_micros)} CNY`)}

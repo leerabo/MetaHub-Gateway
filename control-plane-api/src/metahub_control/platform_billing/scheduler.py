@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
@@ -18,6 +19,9 @@ logger = logging.getLogger("metahub.control.platform_billing.scheduler")
 WORKER_ID = f"platform-meter-{uuid4().hex}"
 POLL_SECONDS = 2.0
 CLOSE_BATCH_SIZE = 50
+FAILURE_BACKOFF_SECONDS = 15.0
+_METER_RETRY_AFTER = 0.0
+_CYCLE_RETRY_AFTER = 0.0
 
 
 def install_platform_billing_scheduler(app: FastAPI) -> None:
@@ -49,23 +53,39 @@ async def _scheduler_loop(app: FastAPI, stop_event: threading.Event) -> None:
 
 
 def run_platform_meter_once(config: AppConfig) -> bool:
+    global _METER_RETRY_AFTER
+    now = time.monotonic()
+    if now < _METER_RETRY_AFTER:
+        return False
     try:
-        return project_usage_once(config, worker_id=WORKER_ID)
+        worked = project_usage_once(config, worker_id=WORKER_ID)
+        _METER_RETRY_AFTER = 0.0
+        return worked
     except ApiError as exc:
+        _METER_RETRY_AFTER = time.monotonic() + FAILURE_BACKOFF_SECONDS
         _warning("platform_billing.meter_projection_failed", exc.code)
         return False
     except Exception:
+        _METER_RETRY_AFTER = time.monotonic() + FAILURE_BACKOFF_SECONDS
         _warning("platform_billing.meter_projection_failed", "platform_metering.unavailable")
         return False
 
 
 def run_platform_cycle_close_once(config: AppConfig) -> bool:
+    global _CYCLE_RETRY_AFTER
+    now = time.monotonic()
+    if now < _CYCLE_RETRY_AFTER:
+        return False
     try:
-        return close_due_cycles(config, limit=CLOSE_BATCH_SIZE) > 0
+        worked = close_due_cycles(config, limit=CLOSE_BATCH_SIZE) > 0
+        _CYCLE_RETRY_AFTER = 0.0
+        return worked
     except ApiError as exc:
+        _CYCLE_RETRY_AFTER = time.monotonic() + FAILURE_BACKOFF_SECONDS
         _warning("platform_billing.cycle_close_failed", exc.code)
         return False
     except Exception:
+        _CYCLE_RETRY_AFTER = time.monotonic() + FAILURE_BACKOFF_SECONDS
         _warning("platform_billing.cycle_close_failed", "platform_billing.unavailable")
         return False
 

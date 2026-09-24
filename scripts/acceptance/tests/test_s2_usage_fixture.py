@@ -63,7 +63,7 @@ def fixture_database(fixture_module):
                 "INSERT INTO workspaces VALUES(?,'organization','user_created')", (WORKSPACE,)
             )
             connection.execute(
-                "INSERT INTO organization_profiles VALUES(?,'s1-browser-fixture')", (WORKSPACE,)
+                "INSERT INTO organization_profiles VALUES(?,'org-current-organization')", (WORKSPACE,)
             )
             connection.execute(
                 "INSERT INTO workspace_tenant_bindings VALUES(?,'test-tenant')", (WORKSPACE,)
@@ -169,7 +169,7 @@ async def test_fixture_rejects_unexpected_body(fixture_module, fixture_database,
 @pytest.mark.parametrize(
     "mutation",
     [
-        "UPDATE organization_profiles SET slug_normalized='existing-organization'",
+        "UPDATE workspaces SET kind='personal'",
         "UPDATE workspaces SET creation_source='legacy_backfill'",
         "DELETE FROM virtual_key_consumers WHERE virtual_key_id='key-2'",
         "UPDATE virtual_key_consumers SET consumer_id='same-person'",

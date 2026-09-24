@@ -1,3 +1,5 @@
+import { icon } from "../public-home/icons.js";
+
 // 默认导航定义控制控制台骨架的兜底菜单，后端返回的角色化导航仍是最终入口来源。
 const DEFAULT_NAVIGATION = [
   {
@@ -21,12 +23,17 @@ const GROUP_KEY_BY_LABEL = {
   applications: "applications",
   observability: "observability",
   "developer-center": "developer-center",
+  advanced: "advanced",
+  "高级工具": "advanced",
+  "Advanced tools": "advanced",
   系统: "system",
   System: "system",
   // PAGE-071 位于调用与成本分组，英文偏好只改变展示标签，不改变后端导航 ID 或权限集合。
   调用与成本: "calls-and-cost",
   "Calls & Cost": "calls-and-cost",
 };
+
+const DEFAULT_GROUP_ITEM_LIMIT = 3;
 
 /**
  * 渲染控制台主框架。
@@ -43,6 +50,12 @@ export function renderConsoleShell({
     localizeNavigationItem(item, i18n),
   );
   const activeItem = activeNavigationItem(consoleShellState, navigationItems);
+  const roleCode = consoleShellState?.navigation?.role_code
+    ?? consoleShellState?.workspaceContext?.role
+    ?? authContext?.workspace?.role;
+  const shellCopy = workspaceRoleShellCopy(roleCode, i18n);
+  const homeItem = ["quickstart", "overview"].map((id) => navigationItems.find((item) =>
+    item.id === id && item.visible !== false && !item.disabled)).find(Boolean);
   const sidebarCollapsed = sidebarCollapsedFromState(consoleShellState);
   const expandedGroupKey = String(consoleShellState?.sidebarExpandedGroupKey ?? "").trim();
   const sidebarToggleLabel = sidebarCollapsed
@@ -52,7 +65,6 @@ export function renderConsoleShell({
     <section class="topbar console-topbar">
       ${renderBrandMark(branding)}
       <div>
-        <p class="eyebrow">${escapeHtml(brandingText(branding?.product_name, t(i18n, "shell.eyebrow", "中国境内企业级 AI Gateway")))}</p>
         <h1>${escapeHtml(brandingText(branding?.product_name, t(i18n, "shell.title", "MetaHub 控制台")))}</h1>
       </div>
       ${renderUserMenu(authContext, i18n, consoleShellState?.navigation, consoleShellState)}
@@ -62,8 +74,7 @@ export function renderConsoleShell({
       <aside id="console-sidebar" class="console-sidebar" aria-label="${escapeAttribute(t(i18n, "shell.nav_aria", "控制台导航"))}">
         <div class="sidebar-title">
           <div class="sidebar-title-copy">
-            <strong>${escapeHtml(t(i18n, "shell.sidebar_title", "治理入口"))}</strong>
-            <span>${escapeHtml(consoleShellState?.workspaceContext?.role ?? authContext?.user?.role ?? t(i18n, "shell.guest", "guest"))}</span>
+            <strong>${escapeHtml(shellCopy.sidebarTitle)}</strong>
           </div>
           <button
             type="button"
@@ -78,17 +89,19 @@ export function renderConsoleShell({
             <span class="sidebar-toggle-text">${escapeHtml(sidebarToggleLabel)}</span>
           </button>
         </div>
-        ${renderNavigationGroups(navigationItems, activeItem.id, expandedGroupKey)}
-        ${renderAdvancedToolsEntry(consoleShellState?.navigation)}
+        ${renderNavigationGroups(navigationItems, activeItem.id, expandedGroupKey, i18n)}
+        ${renderDeferredNavigationControls(navigationItems, activeItem.id, i18n, consoleShellState?.navigation?.role_code)}
+        ${renderAdvancedToolsEntry(consoleShellState?.navigation, i18n, consoleShellState?.navigation?.role_code)}
       </aside>
-      <main class="console-main" aria-labelledby="console-main-title">
+      <main class="console-main" aria-labelledby="console-main-title" data-workspace-role="${escapeAttribute(roleCode ?? "")}">
+        ${homeItem && activeItem.id !== homeItem.id
+          ? `<a class="console-home-return" href="#${homeItem.id === "quickstart" ? "workspace.home.getting-started" : "workspace.home.overview"}" aria-label="${escapeAttribute(t(i18n, "shell.home_return_aria", "返回空间首页"))}">${icon("arrow-left")}<span>${escapeHtml(t(i18n, "shell.home", "空间首页"))}</span></a>` : ""}
         <div class="console-main-heading">
           <div>
             <p class="eyebrow">${escapeHtml(activeItem.group)}</p>
             <h2 id="console-main-title">${escapeHtml(activeItem.label)}</h2>
             <p>${escapeHtml(activeItem.description ?? "")}</p>
           </div>
-          <span class="active-section-pill">${escapeHtml(t(i18n, "shell.current_page", "当前页面"))}</span>
         </div>
         ${renderShellMessage(consoleShellState, i18n)}
         ${contentHtml}
@@ -126,6 +139,40 @@ function sidebarCollapsedFromState(consoleShellState) {
   return preference === true;
 }
 
+export function bindConsoleSidebarViewport({ shell, state, applyCollapsed, onCompact,
+  windowObject = globalThis.window } = {}) {
+  const media = windowObject?.matchMedia?.("(max-width: 820px)");
+  if (!shell || !media?.addEventListener) return () => {};
+  const changed = () => {
+    if (!shell.isConnected) return;
+    if (media.matches) {
+      state.mobileSidebarCollapsed = true;
+      onCompact?.();
+    }
+    const desktopCollapsed = state?.preferences?.preference?.sidebar_collapsed
+      ?? state?.preferences?.sidebar_collapsed;
+    applyCollapsed(shell, media.matches || desktopCollapsed === true);
+  };
+  media.addEventListener("change", changed);
+  return () => media.removeEventListener("change", changed);
+}
+
+export function renderConsoleEntryLoading(container) {
+  if (!container) return;
+  container.innerHTML = '<section class="console-entry-loading" role="status"><strong>MetaHub</strong><p>正在加载组织空间...</p><a href="/">返回首页</a></section>';
+}
+
+/** Reveal the current item inside the sidebar without scrolling the page or moving focus. */
+export function revealConsoleSidebarItem(container) {
+  const sidebar = container?.querySelector?.(".console-sidebar");
+  const current = sidebar?.querySelector?.('.sidebar-link[aria-current="page"]');
+  if (!sidebar || !current || !current.getClientRects().length) return;
+  const bounds = sidebar.getBoundingClientRect();
+  const item = current.getBoundingClientRect();
+  if (item.bottom > bounds.bottom) sidebar.scrollTop += item.bottom - bounds.bottom + 8;
+  else if (item.top < bounds.top) sidebar.scrollTop -= bounds.top - item.top + 8;
+}
+
 function isCompactNavigationViewport() {
   const width = Number(globalThis.window?.innerWidth ?? 0);
   return width > 0 && width <= 820;
@@ -161,7 +208,7 @@ function localizeNavigationItem(item, i18n) {
   const description = t(i18n, `${key}.description`, item.description ?? "");
   return {
     ...item,
-    label: t(i18n, key, item.label ?? item.id),
+    label: t(i18n, `nav.task.${item.id}`, t(i18n, key, item.label ?? item.id)),
     group: localizeGroupLabel(item.group, i18n),
     description,
     empty_state_hint: t(i18n, `${key}.description`, item.empty_state_hint ?? description),
@@ -178,16 +225,18 @@ function navigationMessageKey(item) {
 /**
  * 映射导航分组文案，未知分组保持后端返回值。
  */
-function localizeGroupLabel(group, i18n) {
+export function localizeConsoleGroup(group, i18n) {
   const fallback = String(group ?? "");
   const groupKey = GROUP_KEY_BY_LABEL[fallback];
   return groupKey ? t(i18n, `nav.group.${groupKey}`, fallback) : fallback;
 }
 
+const localizeGroupLabel = localizeConsoleGroup;
+
 /**
  * 按 group 渲染侧边栏导航，保证不同角色只看到后端返回的可见入口。
  */
-function renderNavigationGroups(items, activeId, expandedGroupKey = "") {
+function renderNavigationGroups(items, activeId, expandedGroupKey = "", i18n) {
   const groups = [];
   for (const item of items.filter((candidate) => candidate.sidebar_visible !== false)) {
     let group = groups.find((entry) => entry.name === item.group);
@@ -212,19 +261,54 @@ function renderNavigationGroups(items, activeId, expandedGroupKey = "") {
             data-sidebar-group-toggle="${escapeAttribute(key)}"
             aria-controls="${itemsId}"
             aria-expanded="${isCollapsed ? "false" : "true"}"
-            aria-label="${escapeAttribute(`${isCollapsed ? "展开" : "收起"}${group.name}`)}"
-            title="${escapeAttribute(`${isCollapsed ? "展开" : "收起"}${group.name}`)}"
+            aria-label="${escapeAttribute(`${isCollapsed ? t(i18n, "shell.expand", "展开") : t(i18n, "shell.collapse", "收起")}${group.name}`)}"
+            title="${escapeAttribute(`${isCollapsed ? t(i18n, "shell.expand", "展开") : t(i18n, "shell.collapse", "收起")}${group.name}`)}"
           >
             <span class="sidebar-group-label">${escapeHtml(group.name)}</span>
             <span class="sidebar-group-chevron" aria-hidden="true">⌄</span>
           </button>
           <div id="${itemsId}" class="sidebar-group-items"${isCollapsed ? " hidden" : ""}>
-            ${group.items.map((item) => renderNavigationItem(item, activeId)).join("")}
+            ${group.items.slice(0, DEFAULT_GROUP_ITEM_LIMIT).map((item) => renderNavigationItem(item, activeId, true)).join("")}
+            ${renderDeferredGroupItems(group.items.slice(DEFAULT_GROUP_ITEM_LIMIT), activeId, i18n)}
           </div>
         </nav>
       `;
     })
     .join("");
+}
+
+function renderDeferredGroupItems(items, activeId, i18n) {
+  if (items.length === 0) return "";
+  const label = t(i18n, "shell.more_group_controls", "更多控制");
+  const active = items.some((item) => item.id === activeId);
+  return '<details class="sidebar-group-more"' + (active ? " open" : "") + '><summary>' + escapeHtml(label)
+    + ' (' + items.length + ')</summary><div class="sidebar-group-more-items">'
+    + items.map((item) => renderNavigationItem(item, activeId, false)).join("") + "</div></details>";
+}
+
+function renderDeferredNavigationControls(items, activeId, i18n, roleCode = null) {
+  // Employees use the task home as their product surface. Authorized deep
+  // links remain valid, but a collapsed management menu would reintroduce the
+  // vocabulary and choice overload that the role projection removed.
+  if (roleCode === "viewer") return "";
+  const deferred = items.filter((item) => item.sidebar_visible === false
+    && ["primary", "task_home", "developer_center"].includes(item.placement));
+  if (deferred.length === 0) return "";
+  const groups = [];
+  for (const item of deferred) {
+    let group = groups.find((entry) => entry.name === item.group);
+    if (!group) {
+      group = { name: item.group, items: [] };
+      groups.push(group);
+    }
+    group.items.push(item);
+  }
+  const label = t(i18n, "shell.more_controls", "更多控制");
+  return '<details class="sidebar-deferred-controls"><summary><span>' + escapeHtml(label)
+    + '</span><small>' + deferred.length + '</small></summary><div class="sidebar-deferred-list">'
+    + groups.map((group) => '<section data-sidebar-deferred-group="' + escapeAttribute(sidebarGroupKey(group)) + '"><strong>' + escapeHtml(group.name) + '</strong>'
+      + group.items.map((item) => renderNavigationItem(item, activeId, false)).join("") + "</section>").join("")
+    + "</div></details>";
 }
 
 /** Group identity is derived only from backend navigation IDs, not display labels. */
@@ -241,7 +325,7 @@ function sidebarGroupKey(group) {
  * 渲染单个导航入口。
  * 使用 button 而不是普通链接，便于主应用统一保存偏好并写入 console.page_viewed。
  */
-function renderNavigationItem(item, activeId) {
+function renderNavigationItem(item, activeId, defaultVisible = item.sidebar_visible !== false) {
   const active = item.id === activeId;
   const label = String(item.label ?? item.id ?? "").trim();
   return `
@@ -251,6 +335,8 @@ function renderNavigationItem(item, activeId) {
       data-console-nav="${escapeAttribute(item.id)}"
       data-console-route="${escapeAttribute(item.route_code ?? item.id)}"
       data-console-target="${escapeAttribute(item.target_section)}"
+      data-sidebar-visible="${item.sidebar_visible === false ? "false" : "true"}"
+      data-sidebar-default="${defaultVisible ? "true" : "false"}"
       data-console-nav-label="${escapeAttribute(label)}"
       data-console-group="${escapeAttribute(item.group ?? "")}"
       data-console-description="${escapeAttribute(item.description ?? "")}"
@@ -265,8 +351,8 @@ function renderNavigationItem(item, activeId) {
   `;
 }
 
-function renderAdvancedToolsEntry(navigation) {
-  if (navigation?.advanced_tools_available !== true) return "";
+function renderAdvancedToolsEntry(navigation, i18n, roleCode = null) {
+  if (navigation?.advanced_tools_available !== true || roleCode === "viewer") return "";
   return `
     <button
       type="button"
@@ -275,7 +361,7 @@ function renderAdvancedToolsEntry(navigation) {
       aria-haspopup="dialog"
     >
       <span aria-hidden="true">+</span>
-      <strong>高级工具</strong>
+      <strong>${escapeHtml(t(i18n, "shell.advanced_tools", "高级工具"))}</strong>
     </button>
   `;
 }
@@ -302,13 +388,13 @@ function renderShellMessage(consoleShellState, i18n) {
     `;
   }
   if (warning) {
-    return `<div class="empty-state console-shell-message">${escapeHtml(warning)}</div>`;
+    return `<div class="empty-state console-shell-message">${escapeHtml(t(i18n, "shell.navigation_fallback_warning", warning))}</div>`;
   }
   return "";
 }
 
 /**
- * 渲染顶部用户菜单，展示当前租户、角色和 Session 到期时间。
+ * Keep the current account and organization visible without session internals.
  */
 function renderUserMenu(authContext, i18n, navigation, consoleShellState) {
   if (consoleShellState?.workspaceNavigationContract === true) {
@@ -317,9 +403,10 @@ function renderUserMenu(authContext, i18n, navigation, consoleShellState) {
     if (identity?.account?.status !== "active" || workspace?.session_status !== "active") return "";
     return `<div class="user-menu" aria-label="${escapeAttribute(t(i18n, "shell.user_menu_aria", "个人菜单"))}">
       <div><strong>${escapeHtml(identity.account.display_name || identity.account.email || "")}</strong>
-        <span>${escapeHtml(workspace.name ?? "")} · ${escapeHtml(workspace.role)}</span>
-        <span>${escapeHtml(t(i18n, "shell.session_expires", "Session 到期：{value}", { value: workspace.expires_at }))}</span></div>
-      <a class="user-menu-preferences" href="/identity.html">账号与 Workspace</a>
+        <span>${escapeHtml(workspace.name ?? "")}</span><small>${escapeHtml(workspaceRoleLabel(workspace.role, i18n))}</small></div>
+      <a class="user-menu-preferences" href="/identity.html?view=account#security">${escapeHtml(t(i18n, "shell.account_settings", "账号设置"))}</a>
+      <a class="user-menu-preferences" href="/identity.html?view=workspaces">${escapeHtml(t(i18n, "shell.switch_workspace", "切换组织"))}</a>
+      <button type="button" data-partner-handoff>${escapeHtml(t(i18n, "shell.partner_portal", "Partner 门户"))}</button>
       <button id="logout-button" type="button">${escapeHtml(t(i18n, "shell.logout", "登出"))}</button>
     </div>`;
   }
@@ -336,11 +423,41 @@ function renderUserMenu(authContext, i18n, navigation, consoleShellState) {
         <span>${escapeHtml(t(i18n, "shell.session_expires", "Session 到期：{value}", { value: expiresAt }))}</span>
       </div>
       ${navigation?.account_action_codes?.includes("identity.preferences")
-        ? '<a class="user-menu-preferences" href="/identity.html#account-preferences">账号偏好</a>'
+        ? `<a class="user-menu-preferences" href="/identity.html#account-preferences">${escapeHtml(t(i18n, "shell.account_preferences", "账号偏好"))}</a>`
         : ""}
       <button id="logout-button" type="button">${escapeHtml(t(i18n, "shell.logout", "登出"))}</button>
     </div>
   `;
+}
+
+function workspaceRoleShellCopy(roleCode, i18n) {
+  const label = workspaceRoleLabel(roleCode, i18n);
+  if (roleCode === "owner" || roleCode === "admin") {
+    return { sidebarTitle: t(i18n, "shell.org_management", "组织管理") };
+  }
+  if (roleCode === "finance_admin") {
+    return { sidebarTitle: t(i18n, "shell.finance_workspace", "财务工作台") };
+  }
+  if (["security_admin", "legal_admin", "auditor"].includes(roleCode)) {
+    return { sidebarTitle: `${label}工作台` };
+  }
+  if (roleCode === "developer") {
+    return { sidebarTitle: t(i18n, "shell.developer_workspace", "开发工作台") };
+  }
+  return { sidebarTitle: t(i18n, "shell.employee_workspace", "我的组织空间") };
+}
+
+function workspaceRoleLabel(roleCode, i18n) {
+  return ({
+    owner: t(i18n, "workspace.role.owner", "组织所有者"),
+    admin: t(i18n, "workspace.role.admin", "组织管理员"),
+    developer: t(i18n, "workspace.role.developer", "开发者"),
+    security_admin: t(i18n, "workspace.role.security_admin", "安全管理员"),
+    finance_admin: t(i18n, "workspace.role.finance_admin", "财务管理员"),
+    legal_admin: t(i18n, "workspace.role.legal_admin", "法务管理员"),
+    auditor: t(i18n, "workspace.role.auditor", "审计员"),
+    viewer: t(i18n, "workspace.role.viewer", "成员"),
+  })[roleCode] ?? t(i18n, "workspace.role.member", "组织成员");
 }
 
 /**

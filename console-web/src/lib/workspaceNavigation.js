@@ -5,6 +5,26 @@ const HEX_64 = /^[0-9a-f]{64}$/u;
 const SNAPSHOT_ID = /^ncs_[0-9a-f]{32}$/u;
 const WORKSPACE_ID = /^wsp_[0-9a-f]{32}$/u;
 
+// The authorization projection remains the source of every route. This map
+// only limits the default sidebar surface for a human role; deferred routes
+// remain in navigation_items and can be opened from "More controls" or a
+// valid deep link.
+const DEFAULT_SIDEBAR_GROUPS_BY_ROLE = Object.freeze({
+  // The task home is a landing surface, not a fifth management domain. It
+  // remains routable and is still the first-use destination, while the
+  // sidebar exposes only the four operational domains.
+  owner: new Set(["workspace", "gateway", "finance", "governance"]),
+  admin: new Set(["workspace", "gateway", "finance", "governance"]),
+  developer: new Set(["gateway", "observability", "developer-center"]),
+  security_admin: new Set(["governance", "observability"]),
+  finance_admin: new Set(["finance", "observability"]),
+  legal_admin: new Set(["workspace", "governance"]),
+  auditor: new Set(["governance", "observability"]),
+  // viewer is the current employee/member role. Its authorized deep links
+  // remain available, but the default surface is the single access task.
+  viewer: new Set(["home", "gateway", "finance"]),
+});
+
 const ROUTE_ROWS = [
   ["workspace.home.overview", "overview", "primary", "home"],
   ["workspace.home.assistant", "admin-assistant", "primary", "home"],
@@ -14,7 +34,8 @@ const ROUTE_ROWS = [
   ["workspace.settings.profile", "tenant", "primary", "workspace"],
   ["workspace.settings.members", "users", "primary", "workspace"],
   ["workspace.settings.roles", "role-permissions", "primary", "workspace"],
-  ["workspace.settings.deployments", "environments", "primary", "workspace"],
+  // 租户运行环境由平台运维和内部配置流程管理，不作为 Workspace 用户入口。
+  ["workspace.settings.deployments", "environments", "platform_internal", "workspace"],
   ["workspace.settings.data-management", "tenant-data-lifecycle", "primary", "workspace"],
   ["workspace.gateway.providers", "providers", "primary", "gateway"],
   ["workspace.gateway.private-endpoints", "local-models", "primary", "gateway"],
@@ -192,8 +213,9 @@ export function recordWorkspacePageVisit({ controlApiUrl, visit, idempotencyKey,
     || !["sidebar", "direct_hash"].includes(visit.source)
     || !["mobile", "desktop"].includes(visit.viewport_class)
     || !IDEMPOTENCY_KEY.test(String(idempotencyKey))) invalidRequest();
-  return request(controlApiUrl, "/workspace/navigation/page-views", {
-    method: "POST", body: visit, signal,
+  const timeout = createRequestTimeoutSignal(signal, 2_500);
+  const requestPromise = request(controlApiUrl, "/workspace/navigation/page-views", {
+    method: "POST", body: visit, signal: timeout.signal,
     headers: { "Idempotency-Key": idempotencyKey, "X-CSRF-Token": readExactCookie(WORKSPACE_CSRF_COOKIE) },
     normalize(value) {
       exact(value, ["accepted", "event_id", "idempotent_replay", "permission_fingerprint", "request_id", "trace_id"]);
@@ -204,6 +226,30 @@ export function recordWorkspacePageVisit({ controlApiUrl, visit, idempotencyKey,
     },
     etag: (value) => [value.event_id],
   });
+  return requestPromise.finally(timeout.dispose);
+}
+
+// Page visits are best-effort telemetry. Keep a stalled writer from holding a
+// route transition, logout, or browser screenshot open indefinitely.
+function createRequestTimeoutSignal(parentSignal, timeoutMs) {
+  const controller = new AbortController();
+  let settled = false;
+  const abort = () => {
+    if (!settled) controller.abort(parentSignal?.reason);
+  };
+  if (parentSignal) {
+    if (parentSignal.aborted) abort();
+    else parentSignal.addEventListener("abort", abort, { once: true });
+  }
+  const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+  return {
+    signal: controller.signal,
+    dispose() {
+      settled = true;
+      globalThis.clearTimeout(timer);
+      parentSignal?.removeEventListener("abort", abort);
+    },
+  };
 }
 
 export function normalizeWorkspaceNavigation(value) {
@@ -253,7 +299,7 @@ export function normalizeWorkspaceGettingStarted(value) {
     ]);
     if (typeof task.action_enabled !== "boolean") invalidResponse();
     const route = task.action_route_code === null ? null : routeCode(task.action_route_code);
-    const actionableStatus = new Set(["ready", "needs_attention"]).has(task.status);
+    const actionableStatus = new Set(["ready", "needs_attention", "completed"]).has(task.status);
     if (task.action_enabled !== Boolean(route && actionableStatus)) invalidResponse();
     return deepFreeze({
       task_code: code(task.task_code),
@@ -270,7 +316,7 @@ export function normalizeWorkspaceGettingStarted(value) {
     });
   });
   unique(tasks.map((task) => task.task_code));
-  const enabledTasks = tasks.filter((task) => task.action_enabled);
+  const enabledTasks = tasks.filter((task) => task.action_enabled && task.status !== "completed");
   const nextTaskCode = value.next_task_code === null ? null : code(value.next_task_code);
   if (nextTaskCode !== (enabledTasks[0]?.task_code ?? null)
     || value.completed_count !== tasks.filter((task) => task.status === "completed").length
@@ -373,23 +419,35 @@ export function normalizeWorkspaceAdvancedToolOpen(value) {
 export function resolveWorkspaceNavigationRoute(
   navigation,
   requestedRouteCode,
-  { requestedRejected = false, advancedTools = null } = {},
+  { requestedRejected = false, advancedTools = null, roleCode = null, authorization = null } = {},
 ) {
+  const grantedPermissions = new Set(authorization?.permission_codes ?? navigation.permission_codes ?? []);
   const primary = navigation.groups.flatMap(
-    (group) => group.items.map((item) => item.route_code),
+    (group) => group.items.map((item) => item.route_code)
+      .filter((route) => WORKSPACE_ROUTE_REGISTRY[route]?.placement !== "platform_internal"
+        && routeAvailableForCurrentPermissions(route, grantedPermissions)),
   );
   const allowed = new Set([
     ...primary,
-    ...navigation.detail_route_codes,
+    ...navigation.detail_route_codes.filter((route) => WORKSPACE_ROUTE_REGISTRY[route]?.placement !== "platform_internal"),
     ...navigation.developer_route_codes,
     ...navigation.account_action_codes,
   ]);
   for (const tool of advancedTools?.tools ?? []) {
     if (tool.action_enabled && tool.availability === "available") allowed.add(tool.route_code);
   }
-  const preferred = navigation.preference.last_primary_route_code;
+  const firstUse = Number(navigation.preference.revision ?? 0) <= 1;
+  const preferred = roleCode === "viewer"
+    || ((roleCode === "owner" || roleCode === "admin") && firstUse)
+    ? null
+    : navigation.preference.last_primary_route_code;
   const fallback = (
     preferred && primary.includes(preferred) ? preferred : null
+  ) ?? (
+    (roleCode === "owner" || roleCode === "admin")
+      && primary.includes("workspace.home.overview")
+      ? "workspace.home.overview"
+      : null
   ) ?? (
     primary.includes("workspace.home.getting-started")
       ? "workspace.home.getting-started"
@@ -409,18 +467,33 @@ export function projectWorkspaceNavigationForConsole(
   navigation,
   activeRouteCode,
   advancedTools = null,
+  authorization = null,
+  roleCode = null,
 ) {
   const items = [];
+  const grantedPermissions = new Set(
+    authorization?.permission_codes ?? navigation.permission_codes ?? [],
+  );
   for (const group of navigation.groups) {
-    for (const item of group.items) items.push(projectItem(item.route_code, item, true));
+    for (const item of group.items) {
+      if (!routeAvailableForCurrentPermissions(item.route_code, grantedPermissions)) continue;
+      items.push(projectItem(
+        item.route_code,
+        item,
+        visibleInDefaultSidebar(item.route_code, roleCode),
+      ));
+    }
   }
   for (const route of navigation.developer_route_codes) {
-    items.push(projectItem(route, null, true));
+    if (!routeAvailableForCurrentPermissions(route, grantedPermissions)) continue;
+    items.push(projectItem(route, null, visibleInDefaultSidebar(route, roleCode)));
   }
   for (const route of navigation.detail_route_codes) {
+    if (!routeAvailableForCurrentPermissions(route, grantedPermissions)) continue;
     items.push(projectItem(route, null, false));
   }
   for (const route of navigation.account_action_codes) {
+    if (!routeAvailableForCurrentPermissions(route, grantedPermissions)) continue;
     items.push(projectItem(route, null, false));
   }
   for (const tool of advancedTools?.tools ?? []) {
@@ -433,10 +506,48 @@ export function projectWorkspaceNavigationForConsole(
   if (!active || !items.some((item) => item.route_code === activeRouteCode)) invalidResponse();
   return deepFreeze({
     ...navigation,
+    role_code: roleCode,
+    permission_codes: Array.isArray(authorization?.permission_codes)
+      ? Object.freeze([...authorization.permission_codes])
+      : navigation.permission_codes,
+    permission_revision: authorization?.permission_revision ?? navigation.permission_revision,
+    authorization_fingerprint: authorization?.permission_fingerprint
+      ?? navigation.authorization_fingerprint
+      ?? navigation.permission_fingerprint,
     navigation_items: items,
     active_navigation_item_id: active.sourceId,
     active_route_code: activeRouteCode,
   });
+}
+
+function routeAvailableForCurrentPermissions(routeCode, grantedPermissions) {
+  if (routeCode === "workspace.settings.data-management") {
+    return grantedPermissions.has("tenant_data.read") || grantedPermissions.has("tenant.settings.read");
+  }
+  if (routeCode === "workspace.finance.usage") {
+    return grantedPermissions.has("billing.usage.read") || grantedPermissions.has("virtual_key.read");
+  }
+  return true;
+}
+
+function visibleInDefaultSidebar(routeCode, roleCode) {
+  const route = WORKSPACE_ROUTE_REGISTRY[routeCode];
+  if (!route || !["primary", "task_home", "developer_center"].includes(route.placement)) {
+    return false;
+  }
+  const groups = DEFAULT_SIDEBAR_GROUPS_BY_ROLE[String(roleCode ?? "").trim()];
+  // Legacy callers without a role still receive the complete authorized
+  // projection; only an explicit role activates the opinionated defaults.
+  if (!groups) return true;
+  if (!groups.has(route.groupCode)) return false;
+  if (roleCode === "viewer") {
+    return [
+      "workspace.home.getting-started",
+      "workspace.gateway.virtual-keys",
+      "workspace.finance.usage",
+    ].includes(routeCode);
+  }
+  return true;
 }
 
 function projectItem(route, source, sidebarVisible) {
@@ -453,11 +564,22 @@ function projectItem(route, source, sidebarVisible) {
     label_key: source?.label_key ?? "navigation." + entry.sourceId + ".label",
     description: "",
     description_key: source?.description_key ?? "navigation." + entry.sourceId + ".description",
+    required_permissions: Object.freeze([...(source?.required_permissions ?? [])]),
     visible: true,
     disabled: false,
     sidebar_visible: sidebarVisible,
     order: source?.order ?? 900,
   });
+}
+
+function permissionCodes(value) {
+  if (!Array.isArray(value) || value.some((item) => (
+    typeof item !== "string"
+    || !/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/u.test(item)
+  ))) invalidResponse();
+  const result = [...value].sort();
+  if (new Set(result).size !== result.length) invalidResponse();
+  return Object.freeze(result);
 }
 
 async function request(controlApiUrl, path, options) {
@@ -503,7 +625,12 @@ function normalizeGroup(value) {
   const groupCode = nullableGroup(value.group_code);
   if (groupCode === null) invalidResponse();
   const items = array(value.items, 30).map((item) => {
-    exact(item, ["description_key", "kind", "label_key", "order", "route_code"]);
+    const requiredKeys = ["description_key", "kind", "label_key", "order", "route_code"];
+    const itemKeys = Object.keys(item).sort();
+    const expectedKeys = [...requiredKeys].sort();
+    const expectedWithPermissions = [...requiredKeys, "required_permissions"].sort();
+    if (JSON.stringify(itemKeys) !== JSON.stringify(expectedKeys)
+      && JSON.stringify(itemKeys) !== JSON.stringify(expectedWithPermissions)) invalidResponse();
     const route = routeCode(item.route_code);
     const registry = WORKSPACE_ROUTE_REGISTRY[route];
     if (!registry || registry.groupCode !== groupCode
@@ -515,6 +642,7 @@ function normalizeGroup(value) {
       description_key: key(item.description_key),
       kind: item.kind,
       order: count(item.order),
+      required_permissions: permissionCodes(item.required_permissions ?? []),
     });
   });
   return deepFreeze({

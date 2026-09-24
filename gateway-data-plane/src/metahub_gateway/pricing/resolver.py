@@ -6,6 +6,11 @@ import sqlite3
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
+from metahub_shared.runtime.routing_policy import (
+    MAX_PRICE_DECIMAL_PLACES,
+    MAX_PRICE_PER_1K,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ResolvedCostRate:
@@ -72,7 +77,27 @@ def resolve_workspace_cost_rate(
         if len(rows) > 1:
             raise sqlite3.IntegrityError("workspace_provider_cost_rate_ambiguous")
         if not rows:
-            return None
+            # A retired Workspace rate is an explicit migration boundary: no
+            # active workspace price remains authoritative, so legacy model
+            # catalog data may be read for old databases.  An active head with
+            # no effective version (future/expired/invalid) stays fail-closed.
+            active_head = connection.execute(
+                """
+                SELECT 1
+                FROM workspace_provider_cost_rates rate
+                JOIN workspace_provider_cost_rate_heads head
+                  ON head.workspace_provider_cost_rate_id=rate.workspace_provider_cost_rate_id
+                WHERE rate.tenant_id=? AND rate.model_id=?
+                  AND head.adoption_state='active'
+                LIMIT 1
+                """,
+                (tenant_id, model_id),
+            ).fetchone()
+            if active_head is not None:
+                return None
+            return _resolve_legacy_rate(
+                connection, tenant_id=tenant_id, model_id=model_id, observed_at=observed_at
+            )
         row = rows[0]
         version_id = str(row["workspace_provider_cost_rate_version_id"])
         return ResolvedCostRate(
@@ -131,9 +156,16 @@ def _resolve_legacy_rate(
         output_price = Decimal(str(row["output_price"]))
     except (InvalidOperation, TypeError, ValueError):
         raise sqlite3.IntegrityError("legacy_provider_cost_rate_invalid") from None
-    if not input_price.is_finite() or not output_price.is_finite():
-        raise sqlite3.IntegrityError("legacy_provider_cost_rate_invalid")
-    if input_price < 0 or output_price < 0:
+    if (
+        not input_price.is_finite()
+        or not output_price.is_finite()
+        or input_price < 0
+        or output_price < 0
+        or input_price > MAX_PRICE_PER_1K
+        or output_price > MAX_PRICE_PER_1K
+        or max(-input_price.as_tuple().exponent, 0) > MAX_PRICE_DECIMAL_PLACES
+        or max(-output_price.as_tuple().exponent, 0) > MAX_PRICE_DECIMAL_PLACES
+    ):
         raise sqlite3.IntegrityError("legacy_provider_cost_rate_invalid")
     price_plan_id = row["price_plan_id"]
     return ResolvedCostRate(

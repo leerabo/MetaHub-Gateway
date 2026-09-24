@@ -10,7 +10,10 @@
  * @param {object} handlers 主应用提供的状态转换和 API 调度回调。
  * @returns {void} 页面节点不存在时静默返回，兼容其他导航项和 loading 状态。
  */
-export function bindCostAnomalyInteractions(handlers = {}) {
+export function bindCostAnomalyInteractions(handlers = {}, { isCurrent = () => true } = {}) {
+  handlers = Object.fromEntries(Object.entries(handlers).map(([name, handler]) => [
+    name, (...args) => isCurrent() ? handler(...args) : undefined,
+  ]));
   bindFilters(handlers);
   bindPaging(handlers);
   bindSelection(handlers);

@@ -310,6 +310,8 @@ test("PAGE-071 memory rejects stale tenant result and renderer uses backend tota
   assert.equal(memory.acceptSuccess(ticketB, payload, ownerB), true);
   const html = renderRequestFeedbackSummaryPanel(memory.snapshot(), authContext("developer", "tenant_b"), {}, createI18n("en-US"));
   assert.match(html, /Feedback report/);
+  assert.match(html, /name="fromTime"[^>]*placeholder="2026-07-01T00:00:00Z"[^>]*value=""/);
+  assert.match(html, /name="toTime"[^>]*placeholder="2026-07-20T00:00:00Z"[^>]*value=""/);
   assert.match(html, /4\.25 \/ 5/);
   assert.match(html, /75%/);
   assert.match(html, /&lt;script&gt;DeepSeek&lt;\/script&gt;/);
@@ -322,6 +324,38 @@ test("PAGE-071 memory rejects stale tenant result and renderer uses backend tota
     {},
     createI18n("en-US"),
   ), "");
+
+  const emptySummary = renderRequestFeedbackSummaryPanel({
+    state: "ok",
+    scope_type: "tenant",
+    from_time: "2026-07-01T00:00:00Z",
+    to_time: "2026-07-20T00:00:00Z",
+    summary: {
+      feedback_count: 0,
+      average_rating_milli: 0,
+      accepted_count: 0,
+      adoption_rate_bps: 0,
+      rating_distribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+      tag_counts: [],
+    },
+    models: [],
+    total: 0,
+    limit: 20,
+    offset: 0,
+  }, authContext("developer", "tenant_a"), {}, createI18n("zh-CN"));
+  assert.match(emptySummary, /暂无数据/gu);
+  assert.doesNotMatch(emptySummary, /0 \/ 5|0%/gu);
+});
+
+test("feedback time hints do not invent a date before the authoritative window loads", () => {
+  const context = authContext("developer", "tenant_a");
+  const draft = { fromTime: "2026-09-01T00:00:00Z", toTime: "2026-09-02T00:00:00Z" };
+  for (const state of [null, { state: "error", code: "feedback.unavailable" }]) {
+    const html = renderRequestFeedbackSummaryPanel(state, context, draft, createI18n("en-US"));
+    assert.match(html, /placeholder="YYYY-MM-DDTHH:mm:ssZ"/);
+    assert.match(html, /value="2026-09-01T00:00:00Z"/);
+    assert.doesNotMatch(html, /2026-06-19|2026-07-19/);
+  }
 });
 
 test("main wires feedback cleanup permission-gated loading and operation request id", async () => {

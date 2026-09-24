@@ -66,6 +66,137 @@ export async function getLaunchGates({ controlApiUrl, signal } = {}) {
   return Object.freeze({ gates, candidate, ...trace(value) });
 }
 
+/** Read-only final GA projection. The GA boundary deliberately has a separate
+ * endpoint and DTO so RC actions cannot be replayed against a GA launch. */
+export async function getGaGates({ controlApiUrl, signal } = {}) {
+  const value = await requestJson(controlApiUrl, "/platform/ga-gates", { signal });
+  gaExact(value, ["candidate", "evidence", "gates", "launch", "request_id", "trace_id"]);
+  if (!Array.isArray(value.gates) || value.gates.length !== 20) invalidResponse("ga_gate_registry");
+  const gates = Object.freeze(value.gates.map(gaGateSummary));
+  if (new Set(gates.map((item) => item.gate_code)).size !== 20
+    || LAUNCH_GATE_CODES.some((code) => !gates.some((item) => item.gate_code === code))) {
+    invalidResponse("ga_gate_registry");
+  }
+  const candidate = value.candidate === null ? null : candidateSummary(value.candidate);
+  const launch = value.launch === null ? null : gaLaunchSummary(value.launch);
+  responseArray(value.evidence, 20, "ga_evidence");
+  const evidence = Object.freeze(value.evidence.map(gaEvidenceSummary));
+  const gateIds = new Set(gates.map((item) => item.ga_gate_id));
+  if (gateIds.size !== gates.length
+    || (launch !== null && launch.launch_candidate_id !== candidate?.launch_candidate_id)) {
+    invalidResponse("ga_candidate_projection");
+  }
+  for (const records of [evidence, launch?.evidence ?? []]) {
+    if (new Set(records.map((item) => item.ga_gate_id)).size !== records.length
+      || new Set(records.map((item) => item.ga_evidence_id)).size !== records.length
+      || new Set(records.map((item) => item.source_evidence_id)).size !== records.length
+      || records.some((item) => item.launch_candidate_id !== candidate?.launch_candidate_id
+        || !gateIds.has(item.ga_gate_id))) invalidResponse("ga_evidence_projection");
+  }
+  return Object.freeze({
+    gates,
+    candidate,
+    evidence,
+    launch,
+    ...trace(value),
+  });
+}
+
+export async function submitGaEvidence(input = {}) {
+  if (input.confirmed !== true || (input.metricValue === null) !== (input.metricUnit === null)) {
+    invalidRequest("ga_evidence");
+  }
+  const body = {
+    launch_candidate_id: requestPattern(input.launchCandidateId, ID.candidate, "launch_candidate_id"),
+    expected_revision: requestInteger(input.expectedRevision, "expected_revision"),
+    workspace_id: requestPattern(input.workspaceId, ID.workspace, "workspace_id"),
+    artifact_sha256: requestPattern(input.artifactSha256, SHA256, "artifact_sha256"),
+    verifier_code: requestPattern(input.verifierCode, VERIFIER, "verifier_code"),
+    verifier_version: 1,
+    outcome: requestExact(input.outcome, "passed", "outcome"),
+    metric_value: input.metricValue === null ? null : requestFinite(input.metricValue, "metric_value"),
+    metric_unit: input.metricUnit === null ? null : requestPattern(input.metricUnit, SAFE_METRIC, "metric_unit"),
+    environment_sha256: requestPattern(input.environmentSha256, SHA256, "environment_sha256"),
+    provenance_sha256: requestPattern(input.provenanceSha256, SHA256, "provenance_sha256"),
+    started_at: requestTimestamp(input.startedAt, "started_at"),
+    finished_at: requestTimestamp(input.finishedAt, "finished_at"),
+    signature: requestPattern(input.signature, SIGNATURE, "signature"),
+    confirmed: true,
+  };
+  try {
+    const value = await requestJson(input.controlApiUrl,
+      `/platform/ga-gates/${encodeURIComponent(requestPattern(input.gaGateId, /^gag_[0-9a-f]{32}$/u, "ga_gate_id"))}/evidence`, {
+        method: "POST", body, revision: body.expected_revision,
+        stepUpGrant: requestPattern(input.stepUpGrant, OPAQUE, "step_up_grant"),
+        idempotencyKey: requestPattern(input.idempotencyKey, IDEMPOTENCY, "idempotency_key"), signal: input.signal,
+      });
+    gaExact(value, ["evidence", "request_id", "trace_id"]);
+    return Object.freeze({ evidence: gaEvidenceSummary(value.evidence), ...trace(value) });
+  } finally {
+    body.signature = "";
+  }
+}
+
+export async function launchGa(input = {}) {
+  if (input.confirmed !== true) invalidRequest("confirmed");
+  const body = {
+    operation: "launch",
+    launch_candidate_id: requestPattern(input.launchCandidateId, ID.candidate, "launch_candidate_id"),
+    expected_revision: requestInteger(input.expectedRevision, "expected_revision"),
+    confirmed: true,
+  };
+  const value = await requestJson(input.controlApiUrl, "/platform/ga-launches", {
+    method: "POST", body, revision: body.expected_revision,
+    stepUpGrant: requestPattern(input.stepUpGrant, OPAQUE, "step_up_grant"),
+    idempotencyKey: requestPattern(input.idempotencyKey, IDEMPOTENCY, "idempotency_key"), signal: input.signal,
+  });
+  gaExact(value, ["idempotent_replay", "launch", "request_id", "trace_id"]);
+  return Object.freeze({ launch: gaLaunchSummary(value.launch), idempotent_replay: responseBoolean(value.idempotent_replay, "idempotent_replay"), ...trace(value) });
+}
+
+export async function requestGaRollback(input = {}) {
+  const body = {
+    operation: "request",
+    expected_revision: requestInteger(input.expectedRevision, "expected_revision"),
+    trigger_code: requestChoice(input.triggerCode, ROLLBACK_TRIGGERS, "trigger_code"),
+    trigger_sha256: requestPattern(input.triggerSha256, SHA256, "trigger_sha256"),
+    checkpoint_sha256: requestPattern(input.checkpointSha256, SHA256, "checkpoint_sha256"),
+    job_receipt_sha256: requestPattern(input.jobReceiptSha256, SHA256, "job_receipt_sha256"),
+    confirmed: true,
+  };
+  return postGaCommand(input, body);
+}
+
+export async function verifyGaRollback(input = {}) {
+  const body = {
+    operation: "verify",
+    expected_revision: requestInteger(input.expectedRevision, "expected_revision"),
+    ga_rollback_id: requestPattern(input.gaRollbackId, /^gar_[0-9a-f]{32}$/u, "ga_rollback_id"),
+    outcome: requestChoice(input.outcome, ["passed", "failed"], "outcome"),
+    verification_sha256: requestPattern(input.verificationSha256, SHA256, "verification_sha256"),
+    confirmed: true,
+  };
+  return postGaCommand(input, body);
+}
+
+export async function submitGaReview(input = {}) {
+  const body = {
+    expected_revision: requestInteger(input.expectedRevision, "expected_revision"),
+    summary_sha256: requestPattern(input.summarySha256, SHA256, "summary_sha256"),
+    action_items_sha256: requestPattern(input.actionItemsSha256, SHA256, "action_items_sha256"),
+    conclusion: requestChoice(input.conclusion, ["ga_launched", "ga_rolled_back"], "conclusion"),
+    confirmed: true,
+  };
+  const launchId = requestPattern(input.gaLaunchId, /^gal_[0-9a-f]{32}$/u, "ga_launch_id");
+  const value = await requestJson(input.controlApiUrl, `/platform/ga-launches/${encodeURIComponent(launchId)}/review`, {
+    method: "POST", body, revision: body.expected_revision,
+    stepUpGrant: requestPattern(input.stepUpGrant, OPAQUE, "step_up_grant"),
+    idempotencyKey: requestPattern(input.idempotencyKey, IDEMPOTENCY, "idempotency_key"), signal: input.signal,
+  });
+  gaExact(value, ["idempotent_replay", "launch", "request_id", "review", "trace_id"]);
+  return Object.freeze({ review: gaReviewSummary(value.review), launch: gaLaunchSummary(value.launch), idempotent_replay: responseBoolean(value.idempotent_replay, "idempotent_replay"), ...trace(value) });
+}
+
 export async function createLaunchCandidate({
   controlApiUrl,
   codeTreeSha256,
@@ -338,6 +469,85 @@ async function postLaunchCommand(input, body) {
   }
   return result;
 }
+
+async function postGaCommand(input, body) {
+  const launchId = requestPattern(input.gaLaunchId, /^gal_[0-9a-f]{32}$/u, "ga_launch_id");
+  const value = await requestJson(input.controlApiUrl, `/platform/ga-launches/${encodeURIComponent(launchId)}/rollback`, {
+    method: "POST", body, revision: body.expected_revision,
+    stepUpGrant: requestPattern(input.stepUpGrant, OPAQUE, "step_up_grant"),
+    idempotencyKey: requestPattern(input.idempotencyKey, IDEMPOTENCY, "idempotency_key"), signal: input.signal,
+  });
+  gaExact(value, ["idempotent_replay", "launch", "request_id", "rollback", "trace_id"]);
+  return Object.freeze({ rollback: gaRollbackSummary(value.rollback), launch: gaLaunchSummary(value.launch), idempotent_replay: responseBoolean(value.idempotent_replay, "idempotent_replay"), ...trace(value) });
+}
+
+function gaGateSummary(value) {
+  gaExact(value, ["blocking_severity", "freshness_seconds", "ga_gate_id", "gate_code", "policy_sha256", "policy_version", "verifier_code", "verifier_version"]);
+  return Object.freeze({
+    ga_gate_id: responsePattern(value.ga_gate_id, /^gag_[0-9a-f]{32}$/u, "ga_gate_id"),
+    gate_code: responseChoice(value.gate_code, LAUNCH_GATE_CODES, "gate_code"),
+    policy_version: responseExactInteger(value.policy_version, 1, "policy_version"),
+    verifier_code: responsePattern(value.verifier_code, VERIFIER, "verifier_code"),
+    verifier_version: responseExactInteger(value.verifier_version, 1, "verifier_version"),
+    freshness_seconds: responseInteger(value.freshness_seconds, 300, "freshness_seconds"),
+    blocking_severity: responseExact(value.blocking_severity, "p0", "blocking_severity"),
+    policy_sha256: responsePattern(value.policy_sha256, SHA256, "policy_sha256"),
+  });
+}
+
+function gaEvidenceSummary(value) {
+  gaExact(value, ["created_at", "expires_at", "finished_at", "ga_evidence_id", "ga_gate_id", "launch_candidate_id", "outcome", "source_evidence_id"]);
+  return Object.freeze({
+    ga_evidence_id: responsePattern(value.ga_evidence_id, /^gae_[0-9a-f]{32}$/u, "ga_evidence_id"),
+    launch_candidate_id: responsePattern(value.launch_candidate_id, ID.candidate, "launch_candidate_id"),
+    ga_gate_id: responsePattern(value.ga_gate_id, /^gag_[0-9a-f]{32}$/u, "ga_gate_id"),
+    source_evidence_id: responsePattern(value.source_evidence_id, ID.evidence, "source_evidence_id"),
+    outcome: responseExact(value.outcome, "passed", "outcome"),
+    finished_at: responseTimestamp(value.finished_at, "finished_at"),
+    expires_at: responseTimestamp(value.expires_at, "expires_at"),
+    created_at: responseTimestamp(value.created_at, "created_at"),
+  });
+}
+
+function gaLaunchSummary(value) {
+  gaExact(value, ["approved_at", "candidate_generation", "created_at", "decisions", "evidence", "ga_launch_id", "launch_candidate_id", "launched_at", "revision", "review", "rollbacks", "status", "updated_at", "workspace_id"]);
+  responseArray(value.evidence, 20); responseArray(value.decisions, 6); responseArray(value.rollbacks, 20);
+  return Object.freeze({
+    ga_launch_id: responsePattern(value.ga_launch_id, /^gal_[0-9a-f]{32}$/u, "ga_launch_id"),
+    launch_candidate_id: responsePattern(value.launch_candidate_id, ID.candidate, "launch_candidate_id"),
+    workspace_id: responsePattern(value.workspace_id, ID.workspace, "workspace_id"),
+    status: responseChoice(value.status, ["approved", "launched", "rollback_pending", "rolled_back", "failed"], "ga_status"),
+    candidate_generation: responseInteger(value.candidate_generation, 1, "candidate_generation"),
+    revision: responseInteger(value.revision, 1, "ga_revision"),
+    approved_at: responseTimestamp(value.approved_at, "approved_at"),
+    launched_at: nullableTimestamp(value.launched_at, "launched_at"),
+    created_at: responseTimestamp(value.created_at, "created_at"),
+    updated_at: responseTimestamp(value.updated_at, "updated_at"),
+    evidence: Object.freeze(value.evidence.map(gaEvidenceSummary)),
+    decisions: Object.freeze(value.decisions.map(gaDecisionSummary)),
+    rollbacks: Object.freeze(value.rollbacks.map(gaRollbackSummary)),
+    review: value.review === null ? null : gaReviewSummary(value.review),
+  });
+}
+
+function gaDecisionSummary(value) {
+  gaExact(value, ["actor_kind", "decided_at", "ga_decision_id", "operator_id", "source_decision_id"]);
+  return Object.freeze({ ga_decision_id: responsePattern(value.ga_decision_id, /^gad_[0-9a-f]{32}$/u,
+    "ga_decision_id"),
+    actor_kind: responseChoice(value.actor_kind, LAUNCH_ACTORS, "actor_kind"), operator_id: responsePattern(value.operator_id, ID.operator, "operator_id"), source_decision_id: responsePattern(value.source_decision_id, ID.decision, "source_decision_id"), decided_at: responseTimestamp(value.decided_at, "decided_at") });
+}
+
+function gaRollbackSummary(value) {
+  gaExact(value, ["checkpoint_sha256", "from_status", "ga_launch_id", "ga_rollback_id", "job_receipt_sha256", "requested_at", "revision", "status", "trigger_code", "trigger_sha256", "verification_sha256", "verified_at"]);
+  return Object.freeze({ ga_rollback_id: responsePattern(value.ga_rollback_id, /^gar_[0-9a-f]{32}$/u, "ga_rollback_id"), ga_launch_id: responsePattern(value.ga_launch_id, /^gal_[0-9a-f]{32}$/u, "ga_launch_id"), from_status: responseChoice(value.from_status, ["approved", "launched", "rollback_pending"], "from_status"), trigger_code: responseChoice(value.trigger_code, ROLLBACK_TRIGGERS, "trigger_code"), trigger_sha256: responsePattern(value.trigger_sha256, SHA256, "trigger_sha256"), checkpoint_sha256: responsePattern(value.checkpoint_sha256, SHA256, "checkpoint_sha256"), job_receipt_sha256: responsePattern(value.job_receipt_sha256, SHA256, "job_receipt_sha256"), verification_sha256: nullablePattern(value.verification_sha256, SHA256, "verification_sha256"), status: responseChoice(value.status, ["pending", "passed", "failed"], "ga_rollback_status"), revision: responseInteger(value.revision, 1, "ga_rollback_revision"), requested_at: responseTimestamp(value.requested_at, "requested_at"), verified_at: nullableTimestamp(value.verified_at, "verified_at") });
+}
+
+function gaReviewSummary(value) {
+  gaExact(value, ["action_items_sha256", "conclusion", "ga_launch_id", "post_ga_review_id", "reviewed_at", "summary_sha256"]);
+  return Object.freeze({ post_ga_review_id: responsePattern(value.post_ga_review_id, /^pgr_[0-9a-f]{32}$/u, "post_ga_review_id"), ga_launch_id: responsePattern(value.ga_launch_id, /^gal_[0-9a-f]{32}$/u, "ga_launch_id"), summary_sha256: responsePattern(value.summary_sha256, SHA256, "summary_sha256"), action_items_sha256: responsePattern(value.action_items_sha256, SHA256, "action_items_sha256"), conclusion: responseChoice(value.conclusion, ["ga_launched", "ga_rolled_back"], "ga_conclusion"), reviewed_at: responseTimestamp(value.reviewed_at, "reviewed_at") });
+}
+
+function gaExact(value, keys) { exact(value, keys); }
 
 async function postRollback(input, candidateId, revision, body) {
   const result = rollbackResponse(await requestJson(

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from typing import Annotated, TypeVar
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from metahub_shared.runtime.errors import ApiError
 from pydantic import BaseModel, ValidationError
 
@@ -21,8 +21,10 @@ from .models import (
     CreateInvitationRequest,
     InvitationAcceptResponse,
     InvitationCreateResponse,
+    InvitationPreviewRequest,
+    InvitationPreviewResponse,
 )
-from .service import accept_invitation, create_invitation
+from .service import accept_invitation, create_invitation, preview_invitation
 
 router = APIRouter(prefix="/invitations", tags=["invitations"])
 
@@ -71,6 +73,20 @@ async def post_invitation(
         request_id=_request_id(request),
         trace_id=_trace_id(request),
     )
+
+
+@router.post("/preview", response_model=InvitationPreviewResponse)
+async def post_invitation_preview(
+    request: Request, response: Response,
+) -> InvitationPreviewResponse:
+    response.headers["Cache-Control"] = "no-store, private"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    payload = await _read_payload(
+        request, model=InvitationPreviewRequest,
+        allowed_fields=frozenset({"token"}), required_fields=frozenset({"token"}),
+        error_code="invitation.not_available",
+    )
+    return preview_invitation(request.app.state.config, payload.token)
 
 
 @router.post(

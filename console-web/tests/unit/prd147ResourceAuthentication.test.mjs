@@ -14,6 +14,7 @@ import * as status from "../../src/lib/providerStatus.js";
 import * as aliases from "../../src/lib/modelAliases.js";
 import * as scores from "../../src/lib/modelQualityScores.js";
 import * as experiments from "../../src/lib/experiments.js";
+import * as dlp from "../../src/lib/dlp.js";
 
 const BASE = "https://control.example.test";
 const CSRF = "w".repeat(43);
@@ -24,6 +25,42 @@ test.afterEach(() => {
   globalThis.fetch = originalFetch;
   if (originalDocument === undefined) delete globalThis.document;
   else globalThis.document = originalDocument;
+});
+
+test("workspace transient reads retry once without changing authentication or signal", async () => {
+  const calls = [];
+  const controller = new AbortController();
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    if (calls.length === 1) throw new TypeError("Failed to fetch");
+    return new Response("{}");
+  };
+  await authenticatedResourceFetch(BASE + "/models", { authentication: "workspace", signal: controller.signal });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].options, calls[1].options);
+  assert.equal(calls[1].options.credentials, "include");
+  assert.equal(calls[1].options.signal, controller.signal);
+});
+
+test("transient recovery is bounded and never replays writes or non-network errors", async () => {
+  for (const [method, error, expected] of [["GET", new TypeError("Failed to fetch"), 2], ["POST", new TypeError("Failed to fetch"), 1], ["GET", new TypeError("programming error"), 1]]) {
+    let calls = 0;
+    globalThis.document = { cookie: `__Host-metahub-workspace-csrf=${CSRF}` };
+    globalThis.fetch = async () => { calls += 1; throw error; };
+    await assert.rejects(authenticatedResourceFetch(BASE, { authentication: "workspace", method }), error);
+    assert.equal(calls, expected);
+  }
+});
+
+test("leaving a page cancels a pending read recovery", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  globalThis.fetch = async () => { calls += 1; throw new TypeError("Failed to fetch"); };
+  const pending = authenticatedResourceFetch(BASE, { authentication: "workspace", signal: controller.signal });
+  await Promise.resolve();
+  controller.abort();
+  await assert.rejects(pending);
+  assert.equal(calls, 1);
 });
 
 test("CSRF-protected Workspace GET sends origin-only referrer without changing other requests", async () => {
@@ -44,6 +81,9 @@ test("CSRF-protected Workspace GET sends origin-only referrer without changing o
 });
 
 const operations = [
+  [dlp.listDlpRules, { status: "all" }, "GET", "/dlp/rules"],
+  [dlp.createDlpRule, { name: "Protection", ruleType: "keyword", pattern: "example", action: "log_only" }, "POST", "/dlp/rules"],
+  [dlp.updateDlpRule, { ruleId: "dlp_sample", status: "disabled" }, "PATCH", "/dlp/rules/dlp_sample"],
   [aliases.listModelAliases, {}, "GET", "/model-aliases"],
   [aliases.createModelAlias, { alias: "sample", defaultModelId: "model_sample" }, "POST", "/model-aliases"],
   [aliases.updateModelAlias, { modelAliasId: "alias_sample", status: "disabled", expectedRoutingPolicyVersion: 1 }, "PATCH", "/model-aliases/alias_sample"],
@@ -128,7 +168,10 @@ for (const [operation, input, method, path] of operations) {
       assert.equal(call.options.credentials, authentication === "workspace" ? "include" : "omit");
       assert.equal(call.options.cache, "no-store");
       assert.equal(call.options.redirect, "error");
-      assert.equal(call.options.signal, controller.signal);
+      if ([models.createModel, aliases.createModelAlias].includes(operation)) {
+        assert.ok(call.options.signal instanceof AbortSignal);
+        assert.equal(call.options.signal.aborted, false);
+      } else assert.equal(call.options.signal, controller.signal);
       assert.equal(call.options.token, undefined);
       assert.equal(call.options.authentication, undefined);
       assert.equal(headers.has("cookie"), false);
@@ -144,6 +187,31 @@ for (const [operation, input, method, path] of operations) {
           assert.equal(Object.hasOwn(body, forbidden), false);
         }
       }
+    });
+  }
+}
+
+for (const operation of [models.createModel, aliases.createModelAlias]) {
+  for (const authentication of ["workspace", "legacy"]) {
+    test(`${operation.name} ${authentication} deadline transport follows owner cancellation during response decoding`, async () => {
+      const owner = new AbortController();
+      let transportSignal;
+      let finishBody;
+      globalThis.document = { cookie: `__Host-metahub-workspace-csrf=${CSRF}` };
+      globalThis.fetch = async (_url, options) => {
+        transportSignal = options.signal;
+        return { ok: true, headers: new Headers(), json: () => new Promise((resolve) => { finishBody = resolve; }) };
+      };
+      const result = operation({ controlApiUrl: BASE, authentication, signal: owner.signal,
+        ...(authentication === "legacy" ? { token: "legacy-test-session" } : {}),
+        providerId: "provider_sample", internalModelId: "sample", alias: "sample" });
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(typeof finishBody, "function");
+      owner.abort();
+      await assert.rejects(result, { name: "AbortError" });
+      assert.equal(transportSignal.aborted, true);
+      finishBody({ state: "ok" });
+      await assert.rejects(result, { name: "AbortError" });
     });
   }
 }

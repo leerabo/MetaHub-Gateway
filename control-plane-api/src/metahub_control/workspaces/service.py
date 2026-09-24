@@ -63,8 +63,8 @@ def create_workspace(
     kind: str,
     name: str | None,
     slug: str | None,
-    region: str,
-    service_mode: str,
+    region: str | None,
+    service_mode: str | None,
     request_id: str,
     trace_id: str,
 ) -> WorkspaceResponse:
@@ -132,10 +132,11 @@ def create_workspace(
         stamp = _db_time(now)
         expires_at = _db_time(now + timedelta(minutes=5))
         workspace_id = _id("wsp")
+        region_code = normalized["region"] or config.workspace_allowed_regions[0]
         tenant_id = _id("ten")
         legacy_user_id = _id("usr")
         tenant_slug = (
-            str(normalized["slug"])
+            str(normalized["slug"] or f"org-{workspace_id[4:]}")
             if normalized["kind"] == "organization"
             else f"personal-{workspace_id[4:20]}"
         )
@@ -213,7 +214,7 @@ def create_workspace(
                 _id("wrg"),
                 workspace_id,
                 tenant_id,
-                normalized["region"],
+                region_code,
                 config.workspace_residency_policy_version,
                 stamp,
             ),
@@ -347,7 +348,7 @@ def create_workspace(
                 "schema_version": 1,
                 "kind": normalized["kind"],
                 "profile_state": profile_state,
-                "region_code": normalized["region"],
+                "region_code": region_code,
                 "environment_origin": "system_created",
             },
             now=now,
@@ -413,8 +414,8 @@ def probe_workspace_creation_replay(
     kind: str,
     name: str | None,
     slug: str | None,
-    region: str,
-    service_mode: str,
+    region: str | None,
+    service_mode: str | None,
     request_id: str,
     trace_id: str,
 ) -> tuple[str, WorkspaceResponse | None]:
@@ -693,21 +694,24 @@ def _normalize_create_input(
     kind: str,
     name: str | None,
     slug: str | None,
-    region: str,
-    service_mode: str,
+    region: str | None,
+    service_mode: str | None,
 ) -> dict[str, str | None]:
     normalized_kind = kind.strip().lower()
     if normalized_kind not in {"personal", "organization"}:
         raise ApiError("workspace.kind_invalid")
-    normalized_region = region.strip().lower()
-    if normalized_region not in config.workspace_allowed_regions:
+    if not config.workspace_allowed_regions:
         raise ApiError("workspace.region_invalid")
-    normalized_mode = service_mode.strip().lower()
+    # Preserve omission in the request hash; resolve the default only on first creation.
+    normalized_region = region.strip().lower() if region is not None else None
+    if normalized_region is not None and normalized_region not in config.workspace_allowed_regions:
+        raise ApiError("workspace.region_invalid")
+    normalized_mode = service_mode.strip().lower() if service_mode is not None else "internal_only"
     if normalized_mode not in {"internal_only", "public_service"}:
         raise ApiError("workspace.service_mode_invalid")
     if normalized_kind == "organization":
         normalized_name = _normalize_name(name)
-        normalized_slug = _normalize_slug(slug)
+        normalized_slug = _normalize_slug(slug) if slug is not None else None
     else:
         if name is not None or slug is not None:
             raise ApiError("workspace.request_invalid")

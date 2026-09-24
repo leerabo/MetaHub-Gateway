@@ -6,7 +6,7 @@
 
 import { hasPermission, PERMISSIONS } from "../../lib/permissions.js";
 import { icon } from "../public-home/icons.js";
-import { renderConsumers, renderConsumerSelection } from "./renderConsumers.js";
+import { renderWorkspaceConnectionStatus, workspaceSetupStepComplete } from "../workspace-navigation/renderWorkspaceNavigation.js";
 
 // 环境标签只用于展示和表单选项，提交值仍使用后端枚举。
 const ENVIRONMENT_LABELS = {
@@ -19,7 +19,7 @@ const ENVIRONMENT_LABELS = {
  * 渲染 Virtual Key 管理面板。
  * 只有 admin/developer 显示该区域；后端仍会校验写权限和项目/应用归属，前端隐藏按钮不是安全边界。
  */
-export function renderVirtualKeyPanel(virtualKeysState, authContext, projectState, environmentState) {
+export function renderVirtualKeyPanel(virtualKeysState, authContext, projectState, environmentState, workspaceTaskHomeState, i18n) {
   if (!hasPermission(authContext, PERMISSIONS.VIRTUAL_KEY_READ)) {
     return "";
   }
@@ -27,45 +27,50 @@ export function renderVirtualKeyPanel(virtualKeysState, authContext, projectStat
   if (!virtualKeysState) {
     return `
       <div class="panel-heading">
-        <h2 id="virtual-keys-title">Virtual Key</h2>
-        <p>正在读取当前租户的模型调用凭证。</p>
+        <h2 id="virtual-keys-title">个人 KEY</h2>
+        <p>正在加载个人 KEY...</p>
       </div>
-      <div class="empty-state">等待 /virtual-keys 响应。</div>
+      <div class="empty-state" role="status">正在加载...</div>
     `;
   }
   // 错误态是用户可见反馈入口，需要保留后端 request_id 便于排查。
   if (virtualKeysState.state === "error") {
     return `
       <div class="panel-heading">
-        <h2 id="virtual-keys-title">Virtual Key</h2>
-        <p>Virtual Key 管理暂不可用。</p>
+        <h2 id="virtual-keys-title">个人 KEY</h2>
+        <p>个人 KEY 暂不可用。</p>
       </div>
       <div class="empty-state error-state">
         ${escapeHtml(virtualKeysState.message)} request_id: ${escapeHtml(virtualKeysState.requestId ?? "-")}
+        <button type="button" data-resource-retry>重试</button>
       </div>
     `;
   }
 
   const keys = virtualKeysState.virtual_keys ?? [];
   const canWrite = hasPermission(authContext, PERMISSIONS.VIRTUAL_KEY_WRITE);
-  const directory = hasPermission(authContext, PERMISSIONS.USER_MANAGE) ? virtualKeysState.consumerDirectory : null;
+  const canManageWorkspace = hasPermission(authContext, PERMISSIONS.USER_MANAGE);
+  const keyTitle = canManageWorkspace ? "组织 KEY" : "个人 KEY";
+  const createKeyLabel = canManageWorkspace ? "创建组织 KEY" : "创建个人 KEY";
+  const readyForConnection = ["provider_connected", "model_catalog_ready", "project_key_ready"]
+    .every((code) => workspaceSetupStepComplete(workspaceTaskHomeState, code));
   return `
     <div class="panel-heading virtual-keys-heading">
       <div>
-        <h2 id="virtual-keys-title">Virtual Key</h2>
-        <p>业务系统使用这些 Key 调用 Gateway；明文只在创建成功时展示一次。</p>
+        <h2 id="virtual-keys-title">${keyTitle}</h2>
       </div>
-      <span class="virtual-keys-count">${keys.length} 把 Key</span>
+      <span class="virtual-keys-count">${keys.length} 把 KEY</span>
     </div>
-    ${canWrite ? renderOneTimeSecret(virtualKeysState.created) : ""}
+    ${canManageWorkspace ? renderWorkspaceConnectionStatus(workspaceTaskHomeState, "workspace.gateway.virtual-keys", i18n) : ""}
     ${renderActionError(virtualKeysState.actionError)}
-    ${renderConsumers(directory)}
-    ${canWrite ? `<form class="create-virtual-key-form" id="create-virtual-key-form">
-      <h3>创建 Virtual Key</h3>
-      <label>
-        <span>名称</span>
-        <input name="name" maxlength="80" required placeholder="local dev key" />
+    <p class="virtual-key-owner-note">${canManageWorkspace ? "组织管理员管理组织 KEY；后台成员登录后自行创建和管理个人 KEY。" : "你可以创建、查看和撤销自己的 MetaHub KEY。"}</p>
+    ${canWrite && canManageWorkspace ? renderEnvironmentReadiness(environmentState) : ""}
+    ${canWrite ? `<details class="key-create-disclosure"${!keys.length || virtualKeysState.keyCreateOpen ? " open" : ""}><summary>${createKeyLabel}</summary>
+    <form class="create-virtual-key-form" id="create-virtual-key-form">
+      <label><span>KEY 名称（可选）</span>
+        <input name="name" maxlength="80" value="${canManageWorkspace ? "组织 KEY" : "个人 KEY"}" placeholder="${canManageWorkspace ? "例如：报表服务 KEY" : "例如：我的开发 KEY"}" required />
       </label>
+      ${canManageWorkspace ? `<details class="virtual-key-advanced"><summary>高级设置</summary><div class="virtual-key-advanced-fields">
       <label>
         <span>环境</span>
         <select name="environmentId" ${activeEnvironments(environmentState).length ? "" : "disabled"}>
@@ -73,29 +78,32 @@ export function renderVirtualKeyPanel(virtualKeysState, authContext, projectStat
         </select>
       </label>
       ${renderProjectBindingFields(projectState)}
-      ${renderConsumerSelection(directory)}
       <label>
         <span>备注</span>
         <input name="description" maxlength="240" placeholder="用途、系统或负责人" />
       </label>
+      </div></details>
+      ` : `<p class="virtual-key-owner-note">组织默认环境、模型与路由会自动应用，无需额外选择。</p>`}
       <div class="virtual-key-actions">
-        <button type="submit" ${activeEnvironments(environmentState).length ? "" : "disabled"}>创建 Key</button>
+        <button type="submit" ${canManageWorkspace && !activeEnvironments(environmentState).length ? "disabled" : ""}>${createKeyLabel}</button>
         <span class="virtual-key-feedback" role="status">${escapeHtml(virtualKeysState.feedback ?? "")}</span>
       </div>
-    </form>` : ""}
-    <div class="virtual-keys-grid" role="table" aria-label="当前租户 Virtual Key">
+    </form></details>` : ""}
+    ${canWrite ? renderOneTimeSecret(virtualKeysState.created, canManageWorkspace) : ""}
+    ${keys.length && hasPermission(authContext, PERMISSIONS.DEVELOPER_PORTAL_READ) ? `<a class="${readyForConnection ? "console-flow-next" : "console-flow-related"}" href="#workspace.developer.sdk">${readyForConnection ? "下一步：" : ""}接入信息与调用示例</a>` : ''}
+    ${`<div class="virtual-keys-grid" id="issued-keys" role="table" aria-label="已创建的 MetaHub KEY">
       <div class="virtual-key-row virtual-key-head" role="row">
         <span>名称</span>
         <span>前缀</span>
         <span>环境</span>
-        <span>归属</span>
+        <span>归属范围</span>
         <span>状态</span>
         <span>最近使用</span>
         <span>限制</span>
         <span>操作</span>
       </div>
-      ${keys.length ? keys.map((key) => renderVirtualKeyRow(key, canWrite, directory)).join("") : renderEmptyRow()}
-    </div>
+      ${keys.length ? keys.map((key) => renderVirtualKeyRow(key, canWrite, !canManageWorkspace)).join("") : renderEmptyRow()}
+    </div>`}
   `;
 }
 
@@ -109,15 +117,14 @@ function renderProjectBindingFields(projectState) {
   // 归属列表失败不能阻塞 Key 页面，但必须阻止用户误以为能安全选择项目。
   if (projectState?.state === "error") {
     return `
-      <label class="virtual-key-binding-warning">
-        <span>归属</span>
-        <input disabled value="项目列表不可用" />
-      </label>
+      <div class="virtual-key-binding-warning" role="alert">项目归属暂时无法加载
+        <button type="button" data-resource-retry>重试</button>
+      </div>
     `;
   }
   return `
     <label>
-      <span>Project</span>
+      <span>项目（可选）</span>
       <select name="projectId">
         <option value="">不绑定项目</option>
         ${projects
@@ -127,7 +134,7 @@ function renderProjectBindingFields(projectState) {
       </select>
     </label>
     <label>
-      <span>Application</span>
+      <span>应用（可选）</span>
       <select name="applicationId">
         <option value="">不绑定应用</option>
         ${applications
@@ -143,15 +150,18 @@ function renderProjectBindingFields(projectState) {
  * 渲染创建成功后的一次性明文 Key。
  * 明文只来自刚创建的响应，刷新后不会再出现；页面文案提醒用户立即保存。
  */
-function renderOneTimeSecret(created) {
+function renderOneTimeSecret(created, organizationKey = false) {
   if (!created?.plainValue) {
     return "";
   }
+  const systemKey = Boolean(created.applicationName || created.projectName);
+  const owner = created.applicationName || created.projectName || (organizationKey ? "当前组织" : "本人");
   return `
     <div class="one-time-secret" role="status" aria-label="一次性 Virtual Key 明文">
       <div>
-        <strong>只显示一次</strong>
-        <p>关闭或刷新页面后无法再次查看明文 Key，请立即复制到调用方的安全配置中。</p>
+        <strong>${created.operation === "rotated" ? "KEY 已轮换" : "KEY 已创建"} · 只显示一次</strong>
+        <p class="one-time-secret-owner">${systemKey ? "绑定对象" : "KEY 归属"}：${escapeHtml(owner)}${created.keyName ? ` · ${escapeHtml(created.keyName)}` : ""}</p>
+        <p>${systemKey ? "请先复制保存，将 KEY 配置到对应应用或项目。" : organizationKey ? "请先复制保存，仅配置到授权的组织系统中。" : "请先复制保存；关闭或刷新后无法再次查看此 KEY。"}工具要求时再填写模型名称；各工具接入要求见“接入信息”。</p>
       </div>
       <code>${escapeHtml(created.plainValue)}</code>
       <div class="virtual-key-actions">
@@ -181,35 +191,36 @@ function renderActionError(error) {
  * 渲染单条 Virtual Key。
  * 列表只展示 key_prefix、状态、环境、归属和最近使用时间，不展示明文 Key 或哈希。
  */
-function renderVirtualKeyRow(key, canWrite, directory) {
+function renderVirtualKeyRow(key, canWrite, personalOnly) {
   const nextStatus = key.status === "active" ? "disabled" : "active";
   const actionLabel = key.status === "active" ? "禁用" : "启用";
   return `
     <div class="virtual-key-row" data-virtual-key-row="${escapeAttribute(key.virtual_key_id)}" role="row">
-      <span class="virtual-key-name">
+      <span class="virtual-key-name"><span class="virtual-key-field-label">KEY 名称</span>
         <strong>${escapeHtml(key.name)}</strong>
-        <em>${escapeHtml(key.description || "无备注")}</em>
+        ${key.description ? `<em>${escapeHtml(key.description)}</em>` : ""}
       </span>
-      <code>${escapeHtml(key.key_prefix)}</code>
-      <span>${escapeHtml(key.environment_name ?? ENVIRONMENT_LABELS[key.environment] ?? key.environment)}</span>
-      <span class="virtual-key-binding">
-        ${key.consumer_id ? `<strong>${escapeHtml(directory?.consumers?.find((item) => item.consumer_id === key.consumer_id)?.display_name ?? key.consumer_id)}</strong><em>${key.consumer_status === "active" ? "使用者已启用" : "使用者已停用"}</em>` : ""}
-        <strong>${escapeHtml(key.project_name ?? key.project_id ?? "未绑定项目")}</strong>
-        <em>${escapeHtml(key.application_name ?? key.application_id ?? "未绑定应用")}</em>
+      <span><span class="virtual-key-field-label">密钥前缀</span><code>${escapeHtml(key.key_prefix)}</code></span>
+      <span><span class="virtual-key-field-label">环境</span>${escapeHtml(key.environment_name ?? ENVIRONMENT_LABELS[key.environment] ?? key.environment)}</span>
+      <span class="virtual-key-binding"><span class="virtual-key-field-label">归属范围</span>
+        ${key.consumer_id ? `<strong>历史成员关联</strong><em>${key.consumer_status === "active" ? "使用者已启用" : "使用者已停用"}</em>` : ""}
+        ${key.project_id ? `<strong>${escapeHtml(key.project_name ?? "已关联项目")}</strong>` : ""}
+        ${key.application_id ? `<em>${escapeHtml(key.application_name ?? "已关联应用")}</em>` : ""}
+        ${!key.consumer_id && !key.project_id && !key.application_id ? `<em>${personalOnly ? "本人" : "当前组织"}</em>` : ""}
       </span>
-      <span><mark class="status-mark status-${escapeHtml(key.status)}">${escapeHtml(key.status)}</mark></span>
-      <span>${escapeHtml(formatDateTime(key.last_used_at))}</span>
+      <span><span class="virtual-key-field-label">状态</span><mark class="status-mark status-${escapeHtml(key.status)}">${escapeHtml(key.status === "active" ? "已启用" : key.status === "disabled" ? "已停用" : "状态未知")}</mark></span>
+      <span><span class="virtual-key-field-label">最近使用</span>${key.last_used_at ? escapeHtml(formatDateTime(key.last_used_at)) : "尚未使用"}</span>
       <div class="virtual-key-limits-cell">
         ${renderLimitSummary(key.rate_limit_rule)}
-        ${canWrite ? `<form class="virtual-key-limit-form" data-virtual-key-limits-form data-virtual-key-id="${escapeAttribute(key.virtual_key_id)}">
+        ${canWrite ? `<details class="virtual-key-limit-editor"><summary>调整限制</summary><form class="virtual-key-limit-form" data-virtual-key-limits-form data-virtual-key-id="${escapeAttribute(key.virtual_key_id)}">
           ${renderLimitInput("rpmLimit", "RPM", key.rate_limit_rule?.rpm_limit)}
           ${renderLimitInput("tpmLimit", "TPM", key.rate_limit_rule?.tpm_limit)}
           ${renderLimitInput("concurrencyLimit", "并发", key.rate_limit_rule?.concurrency_limit)}
           <button type="submit">保存限制</button>
-        </form>` : ""}
+        </form></details>` : ""}
       </div>
       <span class="virtual-key-row-actions">
-        ${canWrite && Number.isSafeInteger(key.credential_revision) && key.status === "active" && (!key.consumer_id || (directory && key.consumer_status === "active")) ? `<button type="button" data-rotate-virtual-key="${escapeAttribute(key.virtual_key_id)}" data-key-revision="${key.credential_revision}" title="轮换 KEY，旧 KEY 将立即失效" aria-label="轮换 ${escapeAttribute(key.name)}">${icon("rotate-cw")}</button>` : ""}
+        ${canWrite && Number.isSafeInteger(key.credential_revision) && key.status === "active" ? `<button type="button" data-rotate-virtual-key="${escapeAttribute(key.virtual_key_id)}" data-key-revision="${key.credential_revision}" title="轮换 KEY，旧 KEY 将立即失效" aria-label="轮换 ${escapeAttribute(key.name)}">${icon("rotate-cw")}</button>` : ""}
         ${canWrite ? `<form data-virtual-key-form data-virtual-key-id="${escapeAttribute(key.virtual_key_id)}">
           <input type="hidden" name="status" value="${escapeAttribute(nextStatus)}" />
           <button type="submit">${actionLabel}</button>
@@ -219,11 +230,24 @@ function renderVirtualKeyRow(key, canWrite, directory) {
   `;
 }
 
+function renderEnvironmentReadiness(state) {
+  if (state?.state === "error") {
+    return '<p class="empty-state error-state" role="alert">运行环境加载失败，暂不能创建组织 KEY。<button type="button" data-resource-retry>重试</button></p>';
+  }
+  if (state?.state !== "ok") {
+    return '<p role="status">正在加载运行环境...</p>';
+  }
+  return activeEnvironments(state).length ? "" : '<p role="status">暂无可用运行环境，暂不能创建组织 KEY。</p>';
+}
+
 /**
  * 渲染 Virtual Key 当前限制摘要。
  * 空规则或空字段统一展示“不限制”，避免用户把 0 误解成无限制。
  */
 function renderLimitSummary(rule) {
+  if ([rule?.rpm_limit, rule?.tpm_limit, rule?.concurrency_limit].every((value) => value === null || value === undefined)) {
+    return '<p class="virtual-key-limit-summary">不限速</p>';
+  }
   return `
     <p class="virtual-key-limit-summary">
       RPM ${escapeHtml(limitText(rule?.rpm_limit))} ·
@@ -263,7 +287,7 @@ function limitText(value) {
 function renderEmptyRow() {
   return `
     <div class="virtual-key-row virtual-key-empty" role="row">
-      <span>当前租户还没有 Virtual Key。</span>
+      <span>尚未创建 KEY。</span>
     </div>
   `;
 }

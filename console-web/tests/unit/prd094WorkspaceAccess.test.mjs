@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createIdentityPageController } from "../../src/features/identity/identityPageState.js";
-import { renderIdentitySecurityPage } from "../../src/features/identity/renderIdentityPage.js";
+import { createIdentityPageController as createAccountController } from "../../src/features/identity/identityPageState.js";
+const createIdentityPageController = (options) => createAccountController({ initialSection: "members", ...options });
+import { renderIdentitySecurityPage as renderAccountPage } from "../../src/features/identity/renderIdentityPage.js";
+const renderIdentitySecurityPage = (root, state) => renderAccountPage(root, { accountSection: "members", ...state });
 import { IdentityApiError } from "../../src/lib/identity.js";
 import {
   createWorkspaceMembershipInvitation,
   getCurrentWorkspaceSession,
   getWorkspaceConsoleNavigation,
+  handoffWorkspaceToPartner,
   listIdentityWorkspaces,
   listWorkspaceMemberships,
   switchIdentityWorkspace,
@@ -35,6 +38,7 @@ test("PRD-094 clients use exact Global and Workspace cookie contracts", async ()
   try {
     await listIdentityWorkspaces({ controlApiUrl: CONTROL_URL });
     await switchIdentityWorkspace({ controlApiUrl: CONTROL_URL, workspaceId: WSP_ONE });
+    await handoffWorkspaceToPartner({ controlApiUrl: CONTROL_URL });
     workspaceSession = await getCurrentWorkspaceSession({ controlApiUrl: CONTROL_URL });
     await listWorkspaceMemberships({ controlApiUrl: CONTROL_URL });
     await updateWorkspaceMembership({
@@ -65,6 +69,7 @@ test("PRD-094 clients use exact Global and Workspace cookie contracts", async ()
     [
       ["http://control.local/identity/workspaces", "GET", "include", "no-store"],
       ["http://control.local/identity/workspace-switches", "POST", "include", "no-store"],
+      ["http://control.local/identity/partner-handoffs", "POST", "include", "no-store"],
       ["http://control.local/workspace/session", "GET", "include", "no-store"],
       ["http://control.local/memberships", "GET", "include", "no-store"],
       [`http://control.local/memberships/${MEMBER_ADMIN}`, "PATCH", "include", "no-store"],
@@ -75,8 +80,9 @@ test("PRD-094 clients use exact Global and Workspace cookie contracts", async ()
   );
   assert.equal(calls[0].options.headers["X-CSRF-Token"], undefined);
   assert.equal(calls[1].options.headers["X-CSRF-Token"], "global-csrf");
-  assert.equal(calls[4].options.headers["X-CSRF-Token"], "workspace-csrf");
-  assert.equal(calls[4].options.headers["If-Match"], '"4"');
+  assert.equal(calls[2].options.headers["X-CSRF-Token"], "global-csrf");
+  assert.equal(calls[5].options.headers["X-CSRF-Token"], "workspace-csrf");
+  assert.equal(calls[5].options.headers["If-Match"], '"4"');
   assert.equal(navigation.groups[0].items[0].route_code, "workspace.home.overview");
   assert.equal(navigation.permission_revision, 1);
   assert.equal(navigation.permission_fingerprint, AUTHORIZATION_FINGERPRINT);
@@ -88,13 +94,14 @@ test("PRD-094 clients use exact Global and Workspace cookie contracts", async ()
     membership_revision: 1,
   });
   assert.deepEqual(JSON.parse(calls[1].options.body), { workspace_id: WSP_ONE });
-  assert.deepEqual(JSON.parse(calls[4].options.body), { role: "auditor", status: "active" });
-  assert.deepEqual(JSON.parse(calls[5].options.body), {
+  assert.deepEqual(JSON.parse(calls[2].options.body), {});
+  assert.deepEqual(JSON.parse(calls[5].options.body), { role: "auditor", status: "active" });
+  assert.deepEqual(JSON.parse(calls[6].options.body), {
     email: "member@example.com",
     role: "developer",
     expires_in_hours: 24,
   });
-  assert.deepEqual(JSON.parse(calls[6].options.body), {
+  assert.deepEqual(JSON.parse(calls[7].options.body), {
     target_membership_id: MEMBER_ADMIN,
     current_password: "PrivateOwnerPassword",
   });
@@ -302,7 +309,8 @@ for (const operation of ["logout", "revoke-current"]) {
       });
       await controller.mount();
       const result = operation === "logout" ? controller.logout() : controller.revokeSession(0);
-      assert.match(root.innerHTML, /data-identity-login-form/u);
+      if (operation === "logout") assert.match(root.innerHTML, /正在退出登录/u);
+      else assert.match(root.innerHTML, /data-identity-login-form/u);
       assert.equal(channel.messages.length, 1);
       pending.resolve();
       await result;
@@ -419,6 +427,9 @@ function responseFor(url) {
   if (path === "/identity/workspaces") return jsonResponse(identityWorkspaceListPayload());
   if (path === "/identity/workspace-switches") {
     return jsonResponse(workspaceContextPayload());
+  }
+  if (path === "/identity/partner-handoffs") {
+    return jsonResponse({ handed_off: true, request_id: "req_partner", trace_id: "tr_partner" });
   }
   if (path === "/workspace/session") return jsonResponse(workspaceSessionPayload());
   if (path === "/memberships") return jsonResponse(membershipListPayload());

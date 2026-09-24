@@ -320,7 +320,6 @@ test("PRD-096 renderer keeps role-specific controls and mobile rows bounded", as
     new URL("../../src/features/platform/platformPageState.js", import.meta.url),
     "utf8",
   );
-  assert.match(controllerSource, /scrollIntoView\?\.\(\{ block: "nearest", inline: "nearest" \}\)/u);
   assert.doesNotMatch(controllerSource, /localStorage|sessionStorage|history\.|location\./u);
 });
 

@@ -21,6 +21,7 @@ from metahub_shared.status_bundle import (
     test_kms_status_public_key,
     verify_status_envelope,
 )
+from starlette.middleware.cors import CORSMiddleware
 
 _OBJECT_VERSION = re.compile(r"^status-bundle-[0-9]{20}\.json$")
 _STATUS = frozenset(
@@ -111,6 +112,9 @@ def create_status_app(config: StatusPageConfig | None = None) -> FastAPI:
         openapi_url=None,
     )
     service.state.status_reader = reader
+    # This read plane only exposes the already-public signed status projection.
+    service.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"],
+                           allow_headers=["Accept"], allow_credentials=False)
 
     @service.get("/public/status")
     async def public_status(request: Request) -> JSONResponse:

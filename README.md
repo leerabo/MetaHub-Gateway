@@ -1,5 +1,95 @@
 # MetaHub AI Gateway
 
+2026-09-24 成员撤权与角色化后台续验：当前源码快照为 `outputs/prd148-source-current-20260924-member-key.json`，成员/使用者 9/9、Virtual Key 6/6、Gateway 员工跨协议精确回归 1/1、Console 角色与 KEY 回归 287/287；前端 lint 842 files、build 295 assets 通过，前后端生产资源摘要为 `be5564c28378fe2ab5e2d73c5c7bcd8efab194d4c87444c5010abb0bf2d2d87f`。移除成员会立即停用个人及管理员分配 KEY、关联使用者和活动 Workspace session，旧组织后台入口统一进入按角色过滤的 Console。宽 Gateway 集成因迁移夹具长时间无终态而中断，本地调度器仍有 lease/reconciliation/SQLite 警告；这些不构成 GA，PRD-148 保持未完成。详见 `outputs/prd148-member-key-current-20260924.json`。
+
+2026-09-24 当前中文首发交付语义修正：组织管理员与 SaaS 平台管理员继续严格分域。组织管理员在“后台成员”中邀请、搜索、停用成员；不再使用管理员代发的“模型使用者与 KEY”员工目录。后台成员登录后自己创建、复制、轮换和撤销个人 MetaHub KEY，只能看到自己的 KEY 与个人用量；组织管理员在组织 KEY 页面管理组织级 KEY。模型服务页保留一个默认收起的“自定义接入（中转站 / OpenAI 兼容地址）”入口，品牌目录不是唯一选择。当前代码验证：前端全量 2239/2239，`npm run build` 294 assets，`npm run lint` 840 files；后端 Virtual Key、最新迁移链和生产资源摘要专项通过。生产资源摘要为 `c0ea8953b9c5bf12974dba01b0398a274ff276c707a1165a519ec04cafc7690a`。这些是当前源码与隔离测试证据，不等同于真实商业权益、生产 Partner/Device、发布回滚、对账或 GA；PRD-148 继续未完成。
+
+2026-09-23 管理员接入闭环与控制台布局修正：管理员完成度只计算 Provider、模型/路由和员工 KEY，KEY 发放完成后即可交付，不等待员工第一次调用；首次调用仍由服务端记录为真实使用事实。员工 KEY 对话框提供“删除”操作，调用现有 DELETE 软禁用接口使凭据立即失效，并折叠保留历史计量/审计记录。控制台根容器改为使用可用视口宽度（桌面最大 1800px，窄屏自适应），避免内容长期挤在 1120px 中央区域。前端 lint 844 files、生产构建 296 assets 通过；`production-surface-manifest.json` 已同步当前资源摘要。PRD-148 仍未完成。
+
+2026-09-23 账号初始化收敛后的 S1 双视口复验：旧脚本曾直接点击默认折叠区内的隐藏步骤，连续两次在 12 秒操作上限内超时；页面、API、资源和控制台没有异常。脚本现先断言“查看全部初始化步骤”默认关闭，并在每次选择隐藏步骤前执行可见的展开操作，不放宽任何操作、业务或截图门槛。当前源码在 `1280x900` 与 `390x844` 完成 18 个注册、组织、邀请、Workspace 会话、Provider 视图、员工个人 KEY、停用、初始化确认与 SDK 下载步骤，以及 16 个初始化深链和 32 个布局视图；页面错误、资源错误、外部请求、溢出和小输入字体问题均为 0。证据为 `.artifacts/s1-browser-uft5otua/acceptance.json`、`outputs/prd148-source-current-20260923-onboarding-browser-s3.json`，源码 SHA256 `c081131c0f5f4a2bda93ee5e80d145344f2138a138326c7f07ec7489e262eba4`。该验证只使用隔离 SQLite、seeded Provider catalog 和本地 feedback 契约，不证明 KIMI、付费权益、商业计量或 GA，PRD-148 保持未完成。
+
+2026-09-22 当前源码五域负向矩阵复跑：Platform 38/38、Workspace 44/44、Partner/Support 16 通过并保留 1 个已退役 PRD-087 路由 skipped、Device 14/14；四个分片退出码均为 0，运行期间源码保持不变。证据为 `outputs/prd148-negative-current-20260922-zh/status.json`，绑定当前源码 SHA256 `008f081939eb89c7e45e1ab57db93be544b3889e9103eacc283684160b5be364`。这仍是隔离集成夹具矩阵，不关闭真实注册到付费/计量/撤权链路、企业治理/私有 Gateway、Partner/Device 生产数据、发布复核/回滚、财务隐私安全迁移对账或 HEAD/origin；按用户决定不执行 72 小时稳定性观察和六方会签，PRD-148 保持未完成。
+
+2026-09-22 当前源码 GA Launch 状态机集成复跑 14/14 通过，证据为 `outputs/prd148-ga-launch-current-20260922-r2.json`。Gateway 协议回归中保留一项零费率迁移夹具成本断言漂移，不能写成产品失败或通过；真实 Gateway、付费额度和计量对账仍需业务链路证据。`prd148_complete` 继续为 `false`。
+
+2026-09-22 迁移基线核查：在 `.tmp`、`.artifacts` 的数据库/压缩包和可达 Git 历史中没有找到 S1 要求的 `062ae8e3...f4c2a`，只找到旧基线 `d1634e8b...9fb03`。证据为 `outputs/prd148-baseline-search-20260922.json`；不替换基线、不制造匹配哈希，真实注册到撤权证据保持未闭合。
+
+2026-09-22 中文三角色批量走查：隔离 Chromium 以 `zh-CN` 执行管理员 47 个、开发者 60 个、Viewer/员工 60 个授权入口（Viewer 使用 390x844 移动视口），页面、请求、控制台、布局、裁切、交互重叠和授权跳转均为 0 异常；随后对 `error-maps`、`language-settings` 做修复后定向复验，均通过。审计发现并修复高级工具导航分组直接显示 `advanced` 的中文文案问题，修改了导航分组映射、双语文案和契约测试。lint 841 files 通过，build 295 assets 通过并完成资源摘要对账。证据为 `outputs/prd148-human-audit-current-20260922-zh-admin.json`，当前源码 SHA256 `008f081939eb89c7e45e1ab57db93be544b3889e9103eacc283684160b5be364`，生产资源摘要 `ec08b64a4bf6c24ceae741e54500168d1f8fe4c77b23f1b2e46bcbda45f3fb88`。
+
+2026-09-22 发布前剩余验收（中文首发优先）：前端/角色分区/GA Launch 等隔离回归已完成；当前仍有 6 个发布阻塞检查未闭合：真实注册到员工 KEY、Gateway 调用、计量/额度、撤权的完整链路；真实付费权益与额度；企业治理/私有 Gateway；Partner/Device 生产数据路径；当前源码绑定的五域负向矩阵重跑；HEAD 与 origin 对账。最新 finance 重跑在注册页提交按钮等待阶段超时，并记录 `gatewayScene.js` 资源请求失败，证据为 `.artifacts/s1-browser-rtrfvuij/browser.json`，不计为通过。当前源码快照为 `.tmp/current-source-snapshot-20260922.json`（SHA256 `0f708d8d67e22e6a7bdc3c965093c571f8bcf950b039670fb6d5655eb38335de`）。按用户决定，本轮不执行多语言扩展、72 小时稳定性观察或六方会签；这些项目不计为通过，也不阻止中文首发前的上述核心检查。
+
+2026-09-22 当前源码 S1 真实浏览器重放：注册、创建组织、Provider/模型入口、成员邀请和个人 KEY/轮换停用前置动作均实际完成；在租户 onboarding 截图等待字体阶段超时，API 无 5xx、页面错误或待加载资源，因此仍不能宣称完整注册到撤权/付费链路通过。证据为 `.artifacts/s1-browser-r86v1rw6/acceptance.json`；脚本要求的 `062ae8e3...` 固定迁移基线仍缺失，使用的 `d1634e8b...` 仅是旧脚本基线副本。
+
+同一基线的 finance 分支两次在业务断言前被运行器阻塞：一次为身份静态资源请求失败，另一次为 quickstart shell 未挂载并记录 Windows access violation。证据为 `.artifacts/s1-browser-hmc0dc5u/browser.json` 和 `.artifacts/s1-browser-n3md83li/browser.json`；财务、额度和商业计量仍没有当前真实流程通过证据。
+
+2026-09-22 当前源码追加复验：历史曾报异常的 `environments`、`providers`、`provider-health`、`policy-snapshots` 已按三角色重跑 12 个页面目标，页面、请求、响应、控制台、布局、交互和授权异常均为 0；控制面 GA Launch 集成 14/14 通过（0 failures、0 errors、0 skipped）。证据分别为 `.artifacts/product-qa/20260922-targeted-historical-failures/prd148-role-audit-chromium-scale-1.json` 和 `outputs/prd148-ga-launch-current-20260922.xml`。这些仍是隔离 seeded/集成合同证据，真实注册到付费、企业治理/私有 Gateway、Partner/Device 生产数据、发布回滚、财务/隐私/安全/迁移对账和 HEAD/origin 未闭合，PRD-148 保持未完成。
+
+2026-09-22 OpenRouter 对标修改已收口：管理员默认入口为四个工作域，首屏只保留当前下一步；财务工作台先显示例外状态；员工交付固定为一个统一 Gateway 地址和一把个人 MetaHub KEY；空态、权限矩阵、英文静态与异步面板已完成当前源码回归；管理员工作台已去除卡中卡。当前证据为 `outputs/prd148-openrouter-card-band-current-20260922.json`，源码 SHA256 `ceb9be5281b8bcf3419f12cc0714540d4bec1232c029cbb34ab30fff2547394b`，前端全量 2229/2229、lint 841 files、build 295 assets/277 modules 通过。六方会签与 scheduler-enabled 连续 259200 秒稳定性验证按用户指示不执行，不构成通过证据；真实注册到付费、生产 Partner/Device、发布复核/回滚、财务/隐私/安全/迁移对账和 HEAD/origin 仍未闭合，PRD-148 保持未完成。
+
+2026-09-22 管理员分域与中文导航修复：SaaS 平台运营管理员只使用 Platform session，Workspace 组织管理员、Developer 和员工只使用 Workspace session；平台迁移、平台账务和发布门禁证据不与组织 Provider、模型、路由、员工 KEY、预算或私有 Gateway 混用。中文高级工具导航过渡标题已统一将内部 `advanced` 映射为“高级工具”，内部 route/group code 与 RBAC 不变。当前源码证据为 `outputs/prd148-source-current-20260922-advanced-group-localization-final.json`，SHA256 `a365a6cc351f6fad4f9b1a4c2319ac2b007343ea72aa948fcfd1e63319d36469`；前端全量 2233/2233、lint 841 files、build 295 assets/277 modules、控制面摘要契约定向测试均通过。`prd148_complete=false`、`ga_approval=false` 继续保持。
+
+2026-09-21 OpenRouter 对标第十二批完成当前发布资源对账：前端全量单测 2224/2224、`npm run lint` 838 files、顺序 `npm run build` 294 assets/276 modules 通过；前后端 production manifest 已统一到资源摘要 `2383e3599edfec3a658080fdb2408df9828ca5132fc841cdf341ada611a436c7`。当前源码证据为 `outputs/prd148-source-current-20260921-openrouter-release-reconciled.json`，SHA256 `31c274c380b5f587d8d8a271e79bbc6431a6fe2372f3cba669f4addd0997b15d`。此前构建摘要漂移已按发布资源对账问题修正；真实注册到付费、企业治理/私有 Gateway、Partner/Device 真实数据、六方会签、发布回滚、财务/隐私/安全/迁移对账、正式 259200 秒稳定性和 HEAD/origin 仍未闭合，PRD-148 保持未完成。
+
+2026-09-21 OpenRouter 对标第十一批完成状态优先空态收敛：Partner 无归属 Workspace、Platform 无数据域、私有 Gateway 无部署时均给出原因和下一步；角色权限矩阵增加按职责分组查看提示，降低 643 项权限一次性扫描负担。前端全量单测 2223/2223、`npm run lint` 838 files、生产构建 294 assets/276 modules 通过；当前源码证据为 `outputs/prd148-source-current-20260921-openrouter-empty-states.json`，SHA256 `5bf1230c779fd79b26349be5320f6258634ea922d09ca7f049696798b79348af`，生产资源摘要 `5fd93fb48d28691c622e48cdf9e572aed1f44b6b5723f69749ff2bd2fd08ac6c`。浏览器分区复验本轮在数据库准备阶段再次挂起，已保留运行目录和环境阻塞事实；真实注册到付费、企业治理/私有 Gateway、六方会签、发布回滚、财务/隐私/安全/迁移对账、正式 259200 秒稳定性和 HEAD/origin 未闭合，PRD-148 保持未完成。
+
+2026-09-21 OpenRouter 对标第十批已完成角色化首屏的语言一致性：`en-US` 管理员的四个工作域、唯一下一步、完成态、折叠步骤和低频治理任务不再混入中文；英文员工接入页的统一 Gateway、个人 MetaHub KEY、协议和客户端说明也统一为英文。当前源码证据为 `outputs/prd148-source-current-20260921-openrouter-i18n.json`，SHA256 `b1306d4de931297ba04bc579d720d2e721e0d03530bc13e1c6d2225fcdfdfceb`，生产资源摘要 `456d31dee44283f5b0175ba5f37e5cecae5c8e9da12912fda12332a6bb965dc3`；`humanWalkthrough` 49/49、前端全量 2223/2223、lint 838 files、build 294 assets/276 modules 通过。完整差距和边界见 [OpenRouter 体验差距分析](docs/operations/OpenRouter-UX-gap-analysis-20260920.md) 与 [PRD-148 OpenRouter 人类走查](docs/testing/PRD-148-openrouter-human-audit-20260921.md)。这些仍是当前源码和隔离回归证据，真实注册到付费、六方会签、发布回滚、财务/隐私/安全/迁移对账、正式 259200 秒稳定性和 HEAD/origin 未闭合，PRD-148 保持未完成。
+
+2026-09-21 OpenRouter 对标第八批完成状态卡的最后一处交互缺口：管理员和财务状态卡在域已完成时保留后端授权的“查看配置”入口，不再停在不可点击的状态文字；员工 viewer 当前源码分区走查 60/60 页通过（batch1-6），无请求失败、响应错误、控制台错误或布局问题。新增前端单测后全量为 2,221/2,221，`npm run lint` 838 files、`npm run build` 294 assets/276 modules 通过。当前源码证据为 `outputs/prd148-source-current-20260921-openrouter-status-card-review-r2.json`，SHA256 `4c724b6602cdd7fe34de487db5b261330cf93c261caeec3355592380423bb937`，生产资源摘要 `604e687220b841bc717f807d6cc76eb7efcc90c8c77d0932fb655f2445097e54`。这些仍是当前源码和隔离 seeded 证据；真实注册到付费、六方会签、回滚、对账、正式 259200 秒稳定性和 HEAD/origin 未闭合，PRD-148 保持未完成。
+
+2026-09-21 OpenRouter 对标第七批已完成连续接入向导的最后一层收敛：管理员首页在四域状态卡下显示 Provider → 模型 → 员工 KEY → 首次调用进度条；被阻塞或处理中且没有动作的工作域明确显示“等待前置条件/处理中”，不再误报“已就绪”。前端全量单测 2,220/2,220、`npm run lint` 838 files、`npm run build` 294 assets 通过。当前源码证据为 `outputs/prd148-source-current-20260921-openrouter-progress.json`，SHA256 `e0064c47ed721be544d9aaf89644f0d292ba1ee3ec58cbd93662590659174408`，生产资源摘要 `7bc3004734f98685f61b6b03676c158b48f751b0f3ac89adc50bcefbc0f63a4e`。真实商业链路、会签、回滚、对账、正式 259200 秒稳定性和 HEAD/origin 仍未闭合，PRD-148 保持未完成。
+
+2026-09-21 OpenRouter 对标第六批已补齐空态：管理员在没有任务事实时仍显示四个“待确认”工作域，财务管理员仍显示“财务与风险”工作台，已完成域显示“已完成”。受影响单测 81/81、lint 838 files、生产构建 294 assets 通过；当前源码 SHA256 为 `afa034615dbe88d9d55f67d9687174ec36079d07910b12f16e1180af8b56db29`，生产资源摘要为 `dfeca42ba38d9a841e47c7a182858062200d84d1031602b9b3f01b5dcdc731a5`。真实商业链路、会签、回滚、对账、正式 259200 秒稳定性和 HEAD/origin 仍未闭合，PRD-148 保持未完成。
+
+2026-09-21 OpenRouter 对标第四批：page-view 遥测改为 deferred read 预检加短写事务，降低任务首页与导航偏好并发时的 SQLite 写锁争用；page-view 集成回归 7/7，隔离 Chromium Workspace FLOW 3/3，均无 503、请求失败或控制台错误。源码快照为 `outputs/prd148-source-current-20260921-openrouter-pageview-fix.json`，SHA256 `1ee644602250309fb74c18f158deb9b1c6180a92671189e554f0e08c0bdab111`。这只证明当前隔离环境的修复有效，真实商业链路、付费权益、会签、回滚、对账、正式 259200 秒稳定性和 HEAD/origin 仍未闭合，PRD-148 保持未完成。
+
+2026-09-21 OpenRouter 对标正向域复验：隔离 seeded 当前迁移头走查完成 Device 创建（201、刷新后可见）和 Partner workspace attribution（200），两页布局均无溢出、裁切或交互重叠；此前两次严格选择器失败已保留并归类为测试夹具问题。证据见 `.artifacts/product-qa/20260921-positive-domains-r3/prd148-positive-domains-chromium-scale-1.json`，当前源码快照为 `outputs/prd148-source-current-20260921-openrouter-final.json`，SHA256 `2344f9f626d82cf4ffed1210ed7c431389fb39a4e09c241637b523557f97c5dd`。该批不替代真实商业、六方会签、回滚、对账、正式 259200 秒稳定性或 HEAD/origin，PRD-148 继续未完成。
+
+2026-09-21 OpenRouter 对标第三批已落地：财务管理员默认任务页先显示“财务与风险”状态卡，原始财务任务收进明细；管理员四域卡缺少后端事实时显示“待确认/等待状态”，不再误报“已就绪”。前端全量单测 2,216/2,216、`npm run lint` 838 files、`npm run build` 294 assets/276 modules 通过。当前源码快照为 `outputs/prd148-source-current-20260921-finance-workbench.json`，SHA256 `e808e0df3da4222cda2165dd173020e9712e0a7421691fab231a2cd2c86fb080`，生产资源摘要为 `0925b588ff39e58c571b8c71aa87b99d0480dead1c683f837064f65f95641de4`。这只完成 OpenRouter 体验建议的当前源码修改，PRD-148 真实商业、Partner/Device 正向数据、会签、回滚、对账、正式 259200 秒稳定性和 HEAD/origin 仍未完成。
+
+2026-09-21 OpenRouter 对标集中复验：平台运营三视口通过；Support 管理员/开发者完成创建、回复、升级、解决、评价、重开和刷新持久化，Viewer 写入正确拒绝；Device 仍是空部署态，Partner 仅有无成员 403 边界。首次 Workspace FLOW-01 的任务首页并发写锁 503 已修复，后端导航 6/6、Workspace FLOW-01/02/03 3/3、前端单测 2,214/2,214、lint 838 files、build 294 assets 通过。当前源码 SHA256 为 `6ef4d4e845c33970938171047f03bb2148282fda59e4329545f4dd53ff25e9ba`，证据见 `docs/testing/PRD-148-openrouter-human-audit-20260921.md`。该批仍是隔离 seeded QA，PRD-148 继续未完成。
+当前源码全路由角色审计随后复验通过：admin/developer/viewer 全部授权路由无页面、请求、控制台或布局问题，证据为 `.artifacts/product-qa/20260921-role-audit-r2/prd148-role-audit-chromium-scale-1.json`。该结果不替代真实 Partner/Device 正向数据、商业权益、会签、回滚、对账、正式稳定性或 HEAD/origin 证据。
+
+2026-09-21 OpenRouter 对标落地第二批：员工（当前 `viewer` 成员角色）默认进入“我的接入”，只看到统一 Gateway、个人 MetaHub KEY 和客户端交付规则；`owner`/`admin` 任务首页增加“接入与成员、模型与网关、用量与风险、治理与运维”四域状态卡。授权深链和后端权限契约保留。当前源码快照为 `outputs/prd148-source-current-20260921-ux-final.json`，生产资源摘要为 `507cb0d8922e592149dca76d686f67e4988fb112123740c0e9face7475bf93ee`；受影响单测 77/77、前端全量单测 2,214/2,214、lint 838 files、build 294 assets/276 modules 通过。PRD-148 仍未完成，真实商业与正式 GA 门禁未闭合。对标分析见 `docs/operations/OpenRouter-UX-gap-analysis-20260920.md`。
+
+2026-09-21 交互审计器后续复验：修复侧栏手风琴偏好 PATCH 与后续详情/打开动作之间的 teardown 竞速。当前源码聚焦 developer 六页（models、model-aliases、model-quality-scores、experiments、projects、virtual-keys）6/6 通过，0 请求失败、0 响应错误、0 控制台错误和 0 布局问题；证据为 `.artifacts/product-qa/20260921-interaction-developer-settle-fix3/prd148-human-interaction-chromium-scale-1.json`，源码 SHA256 为 `ee904c92faed340fd4508280e8932b70c5d976a89b8b442c067ef1eb3190b3a0`。修复后的三角色 180 页全量批次在 1200 秒门槛内超时且没有终态 JSON，仍不能替代完整交互门禁。单测 2211/2211、build 294 assets、lint 838 files 通过；真实注册到付费、企业治理/私有 Gateway、六方会签、发布回滚、财务/隐私/安全/迁移对账、正式 259200 秒稳定性和 HEAD/origin 仍未闭合，PRD-148 保持未完成。权威索引为 `outputs/prd148-current-evidence-index-followup-20260921-r2.json`。
+
+角色分区复验随后完成：admin 60/60、developer 60/60、viewer 60/60，共 180/180 页；每组 0 请求失败、0 响应错误、0 控制台错误、0 布局/标签/授权问题。证据目录见同一权威索引的 `partitioned_three_role_interaction`。统一 180 页串行批次的 1200 秒超时仍保留，不能把分区结果改写成统一批次终态。
+
+2026-09-21 当前源码浏览器复验：生产构建 294 assets/276 modules、lint 838 files、前端单测 2,211/2,211 通过；当前源码 SHA256 为 `369d9050a49e81d176fbd5a440e4d53a903ca21af3d40f02d148efec6c5dee82`（2,693 个受测文件），生产资源摘要为 `69ac6068f2bc9c1fb4415db527049197d3ca1a17c846ea5cc02c596298f99bce`。完整 Web 矩阵 `.artifacts/product-qa/20260921-021856` 为 10/11，Chromium 1.25x 原始矩阵失败仍保留；独立重跑通过但不能覆盖原始失败。Viewer 交互复验 `.artifacts/product-qa/20260921-interaction-ux-classified` 4/4 通过；当前源码完整交互批次 `.artifacts/product-qa/20260921-interaction-after-batch` 超时并记录导航偏好 PATCH 422，聚焦管理员批次通过，开发者批次另有页面关闭时 PATCH `net::ERR_ABORTED`，均不能替代完整当前源码交互门禁。权威增量索引为 `outputs/prd148-current-evidence-index-followup-20260921.json`。真实注册到付费、企业治理/私有 Gateway、Partner/Device 数据路径、六方会签、发布回滚、财务/隐私/安全/迁移对账、正式 scheduler-enabled 259200 秒稳定性和 HEAD/origin 仍未闭合，PRD-148 保持未完成。
+
+2026-09-20 OpenRouter 体验对标后的导航收敛批次：MetaHub 按成员职责收敛默认侧栏，并将未完成当前任务的入口放入“更多控制”，保留全部授权深链和后端契约。前端全量单测 2,209/2,209、lint 838 files、生产构建 294 assets 通过，当前资源摘要为 `8a0dad0777857e6e375be96df0e8c1dd0a9935c268e8635bc6f23429274fb798`。当前源码封存为 `outputs/prd148-source-current-20260920-r18.json`，SHA256 为 `f9b7f49499af1072ae1888b2719659c4632ceee7d7b4e4059254d37f4ca22696`。修复前交互走查发现角色权限页保存条遮挡两个复选框，修复后 Chromium 三角色 180/180 页通过，证据为 `.artifacts/product-qa/20260920-interaction-navigation-r9/prd148-human-interaction-chromium-scale-1.json`；当前默认侧栏为管理员 12、开发者 11、查看者 4，后置入口为 20、7、3，完整授权入口仍为 47、27、7，见 `.artifacts/product-qa/20260920-role-audit-navigation-r10/prd148-role-audit-chromium-scale-1.json`。这批是 seeded/local 浏览器证据；真实注册到付费、企业治理/私有 Gateway、Partner/Device 数据路径、六方会签、发布回滚、财务/隐私/安全/迁移对账、正式 259200 秒稳定性和 HEAD/origin 仍未闭合，PRD-148 保持未完成。
+
+2026-09-20 page-view 写入串行化修复：Workspace 快速切换时的遥测 writer 现在按顺序提交，并保留当前会话与取消闸门。受影响单测 17/17、lint 838 files、生产构建 294 assets 通过；资源摘要为 `ab7194634d27e6cbbe51caf72346f04ce5b677d98b0743e2083769179614ad53`，当前源码 SHA256 为 `dcfcd93cab153698df52cafcb5f47455000b985d943dcc115efd16ee7edaa0e7`（2691 个受测文件）。这只关闭了串行写入的局部回归，真实 S1 截图/page-view 尾部、五域当前快照、商业/治理/会签/回滚/对账、正式 259200 秒稳定性和 HEAD/origin 仍未闭合；PRD-148 保持未完成，Excel `01_PRD总表!B60` 继续为“未启动”。
+
+前端全量回归随后为 2,202/2,202，证据 `outputs/prd148-frontend-full-regression-current-20260920-r9.json`。
+
+2026-09-20 当前源码人类式角色批次：admin、developer、viewer 各 60 个 Workspace 路由，共 180/180 页通过；三角色真实业务旅程 FLOW-01/02/03、Platform 运营迁移/MFA 走查、公共入口四视口走查均通过。证据汇总为 `outputs/prd148-human-role-batch-current-20260920-r3.json`，绑定源码 `dcfcd93cab153698df52cafcb5f47455000b985d943dcc115efd16ee7edaa0e7`。Partner 专用 Chromium 验收在页面操作前因旧 PRD-087 harness 要求只应用 0080、当前迁移器实际继续应用 73 个后续迁移而失败；该项按迁移基线漂移记录，未宣称 Partner 通过。商业、真实注册到付费、企业治理/私有 Gateway、会签、回滚、对账、正式稳定性和 HEAD/origin 仍未闭合。
+
+Partner/Support 当前源码聚焦回归：前端 21/21、后端 10/10 通过；Partner 浏览器页面证据仍等待迁移基线修正，未用这些契约测试替代真实页面验收。
+
+权威 Excel 已同步本批走查记录，`01_PRD总表!B60=未启动`，当前工作簿 SHA256 为 `b278257ab680b379d74f4897aba75be05f4be60974c8bd79d8a7a4534a4524a3`；输出副本为 `outputs/prd148-workbook-update-current-20260920-r2/output.xlsx`。
+
+2026-09-20 资源读取锁边界批次：当前源码 SHA256 `6afa45fceb7e36b27bdaa28c79894b83cb239e1b146d197bf8196b5b94ce552b`（2691 个受测文件）上，项目/环境回归 6/6、导航与 page-visit 回归 14/14 通过；`GET /projects`、`GET /environments` 的 Workspace 只读认证使用 `touch=False`，不再更新 last-seen。真实 S1 尾部截图/page-view 失败、五域源码漂移、商业与 GA 门禁仍开放，Excel `01_PRD总表!B60` 继续为“未启动”。
+
+认证 deadline 与 Workspace 资源写入回归 11/11 通过。完整 S1 重放本轮未启动，因为验收脚本要求的受保护计量基线缺失（需要 `METAHUB_TEST_METER_BASELINE` 且摘要为 `d1634e8b...`）；该结果只记为测试基线证据不足，不作为产品通过或失败。
+
+2026-09-20 PRD-148 当前验收仍未完成。当前源码 SHA256 为 `6713a21a301d9b7cfb526df7dcf5b53e98dfd79a82d869ef08a14c86d17c0392`（2691 个受测文件）；最近完整三角色全路由人类式交互审计共 180/180 页通过。员工 KEY 名称可见性、连续发放面板和撤权档案可见性已修复，前端全量回归 2,201/2,201、lint 838 files，当前 294 assets 生产构建资源摘要为 `fc980ad1de3e46ebb7fe326205ee7c102f9c59c091c22dc08c355485f0c91c7c`。真实 S1 重放已到员工 KEY、Gateway、计量路径和撤权后的 Gateway 401，但账户引导导航截图仍超时并伴随延迟 page-view/字体请求，不能宣称完整真实链路。隔离真实管理员旅程还复现了间歇性 `/workspace/navigation/page-views` 503，以及导航偏好在初始手风琴操作中重复发送 revision 0 的 PATCH；两者均保留为开放真实问题，详见权威索引。本机试用没有付费权益；真实付费/治理/私有 Gateway、六方会签、发布回滚、财务隐私安全迁移对账、正式 259200 秒稳定性和 HEAD/origin 一致仍未闭合；Excel `01_PRD总表!B60` 保持“未启动”。权威索引：`outputs/prd148-current-evidence-index-final-20260916.json`。
+
+当前源码三角色人类式交互清查已重新完成：admin、developer、viewer 各 60 个 Workspace 路由，共 180/180 页；0 页面失败、0 请求/响应错误、0 溢出、0 交互重叠、0 未标记控件。证据为 `outputs/prd148-human-interaction-current-20260920.json` 和 `.artifacts/prd148-human-interaction-current-20260920-r1/prd148-human-interaction-chromium-scale-1.json`，绑定当前源码 `0091a551460cacf86d0a6db922e08c8dd040608c091bb4d719102c3e22df7232`。这是非破坏性页面与可逆控件清查，不关闭真实注册/邀请/Provider/员工 KEY/Gateway 全链路、商业权益、六方会签、发布回滚、财务隐私安全迁移对账、正式 259200 秒稳定性或 HEAD/origin 门禁。
+
+五域终态批次 `outputs/prd148-negative-current-final-20260916/status.json` 的 Platform 38/38、Workspace 44/44、Partner/Support 17（含 1 skipped）、Device 14/14 均无失败或错误，但起止源码 SHA256 从 `604cab2a...` 变为 `82168788...`，`source_unchanged=false`，因此只作为源码漂移记录，不能宣称当前源码或 GA 通过。
+
+2026-09-19 导航会话冲突修复：真实本机浏览器复现的过期导航偏好 `412 identity.revision_conflict` 不再删除全局或 Workspace Cookie；冲突后 `/identity/me` 与 `/workspace/navigation` 均保持 200。PRD-146 定向 CAS 回归和 PRD-091 登出 Cookie 回归通过，证据见 `outputs/prd148-navigation-cookie-regression-20260919.json` 与 [导航会话回归记录](docs/testing/PRD-148-navigation-session-regression-20260919.md)。修复使此前审计中的后续 401 问题关闭，但本次源码变更使旧五域/Gateway 制品需要重新绑定；PRD-148 仍未完成。
+
+2026-09-19 当前源码重新走查：隔离 Chromium 角色页面审计 admin/developer/viewer 共 180 页通过，三角色业务旅程 FLOW-01/02/03 通过，均绑定源码 `7537aee46d2e90b358ebd7db349cb66f9d0baf1b394d8495156596021690f136`。真实注册→组织创建尝试中，注册、组织创建和会话切换 API 成功，但隔离静态服务出现多个 `/src` 模块请求失败，Quickstart 未加载并记录 Windows 访问冲突；该批归为验收夹具/运行环境失败，不能宣称 Provider、员工 KEY 或 Gateway 通过。证据见 `outputs/prd148-current-evidence-index-final-20260916.json` 与 `.artifacts/s1-browser-hw00nz0y/acceptance.json`，PRD-148 继续未完成。
+2026-09-19 当前源码本机真实试用链路已形成脱敏证据：登录、组织空间、Provider/模型/默认路由读取、员工消费者、个人 KEY、真实 Gateway、usage summary/records、预算状态、撤权及撤权后 Gateway 401 均已验证；证据为 `outputs/prd148-real-current-flow-20260919.json`。`quota-buckets` 的工作区 Cookie 请求返回 401，当前租户没有付费套餐/权益且该接口要求 Bearer 会话，因此额度与商业证据仍不足。平台 P95 单项在相同 `<50ms` 门槛下当前源码 1/1 通过，历史超时仍保留为运行波动证据；见 `outputs/prd148-platform-p95-current-20260919.json`。这些证据不构成生产 GA，PRD-148 仍未完成。
+2026-09-19 当前源码五域负向矩阵 r2 已完成且起止快照一致：Platform 38/38、Workspace 45/45、Partner/Support 16 passed 加 1 个退役入口 skipped、Device 14/14，证据为 `outputs/prd148-negative-current-20260919-r2/status.json`。首次 Windows 参数拆分与重复 Workspace 运行器问题均保留并单独分类，不计为产品失败；五域结果也不关闭真实商业、会签、回滚、对账、正式 259200 秒稳定性或 HEAD/origin 门禁。
+当前源码前端 `npm run lint`（838 files）与 `npm run build`（294 assets，276 modules）通过，当前源码快照为 `15f1147f7e9135d7a1e2da4fafdf534ebbdef42c74eb07ed075cb55d01ce30c6`（2690 个受测文件）；该静态 QA 不改变 PRD-148 未完成状态。
+
+Chromium 1× 登出失败已在当前源码隔离环境重放：三角色旅程整体通过，原始 15000ms `waitForURL` 超时未复现。原始失败仍保留为真实历史失败，不能据此降级为夹具问题，也不能关闭浏览器或 GA 门禁；重放证据为 `outputs/prd148-browser-failure-rerun-20260919/browser-real-chromium-scale-1.json`，索引已记录该分类。
+
+2026-09-19 三角色人类式全路由交互走查已完成：管理员、开发者、查看者各遍历 60 个 Workspace 路由，共 180/180 页；可逆侧栏、筛选、标签、详情、关闭和刷新控件共记录 421 次交互，0 页面/API/控制台/布局/标签问题。该批 QA 源码快照含审计器，为 `15f1147f7e9135d7a1e2da4fafdf534ebbdef42c74eb07ed075cb55d01ce30c6`（2690 文件），证据见 `outputs/prd148-human-interaction-current-20260919/evidence-manifest.json`。破坏性业务动作仍由专门流程验收；真实商业、发布、回滚、对账、正式稳定性和 HEAD/origin 门禁仍未闭合。
+
 MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制面。它提供统一模型调用入口、控制面治理、成本与用量追踪、日志和调试能力。
 
 重要边界：
@@ -10,13 +100,68 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 ## SaaS 增量路线图
 
+2026-09-18 Shell 与 Workspace 任务导航本轮走查修复：隔离英文偏好管理员时，组织管理、账户操作、返回空间、任务进度、连接状态、高级工具和侧栏折叠按钮等全局文案此前仍有中文硬编码；现已统一接入 `zh-CN`/`en-US` 字典，并沿主渲染链传递活动 locale。受影响前端单测 2200/2200、`npm run lint`（838 files）和 `npm run build`（294 assets）通过。当前源码快照为 revision `0b3fd65fe31e9c6a320ae9d2a399e36c07e34fdf`、SHA256 `b567e0133e5516f3c886384c50dd249b7a9aa22cf040347554e0b7cebc4e12f4`；r9 隔离 Chromium 角色审计已完成 admin/developer/viewer 各 60 页，共 180 页，0 页面/API/浏览器错误、0 溢出、0 裁切、0 交互重叠，且英文样本显示 `Collapse navigation`/`Model providers`，证据见 `outputs/prd148-role-audit-current-20260918-r9/evidence-manifest.json`。本批关闭 `OBS-UI-003`，不改变真实商业、会签、回滚、财务/隐私/安全/迁移对账、正式 259200 秒稳定性和 HEAD/origin 未闭合状态。
+
+同一当前源码上的五域负向矩阵 r4 已通过：Platform 38/38、Workspace 45/45、Partner/Support 16 passed 加 1 个明确退役入口 skipped、Device 14/14；证据为 `outputs/prd148-negative-current-20260918-r4/status.json`。首次共享 pytest 临时目录权限错误通过按域独立 basetemp 重跑解决，归类为测试夹具问题；该批仍不构成真实商业、会签、回滚、对账、正式 259200 秒或 HEAD/origin 证据。
+
+2026-09-18 当前源码角色与业务旅程复验：隔离 Chromium 以独立数据库完成 admin/developer/viewer 各 60 个源路由，共 180 页；0 页面/API/浏览器错误、0 横向溢出、0 控件裁切、0 交互重叠。当前源码三角色业务旅程 FLOW-01/02/03 也通过，覆盖登录、角色操作、键盘导航、表单校验、恢复、移动抽屉和登出；匿名首页、登录、注册策略、验证码关闭策略和密码恢复入口在 1440、1280、390、320 视口通过。证据分别为 `outputs/prd148-role-audit-current-20260918-r6/evidence-manifest.json`、`outputs/prd148-human-journey-current-20260918-r3/evidence-manifest.json`、`outputs/prd148-public-audit-current-20260918-r2/evidence-manifest.json`，均绑定当前源码 SHA256 `199b63e279eee9af271755ed5b5715d58b94fdbe59e146ea1eb1b226d4d5b8ac`。这是隔离脚本证据；admin/viewer 的 hydration 登出专门场景未执行，不能替代真实商业、六方会签、发布回滚、财务/隐私/安全/迁移对账、正式 259200 秒观察或 HEAD/origin 一致性。
+
+2026-09-18 请求解释/反馈体验问题修复：英文请求解释的状态、阶段、区块、事实字段和查询控件已统一使用活动语言字典；反馈报表日期占位符改为服务端权威查询窗口，窗口未加载时使用中性 ISO 格式提示。受影响单测 20/20、`npm run lint`（838 files）和 `npm run build`（294 assets）通过，源码起止快照一致为 `199b63e279eee9af271755ed5b5715d58b94fdbe59e146ea1eb1b226d4d5b8ac`，证据见 `outputs/prd148-request-ui-fix-current-20260918/evidence-manifest.json`。该批只关闭两个已确认 UI 发现，不构成真实付费、企业治理、六方会签、发布回滚、对账或正式 259200 秒稳定性证据；Chromium 登出超时与 PRD-148 其余门禁继续保留。
+
+2026-09-18 资源摘要同步后的当前快照：PAGE-116 Workspace Cookie 本地模型页修复及本轮 Provider 证据范围、订阅空态改进已同步前端生产资源摘要 `df518fe132342130280c753f957a42ed8e90a43a21284b8d34936b08170de022`；`npm run lint` 838 files、`npm run build` 294 assets 通过。当前源码 SHA256 `199b63e279eee9af271755ed5b5715d58b94fdbe59e146ea1eb1b226d4d5b8ac`，域页面自动化审计 69/69（59 桌面、10 移动）见 `outputs/prd148-domain-ui-audit-current-20260918-r5/report.json`。本轮角色走查脚本未形成终态报告，不能算角色复验通过；这不构成原生 computer-use、真实商业链或 GA 证据。Chromium 登出超时、真实付费/治理/私有 Gateway、会签/回滚/对账、正式 72 小时和 HEAD/origin 仍未闭合。
+
+2026-09-18 人类式业务走查批次：集中复核管理员、开发者、Viewer 的页面契约、Provider 状态、订阅/争议、员工 KEY、Webhook、请求解释和 FinOps 空态后，修复了“健康状态但无真实调用样本/探测成功率低”缺乏证据范围提示，以及无订阅时缺少开通路径说明的问题。受影响单测 24/24，lint 838 files，build 294 assets；证据记录见 [PRD-148 人类式走查](docs/testing/PRD-148-human-audit-20260918.md) 和 `outputs/prd148-human-audit-current-20260918.json`。这批证据不关闭真实商业、会签、回滚、对账、正式稳定性或 HEAD/origin 门禁。
+
+2026-09-18 当前源码角色页面复验：隔离 Chromium 使用独立数据库完成 admin/developer/viewer 三角色共 180 个页面和声明路由检查，0 页面/API/浏览器错误、0 横向溢出或交互重叠；迁移 153、最新 0155、完整性检查通过。源码起止快照一致为 `dc503279acc4febf040a46b28b4a771a8d5a509ab53469541e4e12749be2d4d1`，证据见 [当前角色审计](outputs/prd148-role-audit-current-20260918-r3/evidence-manifest.json)。这只是当前源码绑定的隔离页面回归，不构成外部身份、真实付费/企业治理、六方会签、正式稳定性或 GA 证据；五域矩阵源码漂移、Chromium 登出失败、调度/计量告警、正式 259200 秒观察及 HEAD/origin 一致性仍未闭合，PRD-148 保持未完成。
+
+权威 Excel 已同步该批说明，`01_PRD总表!B60` 仍为“未启动”，当前工作簿 SHA256 为 `972bb53b63bf9170e74c546aacc8aa9bc71cdd581332379f3c93cd0c678747d6`；权威变更记录在 `00_变更说明!B5`，证据索引见 `outputs/prd148-current-evidence-index-final-20260916.json`。
+
+2026-09-18 验收状态核对：当前源码 SHA256 `199b63e279eee9af271755ed5b5715d58b94fdbe59e146ea1eb1b226d4d5b8ac`。此前顺序五域矩阵 r2 绑定较早源码 `872f1f625358542e5d967810f5b993756596c3fc30398f62c34b9094aa632235`，已由当前源码一致的 r3 批次补充；Chromium 1x 登出 15000ms 超时继续按真实失败保留。真实商业、六方会签、发布后复核/回滚、财务/隐私/安全/迁移对账、正式 259200 秒稳定性及 HEAD/origin 一致性仍未闭合，PRD-148 保持未完成。
+
+2026-09-18 反馈归因与计量修复复验：真实本机 KIMI 调用返回 200（38 tokens），路由尝试收口为 `succeeded`、usage ledger 为 `recorded`，反馈 POST 返回 201、汇总显示 1 条样本；停用临时 KEY 后再次调用返回 401。此前生产试验因连接池事务包装对象被质量统计类型校验拒绝，导致 attempt/计量悬挂；现已允许受控连接所有权 facade 并增加回滚覆盖，连接所有权单测 4/4、路由与反馈回归 14/14、Ruff 通过。证据仍是本机 scheduler-enabled 试验，不能替代正式 GA；五域矩阵有源码漂移、Chromium 登出 15000ms 失败、真实商业/会签/回滚对账/正式 72 小时与 HEAD/origin 仍未闭合。当前源码 `9849bd36f8d10ebc59278b1a12da888f60512355190c223d2c99ba7d8dcd93eb`，PRD-148 未完成。见 [反馈归因修复证据](outputs/prd148-feedback-attribution-fix-final-20260917/evidence-manifest.json)。
+
+同一当前源码批次复查 PRD-140 客户成功 outbox 接管，完整迁移链 0155 上单项 1/1 通过，原先记录的日期接管失败已关闭；证据见 [outbox 当前复验](outputs/prd148-prd140-outbox-current-20260918/evidence-manifest.json)。这不改变 PRD-148 的全局未完成状态。
+
+2026-09-17 反馈认证性能批次：将 RBAC/Workspace 的全元数据扫描改为事务内按表名查询，保留全部三次认证与 250ms 门槛。基础回归 20/20、反馈/Workspace 集成 26/26、协议与默认模型 26/26、SQLite/原生 PostgreSQL 目录边界通过；普通 scheduler-enabled 本机服务后续反馈 24/24 返回 200（约 99–186ms），Owner/Developer 桌面与手机操作复核通过。这是短样本，未关闭历史 503 和全部调度争用；计量对账告警仍在。当前源码 `7ca09119f905a01690a4438821b9bbfa6c5c4dba4fd8091e7ee0639c2399b83e`，PRD-148 未完成，正式 72 小时未启动。见 [本批证据](outputs/prd148-feedback-live-profile-20260917/summary.md)。
+
+2026-09-17 可观测性批次：请求解释已补齐中英文本、输入旁校验和移动端图标操作；反馈日期提示取自实际响应窗口。受影响前端 97/97、全前端 2197/2197、生产摘要契约 1/1、lint 838 files、build 294 assets 通过；本机同组织 Owner/Developer 的 Playwright 操作复核通过，未覆盖 Viewer。后续 scheduler-enabled 服务诊断中，真实 Owner 的 8 次反馈读取全部 503；外层页面混合语言、全部当前 QA 与真实 GA 门禁仍未闭合，PRD-148 保持未完成，正式 72 小时未启动。当前源码 `3e95d3ff373d2ddeaf30f9dea288664caf5a7164bbf6a81a30c2cc686b85db62`。见 [本批分类记录](outputs/prd148-observability-fix-20260917/summary.md)。
+
+2026-09-17 角色页面复核：Playwright 隔离回归 admin/developer/viewer 共 180 个页面检查通过；本批发生测试夹具源码变更，已封存为有漂移证据，不能认证最终源码。随后 GA Launch/协议/默认模型/跨协议身份计费停用 41/41 通过，源码前后一致。Webhook 布局误报与 PRD-140 日期夹具已定位，接管单项修正后 1/1 通过。调度器争用、完整浏览器矩阵、计量历史数据缺口及真实 GA 门禁仍未闭合，PRD-148 保持未完成，正式 72 小时未启动。见 [本批分类记录](outputs/prd148-role-review-20260917.md)。
+
+2026-09-17 平台全导航与会话边界批次：平台 39 个入口集中走查无横向溢出；admin/developer/viewer
+隔离浏览器回归 36 个目标页全部通过，0 API/浏览器错误。平台客户成功和隐私队列现在只接受与
+PlatformSession 完全匹配的父 GlobalSession，私有 Gateway 的离线/待接管状态不再显示为正常接管，
+生产资源摘要同步为 `45212ba70208e23a8835a28871107750d62f7ab7697e76b1d2665905f9f851a2`。
+PRD-140 outbox 接管断言、真实商业链、六方会签、发布回滚/对账和正式 72 小时稳定性仍未闭合，
+PRD-148 保持未完成。详见 [本批证据](outputs/prd148-platform-session-boundary-20260917/report.json)。
+
+2026-09-17 平台运营批次：先巡检 40 个原生浏览器入口，再合并修复平台导航、手机菜单、首次加载和跨页状态。受影响前端 230/230、lint 838 files、build 294 assets 通过；原生确认组织目录首次显示 13 条、侧栏末尾可点击、手机选页收起。客户成功凭据冲突、组织搜索/详情等 503 仍是真实失败，全角色与业务验收未完成。当前源码摘要 `fe85860e6cc1ccba5495b90a9ceb5c3e17fe97eabb797f3354e317b3870bb054`，PRD-148 保持未完成。见 [平台批次证据与未通过项](outputs/prd148-native-platform-fix-20260917/summary.md)。
+
+2026-09-17 成员与 KEY 批次：原生内置浏览器已验证管理员邀请、独立开发者接受并登录、改为只读角色后的菜单与旧 KEY 地址边界；合并修正了应用 KEY 表单与创建/轮换归属提示。当前源码受影响前端 399/399、lint 838 files、build 294 assets 通过，原生应用 KEY 创建→轮换→复制→停用及桌面/移动布局已复核。当前源码摘要 `788ed041e750dcd19be154cbfe1c6edcdad045c5edf104898cf333dd92e241bb`。间歇性加载失败、调度器告警及其余全域验收仍未闭合，PRD-148 保持未完成。见 [本批证据](outputs/prd148-native-member-key-fix-20260917/summary.md)。
+
+2026-09-17 浏览器控制复核：原生 Codex 内置浏览器已实际通过页面读取、点击“API 文档”和截图；Computer Use 组件可加载并枚举应用。统一 CUA 入口仍报 `unsupported Codex auth method: apikey`，该入口尚未修复，不能据此宣称内置浏览器整体不可用。清理清单没有删除浏览器组件。迁移页配置加载失败仍待定位，PRD-148 保持未完成。见 [浏览器控制诊断](outputs/browser-control-diagnostic-20260917/summary.md)；下方旧记录保留其历史时间范围。
+
+2026-09-16 业务域复查：Computer Use 运行时已恢复初始化和应用枚举，但 Edge 既有页面的 URL 无法被策略可靠识别，原生页面操作因此未执行；Playwright 证据仍单独标注。DLP 已完成当前 Workspace Cookie/CSRF/事务撤权和本机 UI 创建停用回归；Developer/反馈接口在 Control 重载后恢复 200，Webhook 仍待修复。GA 14/14、Gateway 27/27、Platform P95 单项 1/1 通过，反馈专项最终 16/16 通过。真实商业、六方会签、回滚对账、正式 72 小时稳定性与 HEAD/origin 仍未闭合，PRD-148 保持未完成。当前源码摘要见 `outputs/prd148-current-source-followup2-20260916.json`。
+
+2026-09-16 最新：PRD-148 保持未完成。两端生产资源摘要、293 assets 构建、GA Launch 14/14 已复核；完整浏览器矩阵出现登出导航超时，五域/浏览器批次仍在执行且有源码摘要变更，不能作为最终一致快照。formal11 已失败，未启动合格的新 72 小时观察。真实商业、六方会签、发布回滚对账与 HEAD/origin 仍缺证据。见 [最新验收记录](docs/testing/PRD-148-current.md) 和 `outputs/prd148-current-evidence-index-final-20260916.json`。
+2026-09-18 当前域审计：PAGE-116 Workspace Cookie 会话与本地模型空态已修复；当前源码 Playwright 页面审计 69/69（59 桌面、10 移动）通过，证据为 `outputs/prd148-domain-ui-audit-current-20260918-r4/report.json`。该自动化审计不等同于原生 computer-use 或 GA。五域批次仍因源码起止漂移不能作当前一致快照，真实商业链、六方会签、发布后复核/回滚、财务隐私安全迁移对账、正式 72 小时稳定性与 HEAD/origin 仍未闭合，PRD-148 保持未完成。
+PRD-095 并发、游标和 warm session P95 单项本轮隔离重跑 1/1 通过（`outputs/prd148-platform-p95-current-20260918.xml`）；此前超过 50ms 的真实失败仍保留，门槛未放宽，单项通过不构成五域或 GA 证明。
+2026-09-18 顺序当前源码五域复跑：Platform 38/38、Workspace 45/45、Device 14/14，Partner/Support 16/16 通过并保留 1 个明确退役入口 skipped。Partner 测试替身已补齐当前平台读事务的 `csrf_token`/`read_only` 参数；证据目录为 `outputs/prd148-negative-current-20260918-r2`，绑定源码 SHA256 `872f1f625358542e5d967810f5b993756596c3fc30398f62c34b9094aa632235`。该批次解决了已确认的测试夹具问题，但不关闭真实商业、会签、发布回滚、对账、正式 72 小时或 HEAD/origin 门禁，PRD-148 仍未完成。
+2026-09-16 当前源码复跑：Platform 38/38、Workspace 62/62、Partner/Support 16 通过加 1 个退役入口 skipped、Device 14/14；反馈专项 16/16。最新源码摘要为 `6348c7766544b91625140779cc147a37cc0ca9b340b3b7e1d42fa667d37a71be`。数据库 deadline 修复已通过受影响回归。真实付费/企业治理/私有 Gateway、六方会签、发布回滚对账、scheduler-enabled 72 小时、Excel 与 HEAD/origin 一致性仍未具备，PRD-148 继续未完成。
+正式观察 `outputs/continuous-stability-20260916-formal-prd148-r3/status.json` 已因 Gateway 4 次 read timeout 在 309.67 秒失败，长稳 credit=0；不能用作 72 小时证据。
+
 - PRD-001 至 PRD-089 的已完成事实保持不变。旧总清单中的 PRD-090 至 PRD-108 已废弃并禁止开发，只保留历史审计。
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
 - 新 `PRD-090` 至 `PRD-147 - 存量控制台全面分域迁移与旧入口归零` 已有交付记录，G7 分域专项通过；
   G6 正在补正式接线、原生业务和真实运行证据，详见 [G6 补充状态](docs/testing/G6-remediation-status.md)。
-  `PRD-148 - SaaS公开发布、迁移终验与全产品最终门禁` 尚未启动，不能只等健康采样满 72 小时就放行。
+  `PRD-148 - SaaS公开发布、迁移终验与全产品最终门禁` 正在收尾和验收，尚未标记完成。
+  2026-09-15 复核：修复前源码五域已选负向集合为 112 passed 加 1 个退役入口 skipped，Gateway 27/27；完整隔离 QA 为 15/15 任务、浏览器 27/27、loopback 30/30、压力 600/600，但 97 项审计仅 95/97，PERF-08/10 缺合格长稳。新增修复了 0155 down 被正式迁移入口拒绝的问题，GA 集成回归 14/14；副本往返保留 1094 表、543694 行。新源码 `9904e348…cebfe` 的完整自动化 QA 已通过 15/15 任务，但审计仍为 95/97；五域/Gateway 继续重跑。只读审计发现本机入口仍为 expanded/generation 0，缺分域迁移、审批和对账事实；64 条队列契约不证明迁移完成。正式 72 小时、真实付费计量、企业治理/私有 Gateway、真实会签/发布回滚/对账及 HEAD/origin 一致性仍未闭合。PRD-148 保持未完成，详见 [PRD-148 当前验收记录](docs/testing/PRD-148-current.md) 和 `outputs/prd148-current-evidence-index-20260915.json`。
+  本地试用库已升级至 0155，账号和组织等既有数据已逐行核对保留；
+  [本地试用交付记录](docs/testing/PRD-148-local-trial-release-20260912.md) 区分已交付功能与待完成的正式验收。
+  本机人类路径走查记录见 [PRD-148 人类路径走查](docs/testing/PRD-148-human-path-20260915.md)，只覆盖本地试用身份和脱敏测试凭据，不构成正式 GA 证据。
+  2026-09-15 当前源码矩阵复跑：Platform 38/38、Workspace 62/62、Partner/Support 16 通过加 1 个退役入口 skipped、Device 14/14、GA/Gateway 40/40；当前 All QA 5/5、PERF smoke/pressure 3/3、Chromium admin/developer/viewer 真实角色旅程通过。最新索引见 `outputs/prd148-current-evidence-index-final-20260915.json`。外部付费、企业治理/私有 Gateway、六方会签、真实回滚、对账和 scheduler-enabled 72 小时观察仍缺证据，PRD-148 继续未完成。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -662,7 +807,7 @@ AuditLog/source event、固定接受审计脱敏、0051/0052 和 PAGE-087。迁�
 
 已具备：
 
-- 数据面：`gateway-data-plane`，提供 `/health`、`/internal/health`、`/version`、`/v1/chat/completions`、`/v1/embeddings`、`POST /v1/adapter-contract-probes/identity`、`POST /feedback`，并通过 Virtual Key 恢复可信 Environment，按环境解析模型别名、预算和归属快照，再由已发布 Policy 快照、Provider Adapter、KeyPool、健康状态、限流和基础 DLP 控制上游调用；Policy 快照按 tenant 首次 singleflight 拉取并后台轮询，单请求冻结版本和 LKG 状态，`deny`/异常在 Provider 前失败关闭，`route_to` 重新执行租户、环境、模型、Provider、健康和能力校验；新鲜 unhealthy Provider/Key 会在请求前避开，过期证据 Fail Open。PRD-047 为 Alias 增加 `fixed/cost_first/availability_first` 初始排序；PRD-048 的 `quality_cost` 在通用资格后读取租户内 Score，先执行质量门槛和冷启动，再按正权重依赖读取延迟/价格并冻结分量。Attempt/Stream 真实上游终态与 Score 增量同事务，质量资格和预算可能计费判断相互独立，已通过真实三服务和异常路径验收。非流式主调用遇到策略允许的超时、429 或 5xx 时最多切换一次备用模型；流式调用提供 SSE 增量透传、块间超时看门狗、客户端断开清理和 StreamSession 审计，流中不切换模型。PRD-049 的 Feedback 入口只接受产生源调用的同租户 Virtual Key，复用共享严格校验与不可变事务，不在数据面开放聚合报表。PRD-056 在认证后为每个请求冻结一次 ProviderErrorMap lease，主调用、Fallback 和流式握手共享同一 revision；Control 不可用时只回落 builtin，规则热更新无需重启 Gateway，失败 Fact 与 attempt/session 同事务且只保存脱敏证据。PRD-064 的身份端点只用于受控契约探测，在 Virtual Key 鉴权后校验单值 tenant 证明；普通 OpenAI-compatible 请求合同不变。
+- 数据面：`gateway-data-plane`，提供 `/health`、`/internal/health`、`/version`、`/v1/chat/completions`、`/v1/responses`、`/v1/messages`、`/v1/models`、`/v1/embeddings`、`POST /v1/adapter-contract-probes/identity`、`POST /feedback`。Responses 和 Anthropic Messages 是复用同一 Virtual Key、路由、预算、DLP、限流、账本与流式治理链路的协议门面；客户端只需网关地址和个人 KEY，工具专有高级能力仍按客户端版本单独验收。其余路由与审计约束保持不变。
 - 控制面 API：`control-plane-api`，提供 `/health`、`/internal/health`、`/version`、`/error-codes`、`GET/POST /error-maps`、`PATCH /error-maps/{error_map_id}`、`GET /internal/error-maps/{tenant_id}/current`、`/internal/config/summary`、`/auth/login`、`/auth/logout`、`/auth/me`、`/tenant/current`、`/user/preferences`、`/users`、`/environments`、`/projects`、`/applications`、`/virtual-keys`、`/virtual-keys/{id}/limits`、`/providers`、`/providers/{id}/keys`、`/providers/{id}/probe`、`/provider-health`、`/provider-keys/{id}`、`/models`、`/model-prices`、`/model-aliases`、`/model-aliases/{id}/fallback`、`/model-aliases/{id}/routing-mode`、`/model-aliases/{id}/cache-affinity`、`/model-quality-scores`、`/policies`、`/policies/validate`、`/policies/dry-run`、`/policies/{policy_id}`、`/policy-snapshots/current`、`/policy-snapshots`、`/policy-snapshots/publish`、`/policy-snapshots/{id}/rollback`、`/internal/policy-snapshots/{tenant_id}/current`、`POST /security/classify-intent`、`/request-logs`、`GET /request-explain/{source_request_id}`、`/audit-logs`、`GET /audit-logs/export`、`/finops/ledger`、`/finops/adjustments`、`/usage/summary`、`/usage/records`、`/usage/export.csv`、`/usage/exports/{job_id}`、`/usage/exports/{job_id}/download`、`/budgets`、`/budget-status`、`GET /cost-anomalies`、`PATCH /cost-anomalies/{id}/action`、`/dlp/rules`、`/webhooks`、`/webhooks/{id}/test`、`/webhooks/{id}/deliveries`、`/webhooks/{id}/replay`、`/webhooks/{id}/rotate-secret`、`/dashboard/overview`、`/console/navigation`、`/console/preferences`、`/console/events`、`/developer/quickstart-data`、`/developer/sdk-examples/python`、`/developer/sdk-examples/python/download`、`/developer/sdk-examples/javascript`、`/developer/sdk-examples/javascript/download`、`/debug/chat-completions`、`POST /feedback`、`GET /feedback/summary`。`GET /model-aliases` 返回当前 CacheAffinity、RoutingPolicy、休眠质量配置和候选安全摘要；`quality_cost` PATCH 使用完整五字段配置、锁内 CAS 和同 request_id 持久幂等。`GET/PATCH /model-quality-scores` 分离统计版本与人工反馈版本，读权限为 admin/developer、写权限仅 admin，tenant_id 只从 Session 恢复。PRD-049 的反馈创建与汇总继续从 Session 恢复 tenant/actor，admin/developer 可用、viewer 后端拒绝，跨租户或跨 Key 源调用同形防枚举。PRD-051 的 FinOps 读取和调整均为 admin-only 后端权限，tenant_id 只从 Session 恢复，跨租户目标同形 404，统一错误携带 request_id/trace_id。PRD-053 的成本异常 GET/PATCH 同样固定为 admin-only，并只从 Session 恢复 tenant/actor；该合同已通过专项、跨租户与真实运行验收。PRD-056 的规则读权限为 admin/developer、写权限仅 admin，viewer 后端拒绝；tenant/actor 只从 Session 恢复，版本/head/operation/Source Event/Audit 同事务，内部快照只接受 Gateway service token。PRD-058 的审计导出固定 admin-only，tenant/actor 只从 Session 恢复；CSV、不可变 AuditExport、`audit.exported` AuditLog 与持久 source 在同一事务形成复核链。上述已完成合同均已通过对应 RBAC、租户和运行验证。
   PRD-064 已注册 `POST /internal/tenants/{tenant_id}/adapter-contract-runs`、`GET /adapter-contract-runs` 和
   `GET /adapter-contract-runs/{run_id}`；内部上报与 Session 读取分离鉴权，所有租户归属、实时
@@ -1053,11 +1198,32 @@ $env:METAHUB_PYTHON=(Resolve-Path .\.venv\Scripts\python.exe).Path
 .\scripts\dev\start-all.ps1
 ```
 
-三个进程分别承担模型调用数据面、管理控制面和 Web Console，不是演示模式。一键启动后访问：
+四个进程分别承担模型调用数据面、管理控制面、公共状态读服务和 Web Console，不是演示模式。一键启动后访问：
 
 - Gateway Health: <http://localhost:8000/health>
 - Control API Health: <http://localhost:8001/health>
+- Status API: <http://localhost:8002/public/status>
 - Console Web: <http://localhost:5173>
+
+本地开发可使用 `http://localhost:5173` 或 `http://127.0.0.1:5173` 打开 Console。若未显式设置
+`METAHUB_ALLOWED_ORIGINS`，`start-control-api.ps1` 仅为这两个 loopback 来源提供默认 CORS
+白名单；部署环境必须显式配置实际 Console 来源。
+
+同一局域网内的受限技术试用可用专用启动器指定一个精确的 Console 来源：
+
+```powershell
+.\scripts\dev\start-lan-trial.ps1 -ConsoleOrigin "http://172.16.100.2:5173"
+```
+
+该命令只向 Control API 的 CORS 白名单加入该一个来源，并保留本机两个 loopback 来源。客户设备必须在同一可达网络，且应先由另一台设备验证 Console 登录和 Gateway 调用；`172.16.x.x` 等私网地址不是公网交付地址，也不构成付费服务或 GA 发布。
+
+若 Windows 网络配置为 Public，需由管理员在同一台服务器上为当前网段创建受限入站规则：
+
+```powershell
+.\scripts\dev\enable-lan-trial-firewall.ps1 -RemoteCidr "172.16.100.0/24"
+```
+
+规则只允许该网段访问 TCP `5173`（Console）、`8001`（Control）、`8000`（Gateway）和 `8002`（状态页）。客户必须在另一台同网段设备上通过 `http://172.16.100.2:5173/` 登录，并以 `http://172.16.100.2:8000/v1` 加个人 MetaHub KEY 完成一次调用后，才可对外宣称该受限试用可用。
 
 停止时执行：
 
@@ -2615,3 +2781,150 @@ PRD-051 已完成在既有 Usage Ledger 之上增加正式、不可变的财务�
 - 0041 负责历史回填、运行时自动投影、复合租户所有权、append-only/REPLACE 防护和有业务事实时的回滚拒绝；SQLite 仍是当前本地验收基线。
 
 设计与两轮自审见 [PRD-051 设计文档](docs/prd/PRD-051-finops-ledger.md)，公开合同见 [FinOps Ledger API](docs/api/finops-ledger.md)，最终测试记录见 [PRD-051 测试记录](docs/testing/PRD-051-tests.md)；权威 Browser 与停服终态证据位于 `artifacts/prd051/20260727T043500-browser-success-02`。
+
+### 2026-09-14 当前 PRD-148 复核
+
+2026-09-14 复核：formal/formal2/formal3/formal4-isolated 观察均已因 Control 超时或 SQLite 调度器争用失败，不能引用；共享 SQLite 连接现按库一次启用 WAL，新的 scheduler-enabled 120 秒诊断 704 请求、0 错误，但它不是 72 小时证据。PRD-095 session P95 仍有 61.6ms 的真实门槛失败，未放宽。最终源码五域矩阵 Platform 38/38、Workspace 44/44、Partner/Support 16 通过加 1 个退役入口跳过、Device 14/14；Product QA 与 Chromium FLOW 批次均通过。GA 生命周期 13/13、Gateway 协议/默认模型 26/26、跨协议员工身份与计量 1/1、成本回归 1/1、损坏价格防护 4/4 均有当前制品。已完成一条本机真实注册、组织、KIMI Provider/模型/默认路由、员工个人 KEY、Gateway 调用和撤权链路；但该组织没有套餐、订阅和权益快照，实际用量落账以 IntegrityError 延迟，付费/额度证据不足。六方会签、发布后复核、回滚及财务/隐私/安全/迁移对账仍缺真实证据，PRD-148 保持未完成。详见 [当前验收记录](docs/testing/PRD-148-current.md)。
+
+### 2026-09-16 当前复核
+
+PRD-148 继续保持“未完成”。当前生产 surface 摘要已更新并通过 293 assets 构建；隔离浏览器 QA 默认关闭人机挑战只用于本地测试夹具，生产策略不变。前端完整单测 2141/2141、GA Launch 14/14、Gateway 协议/默认路由 24/24 通过。公开入口审计通过，匿名登录拒绝、注册策略可读、页面布局无溢出；关闭挑战的复跑正在收尾。
+
+此前五域结果仍按旧快照保留，源码夹具变更后必须重新绑定当前快照；Platform 38/38、Workspace 62/62、Device 14/14、Partner/Support 16 通过加 1 个退役入口 skipped 不能直接升级为本轮完整门禁。正式 formal11 以 observation_source_changed 失败（6057 秒、0 errors，要求 259200 秒），不构成 GA。真实付费/企业治理/私有 Gateway、六方会签、发布后复核、回滚、财务/隐私/安全/迁移对账、全部 QA 当前快照、Partner/Support 17/17、72 小时 scheduler-enabled 观察以及 HEAD/origin 一致性仍缺证据。当前权威索引将继续保持 `prd148_complete=false`。
+2026-09-16 多角色走查补充：当前隔离 Chromium 角色审计（admin/developer/viewer）、公开入口四尺寸和 Platform 运营旅程均通过，视觉检查确认私有 Gateway/订阅空态与接入说明；Codex In-app Browser 已可用，底层 CUA API-key 会话限制单独记录。Gateway 全量组合重跑因多个失败标记且未形成终态 JUnit，按未完成记录；此前正式 72 小时观察失败、真实商业/会签/回滚/对账和 HEAD/origin 一致性仍未闭合，PRD-148 继续未完成。证据见 `outputs/prd148-ui-audit-current-20260916/summary.json`、`outputs/prd148-gateway-protocol-rerun-20260916/summary.json` 和 `outputs/prd148-roadmap-current-20260916/validation.json`。
+
+2026-09-16 本地服务复核：`127.0.0.1:5173` 的账号页曾因控制面仅允许 `localhost:5173` 而显示无法连接；本地开发进程已重启为同时允许两个 loopback 来源，CORS 预检通过，未登录 `/identity/me` 正确返回 401，Chromium 登录表单无页面错误。当前角色审计证据见 `outputs/prd148-role-audit-current-live-20260916/prd148-role-audit-chromium-scale-1.json`；这仍是隔离本地回归，PRD-148 的真实商业、会签、发布回滚、72 小时稳定性和 HEAD/origin 门禁未完成。
+路线图当前复核：主工作簿 `01_PRD总表!B60=未启动`，校验器 `251 checks passed`、`next_prd=PRD-148`；状态修正仅恢复路线图前缀契约，不代表 PRD-148 完成。当前索引为 `outputs/prd148-current-evidence-index-followup3-20260916.json`。
+
+2026-09-17 内置浏览器治理批次：真实本地组织 owner 登录后，集中检查并调整角色权限、成本异常、
+策略发布三页的术语和信息负担。受影响前端 395/395、Workspace 治理集成 1/1、lint/build 通过；
+桌面与手机六次页面观察已有当前源码绑定。开发者中心导航回退、手机导航收起和直接 URL 导航后
+登录状态丢失仍待处理；独立多角色完整功能走查与 GA 门槛未闭合，PRD-148 保持未完成。
+范围与分类见 [治理批次记录](outputs/prd148-native-governance-20260917/summary.md)。
+
+2026-09-17 导航批次：集中修复开发者中心展开回退、刷新覆盖手动分组、手机选页不收起导航，
+并在内置浏览器复核原操作路径。受影响前端 181/181、后端导航 7/7、lint/build 通过。
+内置浏览器 `reload()` 丢失 Cookie 仍未定因；API 文档与接入页模型/地址不一致、迁移页地址
+不可用、访问事件 422 已合并记录，尚未修复。独立多身份完整验收及 GA 门槛仍未完成。
+详见 [导航与会话批次记录](outputs/prd148-native-navigation-20260917/summary.md)。
+
+2026-09-20 导航与 page-visit 集成回归使用独立工作区临时目录重跑为 14/14（`outputs/prd148-nav-page-current-20260920-r6.xml`）；默认 Windows pytest 临时目录拒绝访问按测试夹具/环境问题保留。真实浏览器 page-view 争用和 S1 截图超时仍未关闭，PRD-148 保持未完成。
+
+2026-09-18 当前源码请求解释回归：17/17 通过，证据为 `outputs/prd148-current-request-explanation-regression-20260918.json`；仅覆盖隔离单元回归，PRD-148 仍未完成。
+当前源码导航、Console 入口、账号/会话生命周期、迁移指南和开发者快速开始回归 118/118 通过，证据为 `outputs/prd148-current-navigation-regression-20260918.json`；仅覆盖隔离单元回归，PRD-148 仍未完成。
+当前源码 Chromium 角色审计：admin、developer、viewer 各 60 页，共 180 页通过，证据为 `.artifacts/prd148-role-audit-current-20260918-r4/evidence-manifest.json`；仅覆盖隔离页面/权限/布局审计，不是原生 computer-use、真实商业验收或 GA，PRD-148 仍未完成。
+当前源码域级页面审计覆盖 59 个桌面页和 10 个移动页，共 69/69 通过，证据为 `outputs/prd148-domain-ui-audit-current-20260918-r5/evidence-manifest.json`；仅覆盖只读页面/布局审计，不是完整操作链或 GA，PRD-148 仍未完成。
+此前 0143 源码快照的 GA Launch 生命周期回归 14/14、Gateway 协议/默认模型/跨协议员工身份计量回归 38/38 已保留为历史证据；当前 199b 源码快照的权威 r3 结果见下文，均为隔离测试，不是实际商业或 GA 证明，PRD-148 仍未完成。
+当前源码三角色 Chromium 业务旅程 FLOW-01/02/03 均通过，证据为 `.artifacts/prd148-human-journey-current-20260918-r2/evidence-manifest.json`；包含 Cookie 登录、角色操作、导航、校验、恢复和登出，但 hydration 登出只执行 developer 分支，且不构成真实商业或 GA 证明，PRD-148 仍未完成。
+
+当前源码五域负向矩阵 r3 已完成且起止快照一致：Platform 38/38、Workspace 44/44、Partner/Support 16 passed + 1 个 PRD-087 退役路由 skipped、Device 14/14。当前源码 GA Launch 14/14；Gateway 协议、流式、默认模型和跨协议员工身份计费回归 27/27。证据分别为 `outputs/prd148-negative-current-20260918-r3/status.json`、`outputs/prd148-ga-launch-current-20260918-r3/evidence-manifest.json`、`outputs/prd148-gateway-current-20260918-r3/evidence-manifest.json`，均绑定源码 SHA256 `199b63e279eee9af271755ed5b5715d58b94fdbe59e146ea1eb1b226d4d5b8ac`。这些是隔离自动化证据，不关闭 Chromium 登出失败、真实付费/企业治理/私有 Gateway、六方会签、发布回滚、财务隐私安全迁移对账、正式 259200 秒稳定性或 HEAD/origin 门禁；PRD-148 仍未完成。
+
+### 2026-09-18 Feedback empty-state batch
+
+Feedback summaries now show “暂无数据”/“No data” when there are no samples, while real zero ratings and zero adoption remain visible when samples exist. The current batch is source-bound to 2688 files with SHA256 `dc503279acc4febf040a46b28b4a771a8d5a509ab53469541e4e12749be2d4d1`; request-feedback tests 9/9, lint 838 files, and the 294-asset production build passed. The frontend and control-plane production manifests now agree on asset digest `aa58650f6c0b3c7badaaa4c69f5f05cd8717f54bec32ab3187c10894518f318b`. Evidence: `outputs/prd148-feedback-ui-empty-state-20260918/evidence-manifest.json`.
+
+PRD-148 remains incomplete. The drifted five-domain artifacts, Chromium logout timeout, open scheduler/metering failures, real paid and enterprise flows, six-party signoff, release review and rollback, reconciliation, formal 259200-second observation, and HEAD/origin consistency still require current evidence.
+
+### 2026-09-19 page-view writer admission follow-up
+
+The current source now bounds Workspace page-view telemetry writer admission to two seconds so a stale navigation beacon cannot hold SQLite logout or session navigation behind a long writer lock. Normal uncontended page-view writes retain the existing contract. The frontend lifecycle regression passed 2,200/2,200 and the isolated current-source Workspace page-visit integration passed 7/7 using a dedicated basetemp; the earlier Windows pytest temporary-directory `PermissionError` remains a fixture issue. Evidence: `outputs/prd148-page-visit-write-deadline-20260919.json`.
+
+The real Chromium organization/invitation journey with two delayed `/workspace/navigation/page-views` requests remains retained as an open product failure until a production-build browser replay proves the fix. This change does not close paid entitlement, six-party signoff, release review/rollback, finance/privacy/security/migration reconciliation, scheduler-enabled 259200-second stability, or HEAD/origin consistency. PRD-148 remains incomplete.
+
+The post-change production-build replay (`.artifacts/s1-browser-pdmjjb3s`) did not close that failure: it reached the retired-task acceptance-contract drift and still recorded delayed page-view requests (up to about 50 seconds). Evidence is summarized in `outputs/prd148-page-visit-write-deadline-browser-rerun-20260919.json`; the runtime issue remains open.
+
+A second production-build replay (`.artifacts/s1-browser-7dz4v8if`) completed the previously failing invited-account subflow: invitation acceptance, Workspace session establishment, logout back to `/`, and guarded redirect to the login page all passed. The full flow still failed later while loading the owner account workspaces section, with two page-view requests pending for about 40 seconds. This is partial progress, not a complete business-flow or GA pass. Evidence: `outputs/prd148-page-visit-write-deadline-browser-rerun2-20260919.json`.
+### 2026-09-17 Platform availability batch
+
+Fixed SQLite snapshot-to-write contention for Platform session reads by re-authenticating under an immediate transaction when a session touch or authority refresh is required. The isolated concurrent regression passed 9/9, and the scheduler-enabled browser rechecked status, residency, GA gates and Workspace operations. Customer Success and privacy mixed-cookie rejection remains an explicit PRD-140 failure boundary; scheduler reconciliation warnings and the required 72-hour observation remain open. PRD-148 is not complete. Evidence: `outputs/prd148-platform-availability-diagnostic-20260917/findings.md`.
+
+### 2026-09-18 Current-source r5/r4 verification
+
+The current source snapshot is `0b3fd65fe31e9c6a320ae9d2a399e36c07e34fdf` with source SHA256
+`b567e0133e5516f3c886384c50dd249b7a9aa22cf040347554e0b7cebc4e12f4`. The unchanged-source
+five-domain negative matrix passed Platform 38/38, Workspace 45/45, Partner/Support 16 passed
+plus one explicitly retired PRD-087 route skipped, and Device 14/14. Current-source GA Launch
+passed 14/14 and Gateway protocol/default-model/cross-protocol accounting passed 27/27.
+Evidence: `outputs/prd148-negative-current-20260918-r5/`,
+`outputs/prd148-ga-launch-current-20260918-r4/`, and
+`outputs/prd148-gateway-current-20260918-r4/`. The initial Windows pytest temporary-directory
+permission error remains classified as a fixture issue and was resolved for the isolated rerun.
+
+These are isolated automated and synthetic-upstream results. The Chromium 1x logout timeout is
+retained as a real failure; the local KIMI registration-to-revocation path is trial-only and has
+no paid entitlement or settlement evidence. Six-party signoff, post-release review/rollback,
+finance/privacy/security/migration reconciliation, scheduler-enabled 259200-second stability,
+and HEAD/origin consistency remain open. PRD-148 remains incomplete.
+
+2026-09-19 page-visit follow-up: current-source PRD-147 page-visit regression is 7/7 with no product
+assertion failures (`outputs/prd148-page-visits-current-20260919.xml`). The real Chromium organization
+journey still has two `/workspace/navigation/page-views` requests waiting about 40 seconds after the
+invited account signs out; this remains an open runtime concurrency failure and the threshold was not
+relaxed. A separate finance journey failure is an acceptance-script contract drift because it seeks
+the retired `workspace.settings.profile` task entry; it is tracked as a fixture/contract issue. The
+current evidence index remains `prd148_complete=false`.
+2026-09-19 page-view 写锁修复后的第三次生产构建重放已记录：注册、组织、试用成员/Provider、账号入口及一个 page-view 200 完成；隔离 Uvicorn 随后发生 Windows access violation，浏览器上下文在导航历史阶段关闭，不能宣称完整业务链通过。page-view 集成回归 7/7，事务全路径沿用两秒截止时间。证据为 `outputs/prd148-page-visit-write-deadline-browser-rerun3-20260919.json`；PRD-148 仍未完成。
+
+2026-09-19 员工流程后续复验：修复了员工创建成功后目录详情被折叠的问题，并将 CSV 导入文本框固定为 16px；受影响前端单测 43/43、lint 838 files 和生产构建 294 assets 通过，当前资源摘要为 `65ed5c9c8de0740b18823abd1b25c959c9b4ae4e63f42da519d01d5ff676914f`，源码 SHA256 为 `6a8396c904034006d48c792c29cbb10187f797c1a9b1d89edd4a694783199720`（2690 files）。真实浏览器复验 `.artifacts/s1-browser-69efzdeh` 已完成两次员工创建并越过原表单可见性失败，但在 CSS 修复前记录了 13.3333px 文本框门槛失败；`.artifacts/s1-browser-a58pqciu` 的账号偏好页等待超时，`.artifacts/s1-browser-3oik8m1s` 的试用成员/Provider 阶段等待 Console 超时，且运行期间仍有延迟 page-view 请求。没有清洁完整业务链通过证据，PRD-148 仍未完成。索引已更新为 `outputs/prd148-current-evidence-index-final-20260916.json`。
+
+2026-09-20 真实员工链路复验：修复了员工 KEY 名称字段默认不可见、创建第一把 KEY 后发放面板关闭、以及员工档案折叠导致撤权控件不可操作的问题；前端全量单测 2,201/2,201、lint 838 files、生产构建 294 assets 通过，当前生产资源摘要为 `0c05a2c0972de0505e07a7a3e2e12157a844d5bec9bff8a585f383c1874dc15b`，当前源码 SHA256 为 `cf68165aabf91d3dc23485588022f406af514c50886f05f945a06227aa819eac`（2691 files）。新的真实 S1 重放 `.artifacts/s1-browser-tv64otey` 已完成注册、创建组织、Provider/订阅、邀请成员、两名员工、两把个人 KEY、Gateway 旧 KEY 失效、员工撤权和撤权后 Gateway 401；随后在账户引导导航截图阶段超时，仍伴随延迟 page-view/字体请求，不能宣称完整真实链路通过。之前失败 `.artifacts/s1-browser-hx1h_hh3`、`.artifacts/s1-browser-vb5jyu54` 保留为真实失败证据。PRD-148 继续保持未完成。
+
+2026-09-20 当前源码分批人类式走查：admin、developer、viewer 覆盖全部 60 个 Workspace 路由，共 180/180 页通过；0 页面失败、HTTP 5xx、请求失败、控制台错误、溢出、裁切、交互重叠或无标签控件。证据目录见 `outputs/prd148-current-evidence-index-final-20260916.json` 的 `current_20260920_human_interaction_partitioned`。一次三进程并行运行在 page-view 写锁竞争下出现 503，单独重跑通过，已按运行器/并发事实保留，未升级为全量失败。
+
+本轮为 page-view 遥测客户端增加 2500ms AbortController 上限，前端单测 2,201/2,201、lint 838 files、生产构建 294 assets 通过；当前源码 SHA256 为 `6713a21a301d9b7cfb526df7dcf5b53e98dfd79a82d869ef08a14c86d17c0392`，资源摘要为 `fc980ad1de3e46ebb7fe326205ee7c102f9c59c091c22dc08c355485f0c91c7c`。真实 S1 `.artifacts/s1-browser-gdpwx6px` 仍在 tenant 截图阶段超时并有 6 个 page-view 请求 pending，因此该修复不构成完整注册到撤权链路或 GA 通过；PRD-148 继续未完成。
+
+同批次当前源码的人类式审计覆盖 admin/developer/viewer 共 180 页，平台运营三视口走查和 WB/API/BB/GR/SEC/PERF/WEB/UI/UCD/COMP/FLOW 全批次均通过；证据为 `.artifacts/product-qa/prd148-human-interaction-chromium-scale-1.json`、`.artifacts/product-qa/prd147-platform-chromium-scale-1.json` 和 `.artifacts/product-qa/20260919-231439/evidence-manifest.json`。这些是隔离 QA 证据，不能替代真实付费、发布会签、回滚、对账、72 小时稳定性或 HEAD/origin 一致性。
+
+严格角色导航审计另有当前源码报告 `.artifacts/product-qa/prd148-role-audit-chromium-scale-1.json`：admin/developer/viewer 共 180 页、47 个声明导航入口，权限回退、请求、布局和交互检查全部通过。该报告不关闭真实商业链路、发布回滚、对账、scheduler-enabled 259200 秒观察或 HEAD/origin 门禁。
+
+2026-09-20 资源摘要重绑定：当前源码快照为 2691 个受测文件，SHA256 `4038c1faeea4ac1ae09c2eb55124ff1a2899302f6e9f541d33bf75f5ee59839a`。生产 surface 校验、`npm run build`（294 assets）和 `npm run lint`（838 files）通过，实际资源摘要为 `f6fee31bb171fee0e319fc134689bd5bd2ac75f80bfd36ebb754a6812b62230c`。证据为 `outputs/prd148-source-current-20260920.json` 与 `outputs/prd148-production-build-current-20260920.json`。
+
+同一源码的新 S1 真实浏览器复验 `.artifacts/s1-browser-z1pzaatf` 已完成注册、创建组织、Provider/订阅、邀请成员、两名员工、两把个人 KEY、Gateway 调用、旧 KEY 失效和员工撤权后的 Gateway 401；在账户引导 `tenant` 页面截图时 `page.screenshot` 12 秒超时，仍有 6 个 page-view 请求未收敛（最长约 110 秒）。该批次是部分成功的真实失败，不能作为完整业务链或 GA 通过。详见 `outputs/prd148-real-s1-rerun-20260920.json`；PRD-148 保持未完成。
+
+2026-09-20 当前 Gateway/GA 复验：GA Launch 集成 14/14，协议门面/流式/默认模型单元 26/26；跨协议员工身份与计量集成在本机超过历史可控时限且没有终态 JUnit，已按未完成记录于 `outputs/prd148-gateway-integration-attempt-20260920.json`。单元结果见 `outputs/prd148-gateway-unit-current-20260920.xml`，不替代跨协议集成、真实 Provider 或商业 GA 证据。当前源码快照 SHA256 `4a929e115f245d46716e932364d68522431939f93c0644916b84fcdd63706b7b`；PRD-148 继续未完成。
+
+2026-09-20 Partner 当前页面边界复验：隔离 Chromium 390x844 审计在无 ChannelMembership 账号下连续两次收到 `403 partner.membership_required`，Partner 页面显示访问已撤销，且无溢出、裁切、交互重叠或应用控制台错误。证据为 `.artifacts/product-qa/20260920-partner-r6/prd148-partner-audit-chromium-scale-1.json`。旧 PRD-087 浏览器验收仍受 0080→0155 迁移基线漂移阻断；该页面边界证据不代表有成员数据投影、付费结算、发布会签、回滚、对账、正式 259200 秒稳定性或 GA 通过，PRD-148 保持未完成。
+
+### 2026-09-20 当前源码验收更新
+
+**最新复核（优先于下方历史批次结论）**：有数据走查发现 Support/Device 业务页仅有外壳，Partner 入口缺少正式跨域切换。Support 已接入正式 Workspace 会话并通过管理员/开发者创建、回复、升级、解决、评价、重开、刷新持久化及查看者写入 403；当前 r6 已验证三角色 handoff 200 及随后预期 `403 partner.membership_required`，但 Device 仍无真实 Deployment 数据，完整交互/全量 QA 未闭合。旧 human-r4 的 `passed=true` 漏算断言，不能作为完整交互通过证据；Support/Device 后端 24/24 也不能替代真实浏览器工作流。见 [合并问题与验证范围](docs/testing/PRD-148-populated-domain-audit-20260920.md) 和 `outputs/prd148-current-evidence-index-final-20260916.json`。PRD-148 继续未完成，正式 72 小时观察未启动。
+
+2026-09-20 Partner 跨域入口已增加显式服务端 handoff：Workspace 账户菜单调用 `/identity/partner-handoffs`，服务端校验同一 GlobalSession、撤销 WorkspaceSession 并清理 Workspace cookies，Partner API 仍拒绝混合凭据。前端 Workspace 授权回归 12/12；真实三角色入口复验、成员投影和商业验收仍未完成。
+
+当前源码快照 `outputs/prd148-source-current-20260920-r3.json` 为 2691 个文件、SHA256 `6713a21a301d9b7cfb526df7dcf5b53e98dfd79a82d869ef08a14c86d17c0392`；生产构建为 294 assets，资源摘要 `fc980ad1de3e46ebb7fe326205ee7c102f9c59c091c22dc08c355485f0c91c7c`。admin/developer/viewer 分批 Workspace 走查 180/180 页通过，page-visit 集成 7/7 通过。
+
+真实 S1 重放 `.artifacts/s1-browser-_dluz246` 已完成注册、创建组织、Provider/订阅、邀请成员、两名员工、个人 KEY、Gateway 调用、轮换、撤权及撤权后 401；在 `1280.onboarding-navigation.tenant` 截图阶段等待字体超时，6 个 page-view 请求仍 pending，故完整真实链路不通过。五域矩阵虽然有 113/113 通过，但起止源码漂移，不能绑定当前源码。真实付费/额度、企业治理/私有 Gateway、六方会签、发布后复核/回滚、财务/隐私/安全/迁移对账、scheduler-enabled 259200 秒稳定性和 HEAD/origin 一致仍未闭合，PRD-148 保持未完成。证据索引为 `outputs/prd148-current-evidence-index-final-20260916.json`。
+2026-09-21 OpenRouter 对标后的三角色人类式复验：owner/admin、developer、viewer/employee 各 60 个 Workspace 路由均通过，0 请求/响应错误、0 控制台错误、0 布局问题、0 交互失败。合并审计记录见 [PRD-148 OpenRouter 人类走查](docs/testing/PRD-148-openrouter-human-audit-20260921.md) 和 `outputs/prd148-openrouter-human-audit-20260921.json`。运行器固定文件名导致后一次角色覆盖原始 JSON，已在证据中明确，不把覆盖文件当作三份独立原始证据。该批仍是隔离 seeded QA；真实注册到付费、企业治理/私有 Gateway、Partner/Device 数据路径、六方会签、发布回滚、财务/隐私/安全/迁移对账、正式 259200 秒稳定性和 HEAD/origin 仍未闭合，PRD-148 保持未完成。
+
+2026-09-21 OpenRouter 对标第五批：管理员默认侧栏已从五组收敛为四个工作域（Workspace、Gateway、Finance、Governance）；任务首页仍是首登落点，员工仍只获得统一 Gateway 地址和个人 MetaHub KEY，所有授权深链保持可用。导航/壳层/产品 QA 契约 122/122、lint 838 files、生产构建 294 assets/276 modules 通过；当前源码快照为 `outputs/prd148-source-current-20260921-openrouter-four-domains.json`，SHA256 `e02776d1aed45aa4d2b588d7de9342de152e99cdaebbe969d2f71e222b8b8ed7`，资源摘要 `23a54e3a40411c44732c5cb6c051cf1857e116c6d99784165bf6363c70011db4`。本批隔离 Chromium 运行器在数据库准备阶段挂起，未形成浏览器结论；真实商业/付费、会签、回滚、对账、正式 259200 秒稳定性和 HEAD/origin 仍未闭合，PRD-148 保持未完成。
+2026-09-21 OpenRouter 对标第九批：管理员接入首页改为首屏只显示一个当前可执行的下一步，完整 Provider → 模型 → 员工 KEY → 首次调用步骤移入“查看全部接入步骤”折叠区；已完成步骤仍可查看配置，阻塞和等待状态仍按后端事实显示。前端全量单测 2221/2221、lint 838 files、生产构建 294 assets/276 modules 通过；当前源码快照为 `outputs/prd148-source-current-20260921-openrouter-next-step.json`，SHA256 `9ed6b8f3292234e47baa21163ca33660a25b894e65df43e5b1d013b1621c8189`，资源摘要 `128e057623923ff796ac68582b3dce416d17e5e67068d633f097034091c72099`。这只完成 OpenRouter 信息架构收敛，不构成真实注册到付费、企业治理/私有 Gateway、Partner/Device 生产数据、六方会签、发布回滚、财务/隐私/安全/迁移对账、正式 259200 秒稳定性或 HEAD/origin 的完成证据；PRD-148 继续未完成。
+
+2026-09-21 OpenRouter 对标第十三批：`en-US` 的角色权限矩阵、Webhook 设置和 Partner 切换失败提示已统一 locale；已知角色 code 即使服务端返回中文名称也使用英文投影，Webhook 的 CEF/JSON、事件白名单、一次性密钥和 RBAC 契约保持不变。定向 permissions/Webhook 25/25、前端全量 2226/2226、lint 838 files、build 294 assets/276 modules 通过；构建先发现旧资源摘要漂移，更新前后端 manifest 后对账通过。当前源码快照为 `outputs/prd148-source-current-20260921-openrouter-role-webhook-i18n-final.json`，SHA256 `fab0506baa4c5e4c9b1c26671b22f62370a4d9549665017de8142134cb75e71f`，资源摘要 `9bda09855a4020b9b40981c305f60818b6354cf9af383120112161348bc0b685`。本批仍缺新的英文高级页面浏览器终态、真实商业链路、会签、回滚、对账、正式 259200 秒稳定性和 HEAD/origin；PRD-148 保持未完成。
+2026-09-22 OpenRouter 对标第十四批：旧 Provider、模型、预算、治理、审计、可观测性、支持和开发者中心渲染器的英文静态文案已在授权内容汇聚层统一投影。投影仅对 `en-US` 的登记静态词汇生效，中文默认、用户/Provider/模型数据、API 字段、错误码、RBAC 和员工统一 Gateway/个人 KEY 合同保持不变。静态投影 2/2、权限/Webhook 定向 27/27、前端全量 2228/2228、lint 841 files、build 295 assets/277 modules 通过；前后端生产资源摘要统一为 `1cceebf6bf335d5d9fab7967b56dbe3019c07b92d7792b5193a89a6e95896bcb`。当前源码快照为 `outputs/prd148-source-current-20260922-openrouter-static-i18n.json`，2696 个文件，SHA256 `f735cd8a766775b8bfba39234cf1d1cbbb9384d8e02259c3b2b91d0441550d75`。随后 admin 英文隔离 Chromium 分区 10/10 通过且 textSample CJK 字符为 0；该证据不替代完整高级页面、真实注册到付费、企业治理/私有 Gateway、Partner/Device 生产数据、六方会签、发布回滚、财务/隐私/安全/迁移对账、正式 259200 秒稳定性和 HEAD/origin，PRD-148 保持未完成。
+
+2026-09-22 OpenRouter 对标第十五批：异步 hydration 路径已统一接入英文静态文案投影；当前源码分区 Chromium 复验为 admin 57/57、developer 57/57、viewer 60/60，全部无请求、响应、控制台、布局、动作或授权问题。developer/viewer 使用 `zh-CN`，中文 textSample 属预期 locale；admin 三批 `en-US` CJK 样本为 0。当前源码证据为 `outputs/prd148-source-current-20260922-openrouter-static-i18n.json`，2696 个文件，SHA256 `32c39158491e80b47ae38ca0cacb93b728b3948509fa51eaedce053b2bee4c1f`；前后端生产资源摘要为 `9112943188353389eec9f1807c3c7de7680e7b30073fb84be01c923e39f83e1e`。前端全量 2228/2228、lint 841 files、build 295 assets/277 modules 和摘要契约通过。分区 seeded 证据不替代统一 180 页运行器、真实注册到付费、企业治理/私有 Gateway、Partner/Device 生产数据、六方会签、发布复核/回滚、财务/隐私/安全/迁移对账、正式 259200 秒稳定性或 HEAD/origin；PRD-148 继续未完成。
+
+2026-09-22 全角色与有数据域复验：平台运营三视口通过；admin/developer/viewer 授权审计按角色分片各 60/60，通过且无请求、响应、控制台、布局或授权问题。Support admin/developer 创建、回复、升级、解决、评价、重开和刷新持久化通过，viewer 写入 403；Device 创建 201 且刷新可见；Partner handoff 200、归属投影 200。正向脚本已将 License 未签发 404、域切换 401 和导航卸载取消单独分类，意外网络/控制台问题为 0。三角色统一授权批次的 300 秒超时仍保留为运行器容量/环境问题。证据目录为 `.artifacts/product-qa/20260922-{platform-operator-current,role-audit-admin,role-audit-developer,role-audit-viewer,populated-domains-current,positive-domains-classified}`。这些是隔离 seeded 证据，真实设备交付、企业治理/私有 Gateway、商业额度、六方会签、回滚、对账、正式 259200 秒稳定性和 HEAD/origin 仍未闭合，PRD-148 保持未完成。
+
+2026-09-22 OpenRouter 对标第十七批：修复 Support 和 Private Gateway 异步 hydration 绕过英文静态文案投影的问题；新增异步面板断言 1/1，前端全量 2229/2229，lint 841 files，build 295 assets/277 modules。当前源码证据为 `outputs/prd148-source-current-20260922-openrouter-static-i18n.json`，SHA256 `b1f008bbbc5b02f28138fb53b669cc2fdcc4e61434a6943b933fafc2b1f5ff5e`；前后端生产资源摘要为 `5f44508358f909fd368442bf806f45d1f1157ff9af68e35ca5536485fd638e99`。构建首次发现旧摘要漂移，已同步 manifest 后通过，按发布资源对账问题保留。该批只证明当前源码和隔离回归，真实注册到付费、企业治理/私有 Gateway、Partner/Device 生产数据、六方会签、发布回滚、财务/隐私/安全/迁移对账、正式 259200 秒稳定性和 HEAD/origin 仍未闭合，PRD-148 保持未完成。
+
+2026-09-22 异步面板三角色复验：Support 与 Private Gateway 按 admin、developer、viewer/employee 各复验 2 页，全部通过，0 请求/响应/控制台/布局/交互/授权问题。证据目录为 `.artifacts/product-qa/20260922-post-i18n-{admin-r2,developer,viewer}`。第一次 route 参数错误在浏览器启动前失败，已保留为测试夹具问题。该批仍是隔离 seeded 证据，不替代真实注册到付费、企业治理/私有 Gateway、生产 Partner/Device、六方会签、回滚、财务/隐私/安全/迁移对账、正式 259200 秒稳定性或 HEAD/origin。
+
+S1 当前真实链路仍未重新启动：历史批次在 `1280.onboarding-navigation.tenant` 截图等待字体阶段失败；脚本要求的迁移基线 SHA256 `062ae8e3a8024030efb712a5120793483203b86d552fcfd86a46e9bf804f4c2a` 在 `.tmp` 中缺失，现存候选不匹配。该项按迁移基线缺失/证据不足保留，不放宽校验，也不把注册到撤权的部分成功写成完整通过。
+
+2026-09-22 OpenRouter 对标第十八批：管理员工作台去掉四个域卡外层的大边框，改为无框内容带，保留四个可操作域卡和全部授权/深链，减少“卡中卡”的视觉重量。前端全量回归 2229/2229、lint 841 files、build 295 assets/277 modules 和前后端摘要契约通过；当前源码快照为 `outputs/prd148-source-current-20260922-openrouter-card-band.json`，生产资源摘要 `72d8c6314c1b3cb2621b336b27762f1220ed1b72902658beddcd7669e36b26b3`。此前 Gateway 402、Quota 402 和流式成本断言均确认是零费率迁移夹具漂移，已改为显式记录当前边界；当前源码绑定为 `outputs/prd148-source-current-20260922-gateway-fixture-reconciled-r4.json`，SHA256 `ceb9be5281b8bcf3419f12cc0714540d4bec1232c029cbb34ab30fff2547394b`。OpenAI 兼容 30 个用例由串行前段、三个分片和三个边界终态聚合，证据索引见 OpenRouter 差距文档；真实商业链路、会签、回滚、对账、正式 259200 秒稳定性和 HEAD/origin 仍未闭合，PRD-148 继续未完成。
+
+2026-09-22 OpenRouter 对标第二十批：预算页英文静态文案、壳层 More controls 和表单占位符完成收口；中文默认界面与组织/环境等用户数据保持不变。前端全量 2230/2230、lint 841 files、build 295 assets/277 modules，资源摘要 `d5accfb3e166e8f4c3f021263a2c25e40a1a5f09db31af87759c7b76e1e0aeee`；当前源码证据 `outputs/prd148-source-current-20260922-openrouter-budget-locale.json`，SHA256 `0b9a8c6f127d9fb2ae7af1aca7e0b9e97a4d2ec255e99bd25cdd0a2505cd27ea`。管理员预算/Webhook/权限/FinOps 分片 4/4 通过，证据 `.artifacts/product-qa/20260922-targeted-admin-role-audit-r4/prd148-role-audit-chromium-scale-1.json`。这仍是隔离 seeded UX 证据；真实商业链路、会签、回滚、对账、正式 259200 秒稳定性和 HEAD/origin 未闭合，PRD-148 保持未完成。
+
+2026-09-22 OpenRouter 对标第二十一批：修复 Webhook 事件选择器滚动区与保存按钮的真实几何重叠。admin/developer 当前分片均为 0 overlap、0 clipping、0 overflow、0 请求/响应/控制台错误；旧失败证据保留，当前源码证据为 `outputs/prd148-source-current-20260922-webhook-layout-fix.json`，SHA256 `6d9d675782de61e5248ed328c31311e4675a710cd9c405fd6272669932e7d40a`，资源摘要 `3a97495ab2596d0b8cdd15b5251a0ebabc93727a794219d4390e8051b5727a22`。该批仍是隔离角色 UX 验收，不代表真实商业或 GA 完成。
+
+2026-09-22 平台运营与组织管理员分域复核：SaaS 平台运营使用独立 Platform session，隔离 Chromium 的控制台迁移路径在 1440x900、1280x720、390x844 三视口通过，迁移状态 2/2 为 200，0 请求失败、0 控制台错误；证据为 `.artifacts/product-qa/20260922-platform-r5/prd147-platform-chromium-scale-1.json`。Workspace 组织管理员、developer 和 viewer/employee 继续使用独立 Workspace session，相关页面和关键交互证据不与平台运营证据合并。证据索引为 `outputs/prd148-human-audit-batch-current-20260922.json`，详细说明见 [平台运营与组织管理员分域复核](docs/testing/PRD-148-human-audit-20260922-platform-separation.md)。用户明确不执行六方会签和 scheduler-enabled 259200 秒观察，两项不计证据；真实商业链路、生产 Partner/Device、发布复核/回滚、对账和 HEAD/origin 仍未闭合，PRD-148 保持未完成。
+2026-09-22 Support/Private Gateway locale 收口：英文静态投影中的混合中文短语已通过 `localizeConsoleStaticHtml` 统一修复。当前源码证据为 `outputs/prd148-source-current-20260922-support-locale-final.json`，SHA256 `d0c39d15adf763d2ceea482cbd2ee11f4b9a4515d9cc8c429ad2c3a25a678cee`；前端全量 2234/2234、lint 841 files、build 295 assets/277 modules，前后端生产资源摘要统一为 `be93bbfd03b244a16c7483c7caf8f428ec9f59733efdea074e87a81004884069`。SaaS 平台运营管理员仍只使用 Platform session，Workspace 组织管理员、Developer 和员工仍只使用 Workspace session；本批没有把两类证据合并，也没有把 locale 源码回归写成新的完整浏览器 GA 证明。真实商业链路、发布复核/回滚、对账和 HEAD/origin 仍未闭合，PRD-148 保持未完成。
+
+2026-09-23 多身份走查：当前源码按四个分片完成 Workspace admin、developer、viewer/employee 各 60 个注册路由，共 180 个角色与路由组合；页面、请求、响应、控制台、溢出、裁切、交互重叠、未结算响应和禁止内容均为 0。SaaS Platform session 的平台运营迁移路径与三视口独立通过；Support 生命周期、viewer 写入拒绝、Device viewer 拒绝与 Partner handoff 也按合同通过。冷启动 Control 服务超过旧 35 秒就绪窗口被归为运行器问题，运行器现在使用可配置、默认 90 秒的服务就绪等待，业务与浏览器断言未放宽。证据为 `outputs/prd148-human-audit-current-20260923.json` 与 [多身份走查记录](docs/testing/PRD-148-human-audit-20260923.md)。Platform 运营证据与 Workspace 组织证据严格分开；这仍是隔离 seeded 回归，PRD-148 未完成。
+
+2026-09-23 客户技术试用交付：可安排明早在本机或另一台已实际验证连通的同网设备上进行受控中文技术试用。试用使用健康的 `default` Workspace 路由；组织管理员配置 Provider、模型和默认路由，员工只接收一个统一 Gateway 地址和一把个人 MetaHub KEY。Private Gateway 页面已把低频“运行与交付”和“维护与治理”操作折叠，核心客户任务三角色交互 24/24 通过；当前源码绑定为 `outputs/prd148-source-current-20260923-private-gateway-layering-r2.json`，2698 文件，SHA256 `d3e2954e9e51746973f0d974889de2f97f69eba364f11b9adcdc81d26e6594b5`。本地数据库的订阅和权益快照均为 0，计量 outbox 仍有 4 条 pending 和 1 条 `platform_metering.owner_invalid`，所以不得承诺付费额度、结算、财务对账、SLA、公网/TLS 或 GA。交付步骤与证据边界见 [客户技术试用交接](docs/testing/PRD-148-customer-trial-handoff-20260923.md)；PRD-148 保持未完成。
+
+2026-09-23 Private Gateway 安装器二次收敛：截图走查确认部署选择、步骤、下载与六项机器要求同时平铺，进一步增加首次配置的扫描负担。现将低频环境规格收进默认闭合的“环境要求”，保留部署、版本、规格、架构、进度和签名下载的直接可见性；安装 API、权限、下载和验证流程未变。定向单测 12/12、lint 844 files、生产构建 296 assets、Control manifest 对账 8/8，以及隔离 Device/Partner Chromium 正向流程均通过；后者还确认环境要求可展开和收起，Device 创建 201、一次性材料和刷新持久化继续有效，布局与意外浏览器错误均为 0。当前源码快照为 `outputs/prd148-source-current-20260923-installer-density-r3.json`，SHA256 `107409ad5ec76a7bb2a9d2c236fbbe53eb2ad08f9f77c350150db9ede28145ee`，资源摘要 `dbf35088bbe1dd22faa4813e89679c03d30ac9629bcb3e5e3417dd533bf4e224`。本批仅是隔离 seeded UI 证据，不改变试用的商业与 GA 边界；PRD-148 保持未完成。
+
+ 2026-09-23 当前源码 S1 浏览器重放：隔离 SQLite 上的注册、组织、邀请成员、Workspace 会话、Provider 渐进配置视图、员工个人 KEY 创建/轮换和员工停用均执行成功，且 15 个已保存页面无溢出或小输入字体问题。随后在 `1280.onboarding-navigation.tenant` 截图捕获阶段超时；页面已完成、字体已加载、没有待处理资源或请求，但完整流程仍为失败，不能把部分成功改写为 S1 通过。没有修改超时或放宽断言，当前按未解决浏览器捕获失败保留。它只使用本地 feedback 契约和 seeded Provider catalog，不是 KIMI、商业额度、付费权益或 GA 证据。索引为 `outputs/prd148-s1-browser-current-20260923.json`；PRD-148 保持未完成。  2026-09-23 S1 双视口复核随后在相同业务与截图阈值下通过：1280x900 和 390x844 共 18 个注册、组织、邀请、Workspace 会话、Provider 视图、员工个人 KEY、停用、onboarding 和 SDK 下载步骤，以及 32 个布局视图，页面错误、资源错误、外部请求、溢出和小输入字体问题均为 0。终态为 `.artifacts/s1-browser-fdoyqs67/acceptance.json`，摘要为 `outputs/prd148-s1-browser-current-20260923-r2.json`，绑定源码 SHA256 `3051b71e8d625881976665897280fe3f1e9ea01af8f91272d978b7f2e99515d6`。历史截图超时仍保留为历史失败；本流仍只使用 seeded Provider catalog 和本地 feedback 契约，不证明 KIMI、付费权益、商业计量或 GA，PRD-148 保持未完成。

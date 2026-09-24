@@ -187,7 +187,8 @@ test("provider UI exposes only generic migration adapter and never competitor pr
   );
   assert.match(html, /value="migration_compatible"/);
   assert.match(html, /迁移兼容（聚合入口）/);
-  assert.match(html, /不是模型厂商或默认上游/);
+  assert.doesNotMatch(html, /value="migration_compatible" selected/);
+  assert.match(html, /<details class="provider-custom-setup">/);
   assert.doesNotMatch(html, /value="openrouter"/i);
   assert.doesNotMatch(html, /value="silicon_?flow"/i);
 });

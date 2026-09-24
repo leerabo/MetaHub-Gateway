@@ -163,15 +163,15 @@ test("policy snapshot client preserves strong ETags and sends publish/rollback c
   assert.doesNotMatch(calls.map((call) => call.url).join(" "), /tenant/);
 
   const publishCall = calls[2];
-  assert.equal(publishCall.options.headers["If-Match"], '"3"');
-  assert.equal(publishCall.options.headers["If-Policy-Candidate-Match"], `"${"b".repeat(64)}"`);
+  assert.equal(new Headers(publishCall.options.headers).get("If-Match"), '"3"');
+  assert.equal(new Headers(publishCall.options.headers).get("If-Policy-Candidate-Match"), `"${"b".repeat(64)}"`);
   assert.equal(publishCall.options.headers["X-Request-ID"], "req_publish_stable");
   assert.deepEqual(JSON.parse(publishCall.options.body), { reason: "发布验证候选" });
   assert.equal(JSON.parse(publishCall.options.body).tenant_id, undefined);
 
   const rollbackCall = calls[3];
-  assert.equal(rollbackCall.options.headers["If-Match"], '"3"');
-  assert.equal(rollbackCall.options.headers["If-Policy-Candidate-Match"], undefined);
+  assert.equal(new Headers(rollbackCall.options.headers).get("If-Match"), '"3"');
+  assert.equal(new Headers(rollbackCall.options.headers).get("If-Policy-Candidate-Match"), null);
   assert.equal(rollbackCall.options.headers["X-Request-ID"], "req_rollback_stable");
   assert.match(rollbackCall.url, /psnap_v2\/rollback$/);
 });

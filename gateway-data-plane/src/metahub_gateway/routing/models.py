@@ -150,6 +150,123 @@ def validate_requested_model_authority(
         connection.close()
 
 
+def resolve_default_model_alias(
+    config: AppConfig,
+    *,
+    tenant_id: str,
+    environment: str,
+    environment_id: str | None,
+    request_kind: str,
+) -> str | None:
+    """为绑定员工 KEY 解析租户当前的默认模型入口。
+
+    外部 OpenAI-compatible 客户端有些会省略 ``model``；员工 KEY 已经代表一个
+    明确的人员身份，此时可以使用租户首个启用且具备对应能力的统一入口。管理员仍可
+    在请求体中显式传入任意已授权入口，普通（未绑定员工）KEY 不会调用此函数。
+    """
+
+    connection = _connect(config)
+    normalized_environment = _normalize_environment(environment)
+    try:
+        resolved_environment_id = _resolve_environment_id(
+            connection, tenant_id, normalized_environment, environment_id
+        )
+        rows = connection.execute(
+            """
+            SELECT a.alias, a.created_at, m.capabilities
+            FROM model_aliases a
+            JOIN models m
+              ON m.tenant_id=a.tenant_id AND m.model_id=a.default_model_id
+            JOIN providers p
+              ON p.tenant_id=m.tenant_id AND p.provider_id=m.provider_id
+            WHERE a.tenant_id=? AND a.environment=?
+              AND (a.environment_id=? OR a.environment_id IS NULL)
+              AND a.status='active' AND m.status='active' AND p.status='active'
+            ORDER BY a.created_at ASC, a.alias ASC
+            """,
+            (tenant_id, normalized_environment, resolved_environment_id),
+        ).fetchall()
+        capability_key = "embeddings" if request_kind == "embeddings" else "chat"
+        candidates: list[str] = []
+        for row in rows:
+            raw_capabilities = row["capabilities"]
+            if isinstance(raw_capabilities, dict):
+                capabilities = raw_capabilities
+            else:
+                try:
+                    capabilities = json.loads(str(raw_capabilities or "{}"))
+                except (TypeError, ValueError):
+                    capabilities = {}
+            if isinstance(capabilities, dict) and capabilities.get(capability_key) is True:
+                candidates.append(str(row["alias"]))
+        # Prefer an explicitly conventional default when present; otherwise creation order
+        # remains deterministic and requires no new schema field.
+        for preferred in ("default", "company-default"):
+            if preferred in candidates:
+                return preferred
+        return candidates[0] if candidates else None
+    finally:
+        connection.close()
+
+
+def list_public_model_aliases(
+    config: AppConfig,
+    *,
+    tenant_id: str,
+    environment: str,
+    environment_id: str | None,
+) -> tuple[dict[str, object], ...]:
+    """列出员工 KEY 可发现的 OpenAI-compatible 模型入口。
+
+    这是 ``GET /v1/models`` 的只读投影：只返回当前租户、当前环境中已启用且绑定到
+    active Provider 的别名，不返回 Provider 地址、密钥或内部模型 ID。这样 Cursor、
+    Codex 兼容模式等需要先探测模型列表的客户端也只需网关地址和个人 KEY。
+    """
+
+    connection = _connect(config)
+    normalized_environment = _normalize_environment(environment)
+    try:
+        resolved_environment_id = _resolve_environment_id(
+            connection, tenant_id, normalized_environment, environment_id
+        )
+        rows = connection.execute(
+            """
+            SELECT DISTINCT a.alias, a.created_at
+            FROM model_aliases a
+            JOIN models m
+              ON m.tenant_id=a.tenant_id AND m.model_id=a.default_model_id
+            JOIN providers p
+              ON p.tenant_id=m.tenant_id AND p.provider_id=m.provider_id
+            WHERE a.tenant_id=? AND a.environment=?
+              AND (a.environment_id=? OR a.environment_id IS NULL)
+              AND a.status='active' AND m.status='active' AND p.status='active'
+            ORDER BY a.created_at ASC, a.alias ASC
+            """,
+            (tenant_id, normalized_environment, resolved_environment_id),
+        ).fetchall()
+        result: list[dict[str, object]] = []
+        for row in rows:
+            alias = str(row["alias"] or "").strip()
+            if not alias:
+                continue
+            # OpenAI 的 created 字段是 Unix 秒；无效时间只影响展示，固定为 0。
+            try:
+                parsed_created = datetime.fromisoformat(
+                    str(row["created_at"]).replace("Z", "+00:00")
+                )
+                if parsed_created.tzinfo is None:
+                    parsed_created = parsed_created.replace(tzinfo=UTC)
+                created = int(parsed_created.timestamp())
+            except (TypeError, ValueError, OverflowError):
+                created = 0
+            result.append(
+                {"id": alias, "object": "model", "created": created, "owned_by": "metahub"}
+            )
+        return tuple(result)
+    finally:
+        connection.close()
+
+
 def resolve_policy_target_route(
     config: AppConfig,
     *,

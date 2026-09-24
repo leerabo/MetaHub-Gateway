@@ -33,6 +33,7 @@ from .request_id import REQUEST_ID_HEADER, TRACE_ID_HEADER, resolve_request_id, 
 
 logger = logging.getLogger("metahub.runtime")
 _CLEAR_IDENTITY_COOKIES_ON_ERROR_STATE = "metahub_clear_identity_cookies_on_error"
+_CLEAR_IDENTITY_COOKIES_ON_AUTH_ERROR_STATE = "metahub_clear_identity_cookies_on_auth_error"
 _CLEAR_WORKSPACE_COOKIES_ON_ERROR_STATE = "metahub_clear_workspace_cookies_on_error"
 
 
@@ -40,6 +41,12 @@ def clear_identity_cookies_on_error(request: Request) -> None:
     """Ensure an authorized logout attempt clears browser credentials on every outcome."""
 
     setattr(request.state, _CLEAR_IDENTITY_COOKIES_ON_ERROR_STATE, True)
+
+
+def clear_identity_cookies_on_auth_error(request: Request) -> None:
+    """Clear identity credentials only when the authenticated request is rejected as 401."""
+
+    setattr(request.state, _CLEAR_IDENTITY_COOKIES_ON_AUTH_ERROR_STATE, True)
 
 
 def clear_workspace_cookies_on_error(request: Request) -> None:
@@ -839,7 +846,14 @@ def _error_response(request: Request, error: ApiError) -> JSONResponse:
         headers={REQUEST_ID_HEADER: request_id, TRACE_ID_HEADER: trace_id},
         background=background_tasks,
     )
-    if getattr(request.state, _CLEAR_IDENTITY_COOKIES_ON_ERROR_STATE, False) is True:
+    if (
+        getattr(request.state, _CLEAR_IDENTITY_COOKIES_ON_ERROR_STATE, False) is True
+        or (
+            error.http_status == 401
+            and getattr(request.state, _CLEAR_IDENTITY_COOKIES_ON_AUTH_ERROR_STATE, False)
+            is True
+        )
+    ):
         error_response.delete_cookie(
             "__Host-metahub-global-session",
             path="/",

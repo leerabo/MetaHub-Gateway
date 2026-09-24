@@ -12,8 +12,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request, Response
-from metahub_shared.db.connection import database_request_scope, release_idle_request_connections
+from fastapi import APIRouter, Depends, Header, Request, Response
+from metahub_shared.db.connection import (
+    database_connection_pool_scope,
+    database_request_scope,
+    release_idle_request_connections,
+)
 from metahub_shared.feedback import (
     FEEDBACK_SUMMARY_ENDPOINT_DEADLINE_SECONDS,
     MAX_FEEDBACK_BODY_BYTES,
@@ -59,12 +63,23 @@ class _SummaryQuery:
     offset: int
 
 
+_FEEDBACK_WRITE_PERMISSION = require_workspace_or_legacy_permissions("feedback.use")
+
+
+def _require_feedback_writer(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    with database_connection_pool_scope():
+        return _FEEDBACK_WRITE_PERMISSION(request, authorization)
+
+
 @router.post("", response_model=FeedbackMutationResponse, status_code=201)
 async def post_feedback(
     request: Request,
     response: Response,
     context: Annotated[
-        AuthContext, Depends(require_workspace_or_legacy_permissions("feedback.use"))
+        AuthContext, Depends(_require_feedback_writer)
     ],
 ) -> FeedbackMutationResponse:
     """由 admin/developer 对当前租户的一次成功模型调用提交不可变反馈。
@@ -83,14 +98,18 @@ async def post_feedback(
         content_type=request.headers.get("content-type"),
         content_length=request.headers.get("content-length"),
     )
-    result = await run_in_threadpool(
-        create_session_feedback,
-        request.app.state.config,
-        context,
-        operation_request_id=operation_request_id,
-        trace_id=_trace_id(request),
-        intent=intent,
-    )
+    def create_feedback() -> FeedbackMutationResponse:
+        # The worker owns every close, including cancellation and lock-recovery paths.
+        with database_connection_pool_scope():
+            return create_session_feedback(
+                request.app.state.config,
+                context,
+                operation_request_id=operation_request_id,
+                trace_id=_trace_id(request),
+                intent=intent,
+            )
+
+    result = await run_in_threadpool(create_feedback)
     # 幂等恢复不创建第二条事实，HTTP 200 显式区别于首次提交的 201。
     response.status_code = 200 if result.idempotent_replay else 201
     response.headers["Cache-Control"] = "no-store, private"

@@ -18,6 +18,7 @@ import {
   testWebhook,
 } from "../../src/lib/webhooks.js";
 import { PERMISSIONS, withPermissionSnapshot } from "./permissionTestContext.mjs";
+import { createI18n } from "../../src/i18n/messages.js";
 
 const mainSource = readFileSync(new URL("../../src/app/main.js", import.meta.url), "utf8");
 const styleSource = readFileSync(new URL("../../src/styles/main.css", import.meta.url), "utf8");
@@ -260,8 +261,26 @@ test("renderWebhookPanel shows endpoint records and one-time secret only when cr
   assert.match(html, /data-webhook-refresh-details="wh_1"/);
   assert.match(html, /JSON/);
   assert.match(html, /安全事件 60 \/ 分钟/);
+  assert.match(html, /class="webhook-event-settings"/);
+  assert.match(html, /4 个默认事件已选/);
   assert.doesNotMatch(html, /encrypted_secret/);
   assert.doesNotMatch(html, /payload_json|idempotency_key/);
+});
+
+test("renderWebhookPanel English projection does not mix Chinese form chrome", () => {
+  const html = renderWebhookPanel(
+    { state: "ok", webhooks: webhookPayload, selectedEndpointId: "wh_1", deliveryFilters: {}, deliveryDetails: { deliveries: [] } },
+    withPermissionSnapshot({ user: { role: "developer" } }, [PERMISSIONS.WEBHOOK_MANAGE]),
+    createI18n("en-US"),
+  );
+  assert.match(html, /Webhook settings/);
+  assert.match(html, /Subscribed events/);
+  assert.match(html, /Send test/);
+  assert.doesNotMatch(html, /Webhook 设置|管理企业回调|新增端点|订阅事件|发送测试|签名密钥|安全事件/u);
+});
+
+test("webhook event options use whole rows before the action row", () => {
+  assert.match(styleSource, /\.webhook-event-options\s*\{[\s\S]*?max-height:\s*288px;[\s\S]*?align-content:\s*start;/u);
 });
 
 test("PAGE-113 CEF mode immediately narrows subscriptions and JSON does not add them back", () => {

@@ -6,12 +6,10 @@
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from urllib.parse import urlsplit
 from uuid import uuid4
 
 from metahub_shared.db.connection import connect_database
@@ -29,6 +27,7 @@ from metahub_control.dashboard.role_service import role_dashboard_event_is_curre
 from metahub_control.permissions.service import load_permission_matrix_from_connection
 from metahub_control.workspace_access.service import WORKSPACE_EXTENSION_PERMISSION_CODES
 
+from .gateway_url import trusted_gateway_base_url as _trusted_gateway_base_url
 from .models import (
     ConsoleEventRequest,
     ConsoleEventResponse,
@@ -742,7 +741,7 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "数据管理",
         "租户治理",
         "tenant-data-lifecycle",
-        ("tenant_data.read",),
+        ("tenant.settings.read",),
         "查看当前租户的数据导出、留存和注销生命周期。",
         "导出或注销操作会由后端再次校验实时权限、租户归属和版本。",
         124,
@@ -1227,45 +1226,6 @@ def _safe_event_payload(
             raise ApiError("console.event_invalid")
         safe[normalized_key] = value
     return safe
-
-
-def _trusted_gateway_base_url(config: AppConfig) -> tuple[str | None, str]:
-    """校验并规范化导航响应中的公开 Gateway `/v1` 地址。
-
-    非开发环境拒绝 loopback；所有环境都拒绝凭据、query、fragment、非 HTTP(S) 和额外路径。
-    """
-
-    raw_url = config.gateway_api_base_url.strip()
-    try:
-        parsed = urlsplit(raw_url)
-        hostname = (parsed.hostname or "").rstrip(".").lower()
-        # 读取 port 会触发非法端口校验，避免把不可解析配置下发给迁移示例。
-        _ = parsed.port
-    except ValueError:
-        return None, "configuration_required"
-    if (
-        not raw_url
-        or parsed.scheme.lower() not in {"http", "https"}
-        or not hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.query
-        or parsed.fragment
-        or parsed.path not in {"", "/", "/v1", "/v1/"}
-    ):
-        # URL 含凭据、附加路径或可变参数时不可信，必须阻断复制而不是猜测修正。
-        return None, "configuration_required"
-    is_loopback = hostname == "localhost"
-    try:
-        is_loopback = is_loopback or ipaddress.ip_address(hostname).is_loopback
-    # DNS 主机名无法按 IP 解析是正常路径，不应误判为配置失败。
-    except ValueError:
-        # 普通 DNS 主机名不是 IP，继续按非 loopback 地址处理。
-        pass
-    if config.environment != "dev" and is_loopback:
-        # test/prod 不能把本机地址作为企业迁移指南的权威 Gateway 地址。
-        return None, "configuration_required"
-    return f"{parsed.scheme.lower()}://{parsed.netloc}/v1", "ready"
 
 
 def _ensure_preference(

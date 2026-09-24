@@ -246,7 +246,7 @@ def _insert_actor(connection, marker: str, role: str) -> PlatformContext:
 def baseline_runtime(tmp_path_factory: pytest.TempPathFactory):
     database = tmp_path_factory.mktemp("prd147-api-baseline") / "prd147.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0139"
+    assert apply_migrations(database_url).applied[-1] == "0156"
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", secrets.token_urlsafe(32))
         seed = apply_seed_data(database_url)

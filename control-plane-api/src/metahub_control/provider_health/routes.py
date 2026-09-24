@@ -12,8 +12,11 @@ from metahub_control.auth import (
     require_workspace_or_legacy_permissions,
 )
 
-from .models import ProbeProviderRequest, ProviderHealthListResponse, ProviderProbeResponse
-from .service import list_provider_health, probe_provider
+from .models import (
+    ProbeProviderRequest, ProviderHealthListResponse, ProviderModelDiscoveryResponse,
+    ProviderProbeResponse,
+)
+from .service import discover_provider_models, list_provider_health, probe_provider
 
 router = APIRouter(tags=["provider-health"])
 
@@ -69,6 +72,31 @@ async def post_provider_probe(
         context,
         provider_id,
         trigger_type="manual",
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+
+
+@router.post("/providers/{provider_id}/discover-models", response_model=ProviderModelDiscoveryResponse)
+async def post_provider_model_discovery(
+    provider_id: str,
+    request: Request,
+    response: Response,
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("provider.health.probe")),
+    ],
+    payload: Annotated[ProbeProviderRequest | None, Body()] = None,
+) -> ProviderModelDiscoveryResponse:
+    """Read the saved Provider's model IDs with the same authority as a manual probe."""
+
+    del payload
+    response.headers["Cache-Control"] = "no-store"
+    return await run_in_threadpool(
+        discover_provider_models,
+        request.app.state.config,
+        context,
+        provider_id,
         request_id=_request_id(request),
         trace_id=_trace_id(request),
     )

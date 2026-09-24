@@ -18,6 +18,11 @@ const INCIDENT_ID = `inc_${"1".repeat(32)}`;
 const UPDATE_ID = `iup_${"2".repeat(32)}`;
 const WORKSPACE_ID = `wsp_${"3".repeat(32)}`;
 
+test("public status timestamps render in Chinese without incompatible Intl options", async () => {
+  const { formatTime } = await import("../../src/features/public-status/main.js");
+  assert.match(formatTime(NOW), /2026/u);
+});
+
 test("public status client rejects extensions and omits credentials", async () => {
   const originalFetch = globalThis.fetch;
   const calls = [];

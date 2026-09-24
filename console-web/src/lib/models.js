@@ -1,5 +1,6 @@
 import { AuthApiError } from "./auth.js";
 import { authenticatedResourceFetch } from "./resourceAuthentication.js";
+import { withResourceMutationDeadline } from "./resourceMutationDeadline.js";
 
 /**
  * 查询当前租户的模型目录。
@@ -49,11 +50,13 @@ export async function createModel({
   description,
 }) {
   // 路由和模型判断决定实际上游调用，必须保持可解释和可追踪。
-  return modelsRequest(`${controlApiUrl}/models`, {
+  const requestId = `console_models_${Date.now()}`;
+  return withResourceMutationDeadline((requestSignal) => modelsRequest(`${controlApiUrl}/models`, {
     method: "POST",
-    authentication, token, signal,
+    authentication, token, signal: requestSignal,
     headers: {
       "Content-Type": "application/json",
+      "X-Request-ID": requestId,
     },
     body: JSON.stringify({
       internal_model_id: internalModelId,
@@ -68,7 +71,7 @@ export async function createModel({
       price_schema_version: priceSchemaVersion,
       description,
     }),
-  });
+  }), signal, { requestId });
 }
 
 /**

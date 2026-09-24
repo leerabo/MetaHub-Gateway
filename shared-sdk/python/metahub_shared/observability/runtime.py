@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from metahub_shared.db import connect_database
+from metahub_shared.db.connection import database_connection_pool_scope
 from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.config import AppConfig
 
@@ -200,7 +201,11 @@ class TelemetryBuffer:
         if not facts and pending_dropped == 0:
             return False
         try:
-            self._persist_batch(facts, pending_dropped)
+            # Reuse a parsed connection across flushes. On the full SQLite schema,
+            # opening a cold connection for every telemetry batch starves business
+            # writers and repeatedly allocates megabytes of schema state.
+            with database_connection_pool_scope():
+                self._persist_batch(facts, pending_dropped)
         except (sqlite3.Error, DbError, TypeError, ValueError):
             with self._lock:
                 self._backend_failures += 1

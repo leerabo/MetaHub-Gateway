@@ -22,10 +22,10 @@ export function renderPrivateGateways(state, authContext, consoleShellState) {
   return `
     <div class="private-gateway-workspace" data-private-gateway-root>
       <header class="private-gateway-toolbar">
-        <div><p class="eyebrow">Customer-owned runtime</p><h3 id="private-gateways-title">私有 Gateway</h3><p>设备身份、交付验证、脱敏支持与运行状态</p></div>
+        <div><p class="eyebrow">客户自有运行时</p><h3 id="private-gateways-title">私有 Gateway</h3><p>设备身份、交付验证、脱敏支持与运行状态</p></div>
         <div class="private-gateway-commands">
           <button type="button" class="private-gateway-icon" data-private-gateway-refresh title="刷新" aria-label="刷新私有 Gateway"${state.busy ? " disabled" : ""}>&#8635;</button>
-          ${owner.canManage ? `<button type="button" class="primary" data-private-gateway-open${state.busy ? " disabled" : ""}>创建 Deployment</button>` : ""}
+          ${owner.canManage ? `<button type="button" class="primary" data-private-gateway-open${state.busy ? " disabled" : ""}>创建部署</button>` : ""}
         </div>
       </header>
       ${renderFeedback(state.feedback)}
@@ -54,19 +54,19 @@ function renderInstallerWorkbench(state, owner) {
   );
   if (!catalog.releases.length) {
     return `<section class="private-gateway-installer" aria-labelledby="private-gateway-installer-title">
-      <header><div><p class="eyebrow">Installer</p><h4 id="private-gateway-installer-title">安装与接入</h4></div><span class="private-gateway-state-status tone-not_observed">暂无可用版本</span></header>
+      <header><div><p class="eyebrow">安装器</p><h4 id="private-gateway-installer-title">安装与接入</h4></div><span class="private-gateway-state-status tone-not_observed">暂无可用版本</span></header>
     </section>`;
   }
   if (!deployment || !release || !profile) {
     return `<section class="private-gateway-installer" aria-labelledby="private-gateway-installer-title">
-      <header><div><p class="eyebrow">Installer</p><h4 id="private-gateway-installer-title">安装与接入</h4></div><span class="private-gateway-state-status tone-pending">等待 Deployment</span></header>
-      <p class="private-gateway-installer-empty">创建 Deployment 后即可选择安装环境。</p>
+      <header><div><p class="eyebrow">安装器</p><h4 id="private-gateway-installer-title">安装与接入</h4></div><span class="private-gateway-state-status tone-pending">等待部署</span></header>
+      <p class="private-gateway-installer-empty">创建部署后即可选择安装环境。</p>
     </section>`;
   }
   const workflow = installerWorkflow(state, deployment, release, profile);
   return `<section class="private-gateway-installer" aria-labelledby="private-gateway-installer-title">
     <header>
-      <div><p class="eyebrow">Installer</p><h4 id="private-gateway-installer-title">安装与接入</h4><span>${escapeHtml(deployment.display_name)}</span></div>
+      <div><p class="eyebrow">安装器</p><h4 id="private-gateway-installer-title">安装与接入</h4><span>${escapeHtml(deployment.display_name)}</span></div>
       <span class="private-gateway-state-status tone-${workflow.tone}">${workflow.label}</span>
     </header>
     ${renderInstallerEnvironment(state, release, profile, owner)}
@@ -86,19 +86,22 @@ function renderInstallerEnvironment(state, release, profile, owner) {
   );
   const disabled = state.busy || !owner.canManageInstallations;
   return `<form class="private-gateway-installer-environment" data-private-gateway-installer-environment>
-    <label><span>Deployment</span><select name="deployment_id"${disabled ? " disabled" : ""}>${activeDeployments.map((item) => `<option value="${escapeAttribute(item.deployment_id)}"${item.deployment_id === selection.deploymentId ? " selected" : ""}>${escapeHtml(item.display_name)} · ${escapeHtml(item.region_code)}</option>`).join("")}</select></label>
+    <label><span>部署</span><select name="deployment_id"${disabled ? " disabled" : ""}>${activeDeployments.map((item) => `<option value="${escapeAttribute(item.deployment_id)}"${item.deployment_id === selection.deploymentId ? " selected" : ""}>${escapeHtml(item.display_name)} · ${escapeHtml(item.region_code)}</option>`).join("")}</select></label>
     <label><span>版本</span><select name="release_id"${disabled ? " disabled" : ""}>${state.installerCatalog.releases.map((item) => `<option value="${escapeAttribute(item.manifest.release_id)}"${item.manifest.release_id === selection.releaseId ? " selected" : ""}>v${escapeHtml(item.manifest.version)} · ${installerChannelLabel(item.manifest.channel)}</option>`).join("")}</select></label>
     <label><span>规格</span><select name="profile_id"${disabled ? " disabled" : ""}>${release.manifest.profiles.map((item) => `<option value="${escapeAttribute(item.install_profile_id)}"${item.install_profile_id === selection.profileId ? " selected" : ""}>${escapeHtml(item.display_name)}</option>`).join("")}</select></label>
     <label><span>架构</span><select name="architecture"${disabled ? " disabled" : ""}>${release.manifest.supported_arch.map((item) => `<option value="${escapeAttribute(item)}"${item === selection.architecture ? " selected" : ""}>${escapeHtml(item)}</option>`).join("")}</select></label>
+  </form>
+  <details class="private-gateway-installer-requirements" data-private-gateway-installer-requirements>
+    <summary><span>环境要求</span><small>CPU、内存、磁盘、Runtime、端口与代理 / CA</small></summary>
     <dl>
-      ${fact("CPU", `${integer(profile.cpu_cores)} cores`)}
+      ${fact("CPU", `${integer(profile.cpu_cores)} 核`)}
       ${fact("内存", `${integer(Math.round(profile.memory_mib / 1024))} GiB`)}
       ${fact("磁盘", `${integer(Math.round(profile.disk_mib / 1024))} GiB`)}
       ${fact("Runtime", `${profile.runtime} ${profile.runtime_min_version}+`)}
       ${fact("端口", profile.required_ports.join(" / "))}
       ${fact("代理 / CA", `${profile.proxy_modes.map(proxyLabel).join(" / ")} · ${caLabel(profile.ca_mode)}`)}
     </dl>
-  </form>`;
+  </details>`;
 }
 
 function renderInstallerSteps(workflow) {
@@ -217,7 +220,10 @@ function installerStepTone(workflow, code) {
 function renderList(state, owner) {
   if (state.state === "loading") return '<div class="private-gateway-empty" role="status">正在读取私有 Gateway 状态</div>';
   if (state.state === "error") return renderError(state.error);
-  if (!state.deployments.length) return '<div class="private-gateway-empty">尚未创建私有 Gateway Deployment</div>';
+  if (!state.deployments.length) return `<div class="private-gateway-empty">
+    <strong>尚未创建私有 Gateway 部署</strong>
+    <p>使用右上角“创建部署”，再选择安装环境、运行架构和签名安装介质。</p>
+  </div>`;
   return `<div class="private-gateway-list">${state.deployments.map((item) => renderDeployment(item, state, owner)).join("")}</div>`;
 }
 
@@ -238,25 +244,35 @@ function renderDeployment(item, state, owner) {
         ${fact("证书状态", certificate ? certificateStatusLabel(certificate.status) : "未签发")}
         ${fact("吊销水位", integer(item.revocation_generation))}
       </div>
-      ${renderLicense(item, state, owner)}
-      ${renderOfflineExchange(item, state, owner)}
-      ${renderBackupRecovery(item, state, owner)}
-      ${renderHealthDiagnostics(item, state, owner)}
-      ${renderDesiredState(item, state.desiredStates?.[item.deployment_id] ?? null, state, owner)}
-      ${renderDeploymentAppearance(item, state, owner)}
-      ${renderUpgrade(item, state, owner)}
-      ${renderTelemetry(item, state.telemetryStates?.[item.deployment_id] ?? null, state, owner)}
-      ${renderSecrets(item, state, owner)}
-      ${renderValidation(item, state, owner)}
-      ${renderSupportBundle(item, state, owner)}
-      ${renderTimeline(item.recent_events)}
-      ${owner.canManage && active ? `
-        <div class="private-gateway-actions">
-          <label><span>吊销原因</span><select data-private-gateway-reason="${escapeAttribute(item.deployment_id)}"${state.busy ? " disabled" : ""}>
-            <option value="owner_requested">主动停用</option><option value="device_lost">设备遗失</option><option value="security_incident">安全事件</option><option value="deployment_retired">Deployment 退役</option>
-          </select></label>
-          <button type="button" class="danger" data-private-gateway-revoke="${escapeAttribute(item.deployment_id)}"${state.busy ? " disabled" : ""}>${state.revokingId === item.deployment_id ? "正在吊销" : "吊销"}</button>
-        </div>` : ""}
+      <details class="private-gateway-operation-group" data-private-gateway-operation-group="runtime">
+        <summary><span>运行与交付</span><small>健康、期望状态、交付验证与最近事件</small></summary>
+        <div class="private-gateway-operation-body">
+          ${renderHealthDiagnostics(item, state, owner)}
+          ${renderDesiredState(item, state.desiredStates?.[item.deployment_id] ?? null, state, owner)}
+          ${renderValidation(item, state, owner)}
+          ${renderTimeline(item.recent_events)}
+        </div>
+      </details>
+      <details class="private-gateway-operation-group" data-private-gateway-operation-group="maintenance">
+        <summary><span>维护与治理</span><small>授权、备份、升级、遥测、本地凭据与支持</small></summary>
+        <div class="private-gateway-operation-body">
+          ${renderLicense(item, state, owner)}
+          ${renderOfflineExchange(item, state, owner)}
+          ${renderBackupRecovery(item, state, owner)}
+          ${renderDeploymentAppearance(item, state, owner)}
+          ${renderUpgrade(item, state, owner)}
+          ${renderTelemetry(item, state.telemetryStates?.[item.deployment_id] ?? null, state, owner)}
+          ${renderSecrets(item, state, owner)}
+          ${renderSupportBundle(item, state, owner)}
+          ${owner.canManage && active ? `
+            <div class="private-gateway-actions">
+              <label><span>吊销原因</span><select data-private-gateway-reason="${escapeAttribute(item.deployment_id)}"${state.busy ? " disabled" : ""}>
+                <option value="owner_requested">主动停用</option><option value="device_lost">设备遗失</option><option value="security_incident">安全事件</option><option value="deployment_retired">Deployment 退役</option>
+              </select></label>
+              <button type="button" class="danger" data-private-gateway-revoke="${escapeAttribute(item.deployment_id)}"${state.busy ? " disabled" : ""}>${state.revokingId === item.deployment_id ? "正在吊销" : "吊销"}</button>
+            </div>` : ""}
+        </div>
+      </details>
     </article>`;
 }
 

@@ -7,10 +7,9 @@ export function renderAccountPreferences(state) {
       aria-busy="${busy}">
       <div class="identity-section-heading">
         <div>
-          <p>全局账号偏好</p>
           <h2 id="identity-account-preference-title">语言与显示</h2>
         </div>
-        ${preference ? `<span>Revision ${Number(preference.revision)}</span>` : ""}
+        <button class="identity-quiet-command" type="button" data-identity-action="reload-account-section" ${busy ? "disabled" : ""}>重新加载</button>
       </div>
       ${stateBlock(status, state?.error)}
       ${preference ? `
@@ -30,7 +29,12 @@ export function renderAccountPreferences(state) {
         <p class="identity-account-preference-note">
           ${preference.confirmation_state === "confirmed" ? "偏好已确认。" : "请确认当前语言偏好。"}
         </p>
-      ` : status === "idle" ? '<p class="identity-empty">账号偏好尚未加载。</p>' : ""}
+      ` : status === "idle" ? '<p class="identity-empty" role="status">正在读取账号偏好...</p>' : ""}
+      <section class="identity-account-lifecycle" aria-labelledby="identity-account-lifecycle-title">
+        <h3 id="identity-account-lifecycle-title">账号生命周期</h3>
+        <p>退出登录会结束当前设备会话；永久注销账号会同时处理组织、账单和审计数据，当前试用环境暂不提供自助注销入口。</p>
+        <small>如需永久注销，请联系平台管理员或客服。</small>
+      </section>
     </section>
   `;
 }

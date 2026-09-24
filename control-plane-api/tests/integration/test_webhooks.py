@@ -192,6 +192,10 @@ async def test_webhook_create_list_test_and_signature(
     with RunningWebhookServer() as receiver:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://control") as client:
             developer_token = await login(client, "developer@example.com", DEVELOPER_PASSWORD)
+            # File-backed application configuration does not populate os.environ.
+            assert app.state.config.provider_key_encryption_secret
+            monkeypatch.delenv("METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET")
+            monkeypatch.delenv("METAHUB_AUTH_TOKEN_SECRET")
             created = await client.post(
                 "/webhooks",
                 headers={
@@ -1119,6 +1123,9 @@ async def test_shared_runtime_uses_rotated_secret_and_current_version(
     with RunningWebhookServer() as receiver:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://control") as client:
             token = await login(client, "developer@example.com", DEVELOPER_PASSWORD)
+            assert app.state.config.provider_key_encryption_secret
+            monkeypatch.delenv("METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET")
+            monkeypatch.delenv("METAHUB_AUTH_TOKEN_SECRET")
             created = await client.post(
                 "/webhooks",
                 headers={"Authorization": f"Bearer {token}"},
@@ -1128,6 +1135,7 @@ async def test_shared_runtime_uses_rotated_secret_and_current_version(
                     "event_types": ["gateway.request_failed"],
                 },
             )
+            assert created.status_code == 200, created.json().get("code")
             endpoint_id = created.json()["webhook"]["webhook_endpoint_id"]
             old_secret = created.json()["signing_secret"]
             rotated = await client.post(

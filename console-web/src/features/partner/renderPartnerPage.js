@@ -14,7 +14,7 @@ function shell(state) {
       <div class="partner-topbar-actions">
         ${partner ? `<span><strong>${escapeHtml(partner.display_name)}</strong><small>${escapeHtml(roleLabel(response.role_code))}</small></span>` : ""}
         <button type="button" data-partner-action="refresh" title="Refresh" aria-label="Refresh" ${state.phase === "loading" ? "disabled" : ""}>&#8635;</button>
-        <a href="/identity.html">Account security</a>
+        <a href="/identity.html?view=account#security">Account security</a>
       </div>
     </header>
     <div class="partner-layout">
@@ -69,7 +69,11 @@ function content(state) {
         <div><p>Owner-qualified projection</p><h2>Workspace directory</h2></div>
         <span>${number(response.items.length)} rows</span>
       </div>
-      ${response.items.length ? workspaceTable(response.items, finance) : '<div class="partner-empty"><strong>No attributed workspaces</strong></div>'}
+      ${response.items.length ? workspaceTable(response.items, finance) : `<div class="partner-empty" role="status">
+        <strong>No attributed workspaces</strong>
+        <span>Complete the current Partner membership assignment, then refresh this projection.</span>
+        <button type="button" data-partner-action="refresh" ${state.phase === "loading" ? "disabled" : ""}>Refresh projection</button>
+      </div>`}
       <div class="partner-pagination">
         <span>Updated from the current membership</span>
         <div>
@@ -114,7 +118,7 @@ function feedback(state) {
 }
 
 function statePanel(title, detail, action = false) {
-  return `<section class="partner-state"><span aria-hidden="true">${action ? "!" : "..."}</span><div><h1>${escapeHtml(title)}</h1><p>${escapeHtml(detail)}</p>${action ? '<a href="/identity.html">Open account security</a>' : ""}</div></section>`;
+  return `<section class="partner-state"><span aria-hidden="true">${action ? "!" : "..."}</span><div><h1>${escapeHtml(title)}</h1><p>${escapeHtml(detail)}</p>${action ? '<a href="/identity.html?view=account#security">Open account security</a>' : ""}</div></section>`;
 }
 
 function metric(name, value, detail) {

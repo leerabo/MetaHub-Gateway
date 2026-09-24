@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { legacyConsoleTarget } from "../../src/features/public-home/entryRoute.js";
 import { icon } from "../../src/features/public-home/icons.js";
+import { createGatewayScene } from "../../src/features/public-home/gatewayScene.js";
 import { renderIdentityLoginPage, renderIdentitySecurityPage, setIdentityPublicBranding } from "../../src/features/identity/renderIdentityPage.js";
 
 test("public anchors stay public and historical console links retain their complete location", () => {
@@ -19,7 +20,7 @@ test("homepage exposes eight factual capabilities and working entry links withou
   assert.equal([...html.matchAll(/<article>/gu)].length, 8);
   assert.equal([...html.matchAll(/<h1\b/gu)].length, 1);
   assert.match(html, /<h1 id="home-title">MetaHub<\/h1>/u);
-  for (const text of ["BYOK", "统一 KEY", "策略路由", "数据防护", "精细化财务", "边缘 AGENT", "团队权限", "可观测性"]) assert.ok(html.includes(text));
+  for (const text of ["BYOK", "统一 KEY", "路由分发", "敏感数据防护", "精细化财务", "边缘 Agent", "团队与身份", "调用洞察"]) assert.ok(html.includes(text));
   assert.match(html, /href="\/identity.html"/u);
   assert.match(html, /href="\/status.html"/u);
   assert.doesNotMatch(html, /99\.9|SLA|72\s*小时|智能体编排|sk-[a-zA-Z0-9]/u);
@@ -72,4 +73,17 @@ test("vendored Lucide icons are decorative and unknown names are rejected", () =
   assert.match(icon("arrow-right"), /aria-hidden="true"/u);
   assert.match(icon("eye"), /<svg/u);
   assert.throws(() => icon("<script>"), TypeError);
+});
+
+test("browsers without WebGL retain the static homepage without a renderer error", (t) => {
+  const previousDocument = globalThis.document;
+  const previousMatchMedia = globalThis.matchMedia;
+  t.after(() => { globalThis.document = previousDocument; globalThis.matchMedia = previousMatchMedia; });
+  const contexts = [];
+  globalThis.matchMedia = () => ({ matches: false });
+  globalThis.document = { createElement: () => ({ getContext: (type) => { contexts.push(type); return null; } }) };
+  const host = { dataset: {} };
+  assert.equal(createGatewayScene(host), null);
+  assert.deepEqual(contexts, ["webgl2", "webgl"]);
+  assert.deepEqual(host.dataset, {});
 });

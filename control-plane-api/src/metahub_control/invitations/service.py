@@ -50,6 +50,7 @@ from .models import (
     InvitationAcceptResponse,
     InvitationCreateResponse,
     InvitationInfo,
+    InvitationPreviewResponse,
 )
 
 logger = logging.getLogger("metahub.control.invitations")
@@ -290,6 +291,68 @@ def create_invitation(
         request_id=request_id,
         trace_id=trace_id,
     )
+
+
+def preview_invitation(config: AppConfig, token: str) -> InvitationPreviewResponse:
+    """Expose recipient details only to a live invitation's bearer, without consuming it."""
+    digest = _token_digest(token)
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN")
+        row = connection.execute(
+            """SELECT invitation.*,tenant.name AS workspace_name
+               FROM invitations invitation
+               JOIN tenants tenant ON tenant.tenant_id=invitation.tenant_id
+               JOIN users inviter ON inviter.tenant_id=invitation.tenant_id
+                 AND inviter.user_id=invitation.invited_by
+               JOIN roles target_role ON target_role.tenant_id=invitation.tenant_id
+                 AND target_role.code=invitation.role_code AND target_role.status='active'
+               WHERE invitation.token_hash=? AND invitation.status='pending'
+                 AND tenant.status='active' AND inviter.status='active'
+                 AND unixepoch(invitation.expires_at)>unixepoch(?)
+                 AND EXISTS (
+                   SELECT 1 FROM roles role
+                   JOIN role_permissions relation ON relation.tenant_id=role.tenant_id
+                     AND relation.role_id=role.role_id
+                   JOIN permissions permission ON permission.tenant_id=relation.tenant_id
+                     AND permission.permission_id=relation.permission_id
+                   WHERE role.tenant_id=inviter.tenant_id AND role.code=inviter.role
+                     AND role.status='active' AND permission.code='user.manage'
+                     AND permission.status='active')""",
+            (digest, _to_db_time(_utcnow())),
+        ).fetchone()
+        if row is None:
+            raise ApiError("invitation.not_available")
+        if workspace_access_schema_available_in_transaction(connection):
+            membership = connection.execute(
+                """SELECT 1 FROM membership_invitations invitation
+                   JOIN workspace_memberships inviter
+                     ON inviter.workspace_membership_id=invitation.inviter_membership_id
+                   JOIN workspaces workspace ON workspace.workspace_id=invitation.workspace_id
+                   WHERE invitation.legacy_invitation_id=? AND invitation.status='pending'
+                     AND inviter.workspace_id=invitation.workspace_id
+                     AND inviter.status='active' AND inviter.role_code IN('owner','admin')
+                     AND inviter.revision=invitation.inviter_membership_revision
+                     AND workspace.status='active'
+                     AND unixepoch(invitation.expires_at)>unixepoch(?)""",
+                (row["invitation_id"], _to_db_time(_utcnow())),
+            ).fetchone()
+            if membership is None:
+                raise ApiError("invitation.not_available")
+        result = InvitationPreviewResponse(
+            email=row["email"], workspace_name=row["workspace_name"],
+            role=row["role_code"], expires_at=_parse_db_time(row["expires_at"]),
+        )
+        connection.commit()
+        return result
+    except ApiError:
+        connection.rollback()
+        raise
+    except (sqlite3.Error, DbError, TypeError, ValueError):
+        connection.rollback()
+        raise ApiError("invitation.unavailable") from None
+    finally:
+        connection.close()
 
 
 def accept_invitation(

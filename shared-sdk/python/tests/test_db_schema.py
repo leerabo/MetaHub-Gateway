@@ -5,6 +5,7 @@ from contextlib import closing
 
 import pytest
 from metahub_shared.db.schema import (
+    existing_table_names,
     foreign_key_violation_count,
     table_columns,
     table_exists,
@@ -44,6 +45,13 @@ def test_sqlite_table_discovery_matches_main_schema_and_tracks_ddl():
             ).fetchone() is not None
             assert table_exists(connection, name) == expected
             assert tables_exist(connection, (name,)) == expected
+            assert existing_table_names(connection, (name,)) == (
+                frozenset((name,)) if expected else frozenset()
+            )
+        assert existing_table_names(connection, (
+            'probe', 'probe', 'probe_view', 'temporary_only', 'attached_only', 'Probe',
+            'probe_search', 'probe_search_data', 'sqlite_schema',
+        )) == {'probe', 'probe_search', 'probe_search_data'}
         connection.execute("DROP TABLE main.probe")
         assert not table_exists(connection, "probe")
         connection.execute("CREATE TABLE main.probe(id INTEGER)")
@@ -59,6 +67,8 @@ def test_schema_discovery_rejects_invalid_table_names(name):
         table_exists(None, name)
     with pytest.raises(ValueError, match="Invalid schema table name"):
         tables_exist(None, ("probe", name))
+    with pytest.raises(ValueError, match="Invalid schema table name"):
+        existing_table_names(None, ("probe", name))
 
 
 def test_required_schema_set_uses_one_query_and_observes_transactional_ddl():
@@ -69,15 +79,20 @@ def test_required_schema_set_uses_one_query_and_observes_transactional_ddl():
         statements = []
         connection.set_trace_callback(statements.append)
         assert tables_exist(connection, ("first_table", "second_table", "first_table"))
-        assert len(statements) == 1
+        # SQLite traces the table-valued PRAGMA's internal work as SQL comments.
+        assert len([sql for sql in statements if not sql.startswith("-- ")]) == 1
         assert connection.in_transaction
         assert tables_exist(connection, ())
-        assert len(statements) == 1
+        assert len([sql for sql in statements if not sql.startswith("-- ")]) == 1
         connection.set_trace_callback(None)
         connection.execute("DROP TABLE second_table")
         assert not tables_exist(connection, ("first_table", "second_table"))
+        assert existing_table_names(connection, ("first_table", "second_table")) == {'first_table'}
         connection.rollback()
         assert tables_exist(connection, ("first_table", "second_table"))
+        assert existing_table_names(connection, ("first_table", "second_table")) == {
+            'first_table', 'second_table',
+        }
 
 
 def test_sqlite_foreign_key_check_preserves_deferred_transaction():

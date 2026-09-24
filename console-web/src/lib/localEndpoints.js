@@ -1,6 +1,7 @@
 /** PAGE-116 Local Model Endpoint control client with closed request and response contracts. */
 
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 const LOCAL_ENDPOINT_ID = /^lme_[0-9a-f]{32}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/;
@@ -89,10 +90,14 @@ const ERROR_MESSAGES = Object.freeze({
 });
 
 /** Read the current tenant's safe Local Endpoint aggregates. */
-export async function listLocalEndpoints({ controlApiUrl, token, tenantId, signal }) {
-  requireTenant(tenantId);
+export async function listLocalEndpoints({
+  controlApiUrl, token, tenantId, authentication = "legacy", signal,
+}) {
+  requireTenantForAuthentication(tenantId, authentication);
   const payload = await requestJson(`${controlApiUrl}/local-endpoints`, {
-    headers: authorizationHeaders(token),
+    authentication,
+    token,
+    headers: { Accept: "application/json" },
     signal,
   }, new Set([200]));
   const normalized = normalizeLocalEndpointList(payload, tenantId);
@@ -107,15 +112,18 @@ export async function createLocalEndpoint({
   tenantId,
   request,
   requestId,
+  authentication = "legacy",
   signal,
 }) {
-  requireTenant(tenantId);
+  requireTenantForAuthentication(tenantId, authentication);
   const body = normalizeLocalEndpointCreateRequest(request);
   const normalizedRequestId = requireChain(requestId, "local_endpoint.request_invalid", 422);
   const payload = await requestJson(`${controlApiUrl}/local-endpoints`, {
+    authentication,
+    token,
     method: "POST",
     headers: {
-      ...authorizationHeaders(token),
+      Accept: "application/json",
       "Content-Type": "application/json",
       "X-Request-ID": normalizedRequestId,
     },
@@ -128,14 +136,21 @@ export async function createLocalEndpoint({
 }
 
 /** Run the bounded backend test. The request body is exactly an empty object. */
-export async function testLocalEndpoint({ controlApiUrl, token, tenantId, localEndpointId, signal }) {
-  requireTenant(tenantId);
+export async function testLocalEndpoint({
+  controlApiUrl, token, tenantId, localEndpointId, authentication = "legacy", signal,
+}) {
+  requireTenantForAuthentication(tenantId, authentication);
   const id = requireLocalEndpointId(localEndpointId);
   const payload = await requestJson(
     `${controlApiUrl}/local-endpoints/${encodeURIComponent(id)}/test`,
     {
+      authentication,
+      token,
       method: "POST",
-      headers: { ...authorizationHeaders(token), "Content-Type": "application/json" },
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
       body: "{}",
       signal,
     },
@@ -183,6 +198,8 @@ export function normalizeLocalEndpointList(payload, tenantId) {
   ) return null;
   const items = payload.local_endpoints.map((item) => normalizeLocalEndpointInfo(item, tenantId));
   if (items.some((item) => !item)) return null;
+  if (tenantId === null && items.length > 1
+    && items.some((item) => item.tenant_id !== items[0].tenant_id)) return null;
   const ids = items.map((item) => item.local_endpoint_id);
   if (new Set(ids).size !== ids.length) return null;
   return Object.freeze({ ...payload, local_endpoints: Object.freeze(items) });
@@ -237,7 +254,7 @@ function normalizeLocalEndpointInfo(value, tenantId) {
   if (
     !exact(value, ENDPOINT_KEYS)
     || !LOCAL_ENDPOINT_ID.test(String(value.local_endpoint_id ?? ""))
-    || value.tenant_id !== tenantId
+    || (tenantId === null ? !safeId(value.tenant_id) : value.tenant_id !== tenantId)
     || !safeId(value.provider_id)
     || !machine(value.provider_code, 64)
     || !display(value.name, 80)
@@ -295,12 +312,7 @@ function normalizeTestResult(value) {
 async function requestJson(url, init, successStatuses) {
   let response;
   try {
-    response = await fetch(url, {
-      ...init,
-      cache: "no-store",
-      credentials: "omit",
-      redirect: "error",
-    });
+    response = await authenticatedResourceFetch(url, init);
   } catch (error) {
     if (error?.name === "AbortError") throw error;
     throw clientError("local_endpoint.unavailable", 503);
@@ -397,7 +409,8 @@ function exact(value, keys) {
     && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort()));
 }
 
-function requireTenant(value) {
+function requireTenantForAuthentication(value, authentication) {
+  if (authentication === "workspace" && value === null) return;
   if (!safeId(value)) throw clientError("local_endpoint.request_invalid", 422);
   return value;
 }

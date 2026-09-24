@@ -16,6 +16,7 @@ import {
   getWebAuthnAssertion,
   listIdentitySessions,
   loginIdentity,
+  identityLoginNotice,
   logoutIdentity,
   registerIdentity,
   getRegistrationPolicy,
@@ -122,20 +123,41 @@ import { createIdentityPageController } from "./identityPageState.js";
 import { setIdentityPublicBranding } from "./renderIdentityPage.js";
 import { installIdentityAccessExperience } from "./accessExperience.js";
 
+import { identitySection, workspaceSectionRoute } from "./identitySections.js";
+import { serviceOrigin } from "../../lib/runtimeOrigins.js";
+import { installUserFacingTextGuard } from "../../lib/userFacingTextGuard.js";
+
 const root = globalThis.document?.querySelector("#identity-app");
 if (root) {
-  const disposeAccessExperience = installIdentityAccessExperience(root);
-  const hostname = globalThis.window.location.hostname;
-  const controlApiUrl = new Set(["localhost", "127.0.0.1", "::1"]).has(hostname)
-    ? `${globalThis.window.location.protocol}//${hostname}:8001`
-    : globalThis.window.location.origin;
+  installUserFacingTextGuard(root);
+  const disposeAccessExperience = installIdentityAccessExperience(root, {
+    activationSelector: "[data-identity-registration-form]",
+  });
+  const controlApiUrl = serviceOrigin(globalThis.window.location, 8001);
   const pendingRiskChallenge = consumeRiskChallengeLocation(globalThis.window);
-  const publicBrandingReady = getPublicBranding({ controlApiUrl })
+  const entryUrl = new URL(window.location.href);
+  const requestedSection = () => {
+    const workspaceRoute = workspaceSectionRoute(window.location.hash);
+    if (workspaceRoute) {
+      const target = new URL("/console.html", window.location.origin);
+      target.hash = workspaceRoute;
+      window.location.replace(`${target.pathname}${target.search}${target.hash}`);
+      return "workspaces";
+    }
+    return identitySection(window.location.hash,
+      entryUrl.searchParams.get("view") === "account" ? "security" : "workspaces");
+  };
+  void getPublicBranding({ controlApiUrl })
     .then((response) => setIdentityPublicBranding(response.branding, globalThis.document))
     .catch(() => setIdentityPublicBranding(null, globalThis.document));
   const controller = createIdentityPageController({
     root,
     onWorkspaceCreated: () => window.location.assign("/console.html"),
+    onWorkspaceReady: () => window.location.replace("/console.html"),
+    onLoggedOut: () => window.location.replace("/"),
+    onPublicViewChange: (view) => syncIdentityEntryView(window, view),
+    initialSection: requestedSection(),
+    autoEnterWorkspace: !entryUrl.hash && !["account", "workspaces"].includes(entryUrl.searchParams.get("view")),
     recordWorkspaceSwitch: ({ durationMs }) => {
       globalThis.console?.debug?.(`workspace_switch_interactive_ms=${durationMs.toFixed(1)}`);
     },
@@ -290,16 +312,34 @@ if (root) {
       completeRiskChallenge: (input) => completeRiskChallenge({ controlApiUrl, ...input }),
     },
   });
-  void publicBrandingReady.then(() => {
-    if (!pendingRiskChallenge && new URLSearchParams(window.location.search).get("view") === "register") {
-      return controller.mount({ registration: true });
-    }
-    return controller.mount();
-  }).then(() => {
-    if (pendingRiskChallenge) controller.showRiskChallenge(pendingRiskChallenge);
+  void controller.mount({
+    registration: !pendingRiskChallenge && new URLSearchParams(window.location.search).get("view") === "register",
+    reset: !pendingRiskChallenge && entryUrl.searchParams.get("view") === "reset",
+    login: !pendingRiskChallenge && entryUrl.searchParams.get("view") === "login",
+    loginNotice: identityLoginNotice(entryUrl.searchParams),
+  });
+  if (pendingRiskChallenge) controller.showRiskChallenge(pendingRiskChallenge);
+  globalThis.window.addEventListener("hashchange", () => {
+    void controller.showAccountSection(requestedSection());
   });
   globalThis.window.addEventListener("pagehide", disposeAccessExperience, { once: true });
   globalThis.window.addEventListener("pagehide", () => controller.destroy(), { once: true });
+  globalThis.window.addEventListener("pageshow", (event) => {
+    if (event.persisted) window.location.reload();
+  });
+}
+
+export function syncIdentityEntryView(windowObject, view) {
+  const url = new URL(windowObject.location.href);
+  if (["login", "register", "reset"].includes(view)) {
+    url.searchParams.delete("reason");
+    url.searchParams.delete("request_id");
+    url.searchParams.set("view", view);
+    url.hash = "";
+  } else if (["login", "register", "reset"].includes(url.searchParams.get("view"))) {
+    url.searchParams.delete("view");
+  }
+  windowObject.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
 function consumeRiskChallengeLocation(windowObject) {

@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import re
 import xml.etree.ElementTree as ET
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+try:
+    from .product_qa_evidence import source_snapshot, verify_evidence
+except ImportError:  # pragma: no cover - direct execution
+    from product_qa_evidence import source_snapshot, verify_evidence
 
 ROOT = Path(__file__).resolve().parents[2]
 PLAN = ROOT / "docs" / "testing" / "product-qa" / "TEST-PLAN.md"
@@ -25,10 +33,26 @@ EXPECTED_COUNTS = {
     "SEC": 7,
     "FLOW": 10,
 }
-EXPECTED_APPLIED_MIGRATIONS = 139
-EXPECTED_LATEST_MIGRATION = "0139"
+EXPECTED_APPLIED_MIGRATIONS = 153
+EXPECTED_LATEST_MIGRATION = "0155"
 EXPECTED_PRESSURE_REQUESTS = 600
 MINIMUM_WEB_TESTS = 16
+REQUIRED_STABILITY_SECONDS = 72 * 60 * 60
+MAXIMUM_GAP_SECONDS = 10
+BROWSER_FILES = {
+    f"browser-real-{browser}-scale-{scale}.json"
+    for browser in ("chromium", "edge", "firefox") for scale in ("1", "1_25", "1_5")
+}
+REQUIRED_FILES = BROWSER_FILES | {
+    "summary.json", "performance-live.json", "performance-pressure.json",
+    "backend-junit.xml", "performance-junit.xml", "web.out", "console-lint.out",
+}
+EXPECTED_TASKS = {
+    "WB-API-BB-GR-SEC", "PERF-isolated", "WEB-UI-UCD-COMP-FLOW-contracts", "Console-lint",
+    "PERF-loopback-smoke", "PERF-loopback-pressure",
+    *(name.removesuffix(".json").replace("browser-real-", "FLOW-real-")
+      for name in BROWSER_FILES),
+}
 SENSITIVE_JSON_KEYS = {
     "access_token",
     "authorization",
@@ -210,7 +234,101 @@ def _plan_cases() -> dict[str, str]:
     return {case_id: title.strip() for case_id, title in rows}
 
 
+def _finite_number(value: Any) -> bool:
+    return type(value) in (int, float) and math.isfinite(value)
+
+
+def _long_stability_clean(report: dict[str, Any], path: Path, source: dict[str, Any]) -> bool:
+    """Validate local availability evidence; this does not certify a GA approval."""
+    try:
+        revision = source["source_revision"]
+        observed = report["observed_seconds"]
+        required = report["required_observed_seconds"]
+        gap = report["maximum_observation_gap_seconds"]
+        if (
+            report.get("schema") != "metahub.product-qa.continuous-availability.v1"
+            or report.get("status") != "passed"
+            or report.get("diagnostic") is not False
+            or report.get("ga_approval") is not False
+            or not re.fullmatch(r"[a-f0-9]{40}", revision)
+            or report.get("source_revision") != revision
+            or report.get("source_start") != source
+            or report.get("source_finish") != source
+            or report.get("errors") != 0
+            or not all(_finite_number(value) for value in (observed, required, gap))
+            or not observed >= required >= REQUIRED_STABILITY_SECONDS
+            or not 0 <= gap <= MAXIMUM_GAP_SECONDS
+            or report.get("sleep_prevention_active") is not True
+        ):
+            return False
+        started = datetime.fromisoformat(report["started_at_utc"])
+        finished = datetime.fromisoformat(report["finished_at_utc"])
+        if started.utcoffset() is None or finished.utcoffset() is None:
+            return False
+        if (finished - started).total_seconds() < observed:
+            return False
+        previous = "0" * 64
+        count = requests = errors = 0
+        wall_seconds = 0.0
+        target_totals = {name: {"requests": 0, "errors": 0}
+                         for name in ("console", "control", "gateway")}
+        with path.with_name("windows.jsonl").open(encoding="utf-8") as stream:
+            for line in stream:
+                count += 1
+                record = json.loads(line)
+                if record["sequence"] != count or record["previous_sha256"] != previous:
+                    return False
+                previous = hashlib.sha256(line.rstrip("\n").encode("utf-8")).hexdigest()
+                window = record["window"]
+                wall, first, last, window_gap = (
+                    window[key] for key in (
+                        "wall_seconds", "first_observation_offset_seconds",
+                        "last_observation_offset_seconds", "max_observation_gap_seconds",
+                    )
+                )
+                if (
+                    not all(_finite_number(value) for value in (wall, first, last, window_gap))
+                    or not 0 <= first <= last <= wall <= 61
+                    or not 0 <= window_gap <= gap
+                ):
+                    return False
+                targets = {target["target"]: target for target in window["targets"]}
+                if set(targets) != set(target_totals) or len(window["targets"]) != 3:
+                    return False
+                if any(type(t["requests"]) is not int or t["requests"] < 1
+                       or type(t["errors"]) is not int or t["errors"] != 0
+                       for t in targets.values()):
+                    return False
+                if sum(t["requests"] for t in targets.values()) != window["requests"]:
+                    return False
+                if sum(t["errors"] for t in targets.values()) != window["errors"]:
+                    return False
+                requests += window["requests"]
+                errors += window["errors"]
+                wall_seconds += wall
+                for name, target in targets.items():
+                    target_totals[name]["requests"] += target["requests"]
+                    target_totals[name]["errors"] += target["errors"]
+        return (
+            count == report["completed_windows"] and count > 0
+            and requests == report["requests"] and errors == report["errors"]
+            and target_totals == report["targets"]
+            and previous == report["journal_sha256"]
+            and observed <= wall_seconds + (count - 1) * gap
+        )
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return False
+
+
 def audit(evidence_dir: Path, long_stability_path: Path) -> dict[str, Any]:
+    expected_source = source_snapshot()
+    missing = sorted(name for name in REQUIRED_FILES if not (evidence_dir / name).is_file())
+    if missing:
+        return {
+            "schema": SCHEMA, "status": "failed", "all_108_prds_complete": False,
+            "reason": "missing_evidence", "missing_evidence": missing,
+        }
+    provenance_clean = verify_evidence(evidence_dir, REQUIRED_FILES, expected_source)
     summary = _json(evidence_dir / "summary.json")
     live = _json(evidence_dir / "performance-live.json")
     pressure = _json(evidence_dir / "performance-pressure.json")
@@ -259,19 +377,18 @@ def audit(evidence_dir: Path, long_stability_path: Path) -> dict[str, Any]:
         for path in evidence_dir.rglob("*")
         if path.is_file()
     )
-    long_clean = (
-        long_stability.get("status") == "passed"
-        and long_stability.get("errors") == 0
-        and long_stability.get("observed_seconds", 0) >= 14000
-        and long_stability.get("max_observation_gap_seconds", 999) <= 10
-        and long_stability.get("sleep_prevention_active") is True
+    long_clean = _long_stability_clean(
+        long_stability, long_stability_path, expected_source,
     )
     gate_clean = (
-        summary.get("all_108_prds_complete") is False
-        and len(summary.get("results", [])) == 15
-        and all(item.get("exit_code") == 0 for item in summary.get("results", []))
+        provenance_clean and summary.get("all_108_prds_complete") is False
+        and len(summary.get("results", [])) == len(EXPECTED_TASKS)
+        and {item.get("group") for item in summary.get("results", [])} == EXPECTED_TASKS
+        and all(item.get("exit_code") == 0 and item.get("error_bytes") == 0
+                for item in summary.get("results", []))
     )
     facts = {
+        "provenance": provenance_clean,
         "gate": gate_clean,
         "backend": _junit_clean(evidence_dir / "backend-junit.xml", minimum_tests=8),
         "performance": _junit_clean(evidence_dir / "performance-junit.xml", minimum_tests=8),
@@ -319,7 +436,7 @@ def audit(evidence_dir: Path, long_stability_path: Path) -> dict[str, Any]:
         raise ValueError("product QA case mapping does not match the 97-case plan")
     cases = []
     for case_id in sorted(expected_cases):
-        required = CASE_REQUIREMENTS[case_id]
+        required = ("provenance", *CASE_REQUIREMENTS[case_id])
         passed = all(facts.get(key) is True for key in required)
         cases.append(
             {
@@ -334,6 +451,10 @@ def audit(evidence_dir: Path, long_stability_path: Path) -> dict[str, Any]:
         "schema": SCHEMA,
         "status": "passed" if all_passed else "failed",
         "all_108_prds_complete": False,
+        "ga_approval": False,
+        "scope": "Current-source product QA and local HTTP availability, not GA approval.",
+        "source_revision": expected_source["source_revision"],
+        "source_sha256": expected_source["source_sha256"],
         "case_count": len(cases),
         "passed": sum(case["status"] == "passed" for case in cases),
         "failed": sum(case["status"] == "failed" for case in cases),

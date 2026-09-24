@@ -15,6 +15,7 @@ export function createInvitationPageState() {
   let feedback = null;
   let secretLink = null;
   let secretMailText = null;
+  let workspaceMode = false;
 
   /** 清除一次性密文；任何公开快照都不能返回这两个变量。 */
   function clearSecrets() {
@@ -31,16 +32,32 @@ export function createInvitationPageState() {
     invitation = null;
     feedback = null;
     clearSecrets();
+    workspaceMode = false;
   }
 
   /** 同步后端授权身份、Session 和导航 owner；任一变化都销毁密文。 */
-  function syncOwner({ authContext, token, activeNavigation }) {
-    const nextOwner = activeNavigation === "users"
-      ? authorizationIdentitySnapshot(authContext, PERMISSIONS.USER_MANAGE)
-      : "";
+  function syncOwner({ authContext, token, activeNavigation, workspaceContext, workspaceOwner }) {
+    const workspacePermissions = Array.isArray(authContext?.permission_codes)
+      ? authContext.permission_codes
+      : [];
+    const isWorkspaceOwner = activeNavigation === "users"
+      && workspaceContext?.workspace_id
+      && workspaceOwner?.workspaceId
+      && workspaceOwner.workspaceId === workspaceContext.workspace_id
+      && workspacePermissions.includes(PERMISSIONS.USER_MANAGE);
+    const nextOwner = isWorkspaceOwner
+      ? JSON.stringify([
+          workspaceOwner.workspaceId,
+          workspaceOwner.membershipRevision,
+          workspaceOwner.permissionRevision,
+          workspaceOwner.permissionFingerprint,
+        ])
+      : activeNavigation === "users"
+        ? authorizationIdentitySnapshot(authContext, PERMISSIONS.USER_MANAGE)
+        : "";
     const nextToken = typeof token === "string" && token ? token : null;
     // 权限快照、导航或 Session 任一不完整都立即失权，不能按角色名或旧 owner 回退。
-    if (!nextOwner || !nextToken) {
+    if (!nextOwner || (!nextToken && !isWorkspaceOwner)) {
       reset();
       owner = "";
       sessionToken = null;
@@ -52,6 +69,7 @@ export function createInvitationPageState() {
     }
     owner = nextOwner;
     sessionToken = nextToken;
+    workspaceMode = Boolean(isWorkspaceOwner);
     return true;
   }
 
@@ -77,7 +95,8 @@ export function createInvitationPageState() {
       const email = String(intent?.email ?? "").trim().toLowerCase();
       const role = String(intent?.role ?? "").trim();
       // 租户、邮箱或角色意图缺失时不创建异步票据，避免响应无法与提交边界复核。
-      if (!tenantId || !email || !role) return null;
+      const workspaceId = String(input?.workspaceContext?.workspace_id ?? "").trim();
+      if ((!tenantId && !workspaceId) || !email || !role) return null;
       generation += 1;
       busy = true;
       dirty = false;
@@ -85,7 +104,7 @@ export function createInvitationPageState() {
       feedback = null;
       clearSecrets();
       // 票据只冻结非敏感意图和 owner，不复制 Session Token 或返回的一次性邀请凭据。
-      return Object.freeze({ generation, owner, tenantId, email, role });
+      return Object.freeze({ generation, owner, tenantId, workspaceId, email, role, workspaceMode });
     },
     /** 只有当前代次和身份可接收创建结果，并把链接存入闭包。 */
     resolveCreate(ticket, result, consoleUrl) {
@@ -94,9 +113,14 @@ export function createInvitationPageState() {
       }
       const createdInvitation = result?.invitation;
       // 后端响应必须仍对应提交时冻结的租户和邀请意图；漂移时整包拒绝，不能复制错误租户的凭据。
+      const membershipInvitation = Boolean(
+        createdInvitation?.invitation_id && createdInvitation?.role
+        && createdInvitation?.status === "pending"
+        && ticket.workspaceMode,
+      );
       if (
-        String(createdInvitation?.tenant_id ?? "") !== ticket.tenantId
-        || String(createdInvitation?.email ?? "").trim().toLowerCase() !== ticket.email
+        (!membershipInvitation && String(createdInvitation?.tenant_id ?? "") !== ticket.tenantId)
+        || (!membershipInvitation && String(createdInvitation?.email ?? "").trim().toLowerCase() !== ticket.email)
         || String(createdInvitation?.role ?? "").trim() !== ticket.role
         || createdInvitation?.status !== "pending"
       ) {
@@ -106,7 +130,7 @@ export function createInvitationPageState() {
       const link = buildInvitationAcceptLink(consoleUrl, result?.accept_token);
       invitation = createdInvitation
         ? {
-            email: String(createdInvitation.email ?? ""),
+            email: String(createdInvitation.email ?? ticket.email),
             role: String(createdInvitation.role ?? ""),
             expiresAt: String(createdInvitation.expires_at ?? ""),
           }

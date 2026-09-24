@@ -32,6 +32,10 @@ FLOW = os.getenv("METAHUB_S1_FLOW", "organization")
 if FLOW not in {"organization", "finance"}:
     raise ValueError("S1 flow must be organization or finance")
 FRONTEND = SOURCE / "console-web" / "dist" if PRODUCTION else SOURCE / "console-web"
+if os.getenv("METAHUB_S1_FRONTEND_ROOT"):
+    FRONTEND = Path(os.environ["METAHUB_S1_FRONTEND_ROOT"]).resolve(strict=True)
+    if not PRODUCTION or not FRONTEND.is_relative_to(ROOT / ".tmp") or FRONTEND.name != "dist":
+        raise ValueError("Candidate frontend must be an isolated production build")
 sys.path[:0] = [
     str(SOURCE / part)
     for part in (
@@ -241,7 +245,9 @@ def main():
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
-                    timeout=360 if FLOW == "finance" else 240,
+                    # Account entry adds login, section and history flows for both viewports.
+                    # Per-browser-operation deadlines remain unchanged at 12 seconds.
+                    timeout=360 if FLOW == "finance" else 420,
                 )
             except subprocess.TimeoutExpired:
                 faulthandler.dump_traceback(file=stacks)
@@ -257,7 +263,8 @@ def main():
                 for table, count in initial.items()
             }
             organizations = 3 if FLOW == "finance" else 2
-            assert delta == {table: organizations for table in initial}, delta
+            accounts = organizations if FLOW == "finance" else organizations * 2
+            assert delta == {table: accounts for table in initial}, delta
             result["identity_count_delta"] = delta
             for table in ("workspace_consumers", "virtual_key_consumers"):
                 count = db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]

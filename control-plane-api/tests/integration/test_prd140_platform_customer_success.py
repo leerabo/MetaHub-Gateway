@@ -84,7 +84,7 @@ def _config(database_url: str) -> AppConfig:
 def base_database(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, datetime]:
     database = tmp_path_factory.mktemp("prd140-api-base") / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0139"
+    assert apply_migrations(database_url).applied[-1] == "0156"
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", f"Aa9!{secrets.token_urlsafe(24)}")
         seed = apply_seed_data(database_url)
@@ -789,7 +789,10 @@ async def test_batch_independent_approval_and_requester_revocation(
 
 
 def test_due_event_and_outbox_takeover(runtime: Runtime) -> None:
-    command = service.CustomerTaskCommand.model_validate(_task_create(runtime))
+    task_due_at = runtime.now + timedelta(hours=1)
+    command = service.CustomerTaskCommand.model_validate({
+        **_task_create(runtime), "due_at": task_due_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    })
     monkey_context = runtime.contexts[runtime.tokens["customer_success"]]
     original_actor = service.authenticate_platform_session_in_transaction
     original_now = service._utcnow
@@ -810,7 +813,8 @@ def test_due_event_and_outbox_takeover(runtime: Runtime) -> None:
         service.authenticate_platform_session_in_transaction = original_actor
         service._utcnow = original_now
     assert response.task is not None
-    due_at = datetime(2026, 9, 16, tzinfo=UTC)
+    # Creation and due events must both precede claims on the same fixture clock.
+    due_at = task_due_at + timedelta(seconds=1)
     with closing(connect_database(runtime.config.database_url)) as connection:
         connection.execute("BEGIN IMMEDIATE")
         assert projection.emit_due_task_events(connection, now=due_at) == 1

@@ -229,6 +229,20 @@ def _app(monkeypatch: pytest.MonkeyPatch, runtime: Runtime, verifier=True):
         return replace(context, roles=roles, permissions=permissions, operator_revision=revision)
 
     monkeypatch.setattr(service, "authenticate_platform_session_in_transaction", platform_actor)
+    # Current read paths use the transaction-aware snapshot helper. Keep the
+    # isolated fixture's platform identity override on that entry point too;
+    # otherwise a contract test silently falls through to the real HMAC lookup.
+    monkeypatch.setattr(
+        service,
+        "begin_platform_read_transaction",
+        lambda connection, config, *, session_token, csrf_token=None: platform_actor(
+            connection,
+            config,
+            session_token=session_token,
+            csrf_token=csrf_token,
+            touch=True,
+        ),
+    )
     monkeypatch.setattr(
         service,
         "consume_global_step_up_grant_in_transaction",

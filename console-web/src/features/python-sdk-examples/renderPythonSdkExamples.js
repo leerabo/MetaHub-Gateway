@@ -4,6 +4,10 @@
  */
 
 // SDK 语言顺序同时决定首屏默认项和键盘循环顺序；固定数组避免后端元数据改变可访问性交互结构。
+import { icon } from "../public-home/icons.js";
+import { renderWorkspaceConnectionStatus } from "../workspace-navigation/renderWorkspaceNavigation.js";
+import { gatewayConnectionAddresses as toolConnectionAddresses } from "../../lib/gatewayConnection.js";
+
 export const SDK_LANGUAGES = Object.freeze(["python", "javascript"]);
 
 // 每种语言的静态 UI 文案集中维护，动态 title/description 仍会经过 HTML 转义后展示。
@@ -26,21 +30,152 @@ const LANGUAGE_UI = Object.freeze({
  * 渲染 Python/JavaScript 双语言 SDK 示例页。
  * 两个 tabpanel 始终独立渲染，单个语言的等待或错误状态不会清空另一语言已经成功返回的元数据。
  */
-export function renderSdkExamples({ pythonState, javascriptState, activeLanguage = "python" } = {}) {
+export function renderSdkExamples({ pythonState, javascriptState, activeLanguage = "python", workspaceTaskHomeState, i18n } = {}) {
   const normalizedLanguage = normalizeSdkLanguage(activeLanguage);
   return `
     <section class="panel sdk-examples-panel" aria-labelledby="sdk-examples-title">
       <div class="panel-heading sdk-examples-heading">
         <div>
-          <h2 id="sdk-examples-title">SDK 示例</h2>
-          <p>选择服务端语言，查看可运行示例并下载受控 ZIP 制品。</p>
+          <h2 id="sdk-examples-title">接入信息</h2>
         </div>
-        ${renderLanguageTabs(normalizedLanguage)}
       </div>
+      ${renderWorkspaceConnectionStatus(workspaceTaskHomeState, "workspace.developer.sdk", i18n)}
+      ${renderConnectionDetails(pythonState?.state === "ok" ? pythonState : javascriptState?.state === "ok" ? javascriptState : pythonState ?? javascriptState)}
+      <details class="sdk-developer-details"><summary>开发者 SDK 示例</summary>
+      ${renderLanguageTabs(normalizedLanguage)}
       ${renderLanguageTabPanel("python", pythonState, normalizedLanguage)}
       ${renderLanguageTabPanel("javascript", javascriptState, normalizedLanguage)}
+      </details>
     </section>
   `;
+}
+
+function renderConnectionDetails(state) {
+  if (!state) return '<div role="status">正在加载接入信息...</div>';
+  if (state.state === "error") return '<div role="alert">接入信息加载失败。<button type="button" data-resource-retry>重试</button></div>';
+  if (state.state !== "ok") return '<div role="status">正在加载接入信息...</div>';
+  const addresses = toolConnectionAddresses(state.gateway_base_url);
+  if (!addresses) return '<div role="alert">网关地址尚未正确配置，请联系管理员。</div>';
+  const serviceAddress = addresses.service;
+  const localOnly = ["localhost", "127.0.0.1", "[::1]"].includes(new URL(addresses.openai).hostname);
+  const modelConfigured = state.chat_model_configured === true && Boolean(state.chat_model_alias);
+  // 交付说明不冒充任一工具的导入格式，不读取或持久化员工明文 KEY。
+  const handoff = [
+    "MetaHub 工具接入说明",
+    `统一网关网址：${serviceAddress}`,
+    "API Key：粘贴你在组织空间创建的个人 MetaHub KEY",
+    modelConfigured ? `工具要求模型名称时填写：${state.chat_model_alias}` : "模型路由尚未配置，请联系管理员。",
+    "所有工具共用这个网址和同一把个人 KEY；接入页已为各工具生成可复制的地址格式和配置示例。",
+    "支持自定义模型设置的工具：使用统一网关网址和同一把个人 KEY；Codex 和 Claude Code CLI 请使用接入页中各自的配置示例。",
+    "若工具支持读取模型列表，可从列表选择；否则填写上面的模型名称。",
+    "先登录组织空间创建个人 KEY；各工具连接同一个网关服务，复用这把个人 KEY；地址后缀按工具要求填写。",
+    "只支持官方账号登录、未开放自定义模型接口的工具不能直接接入。",
+    ...(localOnly ? ["此地址仅供本机试用，其他电脑需要管理员提供可访问的网关地址。"] : []),
+  ].join("\n");
+  return `<div class="connection-quickstart">
+    <h3>员工交付规则：一个网关地址＋一把个人 KEY</h3>
+    <p>所有支持自定义模型接口的工具都复用同一个 MetaHub 网关网址和这位成员的个人 KEY。管理员已配置默认路由时，成员通常只需要这两项；工具详情中的协议路径只是同一网址的技术格式，不是另一项服务，也不需要另领 KEY。</p>
+    <p class="tool-connection-simple"><strong>员工不用填写 MetaHub 环境变量。</strong>把这两项交给员工，在工具自己的“自定义模型 / API”设置中粘贴即可；只有客户端强制要求模型名称时，才再填写管理员给出的模型名称。</p>
+    <ol class="tool-connection-contract" aria-label="员工接入信息">
+      <li><strong>网关服务地址</strong><span>同一个服务；工具卡片只展示它所需的协议路径格式</span></li>
+      <li><strong>个人 MetaHub KEY</strong><span>成员在组织空间自行创建，一人一把</span></li>
+      <li><strong>模型名称（按需）</strong><span>${modelConfigured ? `只有工具要求时填写 <code>${escapeHtml(state.chat_model_alias)}</code>，也可从工具的模型列表选择` : "管理员配置模型路由后显示"}</span></li>
+    </ol>
+    <p class="tool-connection-note">环境变量和配置文件只是 Codex、Claude Code 等客户端保存地址与 KEY 的方式；它们不是员工必须填写的 MetaHub 表单。</p>
+  </div>
+  <dl class="tool-connection-details">
+    <div class="connection-primary-value"><dt>统一 MetaHub 网关网址</dt><dd><code id="tool-service-address">${escapeHtml(serviceAddress)}</code>
+      <button type="button" data-copy-code-target="tool-service-address" title="复制统一网关网址" aria-label="复制统一网关网址">${icon("copy")}</button><span class="quickstart-copy-feedback" role="status"></span>
+      <small>同一网关支持多个调用协议；下方可复制各工具所需的地址格式和配置示例。</small></dd></div>
+    <div><dt>个人 MetaHub KEY</dt><dd>粘贴该成员在组织空间创建的个人 KEY（每位成员一把）</dd></div>
+    <div class="quickstart-example"><dt>模型名称（按需）</dt><dd>${modelConfigured ? `<code id="tool-model-name">${escapeHtml(state.chat_model_alias)}</code>
+      <button type="button" data-copy-code-target="tool-model-name" title="复制模型名称" aria-label="复制模型名称">${icon("copy")}</button><span class="quickstart-copy-feedback" role="status"></span><small>工具要求时填写；支持读取模型列表的工具也可直接选择。</small>` : '<span>尚未配置可用模型路由，请先由管理员配置。</span>'}</dd></div>
+  </dl>${localOnly ? '<p class="tool-local-notice">当前网关地址仅供本机试用。给其他设备上的员工使用前，需部署可访问的网关地址。</p>' : ''}
+  <div class="tool-handoff quickstart-example">
+    <button type="button" data-copy-code-target="tool-connection-instructions">复制接入说明给员工</button>
+    <span class="quickstart-copy-feedback" role="status"></span>
+    <p>说明不含 KEY，请将该员工的个人 KEY 单独交付。</p>
+    <details class="tool-handoff-preview"><summary>查看接入说明</summary><pre><code id="tool-connection-instructions">${escapeHtml(handoff)}</code></pre></details>
+  </div>
+  ${renderToolGuides(addresses, modelConfigured ? state.chat_model_alias : null)}`;
+}
+
+/** 工具版本的支持状态独立于路由配置状态，不能用配置完成冒充客户端验收通过。 */
+function renderToolGuides(addresses, model) {
+  const guides = [
+    {
+      id: "openai-chat", name: "自定义 OpenAI 接口", status: "接口已支持", kind: "supported",
+      text: "在工具的模型设置中选择 OpenAI 兼容接口，将下方地址填入 Base URL，个人 KEY 填入 API Key。需要模型名称时填写上方名称，或使用工具提供的读取模型列表功能。",
+      detail: "当前提供 Chat Completions、流式文本响应和模型列表接口。具体工具的编程、文件操作等 Agent 功能仍需单独验证。",
+    },
+    {
+      id: "cursor", name: "Cursor", status: "需验证具体功能", kind: "conditional",
+      text: "若当前版本提供自定义 OpenAI 地址、API Key 和模型设置，可复制下方地址，并填写员工个人 KEY 与上方模型名称。",
+      detail: "自定义模型能回复消息，不代表 Agent、Tab 补全等功能全部可用；这些功能尚未完成 MetaHub 联调。",
+    },
+    {
+      id: "codex", name: "Codex", status: "客户端待联调", kind: "conditional",
+      text: "如果当前 Codex 版本提供自定义 Provider，请使用下方网关地址、同一把个人 KEY 和模型名称。Codex 的配置文件示例只是把这三项保存到它自己的设置中，KEY 由成员在组织空间创建。",
+      detail: "网关已提供 Responses 接口，Codex 完整工作流尚未验收，部分高级 Agent 功能仍有暂未支持项。ChatGPT 网页聊天不使用这份配置。",
+      documentation: "https://developers.openai.com/codex/config-reference/",
+      configuration: model ? [
+        `model = ${JSON.stringify(model)}`,
+        'model_provider = "metahub"',
+        "",
+        "[model_providers.metahub]",
+        'name = "MetaHub"',
+        `base_url = ${JSON.stringify(addresses.openai)}`,
+        'env_key = "METAHUB_API_KEY"',
+        'wire_api = "responses"',
+      ].join("\n") : null,
+      configNote: "这是 Codex 的配置方式；员工只需要网关地址、个人 KEY 和模型三项信息。已有配置请合并相应字段。",
+    },
+    {
+      id: "claude-code", name: "Claude Code CLI", status: "客户端待联调", kind: "conditional",
+      text: "如果当前 Claude Code 版本提供自定义网关，请使用下方地址、同一把个人 KEY 和模型名称。配置文件示例只是把这三项保存到 Claude Code 自己的设置中，替换 KEY 占位文字后重启即可。",
+      detail: "网关已提供 Messages 接口，Claude Code 完整工作流尚未验收，部分高级 Agent 功能仍有暂未支持项。VS Code 扩展的凭据入口不同，请按官方连接说明配置。",
+      documentation: "https://code.claude.com/docs/en/llm-gateway-connect",
+      configuration: model ? JSON.stringify({ env: {
+        ANTHROPIC_BASE_URL: addresses.anthropic,
+        ANTHROPIC_AUTH_TOKEN: "粘贴你的个人 MetaHub KEY",
+        ANTHROPIC_MODEL: model,
+      } }, null, 2) : null,
+      configNote: "只替换 KEY 占位文字即可；这是 Claude Code 保存凭据的方式，不代表还要申请另一把 KEY。请使用个人设置文件，已有设置合并 env 字段。",
+    },
+    {
+      id: "workbuddy", name: "WorkBuddy", status: "待确认版本支持", kind: "conditional",
+      text: "需先确认当前版本是否开放自定义模型服务。若提供 OpenAI Chat Completions 接入，可复制下方地址，并填写个人 KEY 与上方模型名称。",
+      detail: "MetaHub 尚未完成此工具的 Agent 联调，不能保证所有功能可用。",
+    },
+    {
+      id: "deepseek-harness", name: "DeepSeek Harness / 其他 Agent 工具", status: "待确认版本支持", kind: "conditional",
+      text: "不同工具和版本的配置格式可能不同。若支持自定义 OpenAI Chat Completions 接口，可使用同一个网关地址与个人 KEY。",
+      detail: "工具调用、执行结果回传和流式事件需要逐项验证。工具未开放自定义接口时，单靠网关无法接入。",
+    },
+  ];
+  return `<section class="tool-compatibility" aria-labelledby="tool-compatibility-title">
+    <div class="compact-heading"><h3 id="tool-compatibility-title">选择你使用的工具</h3><span>展开查看接入要求</span></div>
+    <p class="tool-compatibility-note">所有工具共用上面的统一网关网址和个人 KEY。展开工具详情后，页面会显示该工具所需的协议路径；这些路径都指向同一个网关服务。工具需要开放自定义模型接口；各项支持范围见展开说明。</p>
+    <div class="tool-compatibility-grid">${guides.map((guide) => `<details class="tool-guide" name="metahub-tool-guide" data-tool-guide="${guide.id}">
+      <summary><strong>${guide.name}</strong><mark class="compatibility-${guide.kind}">${guide.status}</mark></summary>
+      <div class="tool-guide-content"><p>${guide.text}</p>
+        ${renderToolCopyValue(`tool-${guide.id}-address`, "填入工具的 Base URL", guide.id === "claude-code" ? addresses.anthropic : addresses.openai)}
+        ${guide.configuration ? `${renderToolCopyValue(`tool-${guide.id}-config`, "配置文件示例", guide.configuration, true)}<p>${guide.configNote}</p>` : ""}
+        ${!model ? '<p>管理员尚未配置可用模型路由，配置完成后再接入。</p>' : ""}
+        <p>${guide.detail}${guide.documentation ? ` <a href="${guide.documentation}" target="_blank" rel="noreferrer">官方配置说明</a>` : ""}</p>
+      </div>
+    </details>`).join("")}</div>
+  </section>`;
+}
+
+/** 复用控制台复制反馈，模板只有公开连接信息与占位值，绝不取成员 KEY。 */
+function renderToolCopyValue(id, label, value, multiline = false) {
+  const code = `<code id="${id}">${escapeHtml(value)}</code>`;
+  return `<div class="quickstart-example tool-guide-copy">
+    <div class="tool-guide-copy-heading"><span>${label}</span><button type="button" data-copy-code-target="${id}" aria-label="复制${label}">复制</button></div>
+    ${multiline ? `<pre>${code}</pre>` : code}
+    <span class="quickstart-copy-feedback" role="status"></span>
+  </div>`;
 }
 
 /**
@@ -210,7 +345,7 @@ function renderWaitingState(language) {
   const ui = LANGUAGE_UI[language];
   return `
     <div class="panel-heading"><h3 id="${language}-sdk-title">${ui.defaultTitle}</h3></div>
-    <div class="empty-state">等待 /developer/sdk-examples/${language} 响应。</div>
+    <div class="empty-state" role="status">正在加载 ${ui.label} 示例...</div>
   `;
 }
 
@@ -264,8 +399,8 @@ function renderOverviewItem(label, value) {
  */
 function renderEnvironmentVariables(language, items) {
   return `
-    <section class="python-sdk-section" aria-labelledby="${language}-sdk-env-title">
-      <div class="compact-heading"><h4 id="${language}-sdk-env-title">环境变量</h4></div>
+    <details class="python-sdk-section sdk-advanced-environment"><summary><h4 id="${language}-sdk-env-title">可选：程序化客户端配置</h4></summary>
+      <p class="sdk-environment-note">普通成员不需要逐项填写这里的变量。它们只服务于 Python/Node 示例、自动化部署，或某些 CLI 工具自身的凭据入口；成员始终只使用组织提供的同一个网关服务地址和个人 KEY。</p>
       <div class="python-sdk-list">
         ${items.map((item) => `
           <article>
@@ -275,7 +410,7 @@ function renderEnvironmentVariables(language, items) {
           </article>
         `).join("")}
       </div>
-    </section>
+    </details>
   `;
 }
 

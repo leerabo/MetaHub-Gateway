@@ -44,7 +44,7 @@ GLOBAL_CSRF_COOKIE = "__Host-metahub-global-csrf"
 def migrated_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     database = tmp_path_factory.mktemp("prd096-api-migrated") / "platform-workspaces.sqlite3"
     result = apply_migrations(f"sqlite:///{database.as_posix()}")
-    assert result.applied[-1] == "0132"
+    assert result.applied[-1] == "0156"
     return database
 
 

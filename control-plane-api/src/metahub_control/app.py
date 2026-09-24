@@ -193,9 +193,19 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
     # Control reads commonly authenticate and then query through a separate service.
     # Keep one request-owned handle and return its reset physical connection to the
     # bounded idle pool; writes retain their existing connection ownership.
+    # Liveness/readiness and version probes are deliberately dependency-free. Do
+    # not acquire a pooled SQLite handle for them: scheduler bursts can consume
+    # every idle handle while the probe itself only needs app/config state.
+    lightweight_probe = request.url.path in {
+        "/health",
+        "/internal/health",
+        "/health/live",
+        "/health/ready",
+        "/version",
+    }
     scope = (
         database_request_scope(reuse_connections=True)
-        if request.method in {"GET", "HEAD"}
+        if request.method in {"GET", "HEAD"} and not lightweight_probe
         else nullcontext()
     )
     with scope:

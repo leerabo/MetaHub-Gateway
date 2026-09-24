@@ -5,6 +5,7 @@
  */
 
 import { hasPermission, PERMISSIONS } from "../../lib/permissions.js";
+import { localizeConsoleStaticHtml } from "../../i18n/localizeConsoleStaticHtml.js";
 
 // 筛选选项冻结死信状态机公开枚举，页面不能提交未知状态探测其他租户记录。
 const STATUS_OPTIONS = [
@@ -27,12 +28,12 @@ const STATUS_LABELS = Object.fromEntries(STATUS_OPTIONS);
  *
  * 前端角色判断只用于实现 viewer 零 DOM，真实 GET/POST 仍必须由后端权限守卫独立拒绝。
  */
-export function renderWebhookDeadLetters(state, authContext) {
+export function renderWebhookDeadLetters(state, authContext, i18n = null) {
   if (!hasPermission(authContext, PERMISSIONS.WEBHOOK_MANAGE)) {
     return "";
   }
   const view = normalizeView(state);
-  return `
+  return localizeConsoleStaticHtml(`
     <div class="webhook-dead-letter-page" data-state="${escapeAttribute(view.state)}">
       ${renderHeading(view)}
       ${renderFeedback(view)}
@@ -41,7 +42,7 @@ export function renderWebhookDeadLetters(state, authContext) {
       ${renderPager(view)}
       ${renderArchiveDialog(view.archiveDialog)}
     </div>
-  `;
+  `, i18n);
 }
 
 /** 渲染标题、可见数量和当前请求链路；request_id 是故障排查证据而不是权限依据。 */

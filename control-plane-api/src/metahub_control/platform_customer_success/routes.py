@@ -19,6 +19,7 @@ from metahub_control.platform_access.constants import (
 from metahub_control.platform_access.service import (
     PlatformContext,
     authenticate_platform_session_context,
+    platform_session_matches_global_cookie,
 )
 from metahub_control.saas_billing.routes import (
     _cookie_values,
@@ -97,19 +98,32 @@ def require_platform_customer_success(request: Request) -> PlatformContext:
         or _cookie_values(request, WORKSPACE_SESSION_COOKIE)
         or _cookie_values(request, WORKSPACE_CSRF_COOKIE)
         or _cookie_values(request, SUPPORT_SESSION_COOKIE)
-        or _cookie_values(request, GLOBAL_SESSION_COOKIE)
-        or _cookie_values(request, GLOBAL_CSRF_COOKIE)
     ):
         raise ApiError("platform.credential_conflict")
     csrf = None
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
         _require_origin(request, "platform.origin_invalid")
         csrf = _required_csrf(request, PLATFORM_CSRF_COOKIE, "platform.csrf_invalid")
+    platform_token = _required_cookie(
+        request, PLATFORM_SESSION_COOKIE, "platform.session_required"
+    )
     context = authenticate_platform_session_context(
         request.app.state.config,
-        _required_cookie(request, PLATFORM_SESSION_COOKIE, "platform.session_required"),
+        platform_token,
         csrf_token=csrf,
     )
+    global_values = _cookie_values(request, GLOBAL_SESSION_COOKIE)
+    global_csrf_values = _cookie_values(request, GLOBAL_CSRF_COOKIE)
+    if global_values or global_csrf_values:
+        if (
+            len(global_values) != 1
+            or len(global_csrf_values) > 1
+            or not valid_opaque_value(global_values[0])
+            or not platform_session_matches_global_cookie(
+                request.app.state.config, context, global_values[0]
+            )
+        ):
+            raise ApiError("platform.credential_conflict")
     route = request.scope.get("route")
     path = getattr(route, "path", request.url.path)
     accepted = {

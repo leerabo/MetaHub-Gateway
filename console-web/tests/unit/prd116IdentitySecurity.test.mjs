@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { createIdentityPageController } from "../../src/features/identity/identityPageState.js";
-import { renderIdentitySecurityPage } from "../../src/features/identity/renderIdentityPage.js";
+import { createIdentityPageController as createAccountController } from "../../src/features/identity/identityPageState.js";
+const createIdentityPageController = (options) => createAccountController({ initialSection: "security", ...options });
+import { renderIdentitySecurityPage as renderAccountPage } from "../../src/features/identity/renderIdentityPage.js";
+const renderIdentitySecurityPage = (root, state) => renderAccountPage(root, { accountSection: "security", ...state });
 import {
   IdentityApiError,
   beginIdentityAccountRecovery,
@@ -304,11 +306,13 @@ test("PRD-116 renderer shows security facts without credential or grant identifi
     conditionalAccess: conditionalProjection(),
   });
 
-  assert.match(root.innerHTML, /验证因子与恢复/u);
+  assert.match(root.innerHTML, /登录保护/u);
   assert.match(root.innerHTML, /受信设备/u);
-  assert.match(root.innerHTML, /条件访问/u);
+  assert.match(root.innerHTML, /href="\/console\.html"/u);
+  assert.doesNotMatch(root.innerHTML, /href="#access"/u);
+  assert.doesNotMatch(root.innerHTML, /data-conditional-access-form/u);
   assert.match(root.innerHTML, /data-identity-recovery-dialog/u);
-  assert.match(root.innerHTML, /data-identity-recovery-begin-form/u);
+  assert.doesNotMatch(root.innerHTML, /data-identity-recovery-begin-form/u);
   assert.doesNotMatch(root.innerHTML, /data-identity-factor-disable-form/u);
   assert.match(root.innerHTML, new RegExp(RECOVERY_CODES[0], "u"));
   for (const privateValue of [FACTOR_ID, DEVICE_ID, POLICY_ID, SIMULATION_ID, GRANT_ID]) {
@@ -331,6 +335,7 @@ test("PRD-116 controller clears one-time recovery codes from DOM on close and de
     }),
   });
   await controller.mount();
+  await controller.showAccountSecurity();
   const input = { currentPassword: "PrivateCurrentPassword", method: "recovery_codes" };
   assert.equal(await controller.beginMfaEnrollment(input), true);
   input.currentPassword = "";
@@ -371,6 +376,8 @@ test("PRD-116 controller keeps delayed recovery proofs transient and reloads the
     }),
   });
   await controller.mount();
+  await controller.showAccountSecurity();
+  assert.equal(controller.toggleSecurityTool("recovery"), true);
   assert.match(root.innerHTML, /data-identity-recovery-begin-form/u);
   assert.equal(await controller.beginAccountRecovery({
     currentPassword: "PrivateCurrentPassword",
@@ -436,6 +443,7 @@ test("PRD-116 controller consumes step-up inline and scrubs proof and grant from
   const activity = [];
   let workspaceSessionReads = 0;
   const controller = createIdentityPageController({
+    initialSection: "access",
     root,
     api: controllerApi({
       identityWorkspaces: async () => ({ workspaces: [workspaceChoice()] }),
@@ -500,6 +508,7 @@ test("PRD-146 Identity trusts only WorkspaceSession permissions and fails closed
   let conditionalReads = 0;
   const legacyRoot = createRoot();
   const legacyController = createIdentityPageController({
+    initialSection: "access",
     root: legacyRoot,
     api: controllerApi({
       identityWorkspaces: async () => ({ workspaces: [workspaceChoice()] }),
@@ -524,6 +533,7 @@ test("PRD-146 Identity trusts only WorkspaceSession permissions and fails closed
   let sessionReads = 0;
   const driftRoot = createRoot();
   const driftController = createIdentityPageController({
+    initialSection: "access",
     root: driftRoot,
     api: controllerApi({
       identityWorkspaces: async () => ({ workspaces: [workspaceChoice()] }),

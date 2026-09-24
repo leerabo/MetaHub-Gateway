@@ -69,7 +69,7 @@ owner account 必须经 0083 `account_identity_links` 从 legacy User 恢复。�
 
 | 方法与路径 | 认证与输入 | 返回边界 |
 | --- | --- | --- |
-| `POST /workspaces` | GlobalSession+CSRF；kind，organization name/slug，Region，service mode；禁止 tenant/account/owner 字段 | 本人新 Workspace 安全摘要与 provisioning 状态 |
+| `POST /workspaces` | GlobalSession+CSRF；kind、organization name 必填，slug/Region/service mode 可省略；禁止 tenant/account/owner 字段 | 本人新 Workspace 安全摘要与 provisioning 状态 |
 | `GET /workspaces` | GlobalSession；有界分页 | 只列当前 account 的 owner foundation Workspace |
 | `GET /workspaces/{workspace_id}` | GlobalSession+本人 Membership | 当前 Workspace/profile/Region/environment source 摘要；跨账号同形 404 |
 | `PATCH /workspaces/{workspace_id}` | GlobalSession+CSRF+本人 owner；If-Match revision | 只允许展示名/企业名称和 draft->confirmed；kind/slug/Region/binding 不可改 |
@@ -79,6 +79,11 @@ PRD-094 会把列表的可见范围扩展为所有 active Membership，并提供
 ## 8. slug、Region 与资料状态
 
 organization slug 使用 ASCII 小写 `a-z0-9-`、3..48、首尾字母数字、禁保留字。冲突统一 `workspace.create_conflict`，不证明现有组织名称、owner或状态。personal slug 由服务端随机 ID 派生，不能由邮箱生成。
+
+2026-09-10 试用修订：organization slug 省略时也由 Workspace 随机 ID 派生。
+Region 省略时使用部署批准列表的首项；服务模式省略时为 `internal_only`。
+省略不同于传空字符串或 null，显式非法字段仍拒绝。默认区域只在首次创建时解析，
+部署配置顺序变化不改变幂等重放结果。详见 `MetaHub-trial-entry-revision-20260910.md`。
 
 首版 Region allowlist 只包含配置中已批准的境内 Region；创建后不可 PATCH。未知、跨境或配置不可用失败关闭。OrganizationProfile 为 `draft|confirmed`；确认只推进一次，修改已确认名称递增 revision并写事件。所有展示字段输出转义，数据库事件只存固定摘要。
 
@@ -90,7 +95,10 @@ organization slug 使用 ASCII 小写 `a-z0-9-`、3..48、首尾字母数字、�
 
 ## 10. Console 交互
 
-账号安全页增加“创建空间”入口：先选个人/企业，再填写企业名称、slug、Region和服务模式。页面不展示 tenant_id、legacy role、内部 provisioning generation 或平台状态。成功后展示 Workspace 摘要和下一步，不出现假 Provider/Key/调用成功提示。失败保留非敏感草稿，但密码、Cookie、CSRF 和 account 标识不进入 Storage。
+新注册账号以“创建组织”为主入口，仅填写公司或团队名称；标识、区域和内部使用模式由服务端处理。
+兼容的账号安全页仍保留个人/企业类型入口。页面不展示 tenant_id、legacy role、内部 provisioning generation 或平台状态。
+创建组织成功并恢复有效 Workspace 授权后进入控制台，不出现假 Provider/Key/调用成功提示。
+失败保留非敏感草稿，但密码、Cookie、CSRF 和 account 标识不进入 Storage。
 
 ## 11. 性能与可观测
 

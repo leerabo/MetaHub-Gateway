@@ -546,9 +546,7 @@ async def webauthn_challenge(
             _config(request),
             session_token=_required_session_cookie(request),
             csrf_token=_required_csrf(request),
-            challenge_id=_required_string(
-                payload, "challenge_id", minimum=36, maximum=36
-            ),
+            challenge_id=_required_string(payload, "challenge_id", minimum=36, maximum=36),
             credential=_required_object(payload, "credential"),
             browser_binding=browser_binding,
             request_id=_request_id(request),
@@ -605,15 +603,9 @@ async def webauthn_challenge(
             _config(request),
             session_token=_required_session_cookie(request),
             csrf_token=_required_csrf(request),
-            challenge_id=_required_string(
-                payload, "challenge_id", minimum=36, maximum=36
-            ),
-            notification_code=_required_string(
-                payload, "notification_code", minimum=6, maximum=6
-            ),
-            recovery_code=_required_string(
-                payload, "recovery_code", minimum=12, maximum=32
-            ),
+            challenge_id=_required_string(payload, "challenge_id", minimum=36, maximum=36),
+            notification_code=_required_string(payload, "notification_code", minimum=6, maximum=6),
+            recovery_code=_required_string(payload, "recovery_code", minimum=12, maximum=32),
             browser_binding=browser_binding,
             request_id=_request_id(request),
             trace_id=_trace_id(request),
@@ -774,9 +766,7 @@ async def step_up(request: Request, response: Response) -> StepUpGrantResponse:
         _config(request),
         session_token=_required_session_cookie(request),
         csrf_token=_required_csrf(request),
-        workspace_session_token=_single_cookie(
-            request, WORKSPACE_SESSION_COOKIE, required=False
-        ),
+        workspace_session_token=_single_cookie(request, WORKSPACE_SESSION_COOKIE, required=False),
         workspace_id=_optional_string(payload, "workspace_id", minimum=36, maximum=36),
         action_code=_required_string(payload, "action_code", minimum=3, maximum=80),
         resource_type=_required_string(payload, "resource_type", minimum=2, maximum=60),

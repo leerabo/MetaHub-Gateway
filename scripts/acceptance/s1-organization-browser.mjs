@@ -6,10 +6,13 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyUsageAfterDisable, verifyWorkspaceFinance } from "./s2-workspace-finance-browser.mjs";
+import { verifyTrialEntry } from "./trial-entry-browser.mjs";
+import { verifyTrialMemberProvider } from "./trial-member-provider-browser.mjs";
 
-const { chromium, request } = createRequire(import.meta.url)("playwright");
-const { PNG } = createRequire(import.meta.url)("pngjs");
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const require = createRequire(import.meta.url);
+const { chromium, request } = require(path.join(root, ".tools/product-qa-browser/node_modules/playwright"));
+const { PNG } = require(path.join(root, "scripts/node_modules/pngjs"));
 const origin = process.env.S1_ORIGIN;
 const artifacts = process.env.S1_ARTIFACTS;
 const financeFlow = process.env.S1_FLOW === "finance";
@@ -17,7 +20,16 @@ assert.equal(new URL(origin).hostname, "s1.localhost");
 const loopbackOrigin = new URL(origin);
 loopbackOrigin.hostname = "127.0.0.1";
 assert.equal(path.dirname(path.resolve(artifacts)), path.join(root, ".artifacts"));
-const report = { status: "failed", steps: [], blockedExternalRequests: 0, pageErrors: 0, viewports: [], apiResponses: [], assetFailures: [], stepTimings: [], motion: [], onboardingDestinations: [] };
+const report = { status: "failed", steps: [], blockedExternalRequests: 0, pageErrors: 0, pageErrorMessages: [], viewports: [], apiResponses: [], apiTimings: [], entryTimings: [], assetFailures: [], stepTimings: [], motion: [], onboardingDestinations: [] };
+
+function recordPageError(error) {
+  report.pageErrors += 1;
+  if (report.pageErrorMessages.length >= 10) return;
+  const message = String(error?.message ?? error)
+    .replace(/[A-Za-z0-9_-]{24,}/gu, "[redacted]")
+    .slice(0, 500);
+  report.pageErrorMessages.push(message);
+}
 const pendingAssets = new Map();
 const pendingRequests = new Map();
 let stage = "launch";
@@ -65,7 +77,31 @@ async function layout(page, name) {
   assert.ok(facts.minInputPx >= 16);
   assert.ok(facts.minOnboardingPrimaryPx >= 16);
   assert.ok(facts.minOnboardingSecondaryPx >= 14);
-  await page.screenshot({ path: path.join(artifacts, name + ".png") });
+  await captureLayoutScreenshot(page, path.join(artifacts, name + ".png"));
+}
+
+async function captureLayoutScreenshot(page, outputPath) {
+  // Playwright's screenshot call repeatedly timed out after fonts were reported ready.
+  // Capture the same Chromium viewport through CDP while hiding typed values from evidence.
+  const mask = await page.addStyleTag({ content: `
+    input, textarea, select, .one-time-secret {
+      color: transparent !important;
+      -webkit-text-fill-color: transparent !important;
+      caret-color: transparent !important;
+    }
+  ` });
+  const session = await page.context().newCDPSession(page);
+  try {
+    const image = await session.send("Page.captureScreenshot", {
+      format: "png",
+      fromSurface: true,
+      captureBeyondViewport: false,
+    });
+    await writeFile(outputPath, Buffer.from(image.data, "base64"));
+  } finally {
+    await session.detach().catch(() => {});
+    await mask.evaluate((element) => element.remove()).catch(() => {});
+  }
 }
 
 async function verifyAccessMotion(page, width) {
@@ -127,6 +163,11 @@ try {
       "--disk-cache-size=1048576", "--disable-application-cache"],
   });
   const viewports = [{ width: 1280, height: 900 }, { width: 390, height: 844 }];
+  if (process.env.S1_TRIAL_ENTRY === "true") {
+    await step("public-entry", async () => {
+      report.trialEntry = await verifyTrialEntry(browser, origin, artifacts);
+    });
+  }
   if (financeFlow) viewports.push({ width: 1440, height: 900 });
   for (const viewport of viewports) {
     const tag = String(viewport.width);
@@ -140,11 +181,11 @@ try {
     const page = await context.newPage();
     currentPage = page;
     page.setDefaultTimeout(12_000);
-    page.on("pageerror", () => { report.pageErrors += 1; });
+    page.on("pageerror", recordPageError);
     page.on("request", (request) => {
       const url = new URL(request.url());
       if (url.origin === origin) pendingRequests.set(request, {
-        path: url.pathname.replace(/[0-9a-f]{32,}/gu, "id"),
+        path: url.pathname.replace(/\/invitations\/[^/]+\/accept/gu, "/invitations/token/accept").replace(/[0-9a-f]{32,}/gu, "id"),
         started: performance.now(),
       });
       if (url.origin === origin && url.pathname.startsWith("/src/")) {
@@ -152,6 +193,10 @@ try {
       }
     });
     page.on("requestfinished", (request) => {
+      const pending = pendingRequests.get(request);
+      if (pending && !pending.path.startsWith("/src/") && !pending.path.endsWith(".html")) {
+        report.apiTimings.push({ path: pending.path, method: request.method(), elapsedMs: Math.round(performance.now() - pending.started), stage });
+      }
       pendingAssets.delete(request);
       pendingRequests.delete(request);
     });
@@ -164,7 +209,7 @@ try {
     page.on("response", async (response) => {
       const url = new URL(response.url());
       if (url.origin === origin && !url.pathname.startsWith("/src/") && !url.pathname.endsWith(".html")) {
-        const entry = { path: url.pathname.replace(/[0-9a-f]{32,}/gu, "id"), status: response.status() };
+        const entry = { path: url.pathname.replace(/\/invitations\/[^/]+\/accept/gu, "/invitations/token/accept").replace(/[0-9a-f]{32,}/gu, "id"), status: response.status() };
         report.apiResponses.push(entry);
         if (response.status() >= 400) {
           const body = await response.json().catch(() => null);
@@ -214,10 +259,116 @@ try {
     await step(tag + ".organization", async () => {
       await page.locator('[data-identity-action="show-workspace-create"]').click();
       const form = page.locator("[data-workspace-create-form]");
-      await form.locator('[name="name"]').fill("Browser Organization " + tag);
-      await form.locator('[name="slug"]').fill(slug);
+      await form.locator('[name="name"]').fill("测试组织 " + tag);
+      assert.equal(await form.locator('[name="slug"], [name="region"], [name="serviceMode"]').count(), 0);
+      await layout(page, tag + "-organization");
+      const started = performance.now();
       await form.locator('button[type="submit"]').click();
       await page.waitForURL("**/console.html*");
+      const redirectedMs = Math.round(performance.now() - started);
+      await page.locator('.console-shell[data-active-navigation="quickstart"]').waitFor();
+      report.entryTimings.push({ width: viewport.width, redirectedMs, shellVisibleMs: Math.round(performance.now() - started) });
+    });
+    if (!financeFlow) await step(tag + ".trial-member-provider", async () => {
+      await verifyTrialMemberProvider({ browser, page, context, origin, viewport, tag,
+        report, layout, browserJson, setCurrentPage: (next) => { currentPage = next; } });
+    });
+    await step(tag + ".login-account-entry", async () => {
+      await page.goto(origin + "/identity.html?view=workspaces");
+      await page.locator('[data-account-section="workspaces"]').waitFor();
+      assert.equal(await page.locator("#identity-app form").count(), 0);
+      await page.locator('[data-identity-action="logout"]').click();
+      const login = page.locator("[data-identity-login-form]");
+      await page.waitForURL(origin + "/");
+      await page.locator("#home-title").waitFor();
+      // Ordinary login, as opposed to the separate create-organization callback.
+      await page.goto(origin + "/identity.html");
+      await login.locator('[name="email"]').fill(slug + "@example.test");
+      await login.locator('[name="password"]').fill(password);
+      await login.locator('button[type="submit"]').click();
+      await page.waitForURL("**/console.html*");
+      await page.locator('.console-shell[data-active-navigation="quickstart"]').waitFor();
+      await page.goto(origin + "/identity.html");
+      await page.waitForURL("**/console.html*");
+      await page.locator('.console-shell[data-active-navigation="quickstart"]').waitFor();
+
+      await page.goto(origin + "/identity.html?view=workspaces");
+      await page.locator('[data-account-section="workspaces"]').waitFor();
+      assert.equal(await page.locator("#identity-app form").count(), 0);
+      assert.equal(await page.locator("[data-onboarding-step-panel]").count(), 0);
+      await layout(page, tag + "-account-workspaces");
+      await page.locator('[data-account-section-link="preferences"]').click();
+      const preferences = page.locator("[data-account-preference-form]");
+      await preferences.waitFor();
+      assert.equal(await page.locator("#identity-app form").count(), 1);
+      const preferenceSaved = page.waitForResponse((response) =>
+        new URL(response.url()).pathname === "/identity/preferences"
+        && response.request().method() === "PATCH");
+      await preferences.locator('button[type="submit"]').click();
+      assert.equal((await preferenceSaved).status(), 200);
+      await preferences.locator('button[type="submit"]:enabled').waitFor();
+      assert.equal(await page.locator("#account-preferences [role=alert]").count(), 0);
+      assert.match(await page.locator(".identity-account-preference-note").textContent(), /偏好已确认/u);
+      await layout(page, tag + "-account-preferences");
+      await page.locator('[data-account-section-link="password"]').click();
+      await page.locator("[data-identity-password-form]").waitFor();
+      assert.equal(await page.locator("[data-account-preference-form]").count(), 0);
+      assert.equal(await page.locator("#identity-app form").count(), 1);
+      await page.goBack();
+      await preferences.waitFor();
+      assert.match(await page.locator(".identity-account-preference-note").textContent(), /偏好已确认/u);
+      await page.goForward();
+      await page.locator("[data-identity-password-form]").waitFor();
+      await page.getByRole("link", { name: "返回空间", exact: true }).click();
+      await page.locator('.console-shell[data-active-navigation="quickstart"]').waitFor();
+      const forbidden = ["/workspace/billing", "/workspace/business", "/workspace/enterprise",
+        "/workspace/scim", "/workspace/data-governance", "/workspace/privacy", "/workspace/machine"];
+      assert.equal(report.apiTimings.filter((item) => item.stage === tag + ".login-account-entry"
+        && forbidden.some((prefix) => item.path.startsWith(prefix))).length, 0);
+    });
+    await step(tag + ".navigation-history", async () => {
+      const homeUrl = page.url();
+      assert.ok(homeUrl.endsWith("#workspace.home.getting-started"));
+      // Task-home actions are backend-projected and the catalog changes as
+      // onboarding capabilities complete. Select the first visible current
+      // task instead of binding this browser fixture to a retired route.
+      const taskAction = page.locator("[data-workspace-task-route]:visible").first();
+      await taskAction.waitFor();
+      const taskRoute = await taskAction.getAttribute("data-workspace-task-route");
+      assert.match(String(taskRoute), /^workspace\.[a-z0-9_.-]+$/u);
+      await taskAction.click();
+      await page.locator(".console-shell").waitFor();
+      assert.notEqual(page.url(), homeUrl);
+      const profileUrl = page.url();
+      await page.goBack();
+      await page.locator('.console-shell[data-active-navigation="quickstart"]').waitFor();
+      assert.equal(page.url(), homeUrl);
+      await page.goForward();
+      await page.locator(".console-shell").waitFor();
+      assert.equal(page.url(), profileUrl);
+      await layout(page, tag + "-task-navigation");
+      await page.getByRole("link", { name: "返回空间首页", exact: true }).click();
+      await page.locator('.console-shell[data-active-navigation="quickstart"]').waitFor();
+      await page.goto(origin + "/console.html#workspace.home.approvals");
+      await page.locator('.console-shell[data-active-navigation="approvals"]').waitFor();
+      await page.goto(origin + "/identity.html?view=account#security");
+      await page.locator("#identity-security-title").waitFor();
+      await page.goBack();
+      await page.locator('.console-shell[data-active-navigation="approvals"]').waitFor();
+      await page.goForward();
+      await page.locator("#identity-security-title").waitFor();
+      await page.goBack();
+      await page.locator('.console-shell[data-active-navigation="approvals"]').waitFor();
+      // Routing can disable BFCache in automation; exercise persisted restoration explicitly too.
+      const restored = page.waitForEvent("load");
+      await page.evaluate(() => {
+        dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true }));
+        dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+      });
+      await restored;
+      await page.locator('.console-shell[data-active-navigation="approvals"]').waitFor();
+      assert.equal(await page.locator("#login-form,[data-console-session-retry]").count(), 0);
+      await layout(page, tag + "-approvals-restored");
       await page.goto(origin + "/console.html#virtual-keys");
       await page.locator("#create-consumer-form").waitFor();
       const session = await browserJson(page, "/workspace/session");
@@ -287,11 +438,22 @@ try {
       }));
     }
     if (!financeFlow) await step(tag + ".onboarding-navigation", async () => {
-      await page.goto(origin + "/identity.html");
+      await page.goto(origin + "/identity.html?view=account#onboarding");
       const panel = page.locator("[data-onboarding-step-panel]");
       await panel.waitFor();
-      for (const index of [0, 1]) {
+      assert.equal(await panel.locator(".identity-onboarding-link").getAttribute("href"), "/console.html#tenant");
+      const allSteps = page.locator("details.identity-onboarding-steps-details");
+      assert.equal(await allSteps.count(), 1);
+      assert.equal(await allSteps.evaluate((details) => details.open), false);
+      const selectOnboardingStep = async (index) => {
+        if (!await allSteps.evaluate((details) => details.open)) {
+          await allSteps.locator("summary").click();
+          assert.equal(await allSteps.evaluate((details) => details.open), true);
+        }
         await page.locator(`[data-onboarding-step-index="${index}"]`).click();
+      };
+      for (const index of [0, 1]) {
+        await selectOnboardingStep(index);
         await panel.locator('[data-identity-action="confirm-onboarding-step"]').click();
         await panel.locator('[data-identity-action="reopen-onboarding-step"]:enabled').waitFor();
       }
@@ -302,7 +464,7 @@ try {
         ["virtual-keys", "#create-consumer-form"], ["sdk-examples", "#sdk-examples-title"],
       ];
       for (const [index, [sourceId, ready]] of destinations.entries()) {
-        await page.locator(`[data-onboarding-step-index="${index}"]`).click();
+        await selectOnboardingStep(index);
         const link = panel.locator(".identity-onboarding-link");
         assert.equal(await link.getAttribute("href"), "/console.html#" + sourceId);
         const opened = context.waitForEvent("page");
@@ -312,7 +474,7 @@ try {
         stage = tag + ".onboarding-navigation." + sourceId;
         const check = { width: viewport.width, sourceId, status: "opened", responses: [] };
         report.onboardingDestinations.push(check);
-        destination.on("pageerror", () => { report.pageErrors += 1; });
+        destination.on("pageerror", recordPageError);
         destination.on("response", (response) => {
           const url = new URL(response.url());
           if (url.origin === origin && !url.pathname.startsWith("/src/") && !url.pathname.endsWith(".html")) {
@@ -320,6 +482,19 @@ try {
           }
         });
         await destination.waitForURL(origin + "/console.html#" + sourceId);
+        // Existing directories keep low-frequency create forms closed. Exercise the
+        // same disclosure action available to the customer before using a form.
+        const createDisclosureSelector = {
+          models: "details.model-create-disclosure",
+          "virtual-keys": "details.consumer-create-disclosure",
+        }[sourceId];
+        if (createDisclosureSelector) {
+          const createDisclosure = destination.locator(createDisclosureSelector);
+          await createDisclosure.waitFor();
+          if (!await createDisclosure.evaluate((element) => element.open)) {
+            await createDisclosure.locator(":scope > summary").click();
+          }
+        }
         await destination.locator(ready).waitFor();
         if (sourceId === "tenant") {
           const name = "Profile saved " + tag;
@@ -349,6 +524,11 @@ try {
         }
         if (sourceId === "sdk-examples") {
           check.downloads = [];
+          const developerExamples = destination.locator("details.sdk-developer-details");
+          await developerExamples.waitFor();
+          if (!await developerExamples.evaluate((element) => element.open)) {
+            await developerExamples.locator(":scope > summary").click();
+          }
           for (const language of ["python", "javascript"]) {
             await destination.locator(`[data-sdk-language-tab="${language}"]`).click();
             const received = destination.waitForEvent("download");
@@ -385,6 +565,10 @@ try {
 } catch (error) {
   report.failedStage = stage;
   report.failureType = error.name;
+  // Diagnostic only: retain the concrete Playwright failure so bounded
+  // acceptance failures can be classified without weakening the gate.
+  report.failureMessage = String(error?.message ?? error);
+  report.failureStack = String(error?.stack ?? "");
   report.connectionFailures = ["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "ECONNRESET",
     "ETIMEDOUT", "socket hang up", "Timeout", "Target closed", "strict mode violation"]
     .filter((reason) => String(error.message).includes(reason));

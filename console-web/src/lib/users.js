@@ -1,23 +1,51 @@
 import { AuthApiError } from "./auth.js";
 import { IdentityApiError } from "./identity.js";
-import { listWorkspaceMemberships, updateWorkspaceMembership } from "./workspaces.js";
+import { listWorkspaceMemberships, removeWorkspaceMembership, updateWorkspaceMembership } from "./workspaces.js";
 
 export function listWorkspaceMembers(input) {
-  return workspaceMembersRequest(listWorkspaceMemberships, input);
+  return workspaceMembersRequest(listWorkspaceMemberships, input, { retryUnavailable: true });
 }
 
 export function updateWorkspaceMember(input) {
   return workspaceMembersRequest(updateWorkspaceMembership, input);
 }
 
-async function workspaceMembersRequest(request, input) {
-  try {
-    return await request(input);
-  } catch (error) {
-    if (!(error instanceof IdentityApiError)) throw error;
-    throw new AuthApiError({ status: error.status, code: error.code, message: error.message,
-      requestId: error.requestId, traceId: error.traceId });
+export function removeWorkspaceMember(input) {
+  return workspaceMembersRequest(removeWorkspaceMembership, input);
+}
+
+async function workspaceMembersRequest(request, input, { retryUnavailable = false } = {}) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await request(input);
+    } catch (error) {
+      if (retryUnavailable && attempt === 0 && error instanceof IdentityApiError
+        && error.status === 503 && error.code === "membership.unavailable") {
+        attempt += 1;
+        await waitForMembershipRetry(input?.signal);
+        continue;
+      }
+      if (!(error instanceof IdentityApiError)) throw error;
+      throw new AuthApiError({ status: error.status, code: error.code, message: error.message,
+        requestId: error.requestId, traceId: error.traceId });
+    }
   }
+}
+
+function waitForMembershipRetry(signal) {
+  if (signal?.aborted) return Promise.reject(new DOMException("The operation was aborted.", "AbortError"));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, 120);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 /**

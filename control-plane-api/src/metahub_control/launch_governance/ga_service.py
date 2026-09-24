@@ -36,6 +36,7 @@ from .service import (
     _db_time,
     _digest,
     _id,
+    _next_stamp,
     _platform_actor,
     _require_release_authority,
     _require_schema,
@@ -269,7 +270,7 @@ def promote_ga(
             config,
             platform_session_token,
             platform_csrf_token,
-            "platform.launch.execute",
+            "platform.launch.review",
         )
         _require_schema(connection)
         replay = _ga_action_replay(connection, actor.operator_id, "ga.launch", key_sha, request_sha)
@@ -597,7 +598,8 @@ def record_ga_review(
         ):
             raise ApiError("ga.candidate_not_ready")
         if connection.execute(
-            "SELECT 1 FROM post_ga_reviews WHERE ga_launch_id=?", (ga_launch_id,)
+            "SELECT 1 FROM post_ga_reviews WHERE ga_launch_id=? AND conclusion=?",
+            (ga_launch_id, command.conclusion),
         ).fetchone():
             raise ApiError("ga.rollback_conflict")
         now = _utcnow()
@@ -759,9 +761,12 @@ def _emit_event(connection, launch_id: str, event_type: str, candidate_id: str, 
 
 
 def _advance_ga_launch(connection, launch, status: str, now: datetime):
+    # Multiple governance actions can intentionally share one test/production clock tick.
+    # The immutable transition trigger requires a strictly increasing timestamp, so use the
+    # same monotonic database stamp as the RC lifecycle instead of writing ``now`` directly.
     connection.execute(
         "UPDATE ga_launches SET status=?,revision=revision+1,updated_at=? WHERE ga_launch_id=?",
-        (status, _db_time(now), launch["ga_launch_id"]),
+        (status, _next_stamp(launch["updated_at"], now), launch["ga_launch_id"]),
     )
 
 
@@ -827,7 +832,9 @@ def _ga_launch_summary(connection, launch_id: str) -> GaLaunchSummary:
         ).fetchall()
     )
     review_row = connection.execute(
-        "SELECT * FROM post_ga_reviews WHERE ga_launch_id=?", (launch_id,)
+        """SELECT * FROM post_ga_reviews WHERE ga_launch_id=?
+           ORDER BY reviewed_at DESC,post_ga_review_id DESC LIMIT 1""",
+        (launch_id,),
     ).fetchone()
     review = (
         PostGaReviewSummary.model_validate(

@@ -47,6 +47,7 @@ from .models import (
     ProviderHealthItem,
     ProviderHealthListResponse,
     ProviderHealthSummary,
+    ProviderModelDiscoveryResponse,
     ProviderProbeResponse,
 )
 
@@ -179,12 +180,16 @@ class _PinnedNetworkBackend(httpcore.SyncBackend):
             # follow_redirects 已关闭，但此处仍做连接层兜底，避免未来调用方式变化扩大探测面。
             raise httpcore.ConnectError("probe destination changed")
         last_error: httpcore.ConnectError | httpcore.ConnectTimeout | None = None
+        deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
         for address in self._addresses:
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                raise httpcore.ConnectTimeout("probe connect timeout")
             try:
                 return self._delegate.connect_tcp(
                     address,
                     port,
-                    timeout=timeout,
+                    timeout=remaining,
                     local_address=local_address,
                     socket_options=socket_options,
                 )
@@ -342,6 +347,47 @@ def probe_provider(
 ) -> ProviderProbeResponse:
     """领取并探测当前租户 Provider，返回不含任何凭据标识的安全结果。"""
 
+    result, _probe = _probe_provider(
+        config, context, provider_id, trigger_type=trigger_type,
+        request_id=request_id, trace_id=trace_id,
+    )
+    return result
+
+
+def discover_provider_models(
+    config: AppConfig,
+    context: AuthContext,
+    provider_id: str,
+    *,
+    request_id: str,
+    trace_id: str,
+) -> ProviderModelDiscoveryResponse:
+    """Read an authenticated, bounded upstream catalog without creating local models."""
+
+    result, probe = _probe_provider(
+        config, context, provider_id, trigger_type="manual",
+        request_id=request_id, trace_id=trace_id, capture_model_catalog=True,
+    )
+    successful = next((item for item in probe.attempts if item.result_status == "success"), None)
+    return ProviderModelDiscoveryResponse(
+        **result.model_dump(),
+        model_ids=list(successful.model_ids) if successful is not None else [],
+        catalog_truncated=successful.catalog_truncated if successful is not None else False,
+    )
+
+
+def _probe_provider(
+    config: AppConfig,
+    context: AuthContext,
+    provider_id: str,
+    *,
+    trigger_type: str,
+    request_id: str,
+    trace_id: str,
+    capture_model_catalog: bool = False,
+) -> tuple[ProviderProbeResponse, ProviderProbeResult]:
+    """Share the authenticated lease and completion boundary for probes and discovery."""
+
     claim_config = config.model_copy(update={
         "provider_health_lease_seconds": max(config.provider_health_lease_seconds, 30),
     })
@@ -355,6 +401,8 @@ def probe_provider(
         ).fetchone()
         if row is not None and row["provider_type"] == "local_endpoint":
             raise ApiError("provider.local_endpoint_requires_local_api")
+        if capture_model_catalog and row is not None and row["provider_type"] not in OPENAI_COMPATIBLE_TYPES:
+            raise ApiError("provider_health.catalog_unsupported")
         claim, credentials = _claim_provider(
             claim_config, context.user.tenant_id, provider_id, trigger_type,
             connection=transaction.connection,
@@ -362,7 +410,10 @@ def probe_provider(
         transaction.commit()
 
     try:
-        probe = perform_provider_probe(config, claim, credentials)
+        probe = (
+            perform_provider_probe(config, claim, credentials, capture_model_catalog=True)
+            if capture_model_catalog else perform_provider_probe(config, claim, credentials)
+        )
         with ResourceWriteTransaction(
             _connect(config), config, context, "provider.health.probe",
         ) as transaction:
@@ -380,7 +431,7 @@ def probe_provider(
         _dispatch_unhealthy_event(
             config, claim, result.provider_health, list(probe.attempts), request_id, trace_id,
         )
-    return result
+    return result, probe
 
 
 def probe_provider_for_tenant(
@@ -452,11 +503,15 @@ def claim_catalog_provider_in_transaction(
 
 
 def perform_provider_probe(
-    config: AppConfig, claim: _Claim, credentials: list[_Credential]
+    config: AppConfig, claim: _Claim, credentials: list[_Credential],
+    *, capture_model_catalog: bool = False,
 ) -> ProviderProbeResult:
     """Perform only bounded transport; the caller owns claim and completion."""
 
-    attempts = _perform_probe(config, claim, credentials)
+    attempts = (
+        _perform_probe(config, claim, credentials, capture_model_catalog=True)
+        if capture_model_catalog else _perform_probe(config, claim, credentials)
+    )
     return ProviderProbeResult(_aggregate_result(attempts), tuple(attempts))
 
 

@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { createIdentityPageController } from "../../src/features/identity/identityPageState.js";
-import { renderIdentitySecurityPage } from "../../src/features/identity/renderIdentityPage.js";
+import { createIdentityPageController as createAccountController } from "../../src/features/identity/identityPageState.js";
+const createIdentityPageController = (options) => createAccountController({ initialSection: "enterprise", ...options });
+import { renderIdentitySecurityPage as renderAccountPage } from "../../src/features/identity/renderIdentityPage.js";
+const renderIdentitySecurityPage = (root, state) => renderAccountPage(root, { accountSection: "enterprise", ...state });
 import {
   createEnterpriseDomain,
   createEnterpriseSsoConnection,
@@ -336,6 +338,7 @@ test("PRD-115 renderer projects roles and omits internal SCIM identifiers", () =
     scimDirectoryError: null,
     scimBearerToken: null,
   });
+  state.accountSection = "scim";
   renderIdentitySecurityPage(root, state);
   assert.match(root.innerHTML, /SCIM 目录|Engineering Directory|Owner 保护/u);
   assert.match(root.innerHTML, /data-scim-token-form|data-scim-mapping-form/u);
@@ -355,6 +358,7 @@ test("PRD-115 controller removes one-time Bearer from DOM and state on close", a
   const root = createRoot();
   const copied = [];
   const controller = createIdentityPageController({
+    initialSection: "scim",
     root,
     newIdempotencyKey: () => "scim-controller-key-0001",
     copyText: async (value) => copied.push(value),

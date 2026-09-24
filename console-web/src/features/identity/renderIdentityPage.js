@@ -2,6 +2,15 @@
 import { renderPrivacyCenter } from "./renderPrivacyCenter.js";
 import { renderComplianceCenter } from "./renderComplianceCenter.js";
 import { renderAccountPreferences } from "../account-preferences/renderAccountPreferences.js";
+
+export function renderIdentityAccountLoadingPage(root) {
+  root.innerHTML = `<section class="identity-account-loading" aria-busy="true" aria-label="加载账号设置">
+    <a href="/console.html">MetaHub</a><h1>账号设置</h1>
+    <div class="identity-account-skeleton" aria-hidden="true"></div>
+    <div class="identity-account-skeleton" aria-hidden="true"></div>
+  </section>`;
+}
+import { IDENTITY_SECTIONS, identitySection } from "./identitySections.js";
 import { icon } from "../public-home/icons.js";
 import { workspaceOnboardingHref } from "../../lib/workspaces.js";
 
@@ -31,6 +40,19 @@ export function setIdentityPublicBranding(value, documentObject = globalThis.doc
   if (product) product.textContent = publicBrand.product_name;
   const visual = documentObject?.querySelector?.(".identity-access-visual");
   visual?.setAttribute?.("aria-label", publicBrand.product_name);
+  const title = documentObject?.querySelector?.("#identity-login-title");
+  if (title) title.textContent = publicBrand.login_title;
+  for (const label of documentObject?.querySelectorAll?.(".identity-brand > div > p, .identity-wordmark > strong") ?? []) {
+    label.textContent = publicBrand.product_name;
+  }
+  for (const mark of documentObject?.querySelectorAll?.(".identity-brand-mark") ?? []) {
+    mark.outerHTML = renderIdentityBrandMark();
+  }
+  const message = documentObject?.querySelector?.(".identity-brand-message");
+  if (message) {
+    message.textContent = publicBrand.login_message;
+    message.hidden = !publicBrand.login_message;
+  }
   return publicBrand;
 }
 
@@ -47,7 +69,7 @@ export function renderIdentityLoginPage(container, options = {}) {
             <h1 id="identity-login-title">${escapeHtml(publicBrand.login_title)}</h1>
           </div>
         </header>
-        ${publicBrand.login_message ? `<p class="identity-brand-message">${escapeHtml(publicBrand.login_message)}</p>` : ""}
+        <p class="identity-brand-message" ${publicBrand.login_message ? "" : "hidden"}>${escapeHtml(publicBrand.login_message)}</p>
         <p class="identity-login-welcome">欢迎回来</p>
         <form class="identity-login-form" data-identity-login-form aria-busy="${busy}">
           <label>
@@ -69,6 +91,23 @@ export function renderIdentityLoginPage(container, options = {}) {
       </section>
     </div>
   `;
+}
+
+export function renderIdentityLogoutPage(container) {
+  if (!container) return;
+  container.innerHTML = `
+    <div class="identity-login-shell">
+      <section class="identity-login-panel identity-logout-panel" aria-live="polite" aria-busy="true">
+        <header class="identity-brand">
+          ${renderIdentityBrandMark()}
+          <div>
+            <p>${escapeHtml(publicBrand.product_name)}</p>
+            <h1 id="identity-login-title">正在退出登录</h1>
+          </div>
+        </header>
+        <p class="identity-login-welcome">正在安全结束当前会话，请稍候。</p>
+      </section>
+    </div>`;
 }
 
 export function renderIdentityRiskChallengePage(container, options = {}) {
@@ -98,6 +137,7 @@ export function renderIdentityRiskChallengePage(container, options = {}) {
 export function renderIdentityRegistrationPage(container, options = {}) {
   if (!container) return;
   const busy = options.busy === true;
+  const policyLoading = options.policyLoading === true;
   container.innerHTML = `
     <div class="identity-login-shell">
       <section class="identity-login-panel" aria-labelledby="identity-registration-title">
@@ -130,8 +170,10 @@ export function renderIdentityRegistrationPage(container, options = {}) {
             <button type="button" data-identity-action="refresh-captcha" aria-label="刷新验证码" title="刷新验证码">${icon("rotate-cw")}</button>
           </span></label>` : ""}
           </fieldset>
+          ${policyLoading ? '<p class="identity-setup-status" role="status">正在准备本地注册验证，填写信息后即可继续。</p>' : ""}
           ${renderError(options.error)}
-          <button class="identity-primary" type="submit" ${busy || options.unavailable ? "disabled" : ""}><span>${busy ? (options.loading ? "正在加载" : "正在注册") : "注册"}</span>${icon("arrow-right")}</button>
+          <button class="identity-primary" type="submit" ${busy || policyLoading || options.unavailable ? "disabled" : ""}><span>${busy ? (options.loading ? "正在加载" : "正在注册") : policyLoading ? "准备中" : "注册"}</span>${icon("arrow-right")}</button>
+          ${options.unavailable ? '<button class="identity-secondary-action" type="button" data-identity-action="retry-registration">重试连接</button>' : ""}
           <div class="identity-access-actions is-single">
             <button type="button" data-identity-action="show-login">返回登录</button>
           </div>
@@ -225,6 +267,7 @@ export function renderIdentityResetConfirmPage(container, options = {}) {
 export function renderIdentitySecurityPage(container, state) {
   if (!container) return;
   if (isNewOrganizationAccount(state) && !state.accountSecurityView
+      && identitySection(state.accountSection) === "workspaces"
       && (!state.error || state.workspaceView === "create")) {
     renderOrganizationStart(container, state);
     return;
@@ -237,6 +280,8 @@ export function renderIdentitySecurityPage(container, state) {
     .map((session, index) => ({ session, index }))
     .filter(({ session }) => !session.is_current);
   const displayName = account.display_name || account.email;
+  const section = identitySection(state.accountSection,
+    state.accountSecurityView ? "security" : "workspaces");
 
   if (state.notificationCenterOpen) {
     container.innerHTML = `
@@ -253,20 +298,23 @@ export function renderIdentitySecurityPage(container, state) {
   container.innerHTML = `
     <div class="identity-security-shell">
       ${renderIdentityTopbar(state)}
-      <div class="identity-security-main">
+      <div class="identity-account-layout">
+        ${renderAccountNavigation(state, section)}
+      <div class="identity-security-main identity-account-main" data-account-section="${section}">
         <section class="identity-heading" aria-labelledby="identity-security-title">
-          <p>账号安全</p>
+          <p>账号设置</p>
           <h1 id="identity-security-title">${escapeHtml(displayName)}</h1>
           <span>${escapeHtml(account.email)}</span>
         </section>
         ${renderFeedback(state.feedback)}
         ${renderError(state.error)}
-        ${renderAccountPreferences(state.accountPreferenceState)}
-        ${renderOnboardingSection(state)}
-        ${renderWorkspaceBillingSection(state)}
-        ${renderInvoiceSection(state)}
-        ${renderBusinessVerificationSection(state)}
-        <section class="identity-summary" aria-labelledby="identity-summary-title">
+        ${section === "preferences" ? renderAccountPreferences(state.accountPreferenceState) : ""}
+        ${section === "onboarding" ? renderOnboardingSection(state) : ""}
+        ${section === "billing" ? renderWorkspaceBillingSection(state) : ""}
+        ${section === "invoices" ? renderInvoiceSection(state) : ""}
+        ${section === "business" ? renderBusinessVerificationSection(state) : ""}
+        ${section === "security" ? `<section class="identity-summary" aria-labelledby="identity-summary-title">
+          ${currentSession?.assurance_level === "recovery" ? '<p role="status">当前会话为恢复保证级别，组织访问需要重新验证。</p>' : ""}
           <div class="identity-section-heading">
             <div>
               <p>安全摘要</p>
@@ -283,18 +331,17 @@ export function renderIdentitySecurityPage(container, state) {
               <dd>${account.mfa_configured ? "已启用" : "尚未启用"}</dd>
             </div>
           </dl>
-        </section>
-        ${renderMfaSection(state)}
-        ${renderWorkspaceSection(state)}
-        ${renderMembershipSection(state)}
-        ${renderConditionalAccessSection(state)}
-        ${renderDataGovernanceSection(state)}
-        ${renderPrivacyCenter(state)}
-        ${renderComplianceCenter(state)}
-        ${renderEnterpriseIdentitySection(state)}
-        ${renderScimDirectorySection(state)}
-        ${renderMachineIdentitySection(state)}
-        <section class="identity-sessions" aria-labelledby="identity-current-session-title">
+        </section>${renderMfaSection(state)}` : ""}
+        ${section === "workspaces" ? renderWorkspaceSection(state) : ""}
+        ${section === "members" ? renderMembershipSection(state) : ""}
+        ${section === "access" ? renderConditionalAccessSection(state) : ""}
+        ${section === "governance" ? renderDataGovernanceSection(state) : ""}
+        ${section === "privacy" ? renderPrivacyCenter(state) : ""}
+        ${section === "compliance" ? renderComplianceCenter(state) : ""}
+        ${section === "enterprise" ? renderEnterpriseIdentitySection(state) : ""}
+        ${section === "scim" ? renderScimDirectorySection(state) : ""}
+        ${section === "machines" ? renderMachineIdentitySection(state) : ""}
+        ${section === "devices" ? `<section class="identity-sessions" aria-labelledby="identity-current-session-title">
           <div class="identity-section-heading">
             <div>
               <p>登录设备</p>
@@ -312,8 +359,8 @@ export function renderIdentitySecurityPage(container, state) {
           <div class="identity-session-list">
             ${otherSessions.length > 0 ? otherSessions.map(({ session, index }) => renderOtherSession(session, index)).join("") : '<p class="identity-empty">当前没有其他设备登录。</p>'}
           </div>
-        </section>
-        <section class="identity-password" aria-labelledby="identity-password-title">
+        </section>` : ""}
+        ${section === "password" ? `<section class="identity-password" aria-labelledby="identity-password-title">
           <div class="identity-section-heading">
             <div>
               <p>登录密码</p>
@@ -337,10 +384,29 @@ export function renderIdentitySecurityPage(container, state) {
               <button class="identity-primary" type="submit">更新密码</button>
             </div>
           </form>
-        </section>
+        </section>` : ""}
+      </div>
       </div>
     </div>
   `;
+}
+
+function renderAccountNavigation(state, active) {
+  const context = state.workspaceContext;
+  const role = context?.role;
+  const renderLink = (item) => `<a href="#${item.id}" data-account-section-link="${item.id}"
+    ${active === item.id ? 'aria-current="page"' : ""}>${escapeHtml(item.label)}</a>`;
+  const organizationLabel = role === "owner" || role === "admin" ? "进入组织管理" : "进入组织空间";
+  const organizationLink = context
+    ? `<a class="identity-account-workspace-link" href="/console.html">${escapeHtml(organizationLabel)}</a>`
+    : state.hasPendingInvitation
+      ? '<a class="identity-account-workspace-link" href="/console.html">查看组织邀请</a>'
+      : "";
+  return `<nav class="identity-account-navigation" aria-label="账号设置栏目">
+    <div class="identity-account-primary-nav">${IDENTITY_SECTIONS.filter((item) => !item.workspace).map(renderLink).join("")}</div>
+    ${organizationLink}
+    ${state.platformAccess ? '<a href="/platform.html">SaaS 平台管理</a>' : ""}
+  </nav>`;
 }
 
 function renderIdentityTopbar(state) {
@@ -349,14 +415,14 @@ function renderIdentityTopbar(state) {
   const available = Boolean(state.workspaceContext);
   return `
     <header class="identity-topbar">
-      <a class="identity-wordmark" href="/identity.html" aria-label="${escapeAttribute(publicBrand.product_name)} 账号安全首页">
+      <a class="identity-wordmark" href="/" aria-label="${escapeAttribute(publicBrand.product_name)} 首页">
         ${renderIdentityBrandMark()}
         <strong>${escapeHtml(publicBrand.product_name)}</strong>
       </a>
       ${renderWorkspaceSelector(state)}
       <div class="identity-topbar-actions">
-        ${isNewOrganizationAccount(state) ? '<button class="identity-quiet-command" type="button" data-identity-action="show-organization-start">返回组织开通</button>' : ""}
-        ${available ? `<a class="identity-quiet-command" href="/console.html">进入控制台 ${icon("arrow-right")}</a>` : ""}
+        ${isNewOrganizationAccount(state) ? '<a class="identity-quiet-command" href="#workspaces">返回组织开通</a>' : ""}
+        ${available ? `<a class="identity-quiet-command" href="/console.html">${icon("arrow-left")}${escapeHtml(state.workspaceContext?.role === "owner" || state.workspaceContext?.role === "admin" ? "进入组织管理" : "进入组织空间")}</a>` : ""}
         <button
           class="identity-notification-button"
           type="button"
@@ -564,10 +630,13 @@ function renderOnboardingSection(state) {
         aria-label="初始化进度"
       ></progress>
       <div class="identity-onboarding-layout">
-        <ol class="identity-onboarding-steps" aria-label="初始化步骤">
-          ${onboarding.steps.map((step, index) => renderOnboardingStepButton(step, index, selectedIndex, busy)).join("")}
-        </ol>
         ${renderOnboardingStepPanel(selectedStep, context, busy, state.onboardingError)}
+        <details class="identity-onboarding-steps-details">
+          <summary>查看全部初始化步骤（${onboarding.completed_steps}/${onboarding.total_steps}）</summary>
+          <ol class="identity-onboarding-steps" aria-label="初始化步骤">
+            ${onboarding.steps.map((step, index) => renderOnboardingStepButton(step, index, selectedIndex, busy)).join("")}
+          </ol>
+        </details>
       </div>
     </section>
   `;
@@ -873,7 +942,6 @@ function renderOnboardingStepPanel(step, context, busy, error) {
     && step.status === "complete"
     && step.source === "user_confirmed"
     && new Set(["workspace_profile", "environment"]).has(step.id);
-  const showNavigation = new Set(["configure", "view", "recheck"]).has(step.action) || !canMutate;
   const navigationHref = workspaceOnboardingHref(step);
   return `
     <div class="identity-onboarding-panel" tabindex="-1" data-onboarding-step-panel>
@@ -891,10 +959,10 @@ function renderOnboardingStepPanel(step, context, busy, error) {
       </dl>
       ${error ? renderError(error) : ""}
       <div class="identity-onboarding-actions">
-        ${canConfirm ? `<button class="identity-primary" type="button" data-identity-action="confirm-onboarding-step" ${busy ? "disabled" : ""}>确认完成</button>` : ""}
+        ${navigationHref ? `<a class="identity-primary identity-onboarding-link" href="${escapeAttribute(navigationHref)}">${step.status === "complete" ? "查看配置" : step.id === "workspace_profile" ? "编辑组织名称" : "打开配置"}</a>` : ""}
+        ${canConfirm ? `<button class="identity-quiet-command" type="button" data-identity-action="confirm-onboarding-step" ${busy ? "disabled" : ""}>确认已配置</button>` : ""}
         ${canDefer ? `<button class="identity-quiet-command" type="button" data-identity-action="defer-onboarding-step" ${busy ? "disabled" : ""}>稍后处理</button>` : ""}
         ${canReopen ? `<button class="identity-quiet-command" type="button" data-identity-action="reopen-onboarding-step" ${busy ? "disabled" : ""}>重新配置</button>` : ""}
-        ${showNavigation && navigationHref ? `<a class="identity-quiet-command identity-onboarding-link" href="${escapeAttribute(navigationHref)}">${step.status === "complete" ? "查看" : "打开配置"}</a>` : ""}
       </div>
     </div>
   `;
@@ -1914,22 +1982,27 @@ function renderMfaSection(state) {
     ? state.mfaEnrollmentMethod
     : "totp";
   const enrollment = state.mfaEnrollment;
+  const enrollmentOpen = state.identitySecurityTool === "enrollment" || Boolean(enrollment)
+    || state.currentSession?.assurance_level === "recovery";
+  const recoveryChallenge = overview?.recovery_challenge ?? null;
+  const recoveryOpen = state.identitySecurityTool === "recovery" || Boolean(recoveryChallenge);
+  const devicesOpen = state.identitySecurityTool === "devices";
   return `
     <section class="identity-mfa identity-security-controls" aria-labelledby="identity-mfa-title" aria-busy="${state.identitySecurityBusy === true}">
       <div class="identity-section-heading">
         <div>
           <p>身份保护</p>
-          <h2 id="identity-mfa-title">验证因子与恢复</h2>
+          <h2 id="identity-mfa-title">登录保护</h2>
         </div>
         ${state.platformAccess ? '<a class="identity-primary identity-platform-link" href="/platform.html">进入平台工作台</a>' : ""}
       </div>
       ${renderError(state.identitySecurityError)}
       ${overview ? `
-        <div class="identity-security-summary">
-          <div><span>活跃因子</span><strong>${activeFactors.length}</strong></div>
+        ${factors.length || overview.recovery_code_set || devices.length ? `<div class="identity-security-summary">
+          <div><span>验证方式</span><strong>${activeFactors.length}</strong></div>
           <div><span>恢复码</span><strong>${escapeHtml(recoveryCodeStateLabel(overview.recovery_code_set))}</strong></div>
           <div><span>受信设备</span><strong>${devices.filter((device) => device.status === "active").length}</strong></div>
-        </div>
+        </div>` : ""}
         <div class="identity-factor-list">
           ${factors.length > 0
             ? factors.map((factor, index) => renderMfaFactor(
@@ -1938,11 +2011,12 @@ function renderMfaSection(state) {
               activeFactors.length,
               state,
             )).join("")
-            : '<p class="identity-empty">尚未配置验证因子。</p>'}
+            : '<p class="identity-empty">尚未添加验证方式。</p>'}
         </div>
       ` : ""}
-      <div class="identity-security-subheading">
-        <div><span>添加保护方式</span><h3>新验证因子</h3></div>
+      ${renderSecurityToolStart("enrollment", "添加验证方式", enrollmentOpen, state.identitySecurityBusy || state.currentSession?.assurance_level === "recovery")}
+      ${enrollmentOpen ? `<div class="identity-security-tool-body"><div class="identity-security-subheading">
+        <div><h3>验证方式</h3></div>
         <div class="identity-method-segmented" role="group" aria-label="验证方式">
           ${renderMfaMethodButton("totp", "认证器", method, state.identitySecurityBusy)}
           ${renderMfaMethodButton("webauthn", "安全密钥", method, state.identitySecurityBusy)}
@@ -1959,16 +2033,24 @@ function renderMfaSection(state) {
           <button class="identity-primary" type="submit" ${state.identitySecurityBusy ? "disabled" : ""}>${escapeHtml(mfaActionLabel(method, overview?.recovery_code_set))}</button>
         </form>
       `}
-      ${renderControlledRecovery(
-        overview?.recovery_challenge ?? null,
+      </div>` : ""}</details>
+      ${renderSecurityToolStart("devices", "受信设备", devicesOpen, state.identitySecurityBusy)}
+      ${devicesOpen ? `<div class="identity-security-tool-body">${renderTrustedDevices(devices, activeFactors, state.identitySecurityBusy)}</div>` : ""}</details>
+      ${renderSecurityToolStart("recovery", "恢复账号访问", recoveryOpen, state.identitySecurityBusy || Boolean(recoveryChallenge))}
+      ${recoveryOpen ? `<div class="identity-security-tool-body">${renderControlledRecovery(
+        recoveryChallenge,
         activeFactors.length > 0
           && overview?.recovery_code_set?.status === "active"
           && overview.recovery_code_set.remaining_count > 0,
         state.identitySecurityBusy,
-      )}
-      ${renderTrustedDevices(devices, activeFactors, state.identitySecurityBusy)}
+      )}</div>` : ""}</details>
       ${renderRecoveryCodesDialog(state.recoveryCodes)}
     </section>`;
+}
+
+function renderSecurityToolStart(tool, label, open, busy) {
+  return `<details class="identity-security-tool"${open ? " open" : ""}>
+    <summary data-identity-action="toggle-security-tool" data-security-tool="${tool}" aria-disabled="${busy === true}">${label}</summary>`;
 }
 
 function renderControlledRecovery(challenge, available, busy) {
@@ -1989,6 +2071,9 @@ function renderControlledRecovery(challenge, available, busy) {
           <button class="identity-danger-command" type="submit" ${busy ? "disabled" : ""}>完成恢复</button>
         </form>
       </div>`;
+  }
+  if (!available) {
+    return '<p class="identity-empty">尚无可用的恢复方式。需先启用验证方式并生成恢复码。</p>';
   }
   return `
     <div class="identity-controlled-recovery" aria-labelledby="identity-controlled-recovery-title">
@@ -2063,11 +2148,11 @@ function renderTrustedDevices(devices, activeFactors, busy) {
         </div>
       `).join("") : '<p class="identity-empty">尚无受信设备。</p>'}
     </div>
-    <form class="identity-trusted-device-form" data-identity-trusted-device-form autocomplete="off">
+    ${activeTotp ? `<form class="identity-trusted-device-form" data-identity-trusted-device-form autocomplete="off">
       <label><span>设备名称</span><input name="label" maxlength="80" autocomplete="off" required /></label>
       <label><span>动态验证码</span><input name="totpCode" type="password" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required /></label>
       <button class="identity-primary" type="submit" ${activeTotp && !busy ? "" : "disabled"}>信任当前设备</button>
-    </form>
+    </form>` : '<p class="identity-empty">需先启用认证器，才能验证并信任当前设备。</p>'}
   `;
 }
 
@@ -2168,34 +2253,16 @@ function renderWorkspaceOption(choice, index, context) {
 }
 
 function renderMembershipSection(state) {
-  const context = state.workspaceContext ?? null;
-  const members = Array.isArray(state.memberships) ? state.memberships : [];
-  const navigationCount = Array.isArray(state.navigationItems)
-    ? state.navigationItems.filter((item) => item.visible !== false && item.disabled !== true).length
-    : 0;
   return `
     <section class="identity-memberships" aria-labelledby="identity-memberships-title">
       <div class="identity-section-heading">
         <div>
-          <p>成员与权限</p>
-          <h2 id="identity-memberships-title">当前空间成员</h2>
+          <p>组织空间</p>
+          <h2 id="identity-memberships-title">进入组织工作台</h2>
         </div>
-        <button class="identity-quiet-command" type="button" data-identity-action="refresh-workspace-context">刷新</button>
       </div>
-      ${
-        context
-          ? `
-            <div class="identity-context-summary">
-              <div><span>当前职责</span><strong>${escapeHtml(roleLabel(context.role))}</strong></div>
-              <div><span>可访问功能</span><strong>${navigationCount} 项</strong></div>
-              <div><span>会话有效至</span><strong>${escapeHtml(formatDateTime(context.expires_at))}</strong></div>
-            </div>
-            ${renderMembershipList(members)}
-            ${renderInvitationForm(state)}
-            ${renderOwnerTransferForm(context, members)}
-          `
-          : '<p class="identity-empty">选择一个空间后可查看成员与职责。</p>'
-      }
+      <p class="identity-empty">组织管理员在组织工作台管理成员、模型、路由、财务和治理；其他成员在这里进入自己的组织空间。</p>
+      <a class="identity-primary identity-membership-console-link" href="/console.html">进入组织工作台</a>
     </section>
   `;
 }
@@ -2259,7 +2326,7 @@ function renderInvitationForm(state) {
   return `
     <div class="identity-membership-action">
       <div class="identity-section-heading">
-        <div><p>邀请</p><h3>添加成员</h3></div>
+        <div><p>后台访问</p><h3>邀请后台成员</h3></div>
       </div>
       <form class="identity-membership-form" data-membership-invitation-form>
         <label>
@@ -2377,7 +2444,7 @@ function renderOrganizationStart(container, state) {
       <header class="identity-organization-topbar">
         <a class="identity-wordmark" href="/">${renderIdentityBrandMark()}<strong>${escapeHtml(publicBrand.product_name)}</strong></a>
         <nav aria-label="账号操作">
-          <button class="identity-quiet-command" type="button" data-identity-action="show-account-security" ${state.workspaceCreating ? "disabled" : ""}>账号安全</button>
+          ${state.workspaceCreating ? "" : '<a class="identity-quiet-command" href="#security">账号安全</a>'}
           <button class="identity-quiet-command" type="button" data-identity-action="logout">退出登录</button>
         </nav>
       </header>
@@ -2407,12 +2474,13 @@ function renderWorkspaceSection(state) {
             : '<button class="identity-quiet-command" type="button" data-identity-action="show-workspace-create"><span aria-hidden="true">+</span> 创建空间</button>'
         }
       </div>
-      ${creating ? renderWorkspaceCreateForm(state.workspaceDraft, { busy: state.workspaceCreating }) : renderWorkspaceList(workspaces)}
+      ${creating ? renderWorkspaceCreateForm(state.workspaceDraft, { busy: state.workspaceCreating }) : renderWorkspaceList(workspaces, state.workspaceChoices)}
     </section>
   `;
 }
 
-function renderWorkspaceList(workspaces) {
+function renderWorkspaceList(workspaces, choices = []) {
+  workspaces = [...workspaces, ...choices.filter((choice) => !workspaces.some((workspace) => workspace.workspace_id === choice.workspace_id))];
   if (workspaces.length === 0) {
     return '<p class="identity-empty">尚未创建空间。</p>';
   }
@@ -2423,13 +2491,11 @@ function renderWorkspaceList(workspaces) {
           <div class="identity-workspace-mark" aria-hidden="true">${workspace.kind === "personal" ? "P" : "O"}</div>
           <div>
             <strong>${escapeHtml(workspace.name)}</strong>
-            <span>${workspace.kind === "personal" ? "个人空间" : "企业空间"}${workspace.slug ? ` · ${escapeHtml(workspace.slug)}` : ""}</span>
+            <span>${workspace.kind === "personal" ? "个人空间" : "组织空间"}</span>
           </div>
-          <dl>
-            <div><dt>Region</dt><dd>${escapeHtml(workspace.region)}</dd></div>
-            <div><dt>环境</dt><dd>${workspace.environment?.code === "dev" ? "dev" : "不可用"}</dd></div>
-            <div><dt>状态</dt><dd>${workspaceStatusLabel(workspace)}</dd></div>
-          </dl>
+          ${choices.some((choice) => choice.workspace_id === workspace.workspace_id && choice.role !== "service_account")
+    ? `<button class="identity-primary" type="button" data-identity-action="switch-workspace" data-workspace-index="${choices.findIndex((choice) => choice.workspace_id === workspace.workspace_id)}">进入空间 ${icon("arrow-right")}</button>`
+    : `<span>${workspaceStatusLabel(workspace)}</span>`}
         </article>
       `,
     )
@@ -2451,29 +2517,11 @@ function renderWorkspaceCreateForm(draft = {}, { organizationOnly = false, busy 
           ? `
             <label>
               <span>组织名称</span>
-              <input name="name" type="text" maxlength="160" autocomplete="organization" value="${escapeAttribute(draft?.name ?? "")}" required autofocus ${disabled} />
-            </label>
-            <label>
-              <span>组织标识</span>
-              <input name="slug" type="text" minlength="3" maxlength="48" pattern="[a-z0-9](?:[a-z0-9\\-]{1,46}[a-z0-9])" value="${escapeAttribute(draft?.slug ?? "")}" required ${disabled} />
+              <input name="name" type="text" maxlength="160" autocomplete="organization" placeholder="公司或团队名称" value="${escapeAttribute(draft?.name ?? "")}" required autofocus ${disabled} />
             </label>
           `
           : ""
       }
-      <label>
-        <span>服务区域</span>
-        <select name="region" required ${disabled}>
-          ${renderOption("cn-north-1", "华北", draft?.region)}
-          ${renderOption("cn-east-1", "华东", draft?.region)}
-        </select>
-      </label>
-      <label>
-        <span>服务模式</span>
-        <select name="serviceMode" required ${disabled}>
-          ${renderOption("internal_only", "内部服务", draft?.serviceMode)}
-          ${renderOption("public_service", "公共服务", draft?.serviceMode)}
-        </select>
-      </label>
       <div class="identity-workspace-actions">
         <button class="identity-quiet-command" type="button" data-identity-action="cancel-workspace-create" ${disabled}>取消</button>
         <button class="identity-primary" type="submit" ${disabled}>${busy ? "正在创建" : kind === "organization" ? "创建组织" : "创建空间"}</button>
@@ -2558,6 +2606,11 @@ function renderIdentityBrandMark() {
 
 function normalizedPublicBrand(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return DEFAULT_PUBLIC_BRAND;
+  // Preserve published custom brands; only translate the unchanged legacy bootstrap brand.
+  if (value.brand_generation === 1 && value.product_name === "MetaHub"
+    && value.primary_color === "#176B87" && value.secondary_color === "#F59E0B"
+    && value.login_title === "企业 AI Gateway" && value.login_message === "安全、可追踪的企业模型网关"
+    && value.logo_path === null && value.favicon_path === null) return DEFAULT_PUBLIC_BRAND;
   const productName = safeBrandText(value.product_name, 80) || DEFAULT_PUBLIC_BRAND.product_name;
   return Object.freeze({
     product_name: productName,

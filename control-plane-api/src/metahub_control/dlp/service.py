@@ -1,6 +1,7 @@
 """模块职责：说明本文件在 MetaHub 企业级 AI Gateway 中承担的接口、服务或测试职责。
 
-维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，Provider Key 与 Token 不得明文落日志。
+维护边界：保留 request_id、tenant_id、权限校验、用量追踪和脱敏语义。
+Provider Key 与 Token 不得明文落日志。
 来源文件：control-plane-api/src/metahub_control/dlp/service.py
 """
 
@@ -12,6 +13,12 @@ import sqlite3
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from metahub_shared.db.connection import connect_database
+from metahub_shared.db.errors import DbError
+from metahub_shared.runtime.config import AppConfig
+from metahub_shared.runtime.errors import ApiError
+from metahub_shared.runtime.safe_regex import UnsafeRegexError, compile_safe_dlp_regex
+
 from metahub_control.audit import (
     AuditRequestMeta,
     commit_audited_transaction,
@@ -19,13 +26,15 @@ from metahub_control.audit import (
     record_audit_log,
 )
 from metahub_control.auth import AuthContext
-from metahub_shared.db.connection import connect_database
-from metahub_shared.db.errors import DbError
-from metahub_shared.runtime.config import AppConfig
-from metahub_shared.runtime.errors import ApiError
-from metahub_shared.runtime.safe_regex import UnsafeRegexError, compile_safe_dlp_regex
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 
-from .models import CreateDlpRuleRequest, DlpRuleInfo, DlpRuleListResponse, DlpRuleResponse, UpdateDlpRuleRequest
+from .models import (
+    CreateDlpRuleRequest,
+    DlpRuleInfo,
+    DlpRuleListResponse,
+    DlpRuleResponse,
+    UpdateDlpRuleRequest,
+)
 
 logger = logging.getLogger("metahub.control.dlp")
 
@@ -63,7 +72,7 @@ def list_dlp_rules(
 ) -> DlpRuleListResponse:
     """读取当前租户的 DLP 规则列表。
 
-    查询永远以登录态 tenant_id 为第一过滤条件，不允许前端通过 query 参数指定或猜测其他租户的 DLP 策略。
+    查询始终按认证上下文的 tenant_id 隔离，前端查询参数不能覆盖其他租户的 DLP 策略。
     """
 
     normalized_status = _normalize_query_status(status)
@@ -85,24 +94,29 @@ def list_dlp_rules(
         # 方向筛选仍以 tenant_id 为首条件，不能把前端 query 当作租户边界。
         clauses.append("scan_scope=?")
         params.append(normalized_scan_scope)
-    connection = _connect(config)
-    try:
+    with ResourceWriteTransaction(
+        _connect(config),
+        config,
+        context,
+        "dlp.read",
+        read_only=True,
+    ) as transaction:
+        context = transaction.context
+        connection = transaction.connection
         rows = connection.execute(
-        f"""
-        SELECT *
-        FROM dlp_rules
-        WHERE {' AND '.join(clauses)}
-        ORDER BY priority ASC, updated_at DESC, name ASC
-        """,
-        params,
+            f"""
+            SELECT *
+            FROM dlp_rules
+            WHERE {" AND ".join(clauses)}
+            ORDER BY priority ASC, updated_at DESC, name ASC
+            """,
+            params,
         ).fetchall()
         return DlpRuleListResponse(
             dlp_rules=[_rule_info(row) for row in rows],
             request_id=request_id,
             trace_id=trace_id,
         )
-    finally:
-        connection.close()
 
 
 def create_dlp_rule(
@@ -116,73 +130,80 @@ def create_dlp_rule(
 ) -> DlpRuleResponse:
     """创建当前租户的 DLP 规则。
 
-    服务端只写入认证上下文中的 tenant_id；请求体中即使携带 tenant_id 也会被 Pydantic 忽略，不能影响归属。
+    服务端只写入认证上下文中的 tenant_id；请求正文不能覆盖资源归属。
     """
 
-    connection = _connect(config)
-    _ensure_rule_quota(connection, context.user.tenant_id)
-    rule_type = _normalize_required_rule_type(payload.rule_type)
-    pattern = _normalize_pattern(rule_type, payload.pattern)
-    pattern_hash = _pattern_hash(rule_type, pattern)
-    now = _to_db_time(_utcnow())
-    rule_id = f"dlp_{uuid4().hex}"
-    try:
-        connection.execute(
-            """
-            INSERT INTO dlp_rules(
-              dlp_rule_id, tenant_id, name, rule_type, pattern, pattern_hash,
-              action, scan_scope, status, priority, description, created_by, updated_by,
-              created_at, updated_at
-            )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                rule_id,
-                context.user.tenant_id,
-                _normalize_name(payload.name),
-                rule_type,
-                pattern,
-                pattern_hash,
-                _normalize_required_action(payload.action),
-                _normalize_scan_scope(
-                    "input" if payload.scan_scope is None else payload.scan_scope
+    with ResourceWriteTransaction(
+        _connect(config),
+        config,
+        context,
+        "dlp.write",
+    ) as transaction:
+        context = transaction.context
+        connection = transaction.connection
+        _ensure_rule_quota(connection, context.user.tenant_id)
+        rule_type = _normalize_required_rule_type(payload.rule_type)
+        pattern = _normalize_pattern(rule_type, payload.pattern)
+        pattern_hash = _pattern_hash(rule_type, pattern)
+        now = _to_db_time(_utcnow())
+        rule_id = f"dlp_{uuid4().hex}"
+        try:
+            connection.execute(
+                """
+                INSERT INTO dlp_rules(
+                  dlp_rule_id, tenant_id, name, rule_type, pattern, pattern_hash,
+                  action, scan_scope, status, priority, description, created_by, updated_by,
+                  created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    rule_id,
+                    context.user.tenant_id,
+                    _normalize_name(payload.name),
+                    rule_type,
+                    pattern,
+                    pattern_hash,
+                    _normalize_required_action(payload.action),
+                    _normalize_scan_scope(
+                        "input" if payload.scan_scope is None else payload.scan_scope
+                    ),
+                    _normalize_status(payload.status or "active"),
+                    _normalize_priority(payload.priority if payload.priority is not None else 100),
+                    _normalize_description(payload.description),
+                    context.user.user_id,
+                    context.user.user_id,
+                    now,
+                    now,
                 ),
-                _normalize_status(payload.status or "active"),
-                _normalize_priority(payload.priority if payload.priority is not None else 100),
-                _normalize_description(payload.description),
-                context.user.user_id,
-                context.user.user_id,
-                now,
-                now,
-            ),
-        )
-        row = _load_rule(connection, context.user.tenant_id, rule_id)
-        # 插入成功却无法回读时不能提交不完整业务和审计事实。
-        if row is None:
-            raise ApiError("dlp.status_unavailable")
-        # DLP 审计只传递 pattern_hash 和治理元数据，原始 pattern/description 不进入审计参数。
-        audit_record = record_audit_log(
-            connection,
-            context,
-            action="dlp_rule.created",
-            object_type="dlp_rule",
-            object_id=row["dlp_rule_id"],
-            object_name=row["name"],
-            before_summary={},
-            after_summary=_dlp_audit_summary(row),
-            request_meta=_audit_request_meta(audit_request_meta),
-            request_id=request_id,
-            trace_id=trace_id,
-        )
-        commit_audited_transaction(connection)
-    # 唯一约束命中说明同租户已有相同类型和内容的规则，返回可解释业务错误而不是 SQLite 细节。
-    except sqlite3.IntegrityError as exc:
-        connection.rollback()
-        raise ApiError("dlp.rule_invalid") from exc
-    except Exception:
-        # 审计拒绝、审计表不可用或 commit 失败时，DLP 规则必须同步回滚。
-        connection.rollback()
-        raise
+            )
+            row = _load_rule(connection, context.user.tenant_id, rule_id)
+            # 插入成功却无法回读时不能提交不完整业务和审计事实。
+            if row is None:
+                raise ApiError("dlp.status_unavailable")
+            # DLP 审计只传递 pattern_hash 和治理元数据，原始 pattern/description 不进入审计参数。
+            audit_record = record_audit_log(
+                connection,
+                context,
+                action="dlp_rule.created",
+                object_type="dlp_rule",
+                object_id=row["dlp_rule_id"],
+                object_name=row["name"],
+                before_summary={},
+                after_summary=_dlp_audit_summary(row),
+                request_meta=_audit_request_meta(audit_request_meta),
+                request_id=request_id,
+                trace_id=trace_id,
+            )
+            transaction.commit(commit_audited_transaction)
+        # 唯一约束命中说明同租户已有相同类型和内容的规则，返回可解释业务错误而不是 SQLite 细节。
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            raise ApiError("dlp.rule_invalid") from exc
+        except Exception:
+            # 审计拒绝、审计表不可用或 commit 失败时，DLP 规则必须同步回滚。
+            connection.rollback()
+            raise
     dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
     _log_rule_changed(context, row, request_id, trace_id, event="dlp.rule_created")
     return DlpRuleResponse(dlp_rule=_rule_info(row), request_id=request_id, trace_id=trace_id)
@@ -208,49 +229,63 @@ def update_dlp_rule(
     if not provided:
         # 空 PATCH 无法表达有效治理变更，必须拒绝，避免控制台误报保存成功。
         raise ApiError("dlp.update_empty")
-    connection = _connect(config)
-    existing = _load_rule(connection, context.user.tenant_id, normalized_rule_id)
-    if existing is None:
-        # 404 不区分不存在和跨租户，避免暴露其他租户规则 ID 是否有效。
-        raise ApiError("dlp.rule_not_found")
-    updates, values = _update_values(payload, provided, existing)
-    updates.extend(["updated_by=?", "updated_at=?"])
-    values.extend([context.user.user_id, _to_db_time(_utcnow()), context.user.tenant_id, normalized_rule_id])
-    try:
-        connection.execute(
-            f"""
-            UPDATE dlp_rules
-            SET {', '.join(updates)}
-            WHERE tenant_id=? AND dlp_rule_id=?
-            """,
-            values,
-        )
-        row = _load_rule(connection, context.user.tenant_id, normalized_rule_id)
-        # 更新后回读失败时回滚事务，避免返回或审计过期对象状态。
-        if row is None:
+    with ResourceWriteTransaction(
+        _connect(config),
+        config,
+        context,
+        "dlp.write",
+    ) as transaction:
+        context = transaction.context
+        connection = transaction.connection
+        existing = _load_rule(connection, context.user.tenant_id, normalized_rule_id)
+        if existing is None:
+            # 404 不区分不存在和跨租户，避免暴露其他租户规则 ID 是否有效。
             raise ApiError("dlp.rule_not_found")
-        audit_record = record_audit_log(
-            connection,
-            context,
-            action="dlp_rule.updated",
-            object_type="dlp_rule",
-            object_id=row["dlp_rule_id"],
-            object_name=row["name"],
-            before_summary=_dlp_audit_summary(existing),
-            after_summary=_dlp_audit_summary(row),
-            request_meta=_audit_request_meta(audit_request_meta),
-            request_id=request_id,
-            trace_id=trace_id,
+        updates, values = _update_values(payload, provided, existing)
+        updates.extend(["updated_by=?", "updated_at=?"])
+        values.extend(
+            [
+                context.user.user_id,
+                _to_db_time(_utcnow()),
+                context.user.tenant_id,
+                normalized_rule_id,
+            ]
         )
-        commit_audited_transaction(connection)
-    # 修改 pattern 后可能触发同租户唯一约束，统一返回规则非法而不是泄露索引名称。
-    except sqlite3.IntegrityError as exc:
-        connection.rollback()
-        raise ApiError("dlp.rule_invalid") from exc
-    # 任何审计、提交或未知异常都必须回滚 DLP 更新，保持业务与审计原子性。
-    except Exception:
-        connection.rollback()
-        raise
+        try:
+            connection.execute(
+                f"""
+                UPDATE dlp_rules
+                SET {", ".join(updates)}
+                WHERE tenant_id=? AND dlp_rule_id=?
+                """,
+                values,
+            )
+            row = _load_rule(connection, context.user.tenant_id, normalized_rule_id)
+            # 更新后回读失败时回滚事务，避免返回或审计过期对象状态。
+            if row is None:
+                raise ApiError("dlp.rule_not_found")
+            audit_record = record_audit_log(
+                connection,
+                context,
+                action="dlp_rule.updated",
+                object_type="dlp_rule",
+                object_id=row["dlp_rule_id"],
+                object_name=row["name"],
+                before_summary=_dlp_audit_summary(existing),
+                after_summary=_dlp_audit_summary(row),
+                request_meta=_audit_request_meta(audit_request_meta),
+                request_id=request_id,
+                trace_id=trace_id,
+            )
+            transaction.commit(commit_audited_transaction)
+        # 修改 pattern 后可能触发同租户唯一约束，统一返回规则非法而不是泄露索引名称。
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            raise ApiError("dlp.rule_invalid") from exc
+        # 任何审计、提交或未知异常都必须回滚 DLP 更新，保持业务与审计原子性。
+        except Exception:
+            connection.rollback()
+            raise
     dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
     _log_rule_changed(context, row, request_id, trace_id, event="dlp.rule_updated")
     return DlpRuleResponse(dlp_rule=_rule_info(row), request_id=request_id, trace_id=trace_id)
@@ -522,7 +557,7 @@ def _normalize_rule_id(value: object | None) -> str:
 def _pattern_hash(rule_type: str, pattern: str) -> str:
     """生成 DLP pattern 排重哈希，哈希值不替代规则内容权限控制。"""
 
-    digest = hashlib.sha256(f"{rule_type}:{pattern}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"{rule_type}:{pattern}".encode()).hexdigest()
     return f"sha256:{digest}"
 
 
@@ -567,7 +602,9 @@ def _utcnow() -> datetime:
     return datetime.now(UTC).replace(microsecond=0)
 
 
-def _log_rule_changed(context: AuthContext, row: sqlite3.Row, request_id: str, trace_id: str, *, event: str) -> None:
+def _log_rule_changed(
+    context: AuthContext, row: sqlite3.Row, request_id: str, trace_id: str, *, event: str
+) -> None:
     """记录 DLP 规则变更事件，payload 不包含 pattern 或任何用户输入样例。"""
 
     logger.info(

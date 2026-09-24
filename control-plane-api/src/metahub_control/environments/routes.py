@@ -28,7 +28,7 @@ async def get_environments(
     request: Request,
     context: Annotated[
         AuthContext,
-        Depends(require_workspace_or_legacy_permissions("environment.read")),
+        Depends(require_workspace_or_legacy_permissions("environment.read", touch=False)),
     ],
     status_filter: Annotated[str | None, Query(alias="status")] = None,
     code: str | None = None,

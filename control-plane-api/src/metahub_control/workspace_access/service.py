@@ -9,19 +9,21 @@ import logging
 import re
 import secrets
 import sqlite3
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from metahub_shared.db.connection import connect_database, database_operation_deadline
 from metahub_shared.db.errors import DbError
-from metahub_shared.db.schema import table_exists
+from metahub_shared.db.schema import existing_table_names, table_exists
 from metahub_shared.db.security import hash_token, verify_password
 from metahub_shared.rbac import PERMISSION_BY_CODE, authorization_fingerprint
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.rbac_snapshot import require_actor_runtime_permissions
 
+from metahub_control.audit import AuditActor, AuditRequestMeta
 from metahub_control.auth.models import AuthSession, AuthTenant, AuthUser
 from metahub_control.auth.service import AuthContext, authentication_database_deadline
 from metahub_control.customer_support.permissions import (
@@ -35,6 +37,7 @@ from metahub_control.identity.service import (
 from metahub_control.migration_operations.permissions import (
     MIGRATION_ROLE_PERMISSIONS,
 )
+from metahub_control.virtual_keys.service import disable_virtual_keys_created_by
 
 from .assurance_permissions import ASSURANCE_ROLE_PERMISSIONS
 from .brand_permissions import WORKSPACE_BRAND_ROLE_PERMISSIONS
@@ -683,6 +686,107 @@ def switch_workspace(
         connection.close()
 
 
+def handoff_workspace_to_partner(
+    config: AppConfig,
+    *,
+    global_session_token: str,
+    global_csrf_token: str,
+    workspace_session_token: str,
+    request_id: str,
+    trace_id: str,
+) -> None:
+    """Retry the short handoff write when page-view telemetry briefly holds SQLite."""
+
+    for attempt in range(3):
+        try:
+            return _handoff_workspace_to_partner_once(
+                config,
+                global_session_token=global_session_token,
+                global_csrf_token=global_csrf_token,
+                workspace_session_token=workspace_session_token,
+                request_id=request_id,
+                trace_id=trace_id,
+            )
+        except ApiError as exc:
+            if exc.code != "workspace_session.unavailable" or attempt == 2:
+                raise
+            time.sleep(0.08 * (attempt + 1))
+
+
+def _handoff_workspace_to_partner_once(
+    config: AppConfig,
+    *,
+    global_session_token: str,
+    global_csrf_token: str,
+    workspace_session_token: str,
+    request_id: str,
+    trace_id: str,
+) -> None:
+    """Leave the Workspace credential domain for the isolated Partner surface.
+
+    Partner requests intentionally accept only a GlobalSession.  This explicit
+    transition verifies that the browser's active WorkspaceSession belongs to
+    that same GlobalSession, revokes it, and lets the route clear its cookies.
+    """
+
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        identity, now = authenticate_global_session_in_transaction(
+            connection,
+            config,
+            session_token=global_session_token,
+            csrf_token=global_csrf_token,
+            touch=True,
+        )
+        workspace, _row = _authenticate_workspace(
+            connection,
+            config,
+            session_token=workspace_session_token,
+            csrf_token=None,
+            touch=False,
+        )
+        if (
+            workspace.account_id != identity.account_id
+            or workspace.global_session_id != identity.session_id
+        ):
+            raise ApiError("workspace_session.credential_conflict")
+        stamp = _db_time(now)
+        revoked = connection.execute(
+            """UPDATE workspace_sessions
+                 SET status='revoked',revoked_at=?,revoked_reason='partner_handoff',updated_at=?
+               WHERE workspace_session_id=? AND status='active'""",
+            (stamp, stamp, workspace.workspace_session_id),
+        ).rowcount
+        if revoked != 1:
+            raise ApiError("workspace_session.revoked")
+        _write_event(
+            connection,
+            workspace_id=workspace.workspace_id,
+            tenant_id=workspace.tenant_id,
+            actor_account_id=identity.account_id,
+            subject_membership_id=workspace.membership_id,
+            # PRD-094's immutable event catalog has no separate handoff code;
+            # retain the audited workspace transition type with a precise reason.
+            event_type="workspace.switched",
+            reason_code="partner_handoff",
+            request_id=request_id,
+            trace_id=trace_id,
+            payload={"schema_version": 1},
+            now=now,
+        )
+        connection.commit()
+    except ApiError as exc:
+        _finish_workspace_error(connection, exc)
+        raise
+    except (sqlite3.Error, DbError, KeyError, TypeError, ValueError):
+        if connection.in_transaction:
+            connection.rollback()
+        raise ApiError("workspace_session.unavailable") from None
+    finally:
+        connection.close()
+
+
 def get_workspace_session(
     config: AppConfig,
     *,
@@ -730,6 +834,7 @@ def authenticate_workspace_session_as_auth_context(
     csrf_token: str | None = None,
     monotonic_deadline: float | None = None,
     deadline_error_code: str = "workspace_session.unavailable",
+    touch: bool = True,
 ) -> AuthContext:
     return authenticate_workspace_session_context(
         config,
@@ -737,6 +842,7 @@ def authenticate_workspace_session_as_auth_context(
         csrf_token=csrf_token,
         monotonic_deadline=monotonic_deadline,
         deadline_error_code=deadline_error_code,
+        touch=touch,
     ).as_auth_context()
 
 
@@ -747,6 +853,7 @@ def authenticate_workspace_session_context(
     csrf_token: str | None = None,
     monotonic_deadline: float | None = None,
     deadline_error_code: str = "workspace_session.unavailable",
+    touch: bool = True,
 ) -> WorkspaceSessionContext:
     """Restore the full Workspace principal with optional CSRF verification."""
 
@@ -774,8 +881,17 @@ def authenticate_workspace_session_context(
             except ApiError as exc:
                 if exc.code not in {"workspace_session.expired", "workspace_session.revoked"}:
                     raise
+                # Read-only consumers (navigation, page-view beacons and other
+                # unload work) must not retry a revoked/expired session through
+                # BEGIN IMMEDIATE. The final decision is already terminal and
+                # a writer retry would make logout contend with stale beacons.
+                if not touch:
+                    raise
             else:
-                if _parse_time(row["last_seen_at"]) > _utcnow() - timedelta(seconds=60):
+                if (
+                    not touch
+                    or _parse_time(row["last_seen_at"]) > _utcnow() - timedelta(seconds=60)
+                ):
                     connection.commit()
                     return context
         # Never upgrade an old read snapshot or persist its authorization
@@ -790,7 +906,7 @@ def authenticate_workspace_session_context(
                 config,
                 session_token=session_token,
                 csrf_token=csrf_token,
-                touch=True,
+                touch=touch,
             )
             connection.commit()
             return context
@@ -1075,6 +1191,7 @@ def list_memberships(
     session_token: str,
     limit: int,
     offset: int,
+    search: str | None = None,
     request_id: str,
     trace_id: str,
 ) -> MembershipListResponse:
@@ -1089,18 +1206,28 @@ def list_memberships(
             touch=True,
         )
         manager = context.membership_role in _MANAGER_ROLES
+        # Removed members are revoked identities, not active organization
+        # members. Keep their immutable audit projection in storage, but never
+        # return it to the organization directory or invite workflow.
         owner_filter = (
-            "member.workspace_id=?"
+            "member.workspace_id=? AND member.status='active'"
             if manager
-            else ("member.workspace_id=? AND member.workspace_membership_id=?")
+            else ("member.workspace_id=? AND member.workspace_membership_id=? AND member.status='active'")
         )
         owner_values: tuple[object, ...] = (
             (context.workspace_id,) if manager else (context.workspace_id, context.membership_id)
         )
+        normalized_search = (search or "").strip().lower()
+        search_clause = ""
+        search_values: tuple[object, ...] = ()
+        if normalized_search:
+            search_clause = " AND (lower(account.display_name) LIKE ? OR lower(account.email_normalized) LIKE ?)"
+            pattern = f"%{normalized_search}%"
+            search_values = (pattern, pattern)
         total = int(
             connection.execute(
-                f"SELECT COUNT(*) FROM workspace_memberships member WHERE {owner_filter}",
-                owner_values,
+                f"SELECT COUNT(*) FROM workspace_memberships member JOIN global_accounts account ON account.account_id=member.account_id WHERE {owner_filter}{search_clause}",
+                (*owner_values, *search_values),
             ).fetchone()[0]
         )
         rows = connection.execute(
@@ -1108,12 +1235,12 @@ def list_memberships(
             SELECT member.*,account.display_name
             FROM workspace_memberships member
             JOIN global_accounts account ON account.account_id=member.account_id
-            WHERE {owner_filter}
+            WHERE {owner_filter}{search_clause}
             ORDER BY CASE member.role_code WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
               account.display_name,member.workspace_membership_id
             LIMIT ? OFFSET ?
             """,
-            (*owner_values, limit, offset),
+            (*owner_values, *search_values, limit, offset),
         ).fetchall()
         connection.commit()
         return MembershipListResponse(
@@ -1146,6 +1273,7 @@ def update_membership(
     status: str | None,
     request_id: str,
     trace_id: str,
+    remove: bool = False,
 ) -> MembershipResponse:
     if not _MEMBERSHIP_ID_RE.fullmatch(membership_id):
         raise ApiError("membership.not_found")
@@ -1168,10 +1296,13 @@ def update_membership(
         if target["role_code"] == "owner" or target["role_code"] == "service_account":
             raise ApiError("membership.update_invalid")
         next_role = target["role_code"] if role is None else _delegable_role(role)
-        next_status = target["status"] if status is None else _membership_status(status)
+        next_status = "disabled" if remove else (target["status"] if status is None else _membership_status(status))
         if context.membership_role == "admin" and next_role not in _DELEGABLE_ROLES:
             raise ApiError("workspace_session.permission_denied")
-        if next_role == target["role_code"] and next_status == target["status"]:
+        # DELETE is an idempotent cleanup boundary. A previous release may have
+        # marked the membership disabled while missing an employee-assigned key;
+        # a repeated removal must still run the credential cleanup transaction.
+        if next_role == target["role_code"] and next_status == target["status"] and not remove:
             raise ApiError("membership.update_invalid")
         now = _utcnow()
         stamp = _db_time(now)
@@ -1207,6 +1338,49 @@ def update_membership(
         ).rowcount
         if changed != 1:
             raise ApiError("membership.revision_conflict")
+        revoked_key_count = 0
+        if next_status == "disabled" and (target["status"] != "disabled" or remove):
+            revoked_key_count = disable_virtual_keys_created_by(
+                connection,
+                tenant_id=context.tenant_id,
+                created_by=target["legacy_user_id"],
+                member_account_id=target["account_id"],
+                member_display_name=target["display_name"],
+                member_email=target["member_email"],
+                actor=AuditActor(
+                    tenant_id=context.tenant_id,
+                    user_id=context.legacy_user_id,
+                    email=context.account_email,
+                    role=context.legacy_role,
+                ),
+                request_meta=AuditRequestMeta(client_ip=None, user_agent=None),
+                request_id=request_id,
+                trace_id=trace_id,
+                now=stamp,
+            )
+            # The database trigger covers ordinary membership revisions, but
+            # keep the removal contract explicit for migrated databases where
+            # the trigger may not have been installed yet.
+            connection.execute(
+                """
+                UPDATE workspace_sessions
+                SET status='revoked', revoked_at=?, revoked_reason=?, updated_at=?
+                WHERE membership_id=? AND status='active'
+                """,
+                (stamp, "member_removed" if remove else "membership_changed", stamp, membership_id),
+            )
+            if remove:
+                # Pending invitations issued by or addressed to a removed
+                # member must not remain usable after the directory action.
+                connection.execute(
+                    """
+                    UPDATE membership_invitations
+                    SET status='cancelled',updated_at=?
+                    WHERE workspace_id=? AND status='pending'
+                      AND (inviter_membership_id=? OR target_account_id=?)
+                    """,
+                    (stamp, context.workspace_id, membership_id, target["account_id"]),
+                )
         event_type = "membership.disabled" if next_status == "disabled" else "membership.updated"
         _write_event(
             connection,
@@ -1223,6 +1397,8 @@ def update_membership(
                 "role_code": next_role,
                 "status": next_status,
                 "membership_revision": expected_revision + 1,
+                "personal_keys_disabled": revoked_key_count,
+                "removed": remove,
             },
             now=now,
         )
@@ -2387,22 +2563,8 @@ def _workspace_extension_permissions(
         for table in (family.catalog_table, family.assignments_table)
     }
     table_names.add("schema_migrations")
-    placeholders = ",".join("?" for _ in table_names)
     try:
-        table_catalog = (
-            "SELECT relname FROM pg_catalog.pg_class "
-            "WHERE relnamespace=current_schema()::regnamespace AND relkind IN ('r','p') "
-            "AND relname IN "
-            if getattr(connection, "backend", "sqlite") == "postgresql"
-            else "SELECT name FROM sqlite_schema WHERE type='table' AND name IN "
-        )
-        existing_tables = {
-            str(row[0])
-            for row in connection.execute(
-                f"{table_catalog}({placeholders})",
-                tuple(sorted(table_names)),
-            ).fetchall()
-        }
+        existing_tables = existing_table_names(connection, table_names)
         migration_versions = tuple(
             sorted({family.introduced_migration for family in _WORKSPACE_EXTENSION_FAMILIES})
         )
@@ -2551,7 +2713,7 @@ def _membership_row(
 ) -> sqlite3.Row | None:
     return connection.execute(
         """
-        SELECT member.*,account.display_name
+        SELECT member.*,account.display_name,account.email_normalized AS member_email
         FROM workspace_memberships member
         JOIN global_accounts account ON account.account_id=member.account_id
         WHERE member.workspace_id=? AND member.workspace_membership_id=?

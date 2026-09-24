@@ -90,6 +90,18 @@ export async function createInvitation({
 /**
  * 公开接受邀请；该请求即使浏览器中已有管理员 Session，也绝不附加其身份。
  */
+export async function previewInvitation({ controlApiUrl, token, signal }) {
+  if (!TOKEN_PATTERN.test(String(token ?? ""))) {
+    throw new InvitationApiError({ status: 410, code: "invitation.not_available",
+      message: "邀请链接已失效" });
+  }
+  return invitationRequest(`${controlApiUrl}/invitations/preview`, {
+    method: "POST", credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer",
+    headers: { "Content-Type": "application/json", "X-Request-ID": createInvitationRequestId("preview") },
+    body: JSON.stringify({ token }), signal,
+  }, { hideNetworkDetails: true });
+}
+
 export async function acceptInvitation({
   controlApiUrl,
   token,

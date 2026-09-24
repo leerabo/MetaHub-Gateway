@@ -92,6 +92,7 @@ export function createPlatformPageController({
     loading: true,
     session: null,
     navigation: [],
+    navigationOpen: false,
     operators: null,
     registrationPolicy: null,
     plans: null,
@@ -103,6 +104,7 @@ export function createPlatformPageController({
     securityAssuranceLookup: "",
     securityAssuranceIntent: null,
     launchGovernance: null,
+    gaLaunchGovernance: null,
     launchIntent: null,
     channels: null,
     channelFilters: { status: "", tierCode: "", regionScope: "" },
@@ -445,6 +447,10 @@ export function createPlatformPageController({
         return false;
       }
     },
+    toggleNavigation() {
+      state.navigationOpen = !state.navigationOpen;
+      render();
+    },
     selectView(view) {
       if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
         || state.capacityIntent || state.providerCatalogPublishIntent
@@ -454,19 +460,10 @@ export function createPlatformPageController({
         || state.edgeUpgradeIntent || state.edgeLicenseIntent
         || state.offlineBundleIntent || state.supportTicketIntent)) return false;
       const allowed = new Set((state.navigation ?? []).map((item) => item.id));
-      const nextView = allowed.has(view) ? view : state.navigation[0]?.id ?? "overview";
-      if (new Set([
-        "overview", "admin-assistant", "approvals", "billing",
-        "console-migration",
-        "job-runtime", "feature-rollouts", "config-distribution", "observability",
-        "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
-        "security-assurance", "launch-gates", "provider-catalog", "provider-engineering", "releases", "edge-fleet", "edge-upgrades",
-        "channels", "branding", "customer-success", "growth", "commercial-accounting",
-        "edge-licenses", "edge-backups",
-        "offline-bundles", "support", "privacy",
-        "compliance",
-      ]).has(state.view)
-        && nextView !== state.view) {
+      const requestedView = view === "providers" && allowed.has("provider-engineering")
+        ? "provider-engineering" : view;
+      const nextView = allowed.has(requestedView) ? requestedView : state.navigation[0]?.id ?? "overview";
+      if (nextView !== state.view) {
         generation += 1;
         request?.abort();
         request = null;
@@ -508,6 +505,7 @@ export function createPlatformPageController({
           state.securityAssuranceIntent = null;
         } else if (state.view === "launch-gates") {
           state.launchGovernance = null;
+          state.gaLaunchGovernance = null;
           state.launchIntent = null;
         } else if (state.view === "channels") {
           clearChannelFacts();
@@ -548,8 +546,11 @@ export function createPlatformPageController({
           state.complianceControls = null;
         }
         state.loading = false;
+        state.error = null;
+        state.feedback = null;
       }
       state.view = nextView;
+      state.navigationOpen = false;
       if (!PLATFORM_CONSOLE_EXPERIENCE_VIEWS.has(nextView)) {
         consoleExperienceController.leave();
       }
@@ -668,6 +669,17 @@ export function createPlatformPageController({
       if (state.view === "privacy" && !state.privacyQueue) void loadPrivacyQueue();
       if (state.view === "compliance" && !state.complianceControls) {
         void loadComplianceControls();
+      }
+      if (state.view === "workspaces" && !state.workspaces
+        && typeof api.workspaces === "function" && hasWorkspaceRead(currentPermissions())) {
+        return loadWorkspacePage();
+      }
+      if (state.view === "verification" && !state.verification
+        && currentPermissions().has("platform.verification.read")) {
+        return loadVerificationPage();
+      }
+      if (new Set(["operators", "infrastructure", "gateway", "audit", "notification-templates"]).has(state.view)) {
+        return loadCorePage();
       }
     },
     async refreshCustomerSuccess() {
@@ -1507,6 +1519,156 @@ export function createPlatformPageController({
           ...command, stepUpGrant, idempotencyKey, signal,
         }),
         message: "Rollback verification recorded.",
+      });
+    },
+    async submitGaEvidence(input = {}) {
+      const candidate = currentLaunchCandidate();
+      const gateId = String(input.gaGateId ?? "");
+      if (!candidate || input.launchCandidateId !== candidate.launch_candidate_id
+        || typeof api.submitGaEvidence !== "function") return false;
+      const command = {
+        launchGateId: gateId,
+        launchCandidateId: candidate.launch_candidate_id,
+        expectedRevision: Number(input.expectedRevision),
+        workspaceId: String(input.workspaceId ?? "").trim(),
+        artifactSha256: String(input.artifactSha256 ?? "").trim(),
+        verifierCode: String(input.verifierCode ?? "").trim(),
+        verifierVersion: 1,
+        outcome: "passed",
+        metricValue: input.metricValue == null ? null : Number(input.metricValue),
+        metricUnit: input.metricUnit == null ? null : String(input.metricUnit).trim(),
+        environmentSha256: String(input.environmentSha256 ?? "").trim(),
+        provenanceSha256: String(input.provenanceSha256 ?? "").trim(),
+        startedAt: String(input.startedAt ?? ""),
+        finishedAt: String(input.finishedAt ?? ""),
+        signature: String(input.signature ?? ""),
+        confirmed: input.confirmed === true,
+      };
+      return gaWrite({
+        permission: "platform.launch.evidence.submit",
+        apiMethod: "submitGaEvidence",
+        actionCode: "platform.launch.evidence.submit",
+        resourceType: "ga_gate",
+        resourceId: gateId,
+        operation: "ga.evidence",
+        command,
+        method: input.method,
+        verificationCode: input.verificationCode,
+        invoke: (stepUpGrant, idempotencyKey, signal) => api.submitGaEvidence({
+          ...command, stepUpGrant, idempotencyKey, signal,
+        }),
+        message: "GA 门禁证据已提交。",
+      });
+    },
+    async launchGa(input = {}) {
+      const candidate = currentLaunchCandidate();
+      if (!candidate || input.launchCandidateId !== candidate.launch_candidate_id
+        || typeof api.launchGa !== "function") return false;
+      const command = {
+        launchCandidateId: candidate.launch_candidate_id,
+        expectedRevision: Number(input.expectedRevision),
+        confirmed: input.confirmed === true,
+      };
+      return gaWrite({
+        permission: "platform.launch.execute",
+        apiMethod: "launchGa",
+        actionCode: "platform.launch.execute",
+        resourceType: "ga_candidate",
+        resourceId: candidate.launch_candidate_id,
+        operation: "ga.launch",
+        command,
+        method: input.method,
+        verificationCode: input.verificationCode,
+        invoke: (stepUpGrant, idempotencyKey, signal) => api.launchGa({
+          ...command, stepUpGrant, idempotencyKey, signal,
+        }),
+        message: "GA 发布已执行。",
+      });
+    },
+    async requestGaRollback(input = {}) {
+      const launch = state.gaLaunchGovernance?.launch;
+      if (!launch || input.gaLaunchId !== launch.ga_launch_id
+        || typeof api.requestGaRollback !== "function") return false;
+      const command = {
+        gaLaunchId: launch.ga_launch_id,
+        expectedRevision: Number(input.expectedRevision),
+        triggerCode: String(input.triggerCode ?? "operator_request"),
+        triggerSha256: String(input.triggerSha256 ?? "").trim(),
+        checkpointSha256: String(input.checkpointSha256 ?? "").trim(),
+        jobReceiptSha256: String(input.jobReceiptSha256 ?? "").trim(),
+        confirmed: input.confirmed === true,
+      };
+      return gaWrite({
+        permission: "platform.launch.rollback",
+        apiMethod: "requestGaRollback",
+        actionCode: "platform.launch.rollback",
+        resourceType: "ga_launch",
+        resourceId: launch.ga_launch_id,
+        operation: "ga.rollback.request",
+        command,
+        method: input.method,
+        verificationCode: input.verificationCode,
+        invoke: (stepUpGrant, idempotencyKey, signal) => api.requestGaRollback({
+          ...command, stepUpGrant, idempotencyKey, signal,
+        }),
+        message: "GA 回滚申请已提交，等待独立复核。",
+      });
+    },
+    async verifyGaRollback(input = {}) {
+      const launch = state.gaLaunchGovernance?.launch;
+      const rollbackId = String(input.gaRollbackId ?? "");
+      const rollback = launch?.rollbacks?.find((item) => item.ga_rollback_id === rollbackId);
+      if (!launch || !rollback || typeof api.verifyGaRollback !== "function") return false;
+      const command = {
+        gaLaunchId: launch.ga_launch_id,
+        expectedRevision: Number(input.expectedRevision),
+        gaRollbackId: rollbackId,
+        outcome: String(input.outcome ?? "passed"),
+        verificationSha256: String(input.verificationSha256 ?? "").trim(),
+        confirmed: input.confirmed === true,
+      };
+      return gaWrite({
+        permission: "platform.launch.rollback",
+        apiMethod: "verifyGaRollback",
+        actionCode: "platform.launch.rollback",
+        resourceType: "ga_rollback",
+        resourceId: rollbackId,
+        operation: "ga.rollback.verify",
+        command,
+        method: input.method,
+        verificationCode: input.verificationCode,
+        invoke: (stepUpGrant, idempotencyKey, signal) => api.verifyGaRollback({
+          ...command, stepUpGrant, idempotencyKey, signal,
+        }),
+        message: "GA 回滚复核已记录。",
+      });
+    },
+    async submitGaReview(input = {}) {
+      const launch = state.gaLaunchGovernance?.launch;
+      if (!launch || input.gaLaunchId !== launch.ga_launch_id
+        || typeof api.submitGaReview !== "function") return false;
+      const command = {
+        gaLaunchId: launch.ga_launch_id,
+        expectedRevision: Number(input.expectedRevision),
+        summarySha256: String(input.summarySha256 ?? "").trim(),
+        actionItemsSha256: String(input.actionItemsSha256 ?? "").trim(),
+        conclusion: String(input.conclusion ?? "ga_launched"),
+        confirmed: input.confirmed === true,
+      };
+      return gaWrite({
+        permission: "platform.launch.review",
+        apiMethod: "submitGaReview",
+        actionCode: "platform.launch.review",
+        resourceType: "ga_launch",
+        resourceId: launch.ga_launch_id,
+        operation: "ga.review",
+        command,
+        method: input.method,
+        verificationCode: input.verificationCode,
+        invoke: (stepUpGrant, idempotencyKey, signal) => api.submitGaReview({
+          ...command, stepUpGrant, idempotencyKey, signal,
+        }),
+        message: "发布后复核已完成。",
       });
     },
     async filterSupportTickets(filters = {}) {
@@ -3200,6 +3362,7 @@ export function createPlatformPageController({
         developerContracts: null,
         securityAssurance: null,
         launchGovernance: null,
+        gaLaunchGovernance: null,
         channels: null,
         channelStatements: null,
         billing: null,
@@ -3236,6 +3399,9 @@ export function createPlatformPageController({
       };
       const tasks = [];
       state.navigation = next.navigation;
+      if (state.view === "providers" && state.navigation.some((item) => item.id === "provider-engineering")) {
+        state.view = "provider-engineering";
+      }
       if (!state.navigation.some((item) => item.id === state.view)) {
         state.view = state.navigation[0]?.id ?? "overview";
       }
@@ -3312,6 +3478,11 @@ export function createPlatformPageController({
         tasks.push(api.launchGates({ signal: ticket.signal }).then((value) => {
           next.launchGovernance = value;
         }));
+        if (typeof api.gaLaunchGates === "function") {
+          tasks.push(api.gaLaunchGates({ signal: ticket.signal }).then((value) => {
+            next.gaLaunchGovernance = value;
+          }));
+        }
       }
       if (state.view === "channels" && permissions.has("platform.channel.read")
         && typeof api.channelPartners === "function") {
@@ -3691,6 +3862,36 @@ export function createPlatformPageController({
       if (platformBrandActive && !brandDomainsController.snapshot().platform.branding) {
         void brandDomainsController.loadPlatform();
       }
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function loadCorePage() {
+    const view = state.view;
+    const resources = {
+      operators: [["operators", "operators", "platform.operator.manage"], ["registrationPolicy", "registrationPolicy", "platform.operator.manage"]],
+      infrastructure: [["infrastructure", "infrastructureStatus", "platform.infrastructure.read"]],
+      gateway: [["gatewayCells", "gatewayCells", "platform.gateway.read"]],
+      audit: [["audit", "audit", "platform.audit.read"]],
+      "notification-templates": [["notificationTemplates", "notificationTemplates", "platform.notification_template.read"]],
+    }[view] ?? [];
+    const missing = resources.filter(([field, method, permission]) => state[field] === null
+      && typeof api[method] === "function" && currentPermissions().has(permission));
+    if (!missing.length) return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      const values = await Promise.all(missing.map(async ([field, method]) => [
+        field, await api[method]({ signal: ticket.signal }),
+      ]));
+      if (!current(ticket) || state.view !== view) return false;
+      Object.assign(state, Object.fromEntries(values));
+      state.loading = false;
+      render();
       return true;
     } catch (error) {
       return fail(ticket, error);
@@ -4199,7 +4400,12 @@ export function createPlatformPageController({
     state.error = null;
     render();
     try {
-      state.launchGovernance = await api.launchGates({ signal: ticket.signal });
+      const [launchGovernance, gaLaunchGovernance] = await Promise.all([
+        api.launchGates({ signal: ticket.signal }),
+        typeof api.gaLaunchGates === "function" ? api.gaLaunchGates({ signal: ticket.signal }) : null,
+      ]);
+      state.launchGovernance = launchGovernance;
+      state.gaLaunchGovernance = gaLaunchGovernance;
       if (!currentLaunchTicket(ticket)) return false;
       state.loading = false;
       render();
@@ -4429,6 +4635,75 @@ export function createPlatformPageController({
         ...(state.launchGovernance ?? { gates: [] }),
         candidate: response.candidate,
       };
+      state.launchIntent = null;
+      state.loading = false;
+      state.feedback = message;
+      render();
+      return true;
+    } catch (error) {
+      if (error instanceof PlatformApiError && error.status === 403 && current(ticket)) {
+        state.launchIntent = null;
+        await controller.refresh();
+        return false;
+      }
+      if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+        state.launchIntent = null;
+      }
+      return fail(ticket, error);
+    } finally {
+      verificationCode = "";
+      stepUpGrant = "";
+    }
+  }
+
+  // GA commands use a separate projection and therefore refresh the GA endpoint
+  // after every successful write. This keeps the RC and GA revisions isolated.
+  async function gaWrite({
+    permission,
+    apiMethod,
+    actionCode,
+    resourceType,
+    resourceId,
+    operation,
+    command,
+    method,
+    verificationCode: rawVerificationCode,
+    invoke,
+    message,
+  }) {
+    const checkedMethod = String(method ?? "totp");
+    if (state.view !== "launch-gates" || command.confirmed !== true
+      || !currentPermissions().has(permission) || typeof api[apiMethod] !== "function"
+      || typeof api.gaLaunchGates !== "function"
+      || typeof resourceId !== "string" || resourceId.length < 4
+      || !new Set(["totp", "webauthn"]).has(checkedMethod)) return false;
+    const fingerprint = JSON.stringify([operation, command, checkedMethod]);
+    const idempotencyKey = state.launchIntent?.fingerprint === fingerprint
+      ? state.launchIntent.idempotencyKey : newIdempotencyKey();
+    state.launchIntent = { fingerprint, idempotencyKey };
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    let verificationCode = String(rawVerificationCode ?? "");
+    let stepUpGrant = "";
+    try {
+      stepUpGrant = await createLaunchStepUp({
+        method: checkedMethod,
+        verificationCode,
+        actionCode,
+        resourceType,
+        resourceId,
+        ticket,
+      });
+      verificationCode = "";
+      if (!stepUpGrant || !currentLaunchTicket(ticket)) return false;
+      await invoke(stepUpGrant, idempotencyKey, ticket.signal);
+      stepUpGrant = "";
+      if (!currentLaunchTicket(ticket)) return false;
+      const projection = await api.gaLaunchGates({ signal: ticket.signal });
+      if (!currentLaunchTicket(ticket)) return false;
+      state.gaLaunchGovernance = projection;
       state.launchIntent = null;
       state.loading = false;
       state.feedback = message;
@@ -4700,12 +4975,13 @@ export function createPlatformPageController({
     state.error = null;
     render();
     try {
-      state.verification = await api.businessVerifications({
+      const verification = await api.businessVerifications({
         status: state.verificationStatus,
         offset: state.verificationOffset,
         signal: ticket.signal,
       });
       if (!current(ticket)) return false;
+      state.verification = verification;
       state.loading = false;
       render();
       return true;
@@ -5745,6 +6021,43 @@ export function createPlatformPageController({
           confirmed: data.get("confirmed") === "on",
         });
       }
+      if (form.matches("[data-ga-evidence-form]")) {
+        const signature = String(data.get("signature") ?? "");
+        const verificationCode = String(data.get("verificationCode") ?? "");
+        const metricValue = String(data.get("metricValue") ?? "").trim();
+        const metricUnit = String(data.get("metricUnit") ?? "").trim();
+        form.querySelectorAll("[data-platform-sensitive]").forEach((node) => { node.value = ""; });
+        controller.submitGaEvidence({
+          gaGateId: data.get("gaGateId"), launchCandidateId: data.get("launchCandidateId"),
+          expectedRevision: Number(data.get("expectedRevision")), workspaceId: data.get("workspaceId"),
+          artifactSha256: data.get("artifactSha256"), verifierCode: data.get("verifierCode"),
+          metricValue: metricValue ? Number(metricValue) : null,
+          metricUnit: metricUnit || null, environmentSha256: data.get("environmentSha256"),
+          provenanceSha256: data.get("provenanceSha256"), startedAt: localTimestamp(data.get("startedAt")),
+          finishedAt: localTimestamp(data.get("finishedAt")), signature, method: data.get("method"),
+          verificationCode, confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-ga-launch-form]")) {
+        const verificationCode = String(data.get("verificationCode") ?? "");
+        form.querySelectorAll("[data-platform-sensitive]").forEach((node) => { node.value = ""; });
+        controller.launchGa({ launchCandidateId: data.get("launchCandidateId"), expectedRevision: Number(data.get("expectedRevision")), method: data.get("method"), verificationCode, confirmed: data.get("confirmed") === "on" });
+      }
+      if (form.matches("[data-ga-rollback-request-form]")) {
+        const verificationCode = String(data.get("verificationCode") ?? "");
+        form.querySelectorAll("[data-platform-sensitive]").forEach((node) => { node.value = ""; });
+        controller.requestGaRollback({ gaLaunchId: data.get("gaLaunchId"), expectedRevision: Number(data.get("expectedRevision")), triggerCode: data.get("triggerCode"), triggerSha256: data.get("triggerSha256"), checkpointSha256: data.get("checkpointSha256"), jobReceiptSha256: data.get("jobReceiptSha256"), method: data.get("method"), verificationCode, confirmed: data.get("confirmed") === "on" });
+      }
+      if (form.matches("[data-ga-rollback-verify-form]")) {
+        const verificationCode = String(data.get("verificationCode") ?? "");
+        form.querySelectorAll("[data-platform-sensitive]").forEach((node) => { node.value = ""; });
+        controller.verifyGaRollback({ gaLaunchId: data.get("gaLaunchId"), gaRollbackId: data.get("gaRollbackId"), expectedRevision: Number(data.get("expectedRevision")), outcome: data.get("outcome"), verificationSha256: data.get("verificationSha256"), method: data.get("method"), verificationCode, confirmed: data.get("confirmed") === "on" });
+      }
+      if (form.matches("[data-ga-review-form]")) {
+        const verificationCode = String(data.get("verificationCode") ?? "");
+        form.querySelectorAll("[data-platform-sensitive]").forEach((node) => { node.value = ""; });
+        controller.submitGaReview({ gaLaunchId: data.get("gaLaunchId"), expectedRevision: Number(data.get("expectedRevision")), summarySha256: data.get("summarySha256"), actionItemsSha256: data.get("actionItemsSha256"), conclusion: data.get("conclusion"), method: data.get("method"), verificationCode, confirmed: data.get("confirmed") === "on" });
+      }
       if (form.matches("[data-platform-billing-filter-form]")) {
         controller.filterBilling(data.get("status"));
       }
@@ -6263,11 +6576,12 @@ export function createPlatformPageController({
       if (target.dataset.platformView) {
         const selectedView = target.dataset.platformView;
         controller.selectView(selectedView);
-        [...root.querySelectorAll("[data-platform-view]")]
-          .find((item) => item.dataset.platformView === selectedView)
-          ?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+        const content = root.querySelector?.(".platform-content");
+        content?.focus?.({ preventScroll: true });
+        content?.scrollIntoView?.({ block: "start" });
       }
       const action = target.dataset.platformAction;
+      if (action === "toggle-navigation") controller.toggleNavigation();
       if (action === "refresh") controller.refresh();
       if (action === "commercial-refresh") controller.refreshCommercialAccounting();
       if (target.dataset.platformCommercialPage) {
@@ -6535,7 +6849,10 @@ export function createPlatformPageController({
         || permissions.has("platform.channel.statement.read"));
   }
   function render() {
+    const sidebarScroll = root.querySelector?.(".platform-sidebar")?.scrollTop;
     state.session ? renderPlatformWorkspace(root, state) : renderPlatformGate(root, state);
+    const sidebar = root.querySelector?.(".platform-sidebar");
+    if (sidebar && Number.isFinite(sidebarScroll)) sidebar.scrollTop = sidebarScroll;
     if (state.session && PLATFORM_CONSOLE_EXPERIENCE_VIEWS.has(state.view)) {
       bindPlatformConsoleExperience(root, {
         onAssistantDraft(value) {
@@ -6635,6 +6952,7 @@ export function createPlatformPageController({
     state.securityAssuranceLookup = "";
     state.securityAssuranceIntent = null;
     state.launchGovernance = null;
+    state.gaLaunchGovernance = null;
     state.launchIntent = null;
     clearChannelFacts();
     state.billing = null;
@@ -6812,6 +7130,7 @@ function normalizeNavigation(items) {
   const seen = new Set();
   const authorized = values.filter((item) => {
     if (!PLATFORM_NAVIGATION_IDS.has(item.id) || seen.has(item.id)) return false;
+    if (item.id === "providers" && values.some((entry) => entry.id === "provider-engineering")) return false;
     seen.add(item.id);
     return true;
   });

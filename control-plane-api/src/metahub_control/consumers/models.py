@@ -11,8 +11,9 @@ class CreateConsumerRequest(BaseModel):
 
     display_name: str = Field(min_length=1, max_length=160)
     department: str = Field(default="", max_length=160)
+    employee_code: str = Field(default="", max_length=80)
 
-    @field_validator("display_name", "department")
+    @field_validator("display_name", "department", "employee_code")
     @classmethod
     def reject_controls(cls, value: str) -> str:
         if any(ord(character) < 32 or ord(character) == 127 for character in value):
@@ -29,6 +30,7 @@ class ConsumerInfo(BaseModel):
     consumer_id: str
     display_name: str
     department: str
+    employee_code: str
     status: Literal["active", "disabled"]
     revision: int
     key_count: int

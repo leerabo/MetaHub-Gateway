@@ -7,13 +7,14 @@ import { hasWorkspaceConsoleSession, isConsoleRefreshOwnerCurrent, sameWorkspace
   workspaceConsoleSessionFromShell } from "../../src/lib/workspaceConsoleSession.js";
 import { isConsoleNavigationOwnerCurrent } from "../../src/features/developer-start/renderDeveloperStart.js";
 import { renderWorkspaceSessionPrompt } from "../../src/features/auth/renderLoginPage.js";
-import { renderConsoleShell } from "../../src/features/console-shell/renderConsoleShell.js";
+import { renderConsoleShell, renderConsoleEntryLoading, revealConsoleSidebarItem } from "../../src/features/console-shell/renderConsoleShell.js";
 import { createWorkspaceResourcePage } from "../../src/lib/workspaceResourcePage.js";
 import { createI18n } from "../../src/i18n/messages.js";
 import { WORKSPACE_ROUTE_REGISTRY, WORKSPACE_SOURCE_ROUTE_REGISTRY,
   projectWorkspaceNavigationForConsole, resolveWorkspaceNavigationRoute } from "../../src/lib/workspaceNavigation.js";
 import { parseNavigationHash } from "../../src/lib/consoleShell.js";
 import { workspaceCookieApiOrigin } from "../../src/lib/edgeManagement.js";
+import { gatewayServiceOrigin, serviceOrigin } from "../../src/lib/runtimeOrigins.js";
 
 const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
 const EXPIRY = "2099-01-01T00:00:00Z";
@@ -141,12 +142,17 @@ function harness() {
   let click;
   const scope = {
     authSession: { context: null, owner: null }, refreshSequence: 1, consoleLogoutPending: false,
+    // The extracted production logout binder retains button identity across hydration.
+    boundConsoleLogoutButtons: new WeakSet(),
     resourcePageShellState: null, consoleSidebarController: null, nextRefreshIsBackground: false,
-    mobileSidebarCollapsed: true,
+    disposeSidebarViewport: () => effects.push("viewport-dispose"),
+    workspaceProfileMutation: null, workspaceProfileRecovery: null,
+    mobileSidebarCollapsed: true, sidebarGroupSequence: 0, sidebarGroupPending: false,
     clearBasicResourceFeedback: () => effects.push("resource-feedback-clear"),
     expandedConsoleGroupKey: null, activeRefreshCount: 0,
     hasWorkspaceConsoleSession, sameWorkspaceConsoleSession, workspaceConsoleSessionFromShell,
     isConsoleRefreshOwnerCurrent, currentI18n: null, createI18n: () => ({}), DEFAULT_LOCALE: "zh-CN",
+    renderConsoleEntryLoading, revealConsoleSidebarItem,
     WORKSPACE_PROVIDER_ENGINEERING_NAVIGATION_IDS: new Set(), WORKSPACE_COMMERCIAL_NAVIGATION_IDS: new Set(),
     RESOURCE_NAVIGATION_IDS: new Set(["projects", "environments", "providers", "models", "files", "virtual-keys"]),
     REQUEST_LOG_NAVIGATION_IDS: new Set(), usageExportState: { status: "idle" }, auditExportState: { status: "idle" },
@@ -160,6 +166,10 @@ function harness() {
     readActiveNavigationHash: () => "", publicBrandingGeneration: 0, publicBrandingPreview: null,
     loadPublicBrandingPreview: async () => {},
     app: { replaceChildren: () => effects.push("dom-clear") },
+    window: { location: { replace: (url) => {
+      assert.equal(url, "/");
+      effects.push("home-redirect");
+    } } },
     document: { querySelector: (selector) => selector === "#logout-button"
       ? { addEventListener: (_event, handler) => { click = handler; } } : null },
     clearAuthSession: () => effects.push("storage-clear"),
@@ -170,7 +180,8 @@ function harness() {
       assert.equal(hasWorkspaceConsoleSession(scope.authSession), true);
       effects.push("hydrate");
     },
-    renderWorkspaceSessionPrompt: (_app, input) => effects.push(input.pending ? "pending-prompt" : "session-prompt"),
+    renderWorkspaceSessionPrompt: (_app, input) => effects.push(input.pending ? "pending-prompt"
+      : input.error ? "error-prompt" : "session-prompt"),
     renderLogin: (error) => effects.push(error ? "error-prompt" : "signed-out"),
     authErrorMessage: () => "Unavailable", workspaceControlApiUrl: "https://control.test",
     logoutIdentity: async () => effects.push("logout-request"),
@@ -183,7 +194,11 @@ function harness() {
   };
   for (const name of cleanupFunctions) scope[name] = () => effects.push(name);
   for (const name of pageStates) scope[name] = {
-    clear: () => effects.push(name), syncOwner: (owner) => { assert.equal(owner.token, null); },
+    clear: () => effects.push(name), syncOwner: (owner) => {
+      // Workspace refreshes may carry a legacy token only for legacy pages;
+      // the workspace member flow uses cookie auth and must not require one.
+      assert.ok(owner.token === null || owner.token === undefined || typeof owner.token === "string");
+    },
     cancelList() {},
   };
   scope.resourcePageLifecycle = createWorkspaceResourcePage({ current: () => ({
@@ -191,11 +206,12 @@ function harness() {
     refreshGeneration: scope.refreshSequence,
   }) });
   const lifecycle = section("async function performRefresh(", "async function loadAndRenderActiveNavigation(");
+  const sidebar = section("function syncConsoleSidebarState(", "function applyExpandedConsoleGroup(");
   const refresh = section("async function refresh(", "export function isConsoleWorkspaceContextInvalidation");
   const invalidate = section("function handleConsoleWorkspaceContextInvalidation()", "export function closeConsoleWorkspaceContextInvalidation");
   const broadcast = section("function broadcastConsoleWorkspaceContextInvalidation()", "async function performRefresh(");
   const logout = section('  const logoutButton = document.querySelector("#logout-button");', "  for (const navigationButton");
-  const api = runInNewContext(`${lifecycle}\n${refresh}\n${invalidate}\n${broadcast}\n${logout}
+  const api = runInNewContext(`${sidebar}\n${lifecycle}\n${refresh}\n${invalidate}\n${broadcast}\n${logout}
     ({ performRefresh, refresh, handleConsoleWorkspaceContextInvalidation });`, scope);
   return { scope, effects, api, logout: () => click() };
 }
@@ -321,7 +337,8 @@ for (const result of ["success", "401", "503"]) {
     else pending.reject({ status: Number(result) });
     await leaving;
     assert.equal(scope.consoleLogoutPending, false);
-    assert.deepEqual(effects.slice(-2), ["broadcast", result === "503" ? "error-prompt" : "signed-out"]);
+    assert.deepEqual(effects.slice(-2), ["broadcast", result === "503" ? "error-prompt" : "home-redirect"]);
+    assert.equal(effects.includes("home-redirect"), result !== "503");
   });
 }
 
@@ -339,6 +356,7 @@ for (const rejected of [false, true]) {
     await leaving;
     assert.equal(scope.authSession, newSession);
     assert.equal(effects.includes("signed-out"), false);
+    assert.equal(effects.includes("home-redirect"), false);
     assert.equal(effects.includes("error-prompt"), false);
   });
 }
@@ -352,11 +370,12 @@ test("PRD-146 shared cleanup cancels old owners while optionally preserving new 
       clearConsoleSessionState;`, scope);
     clear({ clearNavigation: !preserve });
     assert.equal(effects.includes("navigation-leave"), !preserve);
-    for (const name of [...cleanupFunctions, ...pageStates, "experience-leave", "sidebar-abort"]) {
+    for (const name of [...cleanupFunctions, ...pageStates, "experience-leave", "sidebar-abort", "viewport-dispose"]) {
       assert.equal(effects.includes(name), true, name);
     }
     assert.equal(scope.workspaceConsoleExperienceShellState, null);
     assert.equal(scope.consoleSidebarController, null);
+    assert.equal(scope.disposeSidebarViewport, null);
     assert.equal(scope.mobileSidebarCollapsed, true);
   }
 });
@@ -492,9 +511,10 @@ test("PRD-146 compact desktop navigation exposes authorized groups without losin
 for (const hostname of ["localhost", "127.0.0.1"]) {
   test(`PRD-146 actual ${hostname} startup shares one Host-only Cookie origin across business and identity`, () => {
     const location = { hostname };
-    const origins = runInNewContext(`${section("const localLoopback =", "const consoleUrl =")}
+    const origins = runInNewContext(`${section("const controlPage =", "const consoleUrl =")}
       ({ controlApiUrl, workspaceControlApiUrl });`, {
-      window: { location }, workspaceCookieApiOrigin: (value) => workspaceCookieApiOrigin(value, location),
+      window: { location }, gatewayServiceOrigin, serviceOrigin,
+      workspaceCookieApiOrigin: (value) => workspaceCookieApiOrigin(value, location),
     });
     assert.equal(origins.controlApiUrl, `http://${hostname}:8001`);
     assert.equal(origins.workspaceControlApiUrl, origins.controlApiUrl);
@@ -504,9 +524,10 @@ for (const hostname of ["localhost", "127.0.0.1"]) {
 for (const origin of ["https://console.example.test", "https://console.example.test:8443", "http://s1.localhost:18940"]) {
   test(`PRD-147 hosted Console keeps the identity Control origin ${origin}`, () => {
     const location = new URL(origin);
-    const origins = runInNewContext(`${section("const localLoopback =", "const consoleUrl =")}
+    const origins = runInNewContext(`${section("const controlPage =", "const consoleUrl =")}
       ({ controlApiUrl, workspaceControlApiUrl });`, {
-      window: { location }, workspaceCookieApiOrigin: (value) => workspaceCookieApiOrigin(value, location),
+      window: { location }, gatewayServiceOrigin, serviceOrigin,
+      workspaceCookieApiOrigin: (value) => workspaceCookieApiOrigin(value, location),
     });
     assert.equal(origins.controlApiUrl, origin);
     assert.equal(origins.workspaceControlApiUrl, origin);
@@ -516,9 +537,10 @@ for (const origin of ["https://console.example.test", "https://console.example.t
 for (const [origin, expected] of [["http://[::1]:5173", "http://[::1]:8001"], ["https://localhost:5173", "https://localhost:8001"]]) {
   test(`PRD-147 local Console preserves protocol and IPv6 ${origin}`, () => {
     const location = new URL(origin);
-    const origins = runInNewContext(`${section("const localLoopback =", "const consoleUrl =")}
+    const origins = runInNewContext(`${section("const controlPage =", "const consoleUrl =")}
       ({ controlApiUrl, workspaceControlApiUrl });`, {
-      window: { location }, workspaceCookieApiOrigin: (value) => workspaceCookieApiOrigin(value, location),
+      window: { location }, gatewayServiceOrigin, serviceOrigin,
+      workspaceCookieApiOrigin: (value) => workspaceCookieApiOrigin(value, location),
     });
     assert.equal(origins.controlApiUrl, expected);
     assert.equal(origins.workspaceControlApiUrl, expected);
@@ -615,7 +637,7 @@ test("PRD-146 unavailable route fallback does not claim a role denial or a fixed
   const scope = { readNavigationHashState: () => navigationHash("#unknown"),
     WORKSPACE_ROUTE_REGISTRY, resolveWorkspaceNavigationRoute, projectWorkspaceNavigationForConsole,
     workspaceNavigationController: { loadNavigation: async () => ({ ...loaded, navigation: loaded.navigation }) },
-    replaceNavigationHash: (value) => { assert.equal(value, ""); cleared = true; },
+    replaceNavigationHash: (value) => { assert.equal(value, "workspace.observability.feedback"); cleared = true; },
     consoleShellActionError: null, expandedConsoleGroupKey: null,
   };
   const load = runInNewContext(`${section("async function loadConsoleShellState(",
@@ -623,6 +645,7 @@ test("PRD-146 unavailable route fallback does not claim a role denial or a fixed
   const result = await load();
   assert.equal(result.state, "ok");
   assert.equal(result.activeNavigationItemId, "feedback-summary");
+  assert.equal(result.sidebarExpandedGroupKey, "observability");
   assert.equal(cleared, true);
   assert.match(result.warning, /入口.*不可用/);
   assert.doesNotMatch(result.warning, /角色|权限|概览/);
@@ -633,6 +656,9 @@ test("PRD-146 successful visible navigation clears only the previous shell messa
   const current = shell();
   current.warning = "previous-navigation-warning";
   current.actionError = { message: "previous-navigation-error" };
+  current.navigation.navigation_items[0].group_code = "home";
+  current.sidebarExpandedGroupKey = "gateway";
+  scope.expandedConsoleGroupKey = "gateway";
   scope.authSession = workspaceConsoleSessionFromShell(current);
   const rendered = [];
   Object.assign(scope, {
@@ -641,7 +667,10 @@ test("PRD-146 successful visible navigation clears only the previous shell messa
     workspaceCommercialNavigationItems: [], consoleShellActionError: current.actionError,
     activeConsoleNavigationCount: 0, gatewayUrl: "http://gateway.test", controlApiUrl: "http://control.test",
     consoleUrl: "http://console.test", publicBrandingDisplay: () => null,
-    replaceNavigationHash: (value) => { assert.equal(value, "workspace.home.overview"); },
+    replaceNavigationHash: (value, options) => {
+      assert.equal(value, "workspace.home.overview");
+      assert.equal(options.push, true);
+    },
     renderConsoleNavigationTransition() {}, bindOutputSafetyDetailInteractions() {}, bindAuthenticatedEvents() {},
     renderDeveloperStart: (_app, input) => rendered.push(input.consoleShellState),
     loadAndRenderActiveNavigation: async (input) => rendered.push(input.consoleShellState),
@@ -655,8 +684,10 @@ test("PRD-146 successful visible navigation clears only the previous shell messa
   for (const state of rendered) {
     assert.equal(state.warning ?? null, null);
     assert.equal(state.actionError ?? null, null);
+    assert.equal(state.sidebarExpandedGroupKey, "home");
   }
   assert.equal(current.warning, "previous-navigation-warning");
   assert.equal(current.actionError.message, "previous-navigation-error");
+  assert.equal(current.sidebarExpandedGroupKey, "gateway");
   assert.equal(scope.activeConsoleNavigationCount, 0);
 });

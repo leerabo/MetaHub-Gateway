@@ -48,6 +48,14 @@ class WorkspaceSwitchResponse(BaseModel):
     trace_id: str
 
 
+class PartnerHandoffResponse(BaseModel):
+    """Confirmation that the browser left its Workspace credential domain."""
+
+    handed_off: Literal[True] = True
+    request_id: str
+    trace_id: str
+
+
 class WorkspaceAuthorizationSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 

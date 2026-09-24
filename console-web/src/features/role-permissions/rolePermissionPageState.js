@@ -26,6 +26,7 @@ export function createRolePermissionPageState({ requestIdFactory = createPermiss
   let latestMatrix = null;
   let selectedRoleId = null;
   let categoryFilter = "all";
+  let viewMode = "role";
   let draft = null;
   let status = "idle";
   let loadError = null;
@@ -51,6 +52,7 @@ export function createRolePermissionPageState({ requestIdFactory = createPermiss
     latestMatrix = null;
     selectedRoleId = null;
     categoryFilter = "all";
+    viewMode = "role";
     draft = null;
     status = "idle";
     loadError = null;
@@ -89,6 +91,7 @@ export function createRolePermissionPageState({ requestIdFactory = createPermiss
       && operation.revision === loadRevision
       && operation.identity === normalizedOwner.identity
       && operation.tenantId === normalizedOwner.tenantId
+      && operation.workspaceId === normalizedOwner.workspaceId
       && operation.navigation === normalizedOwner.navigation
       && operation.refreshGeneration === normalizedOwner.refreshGeneration,
     );
@@ -101,7 +104,8 @@ export function createRolePermissionPageState({ requestIdFactory = createPermiss
    */
   function acceptLoad(operation, payload, owner) {
     if (!isLoadCurrent(operation, owner)) return false;
-    const normalized = normalizeMatrix(payload, operation.tenantId);
+    const tenantId = responseTenantId(payload, operation);
+    const normalized = tenantId ? normalizeMatrix(payload, tenantId) : null;
     if (!normalized) {
       rejectLoad(operation, {
         code: "rbac.matrix_integrity_failed",
@@ -157,6 +161,13 @@ export function createRolePermissionPageState({ requestIdFactory = createPermiss
     const categories = new Set(matrix?.permissions.map((permission) => permission.category) ?? []);
     categoryFilter = normalized === "all" || categories.has(normalized) ? normalized : "all";
     return categoryFilter;
+  }
+
+  /** 默认只编辑当前角色；完整六角色矩阵必须由用户显式打开，降低首屏扫描负担。 */
+  function setViewMode(mode) {
+    const normalized = text(mode).trim();
+    viewMode = normalized === "all" ? "all" : "role";
+    return viewMode;
   }
 
   /**
@@ -261,6 +272,7 @@ export function createRolePermissionPageState({ requestIdFactory = createPermiss
       && operation.revision === mutationRevision
       && operation.identity === normalizedOwner.identity
       && operation.tenantId === normalizedOwner.tenantId
+      && operation.workspaceId === normalizedOwner.workspaceId
       && operation.navigation === normalizedOwner.navigation
       && draft
       && operation.fingerprint === mutationFingerprint(draft),
@@ -272,7 +284,9 @@ export function createRolePermissionPageState({ requestIdFactory = createPermiss
     if (!isMutationCurrent(operation, owner)) return false;
     const currentRole = findRole(operation.roleId);
     const rawRole = payload?.role ?? payload?.updated_role;
-    const role = normalizeRole(rawRole, operation.tenantId, new Set(matrix.permissions.map((item) => item.code)));
+    const tenantId = responseTenantId(payload, operation);
+    const role = tenantId === matrix.tenant_id
+      ? normalizeRole(rawRole, tenantId, new Set(matrix.permissions.map((item) => item.code))) : null;
     const expectedChanged = !sameStrings(operation.permissionCodes, operation.basePermissionCodes);
     const expectedRevision = operation.expectedRevision + (expectedChanged ? 1 : 0);
     if (
@@ -342,6 +356,7 @@ export function createRolePermissionPageState({ requestIdFactory = createPermiss
       selectedRoleId,
       selectedRole,
       categoryFilter,
+      viewMode,
       draftPermissionCodes: draft?.roleId === selectedRoleId ? [...draft.permissionCodes] : null,
       dirty: Boolean(draft),
       busy: Boolean(mutationOperation),
@@ -367,6 +382,7 @@ export function createRolePermissionPageState({ requestIdFactory = createPermiss
     rejectLoad,
     selectRole,
     setCategoryFilter,
+    setViewMode,
     setPermission,
     discardDraft,
     beginMutation,
@@ -405,6 +421,7 @@ function normalizeMatrix(payload, tenantId) {
   const order = new Map(fixedRoleCodes().map((code, index) => [code, index]));
   return Object.freeze({
     catalog_revision: catalogRevision,
+    tenant_id: tenantId,
     permissions: Object.freeze([...permissions].sort((left, right) => (
       left.category.localeCompare(right.category) || left.code.localeCompare(right.code)
     ))),
@@ -508,11 +525,20 @@ function normalizeLoadOwner(owner) {
 function normalizeActionOwner(owner) {
   const identity = text(owner?.identity);
   const tenantId = safeId(owner?.tenantId);
+  const workspaceId = safeId(owner?.workspaceId);
   const navigation = text(owner?.navigation);
   // 写 owner 必须同时绑定授权指纹、tenant 和 PAGE-085 入口，避免跨页或跨租户复用 ticket。
-  return identity && tenantId && navigation === ROLE_PERMISSION_NAVIGATION
-    ? { identity, tenantId, navigation }
+  return identity && Boolean(tenantId) !== Boolean(workspaceId) && navigation === ROLE_PERMISSION_NAVIGATION
+    ? { identity, tenantId, workspaceId, navigation }
     : null;
+}
+
+function responseTenantId(payload, owner) {
+  if (owner.workspaceId) {
+    return payload?.workspace_id === owner.workspaceId ? safeId(payload?.tenant_id) : "";
+  }
+  return payload?.tenant_id === undefined || payload.tenant_id === owner.tenantId
+    ? owner.tenantId : "";
 }
 
 /** 为 CAS 草稿生成规范指纹，不含完整角色目录或用户信息。 */

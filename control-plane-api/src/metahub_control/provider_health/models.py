@@ -89,3 +89,10 @@ class ProviderProbeResponse(BaseModel):
     attempts: list[ProbeAttemptInfo]
     request_id: str
     trace_id: str
+
+
+class ProviderModelDiscoveryResponse(ProviderProbeResponse):
+    """Only validated model IDs are exposed; upstream metadata and credentials stay private."""
+
+    model_ids: list[str]
+    catalog_truncated: bool

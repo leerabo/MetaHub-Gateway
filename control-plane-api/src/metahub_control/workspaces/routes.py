@@ -46,18 +46,24 @@ async def post_workspace(request: Request, response: Response) -> WorkspaceRespo
     payload = await _strict_json(request)
     kind = _required_string(payload, "kind", maximum=20)
     required = (
-        {"kind", "name", "slug", "region", "service_mode"}
+        {"kind", "name"}
         if kind.strip().lower() == "organization"
-        else {"kind", "region", "service_mode"}
+        else {"kind"}
     )
-    if set(payload) != required:
+    optional = {"region", "service_mode"}
+    if kind.strip().lower() == "organization":
+        optional.add("slug")
+    if not required <= set(payload) or not set(payload) <= required | optional:
         raise ApiError("workspace.request_invalid")
     session_token = _required_session_cookie(request)
     csrf_token = _required_csrf(request)
     name = _optional_string(payload, "name", maximum=160)
-    slug = _optional_string(payload, "slug", maximum=48)
-    region = _required_string(payload, "region", maximum=40)
-    service_mode = _required_string(payload, "service_mode", maximum=40)
+    slug = _required_string(payload, "slug", maximum=48) if "slug" in payload else None
+    region = _required_string(payload, "region", maximum=40) if "region" in payload else None
+    service_mode = (
+        _required_string(payload, "service_mode", maximum=40)
+        if "service_mode" in payload else None
+    )
     async with _workspace_creation_lock(request, session_token, idempotency_key):
         account_id, replay = await _run(
             probe_workspace_creation_replay,

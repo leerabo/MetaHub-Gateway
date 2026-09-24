@@ -65,7 +65,7 @@ def list_platform_status(
 ) -> StatusWorkspaceResponse:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
+        connection.execute("BEGIN IMMEDIATE")
         actor = _platform_actor(connection, config, session_token, "platform.status.read")
         result = _status_response(
             connection,

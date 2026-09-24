@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 
 import {
   createMcpToolPageState,
@@ -10,6 +11,7 @@ import {
 } from "../../src/features/mcp-tools/mcpToolPageState.js";
 import { renderMcpTools } from "../../src/features/mcp-tools/renderMcpTools.js";
 import { renderDeveloperStart } from "../../src/features/developer-start/renderDeveloperStart.js";
+import { bindNavigationHashRefresh } from "../../src/lib/consoleShell.js";
 import { PERMISSIONS, withPermissionSnapshot } from "./permissionTestContext.mjs";
 
 const SERVER_ID = `mcps_${"a".repeat(32)}`;
@@ -389,22 +391,74 @@ test("main lifecycle clears PAGE-114 before logout await and feature code never 
 
 test("hashchange and pagehide synchronously destroy PAGE-114 before asynchronous navigation refresh", async () => {
   const main = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
-  const hashAnchor = main.indexOf("workspaceConsoleExperienceController.leave();");
-  const hashStart = main.lastIndexOf('window.addEventListener("hashchange", () => {', hashAnchor);
-  const genericRefresh = main.indexOf("bindNavigationHashRefresh(window, refresh)", hashStart);
-  const hashCondition = main.indexOf('if (nextItemId !== "mcp-tools")', hashStart);
-  const hashClear = main.indexOf("mcpToolPageState.clear();", hashCondition);
-  assert.ok(
-    hashStart >= 0
-      && hashCondition > hashStart
-      && hashClear > hashCondition
-      && hashClear < genericRefresh,
-  );
-
+  const genericRefresh = main.indexOf("bindNavigationHashRefresh(window, refresh)");
+  const hashStart = main.lastIndexOf('window.addEventListener("hashchange", () => {', genericRefresh);
   const pagehideStart = main.indexOf('window.addEventListener("pagehide", () => {', genericRefresh);
   const bootstrap = main.indexOf("void start();", pagehideStart);
-  const pagehideClear = main.indexOf("mcpToolPageState.clear();", pagehideStart);
-  assert.ok(pagehideStart >= 0 && pagehideClear > pagehideStart && pagehideClear < bootstrap);
+  assert.ok(hashStart >= 0 && genericRefresh > hashStart
+    && pagehideStart > genericRefresh && bootstrap > pagehideStart);
+
+  const auth = context([PERMISSIONS.MCP_READ]);
+  const owner = mcpToolPageOwner(auth, shell(auth));
+  const calls = [];
+  const state = createMcpToolPageState({ clearDom: () => calls.push("erase") });
+  state.enter(owner);
+  let ticket = state.beginList(owner, "servers", 1);
+  let nextItemId = "mcp-tools";
+  const listeners = new Map();
+  const scope = {
+    window: { addEventListener: (name, callback) => {
+      listeners.set(name, [...(listeners.get(name) ?? []), callback]);
+    } },
+    bindNavigationHashRefresh,
+    readActiveNavigationHash: () => nextItemId,
+    WORKSPACE_COMMERCIAL_NAVIGATION_IDS: new Set(),
+    mcpToolPageState: state,
+    refreshSequence: 0,
+    refresh: () => {
+      calls.push("refresh");
+      assert.equal(ticket.controller.signal.aborted, nextItemId !== "mcp-tools");
+      // Navigation may remain pending; private state must already be gone.
+      return new Promise(() => {});
+    },
+  };
+  const inactive = { clear() {}, leave() {}, close() {} };
+  for (const name of [
+    "workspacePageVisitTracker", "workspaceConsoleExperienceController", "providerStatusPageState",
+    "workspaceProviderEngineeringController", "workspaceCommercialAccountingController",
+    "sessionRiskPageState", "filePageState", "fileSecurityPageState", "batchJobPageState",
+    "localEndpointPageState", "privateGatewayPageState", "deploymentBrandingController",
+    "migrationOperationPageState", "supportTicketPageState", "experimentPageState",
+    "responseCachePageState", "quotaManagementPageState", "providerStatusVisitTracker",
+    "gatewayDebugLifecycle", "invitationPageState", "costAnomalyPageState",
+    "tenantDataLifecyclePageState", "workspaceNavigationController", "webhookDeadLetterPageState",
+    "migrationGuideVisitTracker",
+  ]) scope[name] = inactive;
+  for (const name of [
+    "clearEnterpriseChatSessionState", "clearPromptTemplateSessionState", "clearIntentSecuritySessionState",
+    "clearBasicResourceSessionState", "closeConsoleWorkspaceContextInvalidation", "clearUsageExportSessionState",
+    "clearAuditExportSessionState", "closeWorkspaceAdvancedToolsDialog", "clearPolicyEditorSessionState",
+    "clearPolicySnapshotSessionState", "clearPolicyDryRunSessionState", "clearRoutingPolicySessionState",
+    "clearModelQualityScoreSessionState", "clearRequestLogSessionState", "clearRequestExplanationSessionState",
+    "clearRequestFeedbackSummarySessionState",
+  ]) scope[name] = () => {};
+  runInNewContext(main.slice(hashStart, bootstrap), scope);
+  const dispatch = (name) => listeners.get(name).forEach((callback) => callback());
+  dispatch("hashchange");
+  assert.deepEqual(calls, ["refresh"]);
+  nextItemId = "overview";
+  calls.length = 0;
+  dispatch("hashchange");
+  assert.deepEqual(calls, ["erase", "refresh"]);
+  assert.equal(state.acceptList(ticket, { servers: [server()], next_cursor: null }, owner, 1), false);
+  assert.equal(state.snapshot().tabs.servers.items.length, 0);
+  state.enter(owner);
+  ticket = state.beginList(owner, "servers", 2);
+  calls.length = 0;
+  dispatch("pagehide");
+  assert.deepEqual(calls, ["erase"]);
+  assert.equal(ticket.controller.signal.aborted, true);
+  assert.equal(state.acceptList(ticket, { servers: [server()], next_cursor: null }, owner, 2), false);
 
   const ownerStart = main.indexOf("function currentMcpToolOwner(");
   const ownerEnd = main.indexOf("function renderCurrentMcpToolsPanel(", ownerStart);

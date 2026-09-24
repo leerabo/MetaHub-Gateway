@@ -41,7 +41,7 @@ async def get_projects(
     request: Request,
     context: Annotated[
         AuthContext,
-        Depends(require_workspace_or_legacy_permissions("project.read")),
+        Depends(require_workspace_or_legacy_permissions("project.read", touch=False)),
     ],
     status_filter: Annotated[str | None, Query(alias="status")] = None,
     search: str | None = None,

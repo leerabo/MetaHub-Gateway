@@ -34,6 +34,11 @@ from .models import (
     UsageSummaryResponse,
     UsageTotals,
     UsageVirtualKeySummary,
+    PersonalUsageDaySummary,
+    PersonalUsageRecord,
+    PersonalUsageRecordListResponse,
+    PersonalUsageSummaryResponse,
+    PersonalUsageTotals,
 )
 
 # 用量查询分页和过滤上限集中定义，保护账本聚合接口免受大范围扫描。
@@ -216,6 +221,161 @@ def list_usage_records(
         connection.close()
 
 
+def get_personal_usage_summary(
+    config: AppConfig,
+    context: AuthContext,
+    *,
+    start_date: str | None,
+    end_date: str | None,
+    request_id: str,
+    trace_id: str,
+) -> PersonalUsageSummaryResponse:
+    filters = normalize_usage_filters(
+        start_date=start_date,
+        end_date=end_date,
+        model_id=None,
+        virtual_key_id=None,
+        consumer_id=None,
+        environment_id=None,
+        provider_id=None,
+        project_id=None,
+        application_id=None,
+        estimated=None,
+        request_id_filter=None,
+        trace_id_filter=None,
+    )
+    where_sql, params = build_usage_filters(
+        context.user.tenant_id, filters, personal_user_id=context.user.user_id
+    )
+    connection = _connect(config)
+    try:
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "virtual_key.read", read_only=True
+        )
+        transaction.begin()
+        totals_row = connection.execute(
+            f"""
+            SELECT COUNT(*) AS request_count,
+              COALESCE(SUM(ul.input_tokens),0) AS input_tokens,
+              COALESCE(SUM(ul.output_tokens),0) AS output_tokens,
+              COALESCE(SUM(ul.total_tokens),0) AS total_tokens,
+              COALESCE(SUM(ul.cache_tokens),0) AS cache_tokens
+            FROM usage_ledger ul
+            LEFT JOIN request_logs rl ON rl.tenant_id=ul.tenant_id AND rl.request_id=ul.request_id
+            {where_sql}
+            """,
+            params,
+        ).fetchone()
+        day_rows = connection.execute(
+            f"""
+            SELECT substr(ul.created_at,1,10) AS day, COUNT(*) AS request_count,
+              COALESCE(SUM(ul.input_tokens),0) AS input_tokens,
+              COALESCE(SUM(ul.output_tokens),0) AS output_tokens,
+              COALESCE(SUM(ul.total_tokens),0) AS total_tokens,
+              COALESCE(SUM(ul.cache_tokens),0) AS cache_tokens
+            FROM usage_ledger ul
+            LEFT JOIN request_logs rl ON rl.tenant_id=ul.tenant_id AND rl.request_id=ul.request_id
+            {where_sql}
+            GROUP BY substr(ul.created_at,1,10)
+            ORDER BY day ASC
+            """,
+            params,
+        ).fetchall()
+        totals = PersonalUsageTotals(**_personal_token_totals(totals_row))
+        by_day = [
+            PersonalUsageDaySummary(day=str(row["day"]), **_personal_token_totals(row))
+            for row in day_rows
+        ]
+        connection.rollback()
+        transaction.begin()
+        return PersonalUsageSummaryResponse(
+            totals=totals, by_day=by_day, request_id=request_id, trace_id=trace_id
+        )
+    finally:
+        connection.close()
+
+
+def list_personal_usage_records(
+    config: AppConfig,
+    context: AuthContext,
+    *,
+    start_date: str | None,
+    end_date: str | None,
+    limit: int,
+    offset: int,
+    request_id: str,
+    trace_id: str,
+) -> PersonalUsageRecordListResponse:
+    filters = normalize_usage_filters(
+        start_date=start_date,
+        end_date=end_date,
+        model_id=None,
+        virtual_key_id=None,
+        consumer_id=None,
+        environment_id=None,
+        provider_id=None,
+        project_id=None,
+        application_id=None,
+        estimated=None,
+        request_id_filter=None,
+        trace_id_filter=None,
+    )
+    normalized_limit = _normalize_limit(limit)
+    normalized_offset = _normalize_offset(offset)
+    where_sql, params = build_usage_filters(
+        context.user.tenant_id, filters, personal_user_id=context.user.user_id
+    )
+    connection = _connect(config)
+    try:
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "virtual_key.read", read_only=True
+        )
+        transaction.begin()
+        total_row = connection.execute(
+            f"""
+            SELECT COUNT(*) AS total FROM usage_ledger ul
+            LEFT JOIN request_logs rl ON rl.tenant_id=ul.tenant_id AND rl.request_id=ul.request_id
+            {where_sql}
+            """,
+            params,
+        ).fetchone()
+        rows = connection.execute(
+            f"""
+            SELECT ul.request_id,
+              COALESCE(ul.model_id,rl.model_id) AS model_id,
+              COALESCE(ul.request_model,rl.request_model) AS request_model,
+              COALESCE(ul.resolved_model,rl.resolved_model) AS resolved_model,
+              ul.input_tokens,ul.output_tokens,ul.total_tokens,ul.cache_tokens,ul.created_at
+            FROM usage_ledger ul
+            LEFT JOIN request_logs rl ON rl.tenant_id=ul.tenant_id AND rl.request_id=ul.request_id
+            {where_sql}
+            ORDER BY ul.created_at DESC,ul.usage_ledger_id DESC
+            LIMIT ? OFFSET ?
+            """,
+            [*params, normalized_limit, normalized_offset],
+        ).fetchall()
+        records = [PersonalUsageRecord(**dict(row)) for row in rows]
+        connection.rollback()
+        transaction.begin()
+        return PersonalUsageRecordListResponse(
+            usage_records=records,
+            total=int(total_row["total"] if total_row else 0),
+            limit=normalized_limit,
+            offset=normalized_offset,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    finally:
+        connection.close()
+
+
+def _personal_token_totals(row: sqlite3.Row | None) -> dict[str, int]:
+    return {
+        key: _int_value(row[key] if row else 0)
+        for key in ("request_count", "input_tokens", "output_tokens", "total_tokens", "cache_tokens")
+    }
+
+
 def normalize_usage_filters(
     *,
     start_date: str | None,
@@ -260,6 +420,7 @@ def build_usage_filters(
     *,
     snapshot_at: str | None = None,
     snapshot_ledger_sequence: int | None = None,
+    personal_user_id: str | None = None,
 ) -> tuple[str, list[object]]:
     """构建 Usage 查询条件，并确保 tenant_id 与可选导出快照始终进入 SQL。
 
@@ -324,6 +485,14 @@ def build_usage_filters(
     if filters["trace_id_filter"]:
         clauses.append("rl.trace_id=?")
         params.append(filters["trace_id_filter"])
+    if personal_user_id is not None:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM virtual_keys personal_key "
+            "WHERE personal_key.tenant_id=ul.tenant_id "
+            "AND personal_key.virtual_key_id=COALESCE(ul.virtual_key_id, rl.virtual_key_id) "
+            "AND personal_key.created_by=?)"
+        )
+        params.append(personal_user_id)
     return f"WHERE {' AND '.join(clauses)}", params
 
 

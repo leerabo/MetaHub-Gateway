@@ -136,7 +136,7 @@ page.on("console", (message) => {
   const source = (() => {
     try { return new URL(message.location().url).pathname || "/"; } catch { return "unknown"; }
   })();
-  if (status === "401" && new Set(["/identity/me", "/workspace/session"]).has(source)) return;
+  if (status === "401" && new Set(["/identity/me", "/workspace/session", "/platform/session"]).has(source)) return;
   const detail = text.replace(/\s+/gu, " ").trim().slice(0, 240);
   consoleErrors.push(`${status}:${source}:${detail || "empty"}`);
 });
@@ -162,7 +162,18 @@ try {
   await login.locator('[name="email"]').fill(adminEmail);
   await login.locator('[name="password"]').fill(adminPassword);
   await login.getByRole("button", { name: "登录", exact: true }).click();
-  await page.locator('[data-identity-action="logout"]').waitFor({ state: "visible", timeout: 25_000 });
+  try {
+    await page.locator('[data-identity-action="logout"], #logout-button').first().waitFor({ state: "visible", timeout: 25_000 });
+  } catch (error) {
+    const diagnostic = {
+      url: page.url(),
+      logout_count: await page.locator('[data-identity-action="logout"], #logout-button').count(),
+      body_text: (await page.locator("body").innerText()).slice(0, 4000),
+      html_head: (await page.locator("body").innerHTML()).slice(0, 12000),
+    };
+    console.error(JSON.stringify(diagnostic));
+    throw error;
+  }
 
   const enrollment = await postWithGlobalCsrf(page, "/identity/mfa/totp/enrollments", {
     current_password: adminPassword,
@@ -180,9 +191,22 @@ try {
     reason_code: "initial_platform_owner",
     confirmed: true,
   });
+  // Platform and Workspace are separate credential domains. The identity
+  // login above may have created a Workspace session for the landing page;
+  // remove it before opening the platform portal so a delayed Workspace
+  // page-view beacon cannot race the Platform session boundary.
+  await context.clearCookies({ name: "__Host-metahub-workspace-session" });
+  await context.clearCookies({ name: "__Host-metahub-workspace-csrf" });
+  // Establish the platform session from the standalone platform portal. Doing
+  // this with no Workspace cookies keeps the two operator domains isolated.
+  await page.goto(`${consoleUrl}/platform.html`, { waitUntil: "domcontentloaded" });
   await postWithGlobalCsrf(page, "/platform/sessions", {
     totp_code: totp(enrollment.secret, totpAnchor + 30_000),
   });
+  await page.waitForFunction(
+    () => document.cookie.includes("__Host-metahub-platform-csrf="),
+    { timeout: 5_000 },
+  );
 
   const statusResponses = [];
   page.on("response", (response) => {
@@ -192,7 +216,12 @@ try {
       }
     } catch { /* Every production request is expected to be an absolute URL. */ }
   });
-  await page.goto(`${consoleUrl}/platform.html#console-migration`, { waitUntil: "domcontentloaded" });
+  // The first platform.html load was intentionally unauthenticated and
+  // rendered the gate. Put the requested Platform view in the location before
+  // the reload, then let the controller read both the newly issued Platform
+  // cookie and the initial hash in one mount.
+  await page.evaluate(() => { globalThis.location.hash = "console-migration"; });
+  await page.reload({ waitUntil: "domcontentloaded" });
   await page.locator("[data-console-migration-root]").waitFor({ state: "visible", timeout: 25_000 });
   await page.locator(".console-migration-summary").waitFor({ state: "visible", timeout: 25_000 });
   assert.match(await page.locator("[data-console-migration-root]").innerText(), /调度合同一致/u);

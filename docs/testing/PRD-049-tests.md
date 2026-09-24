@@ -219,3 +219,55 @@ SavedFilter 均 200，无 401、无新增反馈或模型调用，不用首轮成
 HTTP 客户端时间为 11719ms，不能由 250ms 业务预算推断响应已及时发出。事实前后
 一致，own_session_logout_status=200，整轮仍为 failed。该真实运行与九份独立阶段
 诊断分开，不以成功的短样本覆盖尾延迟问题。
+
+## 14. 2026-09-09 独立写连接暖复用与实际发布
+
+本条与当前运行可靠性批次联合验证，单独记录代码、测试和审计。仅反馈 POST 的原权限
+依赖和业务 worker 显式启用独立连接池；没有把写事务并入 HTTP 请求连接，没有缓存权限。
+设计第 20 节含两轮实施前自审。已有 GET 预算、Origin/CSRF、幂等及终态授权均不改变。
+
+证据均位于 `.artifacts/g6-security-20260907/`：
+
+- `prd049-replay-phases-local-r1.json`：四次既有反馈重放均 200，耗时
+  1756/1317/1279/1240ms。首样本打开四个、后三个样本各打开三个物理连接，零接收者
+  派发仍需 363..403ms。该进程未启动 lifespan，不代表真实服务 SLA。
+- `prd049-replay-phases-pooled-r1.json`：同样四次恢复同一事实，211/507/490/255ms；
+  测量请求内未新开物理连接，派发 1.4..3.2ms，每次仍完整校验权限三次。两次写锁等待
+  报 OperationalError 后按既有只读幂等恢复路径成功，不能视为锁问题消失。
+- `prd049-replay-pool-red-r1.xml`：四项预期失败，新 scope API 尚不存在。
+  `prd049-replay-pool-green-r1.xml`：17 passed，物理复用和既有连接生命周期回归。
+- `prd049-replay-pool-control-r1.xml`：26 passed / 2 failed。测试未开启事务即 commit，
+  原 guard 正确不执行；加入真实 BEGIN 后 `control-r2.xml` 为 28 passed。
+- `prd049-replay-pool-lifecycle-r3.xml`：9 passed，额外验证真实 asyncio 取消后 worker
+  保留独占物理连接；另一连接看不到未提交行，worker 退出才回滚归还，旧 facade 失效。
+- `prd049-replay-pool-api-r1.xml`：11 setup errors。误从子目录运行导致相对迁移目录
+  不存在，并触发已有 DbError 传播异常；保留原件，不为错误启动目录改生产代码。
+- `prd049-replay-pool-api-r2.xml`：10 passed / 1 failed。失败库确有一条反馈，但创建
+  和默认汇总处于同一秒，按原闭开窗口被上界排除；旧断言依赖慢请求自然跨秒。
+- `prd049-replay-pool-api-r3.xml`：11 passed，147.559 秒。显式覆盖上界排除、下界
+  纳入、默认 30 天窗口及同窗口跨租户隔离，并保留撤权、冲突、权限读取故障和超时回归。
+- `prd147-feedback-native-replay-pool-r1-evidence` 对应 XML 的三项原生 PostgreSQL
+  创建/重放/汇总、终态过期和 worker 线程契约通过；实际文件名以该前缀的 UUID 原件为准。
+  `prd147-feedback-native-replay-pool-window-r2-10baa42c64de418bb20aa4cea6828418.xml`
+  独立重跑更新后的时间边界流程通过。两个隔离 PostgreSQL 实例均记录正常关闭。
+- `prd049-replay-pool-regression-r1.xml`：42 passed，复用连接、Control 读取、资源事务
+  生命周期和独立 Summary worker 的受影响回归。Ruff 与差异格式检查通过。
+
+仅更新本地 Control：旧 PID 7044（12:47:09）换为 PID 20332（13:49:01）；Gateway
+16852、Console 336 未重启。`prd049-replay-pool-deployment-r1.json` 保存生产源码摘要、
+旧进程身份和失败计数。发布前仍有 accepted=126、dropped=63、backend_failure=18，
+`prd049-replay-pool-runtime-before-r1.json` 为 failed，不能用新进程零计数覆盖。
+
+真实服务 `prd049-replay-pool-live-r1.json`：8 次同操作反馈全部 200、同一事实且
+idempotent_replay=true，HTTP 耗时 203..547ms；16 次日志/筛选和 8 次 Summary 均 200，
+Summary 141..188ms。自己的测试会话注销 200，反馈事实前后摘要相同，provider_calls=0。
+这组有限样本证明本次实际发布可用，不证明全部性能或 72 小时稳定性。
+
+`prd049-replay-pool-facts-before-r1.json` 与 after-r1 的 13 组账务事实计数及摘要逐组
+一致，quick_check=ok、外键违规 0，三个服务入口/就绪检查均 200。原 owner_invalid
+失败 outbox、pending outbox 和 checkpoint=0 保留，未改写历史数据制造账務完成。
+
+首次发布短观测 `prd049-replay-pool-runtime-r1.json` 为 failed：前段租约仅接管 56 项，
+后续恢复 63 项；18 次健康检查成功，错误/丢弃/停止超时计数均为 0。启动阶段和稳态
+分开评价，不删掉该轮。独立敏感记录见 `PRD-049-replay-pool-sensitive-audit-20260909.md`。
+G6/G7/G8、历史账务问题、独立会签和 72 小时验收仍不通过。

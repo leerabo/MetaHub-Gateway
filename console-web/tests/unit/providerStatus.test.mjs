@@ -204,7 +204,17 @@ test("PAGE-088 renders independent metrics and escapes maintenance and failure f
   assert.match(html, /value="deepseek" selected/);
   assert.match(html, /&lt;script&gt;alert\(&#096;status-xss&#096;\)&lt;\/script&gt;/);
   assert.match(html, /req_&lt;\/span&gt;&lt;script&gt;x&lt;\/script&gt;/);
+  assert.match(html, /独立探测成功率 80%/);
   assert.doesNotMatch(html, /<状态 Provider>|<script>|req_<\/span>/);
+});
+
+test("PAGE-088 explains when a healthy label has probe-only or degraded evidence", () => {
+  const payload = statusPayload();
+  payload.provider_statuses[0].eligible_call_count = 0;
+  payload.provider_statuses[0].probe_success_rate_bps = 9715;
+  const html = renderProviderStatusPanel(payload, statusAuth());
+  assert.match(html, /没有真实调用样本；当前状态主要来自独立探测。/);
+  assert.match(html, /独立探测成功率 97.15%/);
 });
 
 test("PAGE-088 requires both read permissions while loading and errors remain traceable", () => {

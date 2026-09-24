@@ -10,7 +10,7 @@ if (!licenseResponse.ok) throw new Error("Lucide license download failed");
 const license = await licenseResponse.text();
 const names = ["arrow-right", "arrow-left", "key-round", "layers", "git-branch",
   "shield-check", "chart-no-axes-combined", "cpu", "users", "activity", "pause",
-  "play", "eye", "eye-off"];
+  "play", "eye", "eye-off", "rotate-cw", "copy", "search", "eraser"];
 const selected = Object.fromEntries(names.map((name) => {
   if (!Array.isArray(upstream[name])) throw new Error(`Missing upstream icon: ${name}`);
   return [name, upstream[name]];

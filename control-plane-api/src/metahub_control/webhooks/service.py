@@ -189,7 +189,9 @@ def create_webhook(
     _ensure_endpoint_quota(connection, context.user.tenant_id)
     signing_secret = f"whsec_{secrets.token_urlsafe(32)}"
     try:
-        encrypted_secret = encrypt_secret(signing_secret)
+        encrypted_secret = encrypt_secret(
+            signing_secret, encryption_secret=config.provider_key_encryption_secret,
+        )
     # 输入解析异常统一映射为业务错误，避免无结构异常穿透 API。
     except ValueError as exc:
         # 加密失败时不能退化为明文保存，必须让调用方看到可重试的密钥错误。
@@ -1232,7 +1234,9 @@ def rotate_webhook_secret(
     normalized_endpoint_id = _normalize_endpoint_id(endpoint_id)
     signing_secret = f"whsec_{secrets.token_urlsafe(32)}"
     try:
-        encrypted_secret = encrypt_secret(signing_secret)
+        encrypted_secret = encrypt_secret(
+            signing_secret, encryption_secret=config.provider_key_encryption_secret,
+        )
     # 加密失败时严禁回退到明文或沿用不确定 Secret，直接返回统一服务错误。
     except ValueError as exc:
         # 统一错误不携带加密异常文本，避免运行配置和密钥材料泄露。
@@ -2784,7 +2788,10 @@ def _send_once(
     error_code: str | None = None
     error_summary: str | None = None
     try:
-        signing_secret = decrypt_secret(str(endpoint["encrypted_secret"]))
+        signing_secret = decrypt_secret(
+            str(endpoint["encrypted_secret"]),
+            encryption_secret=config.provider_key_encryption_secret,
+        )
         timestamp_seconds = int(time.time())
         normalized_format = normalize_webhook_payload_format(payload_format)
         headers = {

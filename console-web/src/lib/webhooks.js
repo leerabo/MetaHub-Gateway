@@ -1,4 +1,5 @@
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 // PAGE-083 只接受后端冻结的死信状态枚举；未知值必须在 fetch 前失败关闭。
 const DEAD_LETTER_STATUSES = new Set([
@@ -14,13 +15,13 @@ const DEAD_LETTER_STATUSES = new Set([
  * 查询当前租户的 Webhook Endpoint 和最近发送记录。
  * 前端只提交状态和事件类型筛选，不拼接 tenant_id；真实租户隔离与角色校验由控制面 /webhooks 完成。
  */
-export async function listWebhooks({ controlApiUrl, token, status, eventType, includeDeliveries = true }) {
+export async function listWebhooks({ controlApiUrl, authentication, token, status, eventType, includeDeliveries = true, signal }) {
   const url = new URL(`${controlApiUrl}/webhooks`);
   setOptionalParam(url, "status", status);
   setOptionalParam(url, "event_type", eventType);
   url.searchParams.set("include_deliveries", includeDeliveries ? "true" : "false");
   return webhookRequest(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
+    authentication, token, signal,
   });
 }
 
@@ -30,7 +31,9 @@ export async function listWebhooks({ controlApiUrl, token, status, eventType, in
  */
 export async function createWebhook({
   controlApiUrl,
+  authentication,
   token,
+  signal,
   name,
   endpointUrl,
   eventTypes,
@@ -49,9 +52,9 @@ export async function createWebhook({
     timeout_ms: timeoutMs,
   });
   return webhookRequest(`${controlApiUrl}/webhooks`, {
+    authentication, token, signal,
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -62,10 +65,10 @@ export async function createWebhook({
  * 触发单个 Endpoint 的测试事件。
  * 路径 ID 来自后端列表，后端仍会按登录态 tenant_id 重新确认归属并记录 attempts。
  */
-export async function testWebhook({ controlApiUrl, token, webhookEndpointId }) {
+export async function testWebhook({ controlApiUrl, authentication, token, webhookEndpointId, signal }) {
   return webhookRequest(`${controlApiUrl}/webhooks/${encodeURIComponent(webhookEndpointId)}/test`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
+    authentication, token, signal,
   });
 }
 
@@ -75,7 +78,9 @@ export async function testWebhook({ controlApiUrl, token, webhookEndpointId }) {
  */
 export async function listWebhookDeliveries({
   controlApiUrl,
+  authentication,
   token,
+  signal,
   webhookEndpointId,
   eventType,
   status = "all",
@@ -88,7 +93,7 @@ export async function listWebhookDeliveries({
   setOptionalParam(url, "status", status);
   url.searchParams.set("limit", String(limit));
   return webhookRequest(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
+    authentication, token, signal,
   });
 }
 
@@ -98,15 +103,17 @@ export async function listWebhookDeliveries({
  */
 export async function replayWebhook({
   controlApiUrl,
+  authentication,
   token,
+  signal,
   webhookEndpointId,
   webhookDeliveryId,
   idempotencyKey,
 }) {
   return webhookRequest(`${controlApiUrl}/webhooks/${encodeURIComponent(webhookEndpointId)}/replay`, {
+    authentication, token, signal,
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -127,6 +134,7 @@ export async function replayWebhook({
  */
 export async function listWebhookDeadLetters({
   controlApiUrl,
+  authentication,
   token,
   status = "all",
   eventType,
@@ -150,7 +158,7 @@ export async function listWebhookDeadLetters({
   setOptionalParam(url, "cursor", cursor);
   return webhookRequest(url.toString(), {
     cache: "no-store",
-    headers: { Authorization: `Bearer ${token}` },
+    authentication, token,
     signal,
     requestId: operationRequestId,
     traceId: operationTraceId,
@@ -168,6 +176,7 @@ export async function listWebhookDeadLetters({
  */
 export async function replayWebhookDelivery({
   controlApiUrl,
+  authentication,
   token,
   webhookDeliveryId,
   idempotencyKey,
@@ -185,8 +194,8 @@ export async function replayWebhookDelivery({
     `${controlApiUrl}/webhook-deliveries/${encodeURIComponent(deliveryId)}/replay`,
     {
       method: "POST",
+      authentication, token,
       headers: {
-        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ idempotency_key: replayKey }),
@@ -208,6 +217,7 @@ export async function replayWebhookDelivery({
  */
 export async function archiveWebhookDeadLetter({
   controlApiUrl,
+  authentication,
   token,
   deadLetterEventId,
   signal,
@@ -219,7 +229,7 @@ export async function archiveWebhookDeadLetter({
     `${controlApiUrl}/webhook-dead-letters/${encodeURIComponent(eventId)}/archive`,
     {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
+      authentication, token,
       signal,
       requestId: operationRequestId,
       traceId: operationTraceId,
@@ -265,10 +275,10 @@ export function shouldRetainWebhookDeadLetterIdempotencyKey(error) {
  * 原子轮换 Endpoint signing secret。
  * 请求不携带旧/新 secret；新明文只在本次响应返回，并由页面保存在短生命周期内存状态。
  */
-export async function rotateWebhookSecret({ controlApiUrl, token, webhookEndpointId }) {
+export async function rotateWebhookSecret({ controlApiUrl, authentication, token, webhookEndpointId, signal }) {
   return webhookRequest(`${controlApiUrl}/webhooks/${encodeURIComponent(webhookEndpointId)}/rotate-secret`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
+    authentication, token, signal,
   });
 }
 
@@ -305,13 +315,19 @@ function compactPayload(payload) {
  */
 async function webhookRequest(url, options = {}) {
   // requestId/traceId 是客户端控制字段，拆出后不能原样传给 fetch，避免形成未知 RequestInit 属性。
-  const { requestId, traceId, ...fetchOptions } = options;
-  const response = await fetch(url, {
+  const { requestId, traceId, authentication, token, headers: inputHeaders, ...fetchOptions } = options;
+  const method = String(fetchOptions.method ?? "GET").toUpperCase();
+  const headers = new Headers(inputHeaders);
+  const response = await authenticatedResourceFetch(url, {
     ...fetchOptions,
+    authentication,
+    token,
+    method,
+    csrfRequired: method !== "GET" && method !== "HEAD",
     headers: {
       "X-Request-ID": requestId || `console_webhooks_${Date.now()}`,
       ...(traceId ? { "X-Trace-ID": traceId } : {}),
-      ...(options.headers ?? {}),
+      ...Object.fromEntries(headers),
     },
   });
   const payload = await readJson(response);
@@ -336,7 +352,8 @@ async function webhookRequest(url, options = {}) {
 async function readJson(response) {
   try {
     return await response.json();
-  } catch {
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
     return {};
   }
 }

@@ -125,3 +125,23 @@ test("provider health dashboard hides PAGE-088 link without logs permission or n
   assert.doesNotMatch(noLogsLink, /#provider-health/);
   assert.doesNotMatch(noNavigationLink, /#provider-health/);
 });
+
+test("provider health panel shows evidence scope for probe-only or degraded status", () => {
+  const state = {
+    state: "ok",
+    ...healthPayload,
+    provider_health: [{
+      ...healthPayload.provider_health[0],
+      effective_health_status: "healthy",
+      eligible_call_count: 0,
+      probe_total: 10,
+      probe_success_rate_bps: 9700,
+    }],
+  };
+  const html = renderProviderHealthPanel(
+    state,
+    withPermissionSnapshot({ user: { role: "ops_admin" } }, [PERMISSIONS.PROVIDER_HEALTH_READ]),
+  );
+  assert.match(html, /无真实调用样本，状态主要来自探测/);
+  assert.match(html, /探测成功率 97%/);
+});

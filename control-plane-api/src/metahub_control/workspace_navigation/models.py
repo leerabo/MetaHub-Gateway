@@ -18,6 +18,7 @@ class NavigationItem(StrictModel):
     description_key: str = Field(min_length=3, max_length=180)
     kind: Literal["primary", "task_home"]
     order: int = Field(ge=0, le=1000)
+    required_permissions: tuple[str, ...] = Field(default=(), max_length=300)
 
 
 class WorkspacePageVisitRequest(StrictModel):
@@ -101,6 +102,7 @@ class RoleTask(StrictModel):
         expected = self.action_route_code is not None and self.status in {
             "ready",
             "needs_attention",
+            "completed",
         }
         if self.action_enabled is not expected:
             raise ValueError("task action state is inconsistent")
@@ -129,7 +131,10 @@ class GettingStartedResponse(StrictModel):
 
     @model_validator(mode="after")
     def require_task_summary_coherence(self) -> GettingStartedResponse:
-        enabled = [task.task_code for task in self.tasks if task.action_enabled]
+        enabled = [
+            task.task_code for task in self.tasks
+            if task.action_enabled and task.status != "completed"
+        ]
         if (
             self.completed_count != sum(task.status == "completed" for task in self.tasks)
             or self.needs_attention_count

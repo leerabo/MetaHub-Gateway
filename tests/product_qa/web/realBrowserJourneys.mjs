@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { normalizeWorkspaceNavigation } from "../../../console-web/src/lib/workspaceNavigation.js";
+import { measureInteractiveLayout } from "./layoutMetrics.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium, firefox } = require(path.resolve(".tools/product-qa-browser/node_modules/playwright"));
@@ -71,11 +72,19 @@ async function collapseSidebar(page) {
 }
 
 async function assertCurrentNavigationGroupExpanded(page) {
-  assert.equal(
-    await page.locator("[data-sidebar-group-toggle][aria-expanded='true']").count(),
-    1,
-    "only_the_current_navigation_group_should_be_expanded",
-  );
+  const activeNavigation = await page.locator(".console-shell").getAttribute("data-active-navigation");
+  const expandedCount = await page.locator("[data-sidebar-group-toggle][aria-expanded='true']").count();
+  // The task home is the first-use landing surface, deliberately excluded from
+  // the four operational sidebar domains. It has no visible group to expand.
+  if (activeNavigation === "quickstart") {
+    assert.equal(expandedCount, 0, "task_home_should_not_create_a_fifth_sidebar_group");
+    // The first-use task home is intentionally hidden from the management
+    // sidebar; the shell state is the authoritative active surface.
+    assert.equal(await page.locator(".console-shell").getAttribute("data-active-navigation"), "quickstart");
+    return;
+  } else {
+    assert.equal(expandedCount, 1, "only_the_current_navigation_group_should_be_expanded");
+  }
   await page.locator('.sidebar-link[aria-current="page"]').waitFor({ state: "visible" });
 }
 
@@ -96,9 +105,21 @@ async function expandNavigationGroup(page, navigationId) {
       { cause: error },
     );
   }
-  const group = navigation.locator("xpath=ancestor::*[@data-sidebar-group][1]");
-  const groupKey = await group.getAttribute("data-sidebar-group");
-  assert.ok(groupKey, `sidebar_group_missing:${navigationId}`);
+  let group = navigation.locator("xpath=ancestor::*[@data-sidebar-group][1]");
+  let groupKey = await group.getAttribute("data-sidebar-group").catch(() => null);
+  if (!groupKey) {
+    // Role-collapsed entries live under the global More controls disclosure;
+    // open it before treating the deferred business group as a navigation group.
+    const deferred = navigation.locator("xpath=ancestor::section[@data-sidebar-deferred-group][1]");
+    groupKey = await deferred.getAttribute("data-sidebar-deferred-group");
+    assert.ok(groupKey, `sidebar_group_missing:${navigationId}`);
+    const disclosure = deferred.locator("xpath=ancestor::details[1]");
+    if (await disclosure.getAttribute("open") === null) {
+      await humanClick(page, disclosure.locator("summary"));
+    }
+    await navigation.waitFor({ state: "visible", timeout: 3_000 });
+    return { groupKey: `deferred:${groupKey}`, navigation };
+  }
   const toggle = page.locator(`[data-sidebar-group-toggle='${groupKey}']`);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (await toggle.getAttribute("aria-expanded") === "true") break;
@@ -117,6 +138,13 @@ async function expandNavigationGroup(page, navigationId) {
     1,
     `sidebar_accordion_violation:${navigationId}`,
   );
+  const nestedMore = navigation.locator(
+    "xpath=ancestor::details[contains(concat(' ', normalize-space(@class), ' '), ' sidebar-group-more ')][1]",
+  );
+  if (await nestedMore.count() > 0 && await nestedMore.getAttribute("open") === null) {
+    await humanClick(page, nestedMore.locator("summary"));
+    await navigation.waitFor({ state: "visible", timeout: 3_000 });
+  }
   return { groupKey, navigation };
 }
 
@@ -136,7 +164,25 @@ async function openNavigation(page, navigationId, responsePaths) {
           && response.status() < 300;
       }, { timeout: NAVIGATION_RESPONSE_OBSERVER_TIMEOUT_MS });
     } catch (error) {
-      throw new Error(`navigation_response_wait_failed:${navigationId}:${expectedPath}`, { cause: error });
+      const diagnostic = await page.evaluate((id) => {
+        const button = document.querySelector(`[data-console-nav='${id}']`);
+        const shell = document.querySelector(".console-shell");
+        return {
+          button: button ? {
+            disabled: button.disabled,
+            ariaCurrent: button.getAttribute("aria-current"),
+            route: button.getAttribute("data-console-route"),
+            visible: button.getAttribute("data-sidebar-visible"),
+            html: button.outerHTML.slice(0, 600),
+          } : null,
+          activeNavigation: shell?.getAttribute("data-active-navigation") ?? null,
+          activeRoute: shell?.getAttribute("data-active-route") ?? null,
+        };
+      }, navigationId);
+      throw new Error(
+        `navigation_response_wait_failed:${navigationId}:${expectedPath}:${JSON.stringify(diagnostic)}`,
+        { cause: error },
+      );
     }
   }));
   const started = performance.now();
@@ -387,43 +433,7 @@ async function assertProductSurface(page) {
   for (const pattern of forbiddenProductText) assert.doesNotMatch(text, pattern);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   assert.ok(overflow <= 1, `horizontal_overflow:${overflow}`);
-  const layout = await page.evaluate(() => {
-    const visible = [...document.querySelectorAll("button, input, select, textarea, a[href]")]
-      .filter((element) => {
-        const rect = element.getBoundingClientRect();
-        const style = getComputedStyle(element);
-        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-      });
-    const clipped = visible.filter((element) => (
-      ["BUTTON", "A"].includes(element.tagName)
-      && (element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1)
-    ));
-    let overlaps = 0;
-    const overlapPairs = [];
-    for (let leftIndex = 0; leftIndex < visible.length; leftIndex += 1) {
-      const left = visible[leftIndex];
-      const leftRect = left.getBoundingClientRect();
-      for (let rightIndex = leftIndex + 1; rightIndex < visible.length; rightIndex += 1) {
-        const right = visible[rightIndex];
-        if (left.contains(right) || right.contains(left)) continue;
-        const rightRect = right.getBoundingClientRect();
-        const overlapWidth = Math.min(leftRect.right, rightRect.right) - Math.max(leftRect.left, rightRect.left);
-        const overlapHeight = Math.min(leftRect.bottom, rightRect.bottom) - Math.max(leftRect.top, rightRect.top);
-        if (overlapWidth > 2 && overlapHeight > 2) {
-          overlaps += 1;
-          if (overlapPairs.length < 12) {
-            const describe = (element) => ({
-              tag: element.tagName,
-              id: element.id,
-              text: String(element.textContent || "").trim().replace(/\s+/gu, " ").slice(0, 80),
-            });
-            overlapPairs.push([describe(left), describe(right)]);
-          }
-        }
-      }
-    }
-    return { clipped_control_count: clipped.length, interactive_overlap_count: overlaps, overlap_pairs: overlapPairs };
-  });
+  const layout = await page.evaluate(measureInteractiveLayout);
   assert.equal(layout.clipped_control_count, 0, "clipped_interactive_control");
   assert.equal(layout.interactive_overlap_count, 0, `overlapping_interactive_controls:${JSON.stringify(layout.overlap_pairs)}`);
   return { horizontal_overflow_px: Math.max(0, overflow), ...layout };
@@ -434,6 +444,61 @@ async function logout(page) {
   await page.waitForURL((url) => url.pathname === "/", { timeout: 15_000 });
   await page.getByRole("heading", { name: "MetaHub", exact: true }).waitFor({ state: "visible" });
   assert.equal(await page.locator("#console-sidebar, #login-form").count(), 0);
+}
+
+async function logoutDuringHydration(page) {
+  await openNavigation(page, "projects", ["/projects"]);
+  let release;
+  let captured;
+  let captureTimeout;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const responseCaptured = new Promise((resolve, reject) => {
+    captured = resolve;
+    captureTimeout = setTimeout(() => reject(new Error("logout_hydration_request_missing")), 10_000);
+  });
+  // Delay a real response; the product still authorizes and reads the same resource.
+  const pattern = "**/virtual-keys*";
+  const handler = async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const url = new URL(route.request().url());
+    url.hostname = "127.0.0.1";
+    url.port = String(controlPort);
+    const response = await route.fetch({ url: url.toString() });
+    clearTimeout(captureTimeout);
+    captured();
+    await gate;
+    await route.fulfill({ response });
+  };
+  await page.route(pattern, handler);
+  let pointerDown = false;
+  try {
+    const { navigation } = await expandNavigationGroup(page, "virtual-keys");
+    await humanClick(page, navigation);
+    await responseCaptured;
+    const button = page.locator("#logout-button");
+    await button.waitFor({ state: "visible" });
+    const original = await button.elementHandle();
+    const box = await button.boundingBox();
+    assert.ok(box && original, "logout_hydration_button_missing");
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    pointerDown = true;
+    release();
+    await page.locator("#create-virtual-key-form").waitFor({ state: "attached", timeout: 4_000 });
+    assert.equal(await original.evaluate((element) => (
+      element.isConnected && element === document.querySelector("#logout-button")
+    )), true, "logout_pointer_target_replaced_during_hydration");
+    await page.mouse.up();
+    pointerDown = false;
+    await page.waitForURL((url) => url.pathname === "/", { timeout: 15_000 });
+    await page.getByRole("heading", { name: "MetaHub", exact: true }).waitFor({ state: "visible" });
+    assert.equal(await page.locator("#console-sidebar, #login-form").count(), 0);
+  } finally {
+    release();
+    clearTimeout(captureTimeout);
+    if (pointerDown) await page.mouse.up();
+    await page.unroute(pattern, handler);
+  }
 }
 
 async function verifyServiceRecovery(runtime) {
@@ -492,7 +557,8 @@ async function runJourney(browser, definition) {
     assert.equal(logoutLabel, definition.locale === "en-US" ? "Log out" : "\u767b\u51fa");
     const executionFacts = await definition.execute(runtime.page, runtime) ?? {};
     const layout = await assertProductSurface(runtime.page);
-    await logout(runtime.page);
+    if (definition.role === "developer") await logoutDuringHydration(runtime.page);
+    else await logout(runtime.page);
     const facts = runtime.facts();
     assert.equal(
       facts.request_failure_count,
@@ -514,6 +580,7 @@ async function runJourney(browser, definition) {
       ...loginFacts,
       ...layout,
       ...facts,
+      logout_during_hydration_passed: definition.role === "developer",
       passed: true,
     };
   } finally {
@@ -658,9 +725,13 @@ try {
       }
       await collapseSidebar(page);
       const body = (await page.locator("body").innerText()).toLowerCase();
-      for (const sensitive of ["provider key", "access token", "response body"]) {
+      // The employee contract deliberately explains that a Provider KEY is not
+      // required. Guard against leaked credential values instead of treating
+      // that explanatory label as a secret.
+      for (const sensitive of ["access token", "response body"]) {
         assert.ok(!body.includes(sensitive));
       }
+      assert.doesNotMatch(body, /(?:sk|key|token)_[a-z0-9]{20,}/iu);
       return { mobile_drawer_default_closed: true, mobile_touch_targets: targetSizes.length };
     },
   }));

@@ -34,6 +34,7 @@ from metahub_control.audit import (
     new_audit_log_id,
     record_audit_log,
 )
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 from metahub_control.auth.service import AuthContext
 from metahub_control.webhooks.service import dispatch_webhook_event
 
@@ -79,9 +80,17 @@ def list_permission_matrix(
     tenant_id = _trusted_tenant_id(context)
     connection = _connect(config)
     try:
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "rbac.matrix.manage", read_only=True
+        )
+        transaction.begin()
+        workspace_id = _authenticated_workspace_id(connection, transaction.context)
         permissions, roles = _load_and_validate_matrix(connection, tenant_id)
+        transaction.verify()
         # 权限目录、租户关系或矩阵哈希异常时必须回滚并失败关闭，禁止按默认角色补权。
         return PermissionMatrixResponse(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
             catalog_revision=CATALOG_REVISION,
             permissions=permissions,
             roles=roles,
@@ -126,7 +135,10 @@ def replace_role_permissions(
     event_id: str | None = None
     updated_role: RolePermissionInfo | None = None
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        transaction = ResourceWriteTransaction(connection, config, context, "rbac.matrix.manage")
+        transaction.begin()
+        context = transaction.context
+        workspace_id = _authenticated_workspace_id(connection, context)
         permissions, roles = _load_and_validate_matrix(connection, tenant_id)
         role = next((item for item in roles if item.role_id == normalized_role_id), None)
         # 权限目录、租户关系或矩阵哈希异常时必须回滚并失败关闭，禁止按默认角色补权。
@@ -145,8 +157,11 @@ def replace_role_permissions(
         before_codes = tuple(role.permission_codes)
         if requested_codes == before_codes:
             # 读锁来自 BEGIN IMMEDIATE；no-op 显式回滚，保证零 revision、零审计和零事件。
+            transaction.verify()
             connection.rollback()
             return RolePermissionUpdateResponse(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
                 role=role,
                 changed=False,
                 event_id=None,
@@ -305,12 +320,14 @@ def replace_role_permissions(
         ):
             # 权限目录、租户关系或矩阵哈希异常时必须回滚并失败关闭，禁止按默认角色补权。
             raise ApiError("rbac.matrix_integrity_failed")
-        commit_audited_transaction(connection)
+        transaction.commit(commit_audited_transaction)
     # 权限目录、租户关系或矩阵哈希异常时必须回滚并失败关闭，禁止按默认角色补权。
     except ApiError as exc:
         connection.rollback()
         # 权限目录、租户关系或矩阵哈希异常时必须回滚并失败关闭，禁止按默认角色补权。
-        if exc.code in _DOMAIN_ERRORS:
+        if exc.code in _DOMAIN_ERRORS or exc.code.startswith(
+            ("auth.", "workspace_session.", "identity.")
+        ):
             raise
         # 审计或其他内部领域故障统一折叠为矩阵服务不可用，不泄露下游表名。
         raise ApiError("rbac.unavailable") from exc
@@ -339,12 +356,26 @@ def replace_role_permissions(
     )
     # 权限目录、租户关系或矩阵哈希异常时必须回滚并失败关闭，禁止按默认角色补权。
     return RolePermissionUpdateResponse(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
         role=updated_role,
         changed=True,
         event_id=event_id,
         request_id=request_id,
         trace_id=trace_id,
     )
+
+
+def _authenticated_workspace_id(connection: sqlite3.Connection, context: AuthContext) -> str | None:
+    if not context.session.session_id.startswith("wss_"):
+        return None
+    row = connection.execute(
+        "SELECT workspace_id FROM workspace_sessions WHERE workspace_session_id=? AND tenant_id=?",
+        (context.session.session_id, context.user.tenant_id),
+    ).fetchone()
+    if row is None:
+        raise ApiError("auth.permission_denied")
+    return str(row["workspace_id"])
 
 
 def load_permission_matrix_from_connection(

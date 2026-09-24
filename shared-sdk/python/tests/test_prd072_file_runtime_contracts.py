@@ -38,7 +38,7 @@ from metahub_shared.runtime.webhooks import (
 REVISION_10_HASHES = {
     "admin": "ca6468544f0c3b9d3b52180786bc812e29e854a51e160d792a6536ba0c491262",
     "developer": "89e9455fe2abf258658f2571128c392cdb79d95b525980b7ac653135fd6a7b30",
-    "viewer": "33a1c60b27b9536355aa1e93807771d840b8609d74db52349137a94965ae42f9",
+    "viewer": "4dc0ae3ce438a1ea54159d946e0ec051eaab00b08939eeb1fd4616d9ea2dab24",
     "finance_admin": "96b0c1f87a2e3d47e11b9d54b878d282814af589ddf7672a9d2a68cc1da97114",
     "security_admin": "28cc5f8be8a582475d14b9d68f72ba2d0284c0755fe4c43412c613d175c4ffa6",
     "ops_admin": "72a396186bd78f79cbbeadab59ba322d2088640f37787377bb74c034486b65c6",
@@ -63,10 +63,14 @@ def test_file_permissions_are_current_revision_and_role_bounded() -> None:
     assert len(legacy_permission_codes) == 64
     assert PERMISSION_BY_CODE["file.read"].risk_level == "read"
     assert PERMISSION_BY_CODE["file.write"].risk_level == "write"
-    for role_code in ("admin", "developer", "viewer", "security_admin", "ops_admin"):
+    for role_code in ("admin", "developer", "security_admin", "ops_admin"):
         assert "file.read" in ROLE_GRANTABLE_PERMISSIONS[role_code]
-    for role_code in ("admin", "developer", "viewer"):
+    for role_code in ("admin", "developer"):
         assert "file.write" in ROLE_GRANTABLE_PERMISSIONS[role_code]
+    assert ROLE_GRANTABLE_PERMISSIONS["viewer"] == frozenset({
+        "console.basic.read", "dashboard.read", "environment.read",
+        "virtual_key.read", "virtual_key.write",
+    })
     for role_code in ("finance_admin",):
         assert not {"file.read", "file.write"} & ROLE_GRANTABLE_PERMISSIONS[role_code]
     assert "file.write" not in ROLE_GRANTABLE_PERMISSIONS["security_admin"]

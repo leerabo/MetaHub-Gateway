@@ -1,17 +1,18 @@
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 /**
  * 查询当前租户的 DLP 规则列表。
  * 前端只提交状态、类型、动作和检测方向筛选，不允许拼接 tenant_id；真实租户隔离和权限由控制面接口完成。
  */
-export async function listDlpRules({ controlApiUrl, token, status, ruleType, action, scanScope }) {
+export async function listDlpRules({ controlApiUrl, authentication, token, signal, status, ruleType, action, scanScope }) {
   const url = new URL(`${controlApiUrl}/dlp/rules`);
   setOptionalParam(url, "status", status);
   setOptionalParam(url, "rule_type", ruleType);
   setOptionalParam(url, "action", action);
   setOptionalParam(url, "scan_scope", scanScope);
   return dlpRequest(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
+    authentication, token, signal,
   });
 }
 
@@ -21,7 +22,9 @@ export async function listDlpRules({ controlApiUrl, token, status, ruleType, act
  */
 export async function createDlpRule({
   controlApiUrl,
+  authentication,
   token,
+  signal,
   name,
   ruleType,
   pattern,
@@ -42,9 +45,9 @@ export async function createDlpRule({
     description,
   });
   return dlpRequest(`${controlApiUrl}/dlp/rules`, {
+    authentication, token, signal,
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -57,7 +60,9 @@ export async function createDlpRule({
  */
 export async function updateDlpRule({
   controlApiUrl,
+  authentication,
   token,
+  signal,
   ruleId,
   name,
   pattern,
@@ -77,9 +82,9 @@ export async function updateDlpRule({
     description,
   });
   return dlpRequest(`${controlApiUrl}/dlp/rules/${encodeURIComponent(ruleId)}`, {
+    authentication, token, signal,
     method: "PATCH",
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -110,7 +115,7 @@ function compactPayload(payload) {
  * 错误对象只携带 code/request_id/trace_id 等排障元数据，不输出规则 pattern、用户输入或 Provider Key。
  */
 async function dlpRequest(url, options = {}) {
-  const response = await fetch(url, {
+  const response = await authenticatedResourceFetch(url, {
     ...options,
     headers: {
       "X-Request-ID": `console_dlp_${Date.now()}`,
@@ -139,7 +144,8 @@ async function dlpRequest(url, options = {}) {
 async function readJson(response) {
   try {
     return await response.json();
-  } catch {
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
     return {};
   }
 }

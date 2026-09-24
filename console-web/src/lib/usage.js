@@ -98,6 +98,29 @@ export async function listUsageRecords({
   });
 }
 
+export async function getPersonalUsageSummary({
+  controlApiUrl, token, authentication, signal, startDate, endDate,
+}) {
+  const url = new URL(`${controlApiUrl}/usage/me/summary`);
+  appendPersonalUsageDates(url, startDate, endDate);
+  return usageRequest(url.toString(), { authentication, token, signal });
+}
+
+export async function listPersonalUsageRecords({
+  controlApiUrl, token, authentication, signal, startDate, endDate, limit = 20, offset = 0,
+}) {
+  const url = new URL(`${controlApiUrl}/usage/me/records`);
+  appendPersonalUsageDates(url, startDate, endDate);
+  url.searchParams.set("limit", String(limit));
+  url.searchParams.set("offset", String(offset));
+  return usageRequest(url.toString(), { authentication, token, signal });
+}
+
+function appendPersonalUsageDates(url, startDate, endDate) {
+  if (startDate) url.searchParams.set("start_date", String(startDate));
+  if (endDate) url.searchParams.set("end_date", String(endDate));
+}
+
 /**
  * 按当前页面筛选显式创建 CSV 导出。
  * 参数只列出后端允许的 Usage 筛选；即使调用方对象中存在 tenant_id、limit 或 offset，也不会进入查询串。

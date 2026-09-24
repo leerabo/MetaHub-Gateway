@@ -10,6 +10,15 @@ import pytest
 
 from scripts.quality.product_qa_continuous_stability import Coverage, observe
 
+SOURCE = {"source_revision": "a" * 40, "source_sha256": "b" * 64, "source_file_count": 3}
+
+
+@pytest.fixture(autouse=True)
+def simulated_source(monkeypatch):
+    from scripts.quality import product_qa_continuous_stability as module
+
+    monkeypatch.setattr(module, "source_snapshot", lambda: SOURCE.copy())
+
 
 def _window(*, errors=0):
     return {
@@ -79,9 +88,19 @@ def test_failure_is_durable_and_secret_free(tmp_path, monkeypatch):
                 output_dir=tmp_path / "run", revision="a" * 40)
 
 
-@pytest.mark.parametrize("status,expected", [(200, "diagnostic_passed"), (503, "failed")])
-def test_real_socket_diagnostics_preserve_failure_and_chain(tmp_path, status, expected):
+@pytest.mark.parametrize("status,changed,expected", [
+    (200, False, "diagnostic_passed"), (503, False, "failed"), (200, True, "failed"),
+])
+def test_real_socket_diagnostics_preserve_failure_and_chain(
+    tmp_path, monkeypatch, status, changed, expected,
+):
     import hashlib
+
+    from scripts.quality import product_qa_continuous_stability as module
+
+    source_finish = {**SOURCE, "source_sha256": "c" * 64} if changed else SOURCE
+    snapshots = iter((SOURCE, source_finish))
+    monkeypatch.setattr(module, "source_snapshot", lambda: next(snapshots))
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 - stdlib handler contract
@@ -107,6 +126,9 @@ def test_real_socket_diagnostics_preserve_failure_and_chain(tmp_path, status, ex
         thread.join(timeout=3)
     assert result["status"] == expected
     assert result["ga_approval"] is False and result["diagnostic"] is True
+    assert result["source_start"] == SOURCE and result["source_finish"] == source_finish
+    if changed:
+        assert result["reason"] == "observation_source_changed"
     previous = "0" * 64
     for line in (output / "windows.jsonl").read_text().splitlines():
         record = json.loads(line)
@@ -114,3 +136,10 @@ def test_real_socket_diagnostics_preserve_failure_and_chain(tmp_path, status, ex
         previous = hashlib.sha256(line.encode()).hexdigest()
     assert result["journal_sha256"] == previous
     assert json.loads((output / "status.json").read_text()) == result
+
+
+def test_observation_rejects_a_revision_that_is_not_the_actual_source(tmp_path):
+    with pytest.raises(ValueError, match="observation_source_revision_mismatch"):
+        observe(raw_targets=["control=http://127.0.0.1:1/health"],
+                output_dir=tmp_path / "wrong-source", revision="c" * 40)
+    assert not (tmp_path / "wrong-source").exists()

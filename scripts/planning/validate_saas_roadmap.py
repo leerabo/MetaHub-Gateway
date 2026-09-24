@@ -100,7 +100,7 @@ REQUIRED_DOCS = {
         "METAHUB_WORKSPACE_SESSION_SECRET",
     ),
     ROOT / "docs/testing/PRD-094-tests.md": (
-        "状态：已完成",
+        "状态：原批次已完成",
         "敏感审计",
         "PRD-095",
         "0086",
@@ -358,13 +358,13 @@ REQUIRED_DOCS = {
         "0128",
     ),
     ROOT / "docs/prd/PRD-137-tenant-isolation-continuous-security-validation.md": (
-        "状态：已完成",
+        "状态：补充修复中",
         "第一轮自审",
         "第二轮自审",
         "0129",
     ),
     ROOT / "docs/testing/PRD-137-tests.md": (
-        "状态：已完成",
+        "状态：补充修复中",
         "敏感",
         "PRD-138",
         "0129",
@@ -479,7 +479,17 @@ SECRET_PATTERNS = {
     "private_key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
 }
 
-POST_NAVIGATION_BASELINE_IDS = frozenset({"migration-operations", "support-tickets"})
+# These routes were added after the frozen Excel inventory.  They are real
+# Workspace routes, but are intentionally excluded from the 64-row source
+# disposition sheet because they replace/extend existing canonical entries.
+POST_NAVIGATION_BASELINE_IDS = frozenset(
+    {
+        "migration-operations",
+        "support-tickets",
+        "workspace-subscription",
+        "internal-finops",
+    }
+)
 RETIRED_SOURCE_NAVIGATION_IDS = frozenset(
     {
         "adapter-contract-runs",
@@ -988,6 +998,24 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
         "every navigation disposition defines roles, implementation evidence, target PRD and cutover boundary",
     )
     disposition_by_id = {str(row.get("navigation_id")): row for row in navigation_rows}
+    missing_dispositions = sorted(set(source_navigation_ids) - set(disposition_by_id))
+    unknown_dispositions = sorted(set(disposition_by_id) - set(source_navigation_ids))
+    report.check(
+        not missing_dispositions and not unknown_dispositions,
+        "navigation disposition IDs match the normalized 64-item source inventory"
+        + (
+            f" (missing: {', '.join(missing_dispositions)})"
+            if missing_dispositions
+            else ""
+        )
+        + (f" (unknown: {', '.join(unknown_dispositions)})" if unknown_dispositions else ""),
+    )
+    # Keep the remaining ownership checks deterministic even when a damaged
+    # workbook omits a row.  The explicit mismatch above is the useful error;
+    # missing rows must not crash validation with an opaque KeyError.
+    disposition_by_id.update(
+        {item: {} for item in source_navigation_ids if item not in disposition_by_id}
+    )
     saas_only_ids = {
         "growth-analytics",
         "customer-health",
@@ -1134,10 +1162,10 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 135
+        and migration_versions[-1] >= 154
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "migration sequence advances through 0135 while PRD-091 migration 0083 remains present",
+        "migration sequence advances through PRD-148 migration 0155 while PRD-091 migration 0083 remains present",
     )
     report.check(
         (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()

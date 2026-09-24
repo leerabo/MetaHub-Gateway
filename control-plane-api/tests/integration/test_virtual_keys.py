@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -16,8 +17,11 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from metahub_control.auth.routes import router as auth_router
+from metahub_control.audit import AuditActor, AuditRequestMeta
 from metahub_control.environments.routes import router as environments_router
+from metahub_control.usage.routes import router as usage_router
 from metahub_control.virtual_keys.routes import router as virtual_keys_router
+from metahub_control.virtual_keys.service import disable_virtual_keys_created_by
 from metahub_gateway.api.openai_compatible import router as openai_compatible_router
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
 from metahub_shared.db.security import hash_password, hash_secret
@@ -48,6 +52,7 @@ def build_control_app():
     app = create_service_app("control-plane-api", "Virtual Key Test Control API")
     app.include_router(auth_router)
     app.include_router(environments_router)
+    app.include_router(usage_router)
     app.include_router(virtual_keys_router)
     return app
 
@@ -275,6 +280,109 @@ async def test_virtual_key_create_call_disable_flow(
 
 
 @pytest.mark.anyio
+async def test_removed_member_cannot_use_admin_assigned_key(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_upstream,
+) -> None:
+    """移除成员同时撤销管理员分配的历史 KEY，而不是只撤销个人创建的 KEY。"""
+
+    database_url = prepare_database(monkeypatch, tmp_path, fake_upstream)
+    control_app = build_control_app()
+    gateway_app = build_gateway_app()
+    connection = connect_database(database_url)
+    try:
+        admin = connection.execute(
+            "SELECT user_id,tenant_id,email,display_name,role FROM users WHERE email=?",
+            ("admin@metahub.local",),
+        ).fetchone()
+        connection.execute(
+            """
+            INSERT INTO workspace_consumers(
+              consumer_id,tenant_id,display_name,department,status,revision,
+              created_by,created_at,updated_at)
+            VALUES('con_removed_member',?,'Viewer User','研发','active',1,?,?,?)
+            """,
+            (
+                admin["tenant_id"],
+                admin["user_id"],
+                "2026-01-01T00:00:00Z",
+                "2026-01-01T00:00:00Z",
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    control_transport = ASGITransport(app=control_app)
+    gateway_transport = ASGITransport(app=gateway_app)
+    async with AsyncClient(transport=control_transport, base_url="http://control") as control:
+        admin_token = await login(control, "admin@metahub.local", ADMIN_PASSWORD)
+        created = await control.post(
+            "/virtual-keys",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"name": "Viewer historical key", "environment": "dev", "consumer_id": "con_removed_member"},
+        )
+    assert created.status_code == 201, created.text
+    plain_value = created.json()["plain_value"]
+
+    async with AsyncClient(transport=gateway_transport, base_url="http://gateway") as gateway:
+        allowed = await gateway.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {plain_value}"},
+            json={"model": "default-chat", "messages": [{"role": "user", "content": "hi"}]},
+        )
+    assert allowed.status_code == 200, allowed.text
+
+    connection = connect_database(database_url)
+    try:
+        member = connection.execute(
+            "SELECT user_id,tenant_id,email,display_name,role FROM users WHERE email=?",
+            ("viewer@example.com",),
+        ).fetchone()
+        connection.execute("BEGIN IMMEDIATE")
+        disabled_count = disable_virtual_keys_created_by(
+            connection,
+            tenant_id=member["tenant_id"],
+            created_by=member["user_id"],
+            member_display_name=member["display_name"],
+            actor=AuditActor(
+                tenant_id=admin["tenant_id"],
+                user_id=admin["user_id"],
+                email=admin["email"],
+                role=admin["role"],
+            ),
+            request_meta=AuditRequestMeta(client_ip=None, user_agent=None),
+            request_id="req_removed_member_key",
+            trace_id="trc_removed_member_key",
+            now=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        )
+        connection.commit()
+        key_state = connection.execute(
+            "SELECT status FROM virtual_keys WHERE virtual_key_id=?",
+            (created.json()["virtual_key"]["virtual_key_id"],),
+        ).fetchone()["status"]
+        consumer_state = connection.execute(
+            "SELECT status FROM workspace_consumers WHERE consumer_id=?",
+            ("con_removed_member",),
+        ).fetchone()["status"]
+    finally:
+        connection.close()
+    assert disabled_count == 1
+    assert key_state == "disabled"
+    assert consumer_state == "disabled"
+
+    async with AsyncClient(transport=gateway_transport, base_url="http://gateway") as gateway:
+        denied = await gateway.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {plain_value}"},
+            json={"model": "default-chat", "messages": [{"role": "user", "content": "hi"}]},
+        )
+    assert denied.status_code == 401
+    assert denied.json()["code"] == "gateway.auth_invalid"
+
+
+@pytest.mark.anyio
 async def test_virtual_key_permissions_and_validation_errors(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -288,7 +396,7 @@ async def test_virtual_key_permissions_and_validation_errors(
     async with AsyncClient(transport=transport, base_url="http://control") as client:
         admin_token = await login(client, "admin@metahub.local", ADMIN_PASSWORD)
         viewer_token = await login(client, "viewer@example.com", VIEWER_PASSWORD)
-        viewer_denied = await client.get("/virtual-keys", headers={"Authorization": f"Bearer {viewer_token}"})
+        viewer_list = await client.get("/virtual-keys", headers={"Authorization": f"Bearer {viewer_token}"})
         invalid_env = await client.post(
             "/virtual-keys",
             headers={"Authorization": f"Bearer {admin_token}"},
@@ -304,8 +412,8 @@ async def test_virtual_key_permissions_and_validation_errors(
             headers={"Authorization": f"Bearer {admin_token}"},
         )
 
-    assert viewer_denied.status_code == 403
-    assert viewer_denied.json()["code"] == "auth.permission_denied"
+    assert viewer_list.status_code == 200
+    assert viewer_list.json()["virtual_keys"] == []
     assert invalid_env.status_code == 422
     assert invalid_env.json()["code"] == "virtual_key.environment_invalid"
     assert empty_patch.status_code == 422
@@ -315,12 +423,59 @@ async def test_virtual_key_permissions_and_validation_errors(
 
 
 @pytest.mark.anyio
+async def test_viewer_self_service_key_and_personal_usage_scope(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_upstream,
+) -> None:
+    """组织成员可以自助管理本人 KEY 和用量，不会看到管理员 KEY 或组织账单。"""
+
+    prepare_database(monkeypatch, tmp_path, fake_upstream)
+    app = build_control_app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://control") as client:
+        admin_token = await login(client, "admin@metahub.local", ADMIN_PASSWORD)
+        viewer_token = await login(client, "viewer@example.com", VIEWER_PASSWORD)
+        admin_key = await client.post(
+            "/virtual-keys",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"name": "admin only", "environment": "dev"},
+        )
+        viewer_keys = await client.get(
+            "/virtual-keys", headers={"Authorization": f"Bearer {viewer_token}"}
+        )
+        viewer_key = await client.post(
+            "/virtual-keys",
+            headers={"Authorization": f"Bearer {viewer_token}"},
+            json={"name": "my key"},
+        )
+        personal_summary = await client.get(
+            "/usage/me/summary", headers={"Authorization": f"Bearer {viewer_token}"}
+        )
+        personal_records = await client.get(
+            "/usage/me/records", headers={"Authorization": f"Bearer {viewer_token}"}
+        )
+        organization_usage = await client.get(
+            "/usage/summary", headers={"Authorization": f"Bearer {viewer_token}"}
+        )
+
+    assert admin_key.status_code == 201, admin_key.text
+    assert viewer_keys.status_code == 200
+    assert viewer_keys.json()["virtual_keys"] == []
+    assert viewer_key.status_code == 201, viewer_key.text
+    assert personal_summary.status_code == 200
+    assert personal_summary.json()["totals"]["request_count"] == 0
+    assert personal_records.status_code == 200
+    assert personal_records.json()["usage_records"] == []
+    assert organization_usage.status_code == 403
+
+
+@pytest.mark.anyio
 async def test_virtual_key_limit_settings_flow_and_permissions(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     fake_upstream,
 ) -> None:
-    """PRD-022 主流程/权限：writer 可设置 Key 限制，viewer 与非法字段被后端拒绝。"""
+    """PRD-022 主流程/权限：writer 可设置 Key 限制，viewer 只能操作本人 Key。"""
 
     prepare_database(monkeypatch, tmp_path, fake_upstream)
     control_app = build_control_app()
@@ -370,8 +525,8 @@ async def test_virtual_key_limit_settings_flow_and_permissions(
     assert listed_key["rate_limit_rule"]["rpm_limit"] == 2
     assert "plain_value" not in listed.text
     assert "key_hash" not in listed.text
-    assert viewer_denied.status_code == 403
-    assert viewer_denied.json()["code"] == "auth.permission_denied"
+    assert viewer_denied.status_code == 404
+    assert viewer_denied.json()["code"] == "virtual_key.not_found"
     assert invalid.status_code == 422
     assert invalid.json()["code"] == "virtual_key.limit_invalid"
     assert empty.status_code == 422

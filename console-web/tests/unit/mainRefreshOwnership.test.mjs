@@ -31,7 +31,7 @@ test("logout invalidates refresh ownership before cleanup and network await", as
   const clearAuthIndex = handler.indexOf("clearAuthSession();");
   const awaitIndex = handler.indexOf("await logoutIdentity");
   const finalGateIndex = handler.indexOf("logoutGeneration !== refreshSequence || hasWorkspaceConsoleSession(authSession)", awaitIndex);
-  const finalRenderIndex = handler.indexOf("renderLogin(failure", finalGateIndex);
+  const finalRenderIndex = handler.indexOf('window.location.replace("/")', finalGateIndex);
 
   assert.ok(invalidateIndex > 0);
   assert.ok(invalidateIndex < cleanupIndex && cleanupIndex < clearAuthIndex);
@@ -139,7 +139,9 @@ test("workspace navigation preferences come only from the current canonical resp
   );
   assert.match(shellLoader, /workspaceNavigationController\.loadNavigation\(\)/);
   assert.match(shellLoader, /preferences: \{ preference: navigation\.preference \}/);
-  assert.match(shellLoader, /expandedConsoleGroupKey = navigation\.preference\.expanded_group_code/);
+  assert.match(shellLoader, /const savedExpandedGroup = preference\.expanded_group_code/);
+  assert.match(shellLoader, /Number\(preference\.revision \?\? 0\) <= 1/);
+  assert.doesNotMatch(shellLoader, /expandedConsoleGroupKey =/);
   assert.doesNotMatch(
     shellLoader,
     /consolePreferencesCache|getConsolePreferences|localStorage|sessionStorage/,
@@ -217,6 +219,17 @@ test("shell loader still clears a current 401 instead of suppressing authenticat
   assert.deepEqual(effects, ["clear", "login"]);
 });
 
+test("workspace bootstrap retries one transient connection failure before showing the recovery page", async () => {
+  const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
+  const shellLoader = sourceSection(source, "async function loadConsoleShellState(",
+    "async function switchConsoleNavigation");
+  assert.match(shellLoader, /allowTransientRetry = true/u);
+  assert.match(shellLoader, /error\?\.code === "workspace_session\.required"/u);
+  assert.match(shellLoader, /isRetryableWorkspaceBootstrapError\(error\)/u);
+  assert.match(shellLoader, /return loadConsoleShellState\(isCurrent, false\)/u);
+  assert.match(source, /function waitForWorkspaceBootstrapRetry\(\)/u);
+});
+
 
 test("navigation click hydrates only a backend-visible target before deferred telemetry", async () => {
   const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
@@ -282,6 +295,8 @@ test("active-page hydration preserves interactive sidebar DOM and refreshes hand
   assert.match(binder, /navigationButton\.onclick = async/);
   assert.match(binder, /groupToggle\.onclick =/);
   assert.match(binder, /sidebarToggle\.onclick = async/);
+  assert.match(binder, /\.console-home-return, \.console-flow-next, \.console-flow-related, \.workspace-recovery-action/);
+  assert.match(binder, /if \(event.ctrlKey \|\| event.metaKey \|\| event.shiftKey \|\| event.altKey\) return/);
 });
 
 
@@ -298,15 +313,41 @@ test("sidebar groups use one persisted accordion expansion", async () => {
   assert.doesNotMatch(toggle, /localStorage|sessionStorage|persistExpandedConsoleGroupKey/);
 });
 
+test("task links reveal their authorized destination group while hydration preserves manual exploration", async () => {
+  const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
+  const navigation = sourceSection(source, "async function switchConsoleNavigation", "function cancelPendingConsoleNavigationSideEffects");
+  assert.match(navigation, /if \(projectedNavigationItem\) \{[\s\S]*expandedConsoleGroupKey = projectedNavigationItem.group_code/);
+  assert.match(navigation, /projectedNavigationItem\.sidebar_visible !== false[\s\S]*expandedConsoleGroupKey = null;[\s\S]*applyExpandedConsoleGroup\(null\)/);
+  assert.match(navigation, /authorizedProjectedState = \{[\s\S]*sidebarExpandedGroupKey: expandedConsoleGroupKey/);
+  assert.match(navigation, /bindAuthenticatedEvents\(authorizedProjectedState\);\s*revealConsoleSidebarItem\(app\)/);
+  const transition = sourceSection(source, "function renderConsoleNavigationTransition", "async function toggleConsoleSidebar(");
+  assert.match(transition, /const active = candidate.dataset.consoleNav === itemId/);
+  const refresh = sourceSection(source, "async function performRefresh", "async function loadAndRenderActiveNavigation");
+  assert.doesNotMatch(refresh, /expandedConsoleGroupKey = active\?\.group_code/);
+  assert.match(refresh, /syncConsoleSidebarState\(consoleShellState\)/);
+  const dispatcher = sourceSection(source, "async function loadAndRenderActiveNavigation", "function renderLogin(");
+  assert.match(dispatcher, /if \(!isBackgroundRefresh && !preserveConsoleSidebar\) revealConsoleSidebarItem\(app\)/);
+  assert.match(dispatcher, /case "virtual-keys":[\s\S]*state.workspaceTaskHomeState\] = await Promise.all\(\[[\s\S]*loadWorkspaceConnectionProgress\(\)/);
+});
+
+test("empty entry content is replaced before navigation and resource network waits", async () => {
+  const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
+  const refresh = sourceSection(source, "async function performRefresh", "async function loadAndRenderActiveNavigation");
+  assert.match(refresh, /if \(!app\?\.firstElementChild\) renderConsoleEntryLoading\(app\);\s*const consoleShellState = await loadConsoleShellState/);
+  const dispatcher = sourceSection(source, "async function loadAndRenderActiveNavigation", "function renderLogin(");
+  assert.ok(dispatcher.indexOf("renderConsoleEntryLoading(app)") < dispatcher.indexOf("const state = {}"));
+  assert.ok(dispatcher.indexOf("if (!refreshOwnerCurrent()") < dispatcher.indexOf("renderConsoleEntryLoading(app)"));
+});
+
 
 test("Console bootstrap never reads Legacy credentials or offers a second password login", async () => {
   const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
   const startup = sourceSection(source, "async function start()", "async function refresh(");
   assert.match(startup, /clearAuthSession\(\);\s*await refresh\(\);/);
   assert.doesNotMatch(source, /readAuthSession|saveAuthSession|getCurrentUser|loginAdmin|logoutAdmin|loginGeneration/);
-  const prompt = sourceSection(source, "function renderLogin(", "function clearConsoleSessionState(");
-  assert.match(prompt, /renderWorkspaceSessionPrompt/);
-  assert.match(prompt, /retry\.onclick = \(\) => refresh\(\)/);
+  const prompt = sourceSection(source, "function renderLogin(", "async function loadWorkspaceConnectionProgress(");
+  assert.match(prompt, /window\.location\.replace\(identityLoginHref\(\{ interrupted: Boolean\(message\), requestId \}\)\)/);
+  assert.doesNotMatch(prompt, /renderWorkspaceSessionPrompt/);
   assert.doesNotMatch(prompt, /FormData|password|submit/);
 });
 
@@ -327,11 +368,11 @@ test("shared cleanup fences all existing page state families", async () => {
 });
 
 
-test("session prompt invalidates refresh ownership before cleanup and rendering", async () => {
+test("login redirect invalidates refresh ownership before cleanup and navigation", async () => {
   const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
   const login = sourceSection(source, "function renderLogin(", "function clearConsoleSessionState(");
   const invalidateIndex = login.indexOf("refreshSequence += 1;");
   const cleanupIndex = login.indexOf("clearConsoleSessionState();");
-  const renderIndex = login.indexOf("renderWorkspaceSessionPrompt(app");
+  const renderIndex = login.indexOf('window.location.replace(identityLoginHref(');
   assert.ok(invalidateIndex >= 0 && invalidateIndex < cleanupIndex && cleanupIndex < renderIndex);
 });

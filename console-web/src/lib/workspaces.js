@@ -72,6 +72,16 @@ export async function switchIdentityWorkspace({ controlApiUrl, workspaceId, sign
   });
 }
 
+export async function handoffWorkspaceToPartner({ controlApiUrl, signal } = {}) {
+  return workspaceAccessRequest(controlApiUrl, "/identity/partner-handoffs", {
+    method: "POST",
+    body: {},
+    csrf: "global",
+    responseType: "partnerHandoff",
+    signal,
+  });
+}
+
 export async function getCurrentWorkspaceSession({ controlApiUrl, signal } = {}) {
   return workspaceAccessRequest(controlApiUrl, "/workspace/session", {
     responseType: "workspaceSession",
@@ -79,7 +89,7 @@ export async function getCurrentWorkspaceSession({ controlApiUrl, signal } = {})
   });
 }
 
-export async function listWorkspaceMemberships({ controlApiUrl, signal, offset, limit } = {}) {
+export async function listWorkspaceMemberships({ controlApiUrl, signal, offset, limit, search } = {}) {
   const query = new URLSearchParams();
   if (offset !== undefined) {
     if (!Number.isSafeInteger(offset) || offset < 0) invalidClient("offset");
@@ -88,6 +98,11 @@ export async function listWorkspaceMemberships({ controlApiUrl, signal, offset, 
   if (limit !== undefined) {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) invalidClient("limit");
     query.set("limit", String(limit));
+  }
+  if (search !== undefined && String(search).trim()) {
+    const normalized = String(search).trim();
+    if (normalized.length > 160) invalidClient("search");
+    query.set("search", normalized);
   }
   return workspaceAccessRequest(controlApiUrl, `/memberships${query.size ? `?${query}` : ""}`, {
     responseType: "membershipList",
@@ -118,6 +133,26 @@ export async function updateWorkspaceMembership({
     {
       method: "PATCH",
       body,
+      csrf: "workspace",
+      revision,
+      responseType: "membership",
+      signal,
+    },
+  );
+}
+
+export async function removeWorkspaceMembership({
+  controlApiUrl,
+  membershipId,
+  revision,
+  signal,
+} = {}) {
+  if (!Number.isSafeInteger(revision) || revision < 1) invalidClient("revision");
+  return workspaceAccessRequest(
+    controlApiUrl,
+    `/memberships/${encodeURIComponent(requireClientId(membershipId, "membership_id"))}`,
+    {
+      method: "DELETE",
       csrf: "workspace",
       revision,
       responseType: "membership",
@@ -257,16 +292,18 @@ export async function createAccountWorkspace({
   const normalizedKind = requireClientChoice(kind, ["personal", "organization"], "kind");
   const body = {
     kind: normalizedKind,
-    region: requireClientText(region, 40, "region"),
-    service_mode: requireClientChoice(
+  };
+  if (region !== undefined) body.region = requireClientText(region, 40, "region");
+  if (serviceMode !== undefined) {
+    body.service_mode = requireClientChoice(
       serviceMode,
       ["internal_only", "public_service"],
       "service_mode",
-    ),
-  };
+    );
+  }
   if (normalizedKind === "organization") {
     body.name = requireClientText(name, 160, "name");
-    body.slug = requireClientText(slug, 48, "slug");
+    if (slug !== undefined) body.slug = requireClientText(slug, 48, "slug");
   }
   return workspaceRequest(controlApiUrl, "/workspaces", {
     method: "POST",
@@ -390,6 +427,11 @@ function validateWorkspaceAccessResponse(payload, responseType) {
         : {}),
       ...validateRequestTrace(payload),
     };
+  }
+  if (responseType === "partnerHandoff") {
+    requireExactKeys(payload, ["handed_off", "request_id", "trace_id"], "response");
+    if (payload.handed_off !== true) invalidAccessResponse("handed_off");
+    return { handed_off: true, ...validateRequestTrace(payload) };
   }
   if (responseType === "membershipList") {
     requireExactKeys(

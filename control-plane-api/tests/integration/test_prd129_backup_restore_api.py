@@ -88,7 +88,7 @@ def _sha(value: str) -> str:
 def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     database = tmp_path_factory.mktemp("prd129-backup-api-base") / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0122"
+    assert apply_migrations(database_url).applied[-1] == "0156"
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", _TEST_PASSWORD)
         apply_seed_data(database_url)

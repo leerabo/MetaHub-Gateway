@@ -8,6 +8,8 @@ const ROLE_LABELS = {
   finance_admin: "财务管理员",
   security_admin: "安全管理员",
   ops_admin: "运维管理员",
+  legal_admin: "法务管理员",
+  auditor: "审计员",
 };
 const WORKSPACE_ROLE_LABELS = { owner: "所有者", admin: "管理员", developer: "开发者",
   security_admin: "安全管理员", finance_admin: "财务管理员", legal_admin: "法务管理员",
@@ -98,22 +100,29 @@ export function renderUserManagementPanel(usersState, authContext, invitationSta
 }
 
 function renderWorkspaceMembers(state) {
-  const members = state.memberships ?? [];
+  // The directory is an active membership view. Revoked identities stay in
+  // audit/usage projections and are never rendered as current members.
+  const members = (state.memberships ?? []).filter((member) => member.status === "active");
+  const canInvite = ["owner", "admin"].includes(state.role);
   const error = state.actionError ?? (state.state === "error" ? state : null);
   const offset = state.offset ?? 0, limit = state.limit ?? 20, total = state.total ?? 0;
   return `<div class="panel-heading users-heading">
-    <h2 id="users-title">空间成员</h2>
+    <h2 id="users-title">后台成员</h2>
     <div class="users-heading-actions"><span class="users-count">${total} 位成员</span>
-      <a href="identity.html#identity-memberships-title">邀请成员${state.role === "owner" ? "与所有权管理" : ""}</a>
+      ${canInvite ? '<button type="button" class="invite-user-button" id="invite-user-button">邀请后台成员</button>' : ""}
     </div></div>
     ${error ? `<p class="error-state" role="alert">${escapeHtml(error.message ?? "成员管理暂不可用")}
       request_id: ${escapeHtml(error.requestId ?? "-")}</p>` : ""}
-    ${state.feedback ? `<p role="status">${escapeHtml(state.feedback)}</p>` : ""}
+    ${state.feedback && !error ? `<p role="status">${escapeHtml(state.feedback)}</p>` : ""}
+    <form class="workspace-members-search" data-workspace-members-search-form role="search">
+      <label><span>搜索成员</span><input name="search" value="${escapeAttribute(state.search ?? "")}" maxlength="160" placeholder="姓名或邮箱" /></label>
+      <button type="submit">搜索</button><button type="button" data-workspace-members-search-clear>清除</button>
+    </form>
     <div class="users-grid workspace-members-grid" role="table" aria-label="当前空间成员">
       <div class="users-row users-head" role="row"><span>成员</span><span>职责</span><span>状态</span><span>操作</span></div>
       ${members.map(renderWorkspaceMemberRow).join("")}
     </div>
-    ${members.length === 0 && !error ? '<p class="empty-state">暂无成员记录</p>' : ""}
+    ${members.length === 0 && !error ? '<p class="empty-state">暂无成员</p>' : ""}
     <div class="users-heading-actions workspace-members-pagination">
       <button type="button" data-workspace-members-refresh>刷新</button>
       <button type="button" data-workspace-members-offset="${Math.max(0, offset - limit)}"
@@ -121,7 +130,23 @@ function renderWorkspaceMembers(state) {
       <span>${members.length ? offset + 1 : 0}-${members.length ? Math.min(offset + members.length, total) : 0} / ${total}</span>
       <button type="button" data-workspace-members-offset="${offset + limit}"
         aria-label="下一页" title="下一页"${offset + limit >= total ? " disabled" : ""}>&#8594;</button>
-    </div>`;
+    </div>
+    ${canInvite ? renderWorkspaceInvitationDialog(state) : ""}
+  `;
+}
+
+function renderWorkspaceInvitationDialog(state) {
+  const invitationState = state.invitationState ?? {};
+  const roles = [
+    { code: "admin", name: "管理员" },
+    { code: "developer", name: "开发者" },
+    { code: "security_admin", name: "安全管理员" },
+    { code: "finance_admin", name: "财务管理员" },
+    { code: "legal_admin", name: "法务管理员" },
+    { code: "auditor", name: "审计员" },
+    { code: "viewer", name: "只读成员" },
+  ];
+  return renderInvitationDialog(roles, invitationState);
 }
 
 function renderWorkspaceMemberRow(member) {
@@ -140,7 +165,9 @@ function renderWorkspaceMemberRow(member) {
       ${roles.map(([code, name]) => renderRoleOption({ code, name }, member.role)).join("")}</select></span>
     <span><select name="status" aria-label="${escapeAttribute(member.display_name)} 状态">
       ${["active", "disabled"].map((code) => renderRoleOption({ code, name: MEMBERSHIP_STATUS_LABELS[code] }, member.status)).join("")}
-    </select></span><span class="users-row-actions"><button type="submit" disabled>保存</button></span></form>`;
+    </select></span><span class="users-row-actions"><button type="submit" disabled>保存</button>
+      ${member.status === "active" ? '<button type="button" data-workspace-member-remove>移除</button>' : '<span class="member-removed-label">已移除</span>'}
+    </span></form>`;
 }
 
 /**

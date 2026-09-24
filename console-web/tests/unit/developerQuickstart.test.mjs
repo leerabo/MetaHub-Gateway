@@ -152,7 +152,7 @@ test("renderDeveloperStart migrates the quickstart route to the Workspace task h
   });
 
   assert.match(container.innerHTML, /class="workspace-task-home"/);
-  assert.match(container.innerHTML, /正在读取当前职责的下一步任务/);
+  assert.match(container.innerHTML, /正在加载接入进度/);
   assert.doesNotMatch(container.innerHTML, /5分钟快速接入/);
   assert.doesNotMatch(container.innerHTML, /quickstart-code-python-openai/);
   assert.doesNotMatch(container.innerHTML, /http:\/\/gateway\.local/);

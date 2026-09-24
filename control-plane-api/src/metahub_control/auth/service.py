@@ -502,6 +502,11 @@ def _authentication_sqlite_deadline(
             _remaining_auth_deadline_ms(deadline, error_code)
         return
     remaining_ms = _remaining_auth_deadline_ms(deadline, error_code)
+    # For endpoint budgets below 250ms, a lock wait should fail fast.  Waiting
+    # the entire remaining budget can be repeated across the read and writer
+    # phases and exceed the caller's outer SLA due to scheduler granularity.
+    # Longer internal budgets retain their measured remaining timeout.
+    sqlite_timeout_ms = min(remaining_ms, 1) if remaining_ms <= 250 else remaining_ms
     previous_timeout_ms: int | None = None
     timeout_changed = False
     handler_install_attempted = False
@@ -523,11 +528,15 @@ def _authentication_sqlite_deadline(
         if previous_timeout_row is None:
             raise sqlite3.OperationalError("busy timeout unavailable")
         previous_timeout_ms = int(previous_timeout_row[0])
-        connection.execute(f"PRAGMA busy_timeout={remaining_ms}")
+        connection.execute(f"PRAGMA busy_timeout={sqlite_timeout_ms}")
         timeout_changed = True
         handler_install_attempted = True
         connection.set_progress_handler(
             lambda: 1 if time.monotonic() >= deadline else 0,
+            # Keep the handler coarse enough for ordinary summary reads to
+            # finish within the 250ms budget. Cold schema parsing is deferred
+            # until after this handler is installed, so short lock waits still
+            # fail fast without per-instruction callback overhead.
             1_000,
         )
         yield

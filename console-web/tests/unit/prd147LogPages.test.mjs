@@ -92,7 +92,7 @@ test("production authentication message distinguishes Workspace recovery from ne
   assert.match(message(new IdentityApiError({ status: 401, code: "workspace_session.expired" })), /Workspace/);
   assert.match(message(new IdentityApiError({ status: 401, code: "identity.session_expired" })), /重新登录/);
   assert.equal(message(new AuthApiError({ status: 401, code: "auth.token_expired" })), "登录状态已失效，请重新登录。");
-  assert.equal(message(new Error("private transport detail")), "无法连接控制面认证接口。");
+  assert.equal(message(new Error("private transport detail")), "暂时无法加载，请重试。");
 });
 
 test("production Workspace log loader uses real client and memory without transport substitutes", async (t) => {

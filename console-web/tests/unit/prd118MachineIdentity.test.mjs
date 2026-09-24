@@ -9,8 +9,10 @@ import {
   revokeWorkspaceServiceAccount,
   rotateWorkspaceServiceAccountCredential,
 } from "../../src/lib/machineIdentity.js";
-import { createIdentityPageController } from "../../src/features/identity/identityPageState.js";
-import { renderIdentitySecurityPage } from "../../src/features/identity/renderIdentityPage.js";
+import { createIdentityPageController as createAccountController } from "../../src/features/identity/identityPageState.js";
+const createIdentityPageController = (options) => createAccountController({ initialSection: "machines", ...options });
+import { renderIdentitySecurityPage as renderAccountPage } from "../../src/features/identity/renderIdentityPage.js";
+const renderIdentitySecurityPage = (root, state) => renderAccountPage(root, { accountSection: "machines", ...state });
 
 const CONTROL_URL = "http://control.local";
 const WORKSPACE_ID = `wsp_${"1".repeat(32)}`;

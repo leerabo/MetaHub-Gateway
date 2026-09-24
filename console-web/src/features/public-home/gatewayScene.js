@@ -10,7 +10,13 @@ export function createGatewayScene(host, { onMotionChange = () => {} } = {}) {
   let elapsed = 0;
   let last = 0;
   let pointer = 0;
-  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: "low-power" });
+  // Keep the static illustration when the browser cannot create a graphics context.
+  // Probing first avoids Three.js reporting a page error for an optional decoration.
+  const canvas = document.createElement("canvas");
+  const contextOptions = { alpha: true, antialias: true, powerPreference: "low-power" };
+  const context = canvas.getContext("webgl2", contextOptions) || canvas.getContext("webgl", contextOptions);
+  if (!context) return null;
+  const renderer = new THREE.WebGLRenderer({ canvas, context, ...contextOptions });
   renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.6));
   renderer.setClearColor(0xf6f7f5, 0);
   renderer.outputColorSpace = THREE.SRGBColorSpace;

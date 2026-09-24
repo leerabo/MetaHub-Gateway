@@ -41,7 +41,7 @@ test("PRD-072 browser DOM contract excludes extracted text and storage internals
 /** 登录、撤权、导航、离页和上传中的刷新门禁必须全部由主应用统一执行。 */
 test("PRD-072 browser lifecycle contract destroys owner state on every strong boundary", async () => {
   const main = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
-  assert.match(main, /const session = sameWorkspaceConsoleSession\(authSession, nextSession\) \? authSession : nextSession;\s*if \(authSession !== session\) \{\s*clearConsoleSessionState\(\{ clearNavigation: false \}\)/);
+  assert.match(main, /const session = sameWorkspaceConsoleSession\(authSession, nextSession\) \? authSession : nextSession;\s*const sessionChanged = authSession !== session;\s*if \(sessionChanged\) \{\s*clearConsoleSessionState\(\{ clearNavigation: false \}\)/);
   assert.match(main, /function clearConsoleSessionState[\s\S]*filePageState\.clear\(\)/);
   assert.match(main, /window\.addEventListener\("pagehide"[\s\S]*filePageState\.clear\(\)/);
   assert.match(main, /function renderLogin[\s\S]*filePageState\.clear\(\)/);

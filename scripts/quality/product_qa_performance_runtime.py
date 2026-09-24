@@ -110,7 +110,10 @@ def main() -> int:
             os.environ.pop("METAHUB_SEED_ADMIN_PASSWORD", None)
         else:
             os.environ["METAHUB_SEED_ADMIN_PASSWORD"] = previous_seed_password
-    if not migration.applied or migration.applied[-1] != "0139":
+    # The performance stack must boot from the same schema as the current
+    # release candidate.  0139 was the pre-GA console baseline; PRD-148 adds
+    # migration 0155 and older checks would abort before any probe ran.
+    if not migration.applied or migration.applied[-1] != "0155":
         raise RuntimeError("product_qa_performance_migration_invalid")
 
     control_port, gateway_port, console_port = _free_port(), _free_port(), _free_port()

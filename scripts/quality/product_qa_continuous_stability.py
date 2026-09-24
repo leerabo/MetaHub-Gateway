@@ -14,9 +14,11 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from .product_qa_evidence import source_snapshot
     from .product_qa_performance import _safe_target, run_loopback_smoke
     from .product_qa_stability_gate import _keep_system_awake
 except ImportError:  # pragma: no cover - direct execution
+    from product_qa_evidence import source_snapshot
     from product_qa_performance import _safe_target, run_loopback_smoke
     from product_qa_stability_gate import _keep_system_awake
 
@@ -118,12 +120,16 @@ def observe(
     names = {target.name for target in targets}
     if not targets or len(names) != len(targets):
         raise ValueError("targets_must_be_nonempty_and_unique")
+    source_start = source_snapshot()
+    if source_start["source_revision"] != revision:
+        raise ValueError("observation_source_revision_mismatch")
     output_dir.mkdir(parents=True, exist_ok=False)
     coverage = Coverage(names)
     chain = "0" * 64
     report: dict[str, Any] = {
         "schema": SCHEMA, "status": "running", "diagnostic": diagnostic,
         "source_revision": revision,
+        "source_start": source_start,
         "started_at_utc": datetime.now(UTC).isoformat(),
         "required_observed_seconds": duration_seconds,
         "ga_approval": False,
@@ -165,6 +171,12 @@ def observe(
                     break
             else:
                 report["status"] = "diagnostic_passed" if diagnostic else "passed"
+        # HEAD alone does not identify a dirty worktree. A run may describe
+        # local availability across a deployment, but cannot certify one source
+        # version when its actual bytes differ at completion.
+        report["source_finish"] = source_snapshot()
+        if report["source_finish"] != source_start:
+            report.update(status="failed", reason="observation_source_changed")
     except BaseException as exc:
         report.update(status="failed", reason=type(exc).__name__)
         _write_status(output_dir / "status.json", report)

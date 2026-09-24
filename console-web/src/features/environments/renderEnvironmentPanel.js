@@ -38,10 +38,22 @@ export function renderEnvironmentPanel(state, authContext) {
     <div class="panel-heading environment-heading">
       <div>
         <h2 id="environments-title">环境设置</h2>
-        <p>dev、test、prod 分别隔离 Virtual Key、模型别名、预算、日志和用量。</p>
+        <p>按开发、测试、生产隔离 Virtual Key、模型别名、预算、日志和用量。</p>
       </div>
       <span class="environment-count">${environments.length} / 3</span>
     </div>
+    <section class="environment-guide" aria-labelledby="environment-guide-title">
+      <div>
+        <h3 id="environment-guide-title">这页怎么用</h3>
+        <p>普通中文首发只需要开发环境。只有要把测试流量和正式客户流量分开，或分别设置预算、Key 和路由时，才创建测试、生产环境。</p>
+      </div>
+      <ol>
+        <li><strong>开发</strong><span>日常联调，系统默认创建。</span></li>
+        <li><strong>测试</strong><span>上线前验证模型、路由和额度。</span></li>
+        <li><strong>生产</strong><span>正式员工和客户使用的独立边界。</span></li>
+      </ol>
+      <p class="environment-guide-note">创建环境后，再到模型别名、Virtual Key 和预算页面选择对应环境；不需要隔离时不要重复创建。</p>
+    </section>
     ${renderActionError(state.actionError)}
     ${canWrite ? renderCreateForm(environments, state.feedback) : ""}
     <div class="environment-segments" role="list" aria-label="当前租户环境">

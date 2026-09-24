@@ -7,6 +7,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { AuthApiError } from "../../src/lib/auth.js";
+import { createI18n } from "../../src/i18n/messages.js";
 import { getRequestExplanation } from "../../src/lib/requestExplanations.js";
 import {
   createRequestExplanationHandoff,
@@ -448,12 +449,45 @@ test("renderer covers partial, error and viewer zero-DOM states", () => {
   ), "");
 });
 
+test("invalid request ID is attached to its input without pretending a server read failed", () => {
+  const context = authContext();
+  const state = { state: "error", draftRequestId: "invalid request id", requestId: "",
+    error: { code: "request_explanation.request_id_invalid", message: "request_id 格式不合法", requestId: "-" } };
+  const html = renderRequestExplanationPanel(state, context, createI18n("en-US"));
+  assert.match(html, /aria-invalid="true"/);
+  assert.match(html, /aria-describedby="request-explanation-input-error"/);
+  assert.match(html, /aria-live="polite">Enter a valid request ID<\/span>/);
+  assert.match(html, /value="invalid request id"/);
+  assert.doesNotMatch(html, /No verifiable evidence|operation request_id|request-explanation-error-body/);
+  const cleared = renderRequestExplanationPanel({ state: "idle", requestId: "" }, context, createI18n("en-US"));
+  assert.match(cleared, /aria-invalid="false"/);
+  assert.doesNotMatch(cleared, /Enter a valid request ID|invalid request id/);
+});
+
+test("explanation localizes evidence labels and controls without translating tenant data", () => {
+  const state = { state: "ok", ...responsePayload(), requestId: "req_prd054_frontend" };
+  const html = renderRequestExplanationPanel(state, authContext(), createI18n("en-US"));
+  assert.match(html, /Request explanation/);
+  assert.match(html, /title="Refresh"/);
+  assert.match(html, /aria-label="Clear"/);
+  assert.match(html, /Decision chain/);
+  assert.match(html, /Authentication snapshot/);
+  assert.match(html, /Evidence version/);
+  assert.match(html, /<dt>Input tokens<\/dt>/);
+  assert.match(html, /<dd>Yes<\/dd>/);
+  assert.match(html, /账务核心/);
+  assert.doesNotMatch(html, /<dt>[^<]*[\u3400-\u9fff]/u);
+  assert.doesNotMatch(html, /证据完整|鉴权与身份|没有可展示的历史证据|等待查询/);
+  assert.match(renderRequestExplanationPanel(state, authContext(), createI18n("zh-CN")), /请求解释|证据完整/);
+  assert.equal(renderRequestExplanationPanel(state, authContext({ permissionCodes: [] }), createI18n("en-US")), "");
+});
+
 test("main wires no-prefetch RBAC, cleanup, inline detail and generic page-view skip", async () => {
   const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
   assert.match(source, /pagehide[\s\S]*clearRequestExplanationSessionState\(\)/);
   assert.match(source, /function renderLogin[\s\S]*clearRequestExplanationSessionState\(\)/);
   assert.match(source, /logoutButton[\s\S]*clearRequestExplanationSessionState\(\)/);
-  assert.match(source, /const session = sameWorkspaceConsoleSession\(authSession, nextSession\) \? authSession : nextSession;\s*if \(authSession !== session\) \{\s*clearConsoleSessionState\(\{ clearNavigation: false \}\)/);
+  assert.match(source, /const session = sameWorkspaceConsoleSession\(authSession, nextSession\) \? authSession : nextSession;\s*const sessionChanged = authSession !== session;\s*if \(sessionChanged\) \{\s*clearConsoleSessionState\(\{ clearNavigation: false \}\)/);
   assert.match(source, /function clearConsoleSessionState[\s\S]*clearRequestExplanationSessionState\(\)/);
   assert.match(source, /!\["request-logs", "request-explanations"\]\.includes\(consoleShellState\?\.activeNavigationItemId\)/);
   assert.match(source, /runRequestExplanationRead\(button\.dataset\.requestLogExplain, "request_logs", binding/);

@@ -52,6 +52,7 @@ from metahub_control.audit import (
     record_audit_log,
 )
 from metahub_control.auth import AuthContext, require_transaction_permission
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 from metahub_control.policies.models import PolicyActionDraft, PolicyInfo
 from metahub_control.policies.service import (
     _audit_summary as _policy_audit_summary,
@@ -827,12 +828,7 @@ def _try_rollback_policy_template_application(
         )
         if replay_application is not None:
             # 路由鉴权后的写锁内复核阻止权限被撤销的 Session 继续读取补偿结果和补派事件。
-            require_transaction_permission(
-                connection,
-                context,
-                "policy.publish",
-                unavailable_error_code="policy_template.unavailable",
-            )
+            ResourceWriteTransaction(connection, config, context, "policy.publish").verify()
             # 回滚回放仍绑定原 actor 与完整意图，不能把稳定 request_id 当成结果读取凭证。
             if (
                 replay_application["rollback_actor_user_id"] != context.user.user_id
@@ -871,12 +867,9 @@ def _try_rollback_policy_template_application(
             if application is None:
                 return None
 
-            locked_context = require_transaction_permission(
-                connection,
-                context,
-                "policy.publish",
-                unavailable_error_code="policy_template.unavailable",
-            )
+            locked_context = ResourceWriteTransaction(
+                connection, config, context, "policy.publish"
+            ).verify()
             # 一个 rollback request_id 不能复用任何既有 Snapshot 事实；否则延迟 FK 可能把
             # application 指向另一条命令，必须在首次写入前返回稳定冲突。
             occupied_request = connection.execute(
@@ -1182,7 +1175,9 @@ def _try_rollback_policy_template_application(
             # 提交前交叉核对四类事实的 tenant、request 与稳定 ID，损坏时拒绝提交。
             if dispatch_facts != expected_facts:
                 raise ApiError("policy_template.unavailable")
-            commit_audited_transaction(connection)
+            ResourceWriteTransaction(connection, config, context, "policy.publish").commit(
+                commit_audited_transaction
+            )
             rollback_row = _load_snapshot_row(
                 connection,
                 tenant_id,

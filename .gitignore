@@ -164,3 +164,9 @@ artifacts/
 !.artifacts/prd078-browser/prd078-browser-final-20260814-36/finance-standard-modal-desktop-1280x720.png
 !.artifacts/prd078-browser/prd078-browser-final-20260814-36/security-high-risk-modal-mobile-390x844.png
 !.artifacts/prd078-browser/prd078-browser-final-20260814-36/security-high-risk-busy-mobile-390x844.png
+
+# Local QA runs and generated evidence stay on the developer machine.
+outputs/
+.pytest-*/
+.tmp-*/
+*.inspect.ndjson

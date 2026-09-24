@@ -27,6 +27,7 @@ from metahub_control.identity.security_service import (
 from metahub_control.platform_access.service import (
     PlatformContext,
     authenticate_platform_session_in_transaction,
+    begin_platform_read_transaction,
 )
 
 from .models import (
@@ -122,14 +123,11 @@ def list_launch_gates(
 ) -> GateListResponse:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
-        _platform_actor(
-            connection,
-            config,
-            platform_session_token,
-            None,
-            "platform.launch.read",
+        actor = begin_platform_read_transaction(
+            connection, config, session_token=platform_session_token
         )
+        if "platform.launch.read" not in actor.permissions:
+            raise ApiError("launch.permission_denied")
         _require_schema(connection)
         candidate = connection.execute(
             """SELECT launch_candidate_id FROM launch_candidates

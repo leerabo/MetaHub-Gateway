@@ -14,10 +14,15 @@ import hmac
 import json
 import re
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Iterable
 from uuid import UUID, uuid4
+
+from metahub_shared.db.connection import connect_database
+from metahub_shared.db.errors import DbError
+from metahub_shared.runtime.config import AppConfig
+from metahub_shared.runtime.errors import ApiError
 
 from metahub_control.audit import (
     AuditRequestMeta,
@@ -26,10 +31,7 @@ from metahub_control.audit import (
     record_audit_log,
 )
 from metahub_control.auth import AuthContext
-from metahub_shared.db.connection import connect_database
-from metahub_shared.db.errors import DbError
-from metahub_shared.runtime.config import AppConfig
-from metahub_shared.runtime.errors import ApiError
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 
 from .models import (
     CostAnomalyActionInfo,
@@ -118,7 +120,11 @@ def list_cost_anomalies(
     filter_hash = _filter_hash(filters)
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "billing.anomaly.read", read_only=True
+        )
+        transaction.begin()
+        context = transaction.context
         _validate_filter_owners(connection, context.user.tenant_id, filters)
         if cursor:
             cursor_state = _decode_cursor(
@@ -200,7 +206,7 @@ def list_cost_anomalies(
             request_id=request_id,
             trace_id=trace_id,
         )
-        connection.commit()
+        transaction.commit()
         return response
     # 已规范化的领域错误必须保留原错误码，同时回滚当前只读快照。
     except ApiError:
@@ -252,7 +258,9 @@ def apply_cost_anomaly_action(
     connection = _connect(config)
     audit_record = None
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        transaction = ResourceWriteTransaction(connection, config, context, "billing.anomaly.write")
+        transaction.begin()
+        context = transaction.context
         replay = connection.execute(
             """
             SELECT *
@@ -282,7 +290,7 @@ def apply_cost_anomaly_action(
                 request_id=request_id,
                 trace_id=trace_id,
             )
-            connection.commit()
+            transaction.commit()
             return response
 
         anomaly_row = _load_anomaly(
@@ -334,7 +342,7 @@ def apply_cost_anomaly_action(
             request_id=request_id,
             trace_id=trace_id,
         )
-        commit_audited_transaction(connection)
+        transaction.commit(commit_audited_transaction)
     # 服务层产生的领域错误必须与 action、override 和 Audit 一起完整回滚。
     except ApiError:
         _rollback_safely(connection)

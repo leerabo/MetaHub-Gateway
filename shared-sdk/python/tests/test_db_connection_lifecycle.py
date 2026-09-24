@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from contextlib import ExitStack
 from contextvars import Context
 
@@ -47,6 +48,77 @@ def test_new_connection_restores_required_sqlite_pragmas(tmp_path):
     assert reopened.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     assert reopened.execute("PRAGMA busy_timeout").fetchone()[0] == 30000
     reopened.close()
+
+
+def test_deadline_connection_does_not_wait_for_wal_promotion_lock(tmp_path):
+    database = str(tmp_path / "wal-promotion.db")
+    seed = sqlite3.connect(database)
+    seed.execute("CREATE TABLE probe (value TEXT)")
+    seed.commit()
+    seed.close()
+
+    database_connections._SQLITE_WAL_DATABASES.discard(database)
+    assert database_connections._SQLITE_WAL_LOCK.acquire()
+    try:
+        started = time.monotonic()
+        with database_connections.database_operation_deadline(time.monotonic() + 0.020):
+            connection = connect_database(f"sqlite:///{database}")
+        elapsed = time.monotonic() - started
+        connection.close()
+    finally:
+        database_connections._SQLITE_WAL_LOCK.release()
+
+    assert elapsed < 0.20
+
+
+def test_schema_initialization_finishes_without_holding_a_writer(tmp_path, monkeypatch):
+    database = str(tmp_path / "schema-before-writer.db")
+    observer = sqlite3.connect(database, timeout=0.05)
+    observer.execute("CREATE TABLE probe(value INTEGER)")
+    observer.commit()
+    original = database_connections._SqliteConnection.execute
+    checked = []
+
+    def check_schema_read(connection, sql, parameters=()):
+        if "sqlite_schema" in sql:
+            # A slow cold-schema preparation must leave the business writer free.
+            observer.execute("BEGIN IMMEDIATE")
+            observer.execute("INSERT INTO probe VALUES(1)")
+            observer.commit()
+            checked.append(True)
+        return original(connection, sql, parameters)
+
+    monkeypatch.setattr(database_connections._SqliteConnection, "execute", check_schema_read)
+    try:
+        connection = connect_database(f"sqlite:///{database}")
+        try:
+            assert checked
+            assert not connection.in_transaction
+            connection.execute("BEGIN IMMEDIATE")
+            assert connection.execute("SELECT count(*) FROM probe").fetchone()[0] == 1
+            connection.rollback()
+        finally:
+            connection.close()
+    finally:
+        observer.close()
+
+
+def test_schema_initialization_failure_releases_native_connection(tmp_path, monkeypatch):
+    original = database_connections._SqliteConnection.execute
+    opened = []
+
+    def fail_schema_read(connection, sql, parameters=()):
+        if "sqlite_schema" in sql:
+            opened.append(connection)
+            raise sqlite3.OperationalError("controlled schema read failure")
+        return original(connection, sql, parameters)
+
+    monkeypatch.setattr(database_connections._SqliteConnection, "execute", fail_schema_read)
+    with pytest.raises(database_connections.DbError):
+        connect_database(f"sqlite:///{tmp_path / 'schema-error.db'}")
+    assert len(opened) == 1
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        opened[0].execute("SELECT 1")
 
 
 def test_request_scope_reuses_one_handle_until_the_request_ends(
@@ -179,6 +251,54 @@ def test_absolute_sqlite_url_uses_the_requested_filesystem_path(tmp_path):
         connection.close()
 
     assert database.is_file()
+
+
+def test_warm_queries_are_not_recompiled_after_every_clean_pool_loan(tmp_path):
+    pool = database_connections._IdleConnectionPool()
+    database = str(tmp_path / "statement-reuse.db")
+    connection = pool.acquire(database)
+    connection.execute("CREATE TABLE probe(value INTEGER)")
+    connection.execute("INSERT INTO probe VALUES(1)")
+    connection.commit()
+    preparations = []
+
+    def authorize(action, table, _column, *_rest):
+        if action == sqlite3.SQLITE_READ and table == "probe":
+            preparations.append(True)
+        return sqlite3.SQLITE_OK
+
+    connection.set_authorizer(authorize)
+    try:
+        for _ in range(20):
+            assert connection.execute("SELECT value FROM probe").fetchall()[0][0] == 1
+            pool.release(database, connection)
+            connection = pool.acquire(database)
+        assert len(preparations) == 1
+        # Reusing compiled SQL still reads current data; it is not an authority cache.
+        connection.execute("UPDATE probe SET value=2")
+        connection.commit()
+        assert connection.execute("SELECT value FROM probe").fetchall()[0][0] == 2
+    finally:
+        pool.release(database, connection)
+        pool.close_idle()
+
+
+@pytest.mark.parametrize("pragma,dirty,expected", [
+    ("query_only", 1, 0), ("read_uncommitted", 1, 0),
+    ("recursive_triggers", 1, 0), ("foreign_keys", 0, 1),
+])
+def test_dirty_pool_loan_restores_each_security_pragma(tmp_path, pragma, dirty, expected):
+    pool = database_connections._IdleConnectionPool()
+    database = str(tmp_path / "dirty-state.db")
+    connection = pool.acquire(database)
+    connection.execute(f"PRAGMA {pragma}={dirty}")
+    pool.release(database, connection)
+    restored = pool.acquire(database)
+    try:
+        assert restored.execute(f"PRAGMA {pragma}").fetchone()[0] == expected
+    finally:
+        pool.release(database, restored)
+        pool.close_idle()
 
 
 def test_idle_stage_release_reuses_handle_with_independent_lifetime(tmp_path):

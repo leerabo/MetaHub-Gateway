@@ -2,6 +2,10 @@
 
 import { AuthApiError } from "./auth.js";
 import { PlatformApiError, readPlatformCsrfCookie } from "./platform.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
+
+// Credential domains remain explicit at the transport boundary: legacy
+// requests use credentials: "omit" and Workspace requests use credentials: "include".
 
 const IDS = Object.freeze({
   apiVersion: /^apv_[0-9a-f]{32}$/u,
@@ -51,8 +55,8 @@ const EVENT_METADATA_KEYS = Object.freeze({
   ],
 });
 
-export async function getDeveloperContractWorkspace({ controlApiUrl, token, signal } = {}) {
-  const bearer = developerToken(token);
+export async function getDeveloperContractWorkspace({ controlApiUrl, authentication, token, signal } = {}) {
+  const bearer = developerCredentials(authentication, token);
   const [versions, changelog, schemas, python, javascript] = await Promise.all([
     developerJson(controlApiUrl, "/developer/api-versions", bearer, signal),
     developerJson(controlApiUrl, "/developer/changelog?limit=100", bearer, signal),
@@ -83,6 +87,7 @@ export async function getDeveloperContractWorkspace({ controlApiUrl, token, sign
 export async function downloadDeveloperSdk({
   controlApiUrl,
   token,
+  authentication,
   language,
   sdkVersion,
   contractSha256,
@@ -115,13 +120,14 @@ export async function downloadDeveloperSdk({
   );
   let response;
   try {
-    response = await fetch(apiUrl(
+    response = await authenticatedResourceFetch(apiUrl(
       controlApiUrl,
       `/developer/sdks/${checkedLanguage}/${checkedVersion}/download`,
       "developer",
     ), {
-      headers: { Accept: "application/zip", Authorization: `Bearer ${developerToken(token)}` },
-      credentials: "omit",
+      ...developerCredentials(authentication, token),
+      csrfRequired: true,
+      headers: { Accept: "application/zip" },
       cache: "no-store",
       redirect: "error",
       signal,
@@ -660,12 +666,12 @@ function smokeMatrix(value, apiVersionValue, domain) {
   });
 }
 
-async function developerJson(controlApiUrl, path, token, signal) {
+async function developerJson(controlApiUrl, path, credentials, signal) {
   let response;
   try {
-    response = await fetch(apiUrl(controlApiUrl, path, "developer"), {
-      headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
-      credentials: "omit",
+    response = await authenticatedResourceFetch(apiUrl(controlApiUrl, path, "developer"), {
+      ...credentials,
+      headers: { Accept: "application/json" },
       cache: "no-store",
       redirect: "error",
       signal,
@@ -785,6 +791,17 @@ function developerToken(value) {
     invalidRequest("developer", "token");
   }
   return token;
+}
+
+function developerCredentials(authentication, token) {
+  if (authentication === "workspace") {
+    if (token !== undefined && token !== null) {
+      throw new AuthApiError({ status: 401, code: "workspace_session.credential_conflict", message: "Authentication context is unavailable." });
+    }
+    return { authentication };
+  }
+  if (authentication !== undefined && authentication !== "legacy") invalidRequest("developer", "authentication");
+  return { authentication, token: developerToken(token) };
 }
 
 function clientTimestamp(value, label, domain) {

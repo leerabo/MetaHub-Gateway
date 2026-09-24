@@ -13,7 +13,11 @@ import { bindFileInteractions } from "../../src/features/files/bindFiles.js";
 import { renderVirtualKeyPanel } from "../../src/features/virtual-keys/renderVirtualKeyPanel.js";
 import { createBudgetMutationLifecycle, selectBudgetScopeOption } from "../../src/features/budgets/budgetPageLifecycle.js";
 import { createFinOpsPageState } from "../../src/features/finops-ledger/finOpsPageState.js";
+import { createRolePermissionPageState } from "../../src/features/role-permissions/rolePermissionPageState.js";
+import { createCostAnomalyPageState } from "../../src/features/cost-anomalies/costAnomalyPageState.js";
+import { createPolicySnapshotLoadLifecycle, shouldLoadPolicySnapshots } from "../../src/features/policy-snapshots/renderPolicySnapshotsPanel.js";
 import { bindFinOpsLedgerInteractions } from "../../src/features/finops-ledger/bindFinOpsLedger.js";
+import { renderConsoleEntryLoading, revealConsoleSidebarItem } from "../../src/features/console-shell/renderConsoleShell.js";
 
 const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
 const allPermissions = Object.values(PERMISSIONS);
@@ -58,24 +62,38 @@ class Element {
     this.value = "alert_only";
     this.values = { name: "Sample", status: "disabled", confirmed: "on", entryCode: "sample", version: "2026.09.08.1",
       regionCode: "cn-east", capabilityCodes: "chat", providerCode: "sample", timeoutSeconds: "5", role: "auditor" };
-    this.button = { disabled: false };
+    this.button = { disabled: false, dataset: {}, textContent: "Submit" };
+    this.feedback = { textContent: "", setAttribute(name, value) { this[name] = value; } };
+    this.reload = { hidden: true };
+    const owner = this;
+    this.elements = { namedItem: (name) => ({
+      get value() { return owner.values[name] ?? ""; },
+      set value(value) { owner.values[name] = value; },
+    }) };
   }
   addEventListener(event, handler) {
     this.listeners.set(event, [...(this.listeners.get(event) ?? []), handler]);
   }
-  querySelector(selector) { return selector?.startsWith("[name=") ? null : this.button; }
+  querySelector(selector) {
+    if (selector === "[data-model-setup-feedback]") return this.feedback;
+    if (selector === "[data-model-setup-reload]") return this.reload;
+    return selector?.startsWith("[name=") ? null : this.button;
+  }
   querySelectorAll() { return []; }
   setAttribute() {}
   closest() { return { replaceChildren: () => { this.cleared = true; } }; }
   fire(event) { return Promise.all((this.listeners.get(event) ?? []).map((handler) => handler({ preventDefault() {}, currentTarget: this }))); }
 }
 
-const helpers = ["clearBasicResourceFeedback", "clearBasicResourceSessionState", "bindResourceElement",
+const helpers = ["syncConsoleSidebarState", "clearBasicResourceFeedback", "clearBasicResourceSessionState", "bindResourceElement",
+  "currentCostAnomalyOwner", "currentCostAnomalyActionOwner", "currentCostAnomalyListOwner",
+  "rolePermissionOwner", "loadPolicySnapshotsState", "currentPolicySnapshotIdentity",
   "handleResourceAuthorizationError", "handleResourceMutationError", "resourceMutationRequest", "refreshResourceMutation",
-  "loadResourceState", "loadModelsState", "loadEnvironmentState", "loadProjectState", "loadVirtualKeysState", "loadProvidersState",
+  "setModelSetupFormPending", "showModelSetupFormError",
+  "loadResourceState", "loadDeveloperConnectionState", "loadModelsState", "loadEnvironmentState", "loadProjectState", "loadVirtualKeysState", "loadProvidersState",
   "currentFileReadOwner", "currentFileWriteOwner", "bindFilesPageInteractions", "submitFileUpload", "loadFilesState",
   "loadAndRenderActiveNavigation", "loadProviderHealthState", "loadProviderStatusState", "runProviderProbe",
-  "loadModelAliasesState", "loadUsageState",
+  "loadModelAliasesState", "loadUsageState", "loadWorkspaceConnectionProgress",
   "currentEvaluationPageIdentity", "currentBudgetMutationOwner", "isCurrentBudgetMutation", "budgetRuleAlreadyExists",
   "clearBudgetSessionState", "loadBudgetState", "loadFinOpsState", "bindFinOpsInteractions", "submitFinOpsAdjustment", "setFinOpsSubmittingDom",
   "bindWorkspaceMemberInteractions", "loadUsersState",
@@ -83,7 +101,7 @@ const helpers = ["clearBasicResourceFeedback", "clearBasicResourceSessionState",
 const payload = { state: "ok", providers: [{ provider_id: "provider_sample" }], projects: [], applications: [], models: [],
   virtual_keys: [], files: [], next_cursor: null, file: { file_id: "file_sample" }, plain_value: "synthetic-one-time-value",
   virtual_key: { key_prefix: "synthetic" }, entry_code: "sample" };
-const clients = ["createEnvironment", "updateEnvironment", "createProject", "createApplication", "createVirtualKey",
+const clients = ["createEnvironment", "updateEnvironment", "createProject", "createApplication", "createVirtualKey", "rotateVirtualKey",
   "disableVirtualKey", "updateVirtualKey", "updateVirtualKeyLimits", "getProviderCatalogCompatibility", "createProviderFromCatalog",
   "preflightCatalogProvider", "createProvider", "updateProvider", "testProviderConnection", "createProviderKey", "updateProviderKey",
   "createModel", "updateModel", "listEnvironments", "listProjects", "listApplications", "listVirtualKeys", "listProviders",
@@ -97,12 +115,15 @@ function harness(navigation, selector) {
   const element = new Element();
   const calls = [], effects = [], scheduled = [];
   const pending = deferred();
-  const scope = { AuthApiError, DOMException, AbortController, PERMISSIONS, hasPermission, filePageOwner, isFileAbortError,
+  const scope = { AuthApiError, DOMException, AbortController, crypto: globalThis.crypto, PERMISSIONS, hasPermission, filePageOwner, isFileAbortError,
     workspaceResourcePageOwner,
     hasWorkspaceConsoleSession, gatewayUrl: "https://gateway.example.test", consoleUrl: "https://console.example.test",
-    currentI18n: null, gatewayDebugState: {}, policyDryRunState: {},
+    currentI18n: null, gatewayDebugState: {}, policyDryRunState: {}, renderConsoleEntryLoading, revealConsoleSidebarItem,
     budgetMutationLifecycle: createBudgetMutationLifecycle(), selectBudgetScopeOption,
     finOpsPageState: createFinOpsPageState(), bindFinOpsLedgerInteractions,
+    rolePermissionPageState: createRolePermissionPageState(), costAnomalyPageState: createCostAnomalyPageState(),
+    clearPolicySnapshotSessionState() {}, policySnapshotOperationStatus: "idle",
+    clearWebhookSessionState() {}, webhookDeadLetterPageState: { clear() {} },
     workspaceConsoleExperienceView: () => null,
     workspaceConsoleExperienceController: { leave() {}, snapshot: () => ({}) },
     workspaceCommercialAccountingController: { close() {}, open: async () => {}, snapshot: () => ({}) },
@@ -118,6 +139,9 @@ function harness(navigation, selector) {
     usageExportState: { status: "idle", message: "" },
     clearRequestExplanationSessionState() {},
     workspacePageVisitTracker: { leave() {} }, workspacePageVisitShellState: null,
+    expandedConsoleGroupKey: null, mobileSidebarCollapsed: true,
+    activeSdkLanguage: "python", activeMigrationLanguage: "python", migrationGuideEventWarning: null,
+    selectedMigrationEnvironmentId: null, selectedMigrationModelAlias: null,
     providerHealthRequestGeneration: 0, providerHealthController: null,
     RESOURCE_NAVIGATION_IDS: new Set(["users", "environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health", "model-aliases"]),
     broadcastConsoleWorkspaceContextInvalidation: () => effects.push("broadcast"),
@@ -126,6 +150,7 @@ function harness(navigation, selector) {
     optionalNumber: (value, fallback) => value ? Number(value) : fallback,
     optionalText: (value) => value || undefined, readCapabilities: () => ({ chat: true }),
     workspaceProviderEngineeringController: { snapshot: () => ({}), close: () => effects.push("engineering-close") },
+    workspaceNavigationController: { loadGettingStarted: async () => ({ source_freshness: "fresh", tasks: [] }) },
     workspaceProviderEngineeringProviders: [],
     refresh: async () => { effects.push("refresh"); },
     clearAuthSession: () => effects.push("clear-auth"),
@@ -171,6 +196,138 @@ function harness(navigation, selector) {
   return { scope, functions, element, calls, effects, scheduled, pending, switchOwner };
 }
 
+test("governance owners bind the active Workspace and separate anomaly reads from writes", () => {
+  const h = harness("cost-anomalies", ".cost-anomaly-page");
+  h.scope.resourcePageShellState = shell("cost-anomalies", "1", [PERMISSIONS.BILLING_ANOMALY_READ]);
+  h.scope.authSession = workspaceConsoleSessionFromShell(h.scope.resourcePageShellState);
+  const read = h.functions.currentCostAnomalyListOwner(h.scope.resourcePageShellState, 1);
+  assert.ok(read);
+  assert.equal(h.functions.currentCostAnomalyActionOwner(h.scope.resourcePageShellState), null);
+  assert.equal(h.functions.currentCostAnomalyListOwner(h.scope.resourcePageShellState, 0), null);
+  const previousShell = h.scope.resourcePageShellState;
+  h.switchOwner();
+  assert.equal(h.functions.currentCostAnomalyListOwner(previousShell, 1), null);
+
+  const roles = harness("role-permissions", ".role-permission-page");
+  const owner = roles.functions.rolePermissionOwner(roles.scope.resourcePageShellState, 1);
+  assert.equal(owner.workspaceId, `wsp_${"1".repeat(32)}`);
+  assert.equal(owner.tenantId, undefined);
+  roles.scope.hash = "projects";
+  assert.equal(roles.functions.rolePermissionOwner(roles.scope.resourcePageShellState, 1), null);
+});
+
+test("a delayed snapshot 401 cannot log out the next Workspace session", async () => {
+  const h = harness("policy-snapshots", ".policy-snapshots-panel");
+  Object.assign(h.scope, {
+    shouldLoadPolicySnapshots,
+    policySnapshotHistoryFilters: { limit: 20, offset: 0 },
+    policySnapshotLoadLifecycle: createPolicySnapshotLoadLifecycle(),
+    getCurrentPolicySnapshot: async (input) => { h.calls.push(input); return h.pending.promise; },
+    listPolicySnapshots: async (input) => { h.calls.push(input); return h.pending.promise; },
+  });
+  const load = h.functions.loadPolicySnapshotsState(h.scope.resourcePageShellState, 1);
+  assert.equal(h.calls.length, 2);
+  assert.ok(h.calls.every(input => input.authentication === "workspace" && !input.token));
+  h.switchOwner();
+  const session = h.scope.authSession;
+  h.pending.reject(new AuthApiError({ status: 401, code: "workspace_session.expired" }));
+  assert.equal(await load, null);
+  assert.equal(h.scope.authSession, session);
+  assert.equal(h.effects.includes("login"), false);
+  assert.equal(h.effects.includes("clear-auth"), false);
+});
+
+test("custom provider generates a valid stable code and opens only the returned service setup", async () => {
+  const h = harness("providers", "#create-provider-form");
+  h.element.values.providerCode = "";
+  h.functions.bindActualResourceHandlers();
+  const submitted = h.element.fire("submit");
+  const code = h.calls[0].input.providerCode;
+  assert.match(code, /^provider_[a-f0-9]{32}$/u);
+  assert.equal(h.element.button.textContent, "正在添加...");
+  h.pending.reject(new AuthApiError({ status: 503, code: "dependency.unavailable", message: "Unavailable" }));
+  await submitted;
+  h.scope.resourcePageLifecycle.render();
+  h.element.listeners.clear();
+  h.functions.bindActualResourceHandlers();
+  h.scope.createProvider = async (input) => {
+    assert.equal(input.providerCode, code);
+    return { provider: { provider_id: "created_service", auth_type: "bearer" } };
+  };
+  await h.element.fire("submit");
+  assert.equal(h.scope.providerCustomCreateCode, null);
+  assert.equal(h.scope.providerSetupId, "created_service");
+  assert.match(h.scope.providerFeedback, /配置厂家 API KEY/u);
+  h.functions.clearBasicResourceFeedback();
+  assert.equal(h.scope.providerSetupId, null);
+});
+
+test("creating an organization KEY keeps only the one-time result", async () => {
+  const h = harness("virtual-keys", "#create-virtual-key-form");
+  h.functions.bindActualResourceHandlers();
+  const submitted = h.element.fire("submit");
+  assert.equal(h.element.button.disabled, true);
+  h.pending.resolve({ ...payload, virtual_key: { ...payload.virtual_key, name: "Organization KEY" } });
+  await submitted;
+  assert.equal(h.scope.virtualKeyCreatedSecret.plainValue, payload.plain_value);
+  assert.equal(Object.hasOwn(h.scope.virtualKeyCreatedSecret, "consumerId"), false);
+  assert.equal(h.scope.virtualKeyCreatedSecret.keyName, "Organization KEY");
+  assert.match(h.scope.virtualKeyFeedback, /复制保存/u);
+});
+
+test("rotating a KEY identifies the rotation without employee ownership", async () => {
+    const h = harness("virtual-keys", "[data-rotate-virtual-key]");
+    h.element.dataset.rotateVirtualKey = "vkey_sample";
+    h.element.dataset.keyRevision = "3";
+    h.functions.bindActualResourceHandlers();
+    const submitted = h.element.fire("click");
+    assert.equal(h.calls[0].client, "rotateVirtualKey");
+    assert.equal(h.calls[0].input.expectedRevision, 3);
+    h.pending.resolve({ ...payload, virtual_key: {
+      ...payload.virtual_key, name: "Rotated KEY",
+    } });
+    await submitted;
+    assert.equal(Object.hasOwn(h.scope.virtualKeyCreatedSecret, "consumerId"), false);
+    assert.equal(h.scope.virtualKeyCreatedSecret.keyName, "Rotated KEY");
+    assert.equal(h.scope.virtualKeyCreatedSecret.operation, "rotated");
+});
+
+test("saving a provider credential clears the input immediately and collapses setup only after success", async () => {
+  const h = harness("providers", "[data-provider-key-create-form]");
+  const secretInput = { value: "synthetic-provider-credential" };
+  const query = h.element.querySelector.bind(h.element);
+  h.element.querySelector = (selector) => selector === 'input[name="plainValue"]' ? secretInput : query(selector);
+  h.element.values.plainValue = secretInput.value;
+  h.scope.providerSetupId = "provider_sample";
+  h.functions.bindActualResourceHandlers();
+  const submitted = h.element.fire("submit");
+  assert.equal(secretInput.value, "");
+  assert.equal(h.scope.providerSetupId, "provider_sample");
+  assert.equal(h.calls[0].input.plainValue, "synthetic-provider-credential");
+  h.pending.resolve(payload);
+  await submitted;
+  assert.equal(h.scope.providerSetupId, "");
+  assert.match(h.scope.providerFeedback, /下一步：测试连接/u);
+});
+
+test("connection progress reports dependency failure without suppressing identity or owner conflicts", async () => {
+  const h = harness("models");
+  for (const status of [0, 500, 503]) {
+    h.scope.workspaceNavigationController.loadGettingStarted = async () => { throw { status }; };
+    assert.equal((await h.functions.loadWorkspaceConnectionProgress()).status, "error");
+  }
+  for (const status of [401, 403, 409, 412]) {
+    const error = { status };
+    h.scope.workspaceNavigationController.loadGettingStarted = async () => { throw error; };
+    await assert.rejects(h.functions.loadWorkspaceConnectionProgress(), (received) => received === error);
+  }
+  const cancelled = new DOMException("Cancelled", "AbortError");
+  h.scope.workspaceNavigationController.loadGettingStarted = async () => { throw cancelled; };
+  await assert.rejects(h.functions.loadWorkspaceConnectionProgress(), (error) => error === cancelled);
+  h.scope.resourcePageShellState.workspaceNavigationContract = false;
+  assert.equal(await h.functions.loadWorkspaceConnectionProgress(), null);
+});
+
 test("PRD-147 membership save requires an actual change and clears when reverted", async () => {
   const h = harness("users", "[data-workspace-member-form]");
   h.functions.bindWorkspaceMemberInteractions();
@@ -209,12 +366,28 @@ const forms = [
   ["providers", "[data-provider-catalog-preflight-form]", "preflightCatalogProvider"],
   ["providers", "#create-provider-form", "createProvider"],
   ["providers", "[data-provider-status-form]", "updateProvider"],
-  ["providers", "[data-provider-test-form]", "testProviderConnection"],
+  ["providers", "[data-provider-test-form]", "probeProvider"],
   ["providers", "[data-provider-key-create-form]", "createProviderKey"],
   ["providers", "[data-provider-key-status-form]", "updateProviderKey"],
   ["models", "#create-model-form", "createModel"],
   ["models", "[data-model-status-form]", "updateModel"],
 ];
+
+test("generated provider code survives an uncertain submission and form repaint", async () => {
+  const h = harness("providers", "[data-provider-catalog-create-form]");
+  h.element.values.providerCode = "";
+  h.functions.bindActualResourceHandlers();
+  const operation = h.element.fire("submit");
+  assert.equal(h.calls.length, 1);
+  assert.match(h.calls[0].input.providerCode, /^sample_[a-f0-9]{12}$/u);
+  h.pending.reject(new AuthApiError({ status: 503 }));
+  await operation;
+  h.element.values.providerCode = "";
+  await h.element.fire("submit");
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.calls[0].input.providerCode, h.calls[1].input.providerCode);
+  assert.equal(h.calls[0].input.idempotencyKey, h.calls[1].input.idempotencyKey);
+});
 
 for (const navigation of ["budgets", "internal-finops"]) {
   const load = (h) => navigation === "budgets"
@@ -406,6 +579,38 @@ for (const [navigation, selector, client, event = "submit", status] of forms) {
 const loaders = [["environments", "loadEnvironmentState"], ["projects", "loadProjectState"],
   ["providers", "loadProvidersState"], ["models", "loadModelsState"], ["virtual-keys", "loadVirtualKeysState"], ["files", "loadFilesState"],
   ["provider-health", "loadProviderHealthState"], ["model-aliases", "loadModelAliasesState"], ["usage", "loadUsageState"]];
+for (const [navigation, selector] of [["models", "#create-model-form"], ["model-aliases", "#create-model-alias-form"]]) {
+  test(`${navigation} displays progress immediately and keeps rejected draft without a full refresh`, async () => {
+    const h = harness(navigation, selector);
+    h.element.values.alias = "company-default";
+    h.functions.bindActualResourceHandlers();
+    const operation = h.element.fire("submit");
+    assert.equal(h.element.feedback.textContent, "");
+    assert.match(h.element.button.textContent, /正在创建/u);
+    h.pending.reject(new AuthApiError({ status: 422, code: "model_alias.alias_invalid", requestId: "req_rejected" }));
+    await operation;
+    assert.equal(h.element.button.disabled, false);
+    assert.match(h.element.feedback.textContent, /模型名称格式不正确/u);
+    assert.match(h.element.feedback.textContent, /req_rejected/u);
+    assert.equal(h.element.feedback.role, "alert");
+    assert.equal(h.element.values.alias, "company-default");
+    assert.equal(h.effects.includes("refresh"), false);
+    assert.equal(h.scope.resourcePageLifecycle.blocksReplacement(false), false);
+  });
+  test(`${navigation} uncertain writes require a list check before another submission`, async () => {
+    const h = harness(navigation, selector);
+    h.functions.bindActualResourceHandlers();
+    const operation = h.element.fire("submit");
+    h.pending.reject(new AuthApiError({ status: 0, code: "resource.mutation_unconfirmed" }));
+    await operation;
+    assert.equal(h.element.button.disabled, true);
+    assert.equal(h.element.reload.hidden, false);
+    assert.match(h.element.feedback.textContent, /提交结果尚未确认/u);
+    await h.element.fire("submit");
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.effects.includes("refresh"), false);
+  });
+}
 for (const [navigation, loader] of loaders) {
   test(`PRD-147 actual ${navigation} dispatcher supplies Workspace reads and renders the accepted state`, async () => {
     const h = harness(navigation);
@@ -578,8 +783,9 @@ for (const selector of ["[data-provider-tab]", "[data-provider-catalog-filter-fo
     const h = harness("providers", selector);
     h.functions.bindActualResourceHandlers();
     h.switchOwner();
+    h.element.dataset.providerTab = "catalog";
     await h.element.fire(selector.includes("filter") ? "submit" : "click");
-    assert.equal(h.scope.providerCatalogActiveTab, "catalog");
+    assert.equal(h.scope.providerCatalogActiveTab, "providers");
     assert.equal(h.scope.providerCatalogFeedback, "");
     assert.deepEqual(h.effects, []);
   });
@@ -627,6 +833,8 @@ test("PRD-147 actual navigation projection removes old secrets before loading a 
   h.scope.listModels = async () => {
     assert.equal(h.effects.includes("clear-dom"), true);
     assert.equal(h.scope.virtualKeyCreatedSecret, null);
+    assert.match(h.scope.app.innerHTML, /正在加载组织空间/u);
+    assert.doesNotMatch(h.scope.app.innerHTML, /synthetic-one-time-value/u);
     return h.pending.promise;
   };
   const operation = h.functions.loadAndRenderActiveNavigation({ consoleShellState: next,
@@ -784,6 +992,46 @@ test("PRD-147 production SDK reads both languages under the current Workspace", 
   h.scope.hash = "projects";
   assert.equal(await h.functions.loadSdkExampleStates(h.scope.resourcePageShellState), null);
   assert.equal(h.calls.length, 2);
+});
+
+for (const navigation of ["migration-guide", "api-docs"]) {
+  test(`connection metadata on ${navigation} is permission and owner bound`, async () => {
+    const h = harness(navigation);
+    h.scope.getPythonSdkExample = async (input) => { h.calls.push(input); return h.pending.promise; };
+    const load = runInNewContext(production("loadDeveloperConnectionState") + "\nloadDeveloperConnectionState", h.scope);
+    const pending = load();
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.calls[0].authentication, "workspace");
+    assert.equal(Object.hasOwn(h.calls[0], "token"), false);
+    h.switchOwner();
+    assert.equal(h.calls[0].signal.aborted, true);
+    h.pending.resolve({ state: "ok", chat_model_alias: "old-workspace" });
+    assert.equal(await pending, null);
+    h.scope.resourcePageShellState = shell(navigation, "2", []);
+    h.scope.authSession = workspaceConsoleSessionFromShell(h.scope.resourcePageShellState);
+    h.scope.resourcePageLifecycle.enter();
+    assert.equal(await load(), null);
+    assert.equal(h.calls.length, 1);
+  });
+}
+
+test("migration dispatcher preserves the latest explicit choices and language through asynchronous reads", async () => {
+  const h = harness("migration-guide");
+  h.scope.getPythonSdkExample = async () => h.pending.promise;
+  const session = h.scope.authSession;
+  const pending = h.functions.loadAndRenderActiveNavigation({ consoleShellState: h.scope.resourcePageShellState,
+    refreshId: 1, isBackgroundRefresh: false, refreshOwnerCurrent: () => session === h.scope.authSession });
+  h.scope.selectedMigrationEnvironmentId = "env_selected";
+  h.scope.selectedMigrationModelAlias = "actual-model";
+  h.scope.activeMigrationLanguage = "node";
+  h.scope.activeSdkLanguage = "javascript";
+  h.pending.resolve({ ...payload, gateway_base_url: "https://actual.gateway/v1" });
+  await pending;
+  assert.equal(h.scope.rendered.selectedMigrationEnvironmentId, "env_selected");
+  assert.equal(h.scope.rendered.selectedMigrationModelAlias, "actual-model");
+  assert.equal(h.scope.rendered.activeMigrationLanguage, "node");
+  assert.equal(h.scope.rendered.activeSdkLanguage, "javascript");
+  assert.equal(h.scope.rendered.developerConnectionState.gateway_base_url, "https://actual.gateway/v1");
 });
 
 for (const outcome of ["success", "401", "403", "503"]) {
