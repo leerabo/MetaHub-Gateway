@@ -31,7 +31,7 @@ test("logout invalidates refresh ownership before cleanup and network await", as
   const clearAuthIndex = handler.indexOf("clearAuthSession();");
   const awaitIndex = handler.indexOf("await logoutIdentity");
   const finalGateIndex = handler.indexOf("logoutGeneration !== refreshSequence || hasWorkspaceConsoleSession(authSession)", awaitIndex);
-  const finalRenderIndex = handler.indexOf('window.location.replace("/")', finalGateIndex);
+  const finalRenderIndex = handler.indexOf('window.location.replace("./")', finalGateIndex);
 
   assert.ok(invalidateIndex > 0);
   assert.ok(invalidateIndex < cleanupIndex && cleanupIndex < clearAuthIndex);

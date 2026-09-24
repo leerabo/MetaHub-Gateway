@@ -41,7 +41,7 @@ export function renderInvitationAcceptancePage(state = {}) {
   }
   if (status === "loading") return pageShell('<h1>接受邀请</h1><p role="status">正在读取邀请...</p>');
   if (status === "preview-error") return pageShell(`<h1>邀请暂不可用</h1>${feedback}
-    <button type="button" data-invitation-preview-retry>重试</button><a href="/">返回首页</a>`);
+    <button type="button" data-invitation-preview-retry>重试</button><a href="./">返回首页</a>`);
   const submitting = status === "submitting";
   return pageShell(`
     <div class="invitation-public-heading">

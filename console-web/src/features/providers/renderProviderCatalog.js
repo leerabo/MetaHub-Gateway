@@ -87,7 +87,7 @@ function renderEntry(entry, state, canWrite) {
 
 function renderEntryAction(entry, version, canWrite) {
   if (entry.instantiation_mode === "local_endpoint") {
-    return '<div class="provider-catalog-next"><a href="/console.html#workspace.gateway.private-endpoints">前往本地模型</a></div>';
+    return '<div class="provider-catalog-next"><a href="console.html#workspace.gateway.private-endpoints">前往本地模型</a></div>';
   }
   if (entry.instantiation_mode === "migration_only") {
     return '<div class="provider-catalog-next"><span>此条目仅说明迁移兼容性，不会创建共享或默认上游。</span></div>';

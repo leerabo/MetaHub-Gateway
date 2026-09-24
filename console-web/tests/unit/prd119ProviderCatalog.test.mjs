@@ -116,7 +116,7 @@ test("Provider page exposes official, local, and migration catalog modes without
 
   assert.match(html, /选择模型厂家/u);
   assert.match(html, /data-provider-catalog-create-form/u);
-  assert.match(html, /href="\/console.html#workspace.gateway.private-endpoints"/u);
+  assert.match(html, /href="console.html#workspace.gateway.private-endpoints"/u);
   assert.match(html, /仅说明迁移兼容性/u);
   assert.match(html, /data-provider-catalog-preflight-form/u);
   assert.match(html, /下一步：配置客户自持 Provider Key/u);

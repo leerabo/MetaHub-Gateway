@@ -1429,7 +1429,7 @@ function renderPublicInvitation(state = null) {
     publicInvitationSummary = null;
     clearAuthSession();
     authSession = { token: null, context: null };
-    window.location.replace("/identity.html?view=login");
+    window.location.replace("identity.html?view=login");
   });
 
   const form = document.querySelector("#invitation-accept-form");
@@ -1462,7 +1462,7 @@ function renderPublicInvitation(state = null) {
       try {
         await loginIdentity({ controlApiUrl: workspaceControlApiUrl, email: result.user.email, password });
         publicInvitationSummary = null;
-        window.location.replace("/identity.html");
+        window.location.replace("identity.html");
       } catch {
         renderPublicInvitation({ status: "success", user: result.user,
           message: "已加入组织，请登录受邀账号。" });
@@ -2148,7 +2148,7 @@ async function loadAndRenderActiveNavigation({
       await load("rolePermissionState", () => loadRolePermissionState(consoleShellState, refreshId));
       break;
     case "language-settings":
-      state.accountPreferenceLocation = "/identity.html#account-preferences";
+      state.accountPreferenceLocation = "identity.html#account-preferences";
       break;
     case "quickstart":
       await load("workspaceTaskHomeState", () => (
@@ -2892,7 +2892,7 @@ function bindAuthenticatedEvents(consoleShellState) {
         if (retry) retry.onclick = () => refresh();
         return;
       }
-      window.location.replace("/");
+      window.location.replace("./");
     });
   }
 
@@ -9732,7 +9732,7 @@ async function loadDeveloperConnectionState() {
       partnerHandoff.disabled = true;
       try {
         await handoffWorkspaceToPartner({ controlApiUrl: workspaceControlApiUrl });
-        window.location.assign("/partner.html");
+        window.location.assign("partner.html");
       } catch (error) {
         partnerHandoff.disabled = false;
         consoleShellActionError = currentI18n.t(

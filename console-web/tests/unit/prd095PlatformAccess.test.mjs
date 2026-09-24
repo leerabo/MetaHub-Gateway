@@ -166,7 +166,7 @@ test("PRD-095 identity controller removes MFA secrets and shows only projected p
   assert.equal(await controller.verifyMfaEnrollment({ code: "123456" }), true);
   assert.equal(sensitiveInputs[1].value, "");
   assert.doesNotMatch(root.innerHTML, new RegExp(`${MFA_SECRET}|123456|CurrentPassword`, "u"));
-  assert.match(root.innerHTML, /href="\/platform\.html"/u);
+  assert.match(root.innerHTML, /href="platform\.html"/u);
   assert.deepEqual(seen, [
     ["begin", "CurrentPassword"],
     ["verify", MFA_FACTOR_ID, "123456"],

@@ -59,7 +59,7 @@
 .identity-topbar-actions > a { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; font-size: 12px; }
 .identity-topbar-actions > a svg { width: 16px; height: 16px; }
 @media (max-width: 600px) {
-  .identity-topbar-actions:has(a[href="/console.html"]) { grid-column: 1 / -1; grid-row: 3; justify-content: space-between; flex-wrap: wrap; }
+  .identity-topbar-actions:has(a[href="console.html"]) { grid-column: 1 / -1; grid-row: 3; justify-content: space-between; flex-wrap: wrap; }
 }
 @media (min-height: 950px) { .identity-access-copy { padding-top: 220px; } .identity-access-scene { top: 420px; } }
 @media (max-height: 760px) and (min-width: 861px) { .identity-access-copy { padding-top: 120px; } .identity-access-copy h2 { font-size: 31px; } .identity-access-scene { top: 310px; bottom: 70px; } .identity-access-caption { bottom: 92px; } .identity-access-footnote { bottom: 24px; padding-top: 18px; } }

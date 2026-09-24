@@ -5,7 +5,7 @@ import { renderAccountPreferences } from "../account-preferences/renderAccountPr
 
 export function renderIdentityAccountLoadingPage(root) {
   root.innerHTML = `<section class="identity-account-loading" aria-busy="true" aria-label="加载账号设置">
-    <a href="/console.html">MetaHub</a><h1>账号设置</h1>
+    <a href="console.html">MetaHub</a><h1>账号设置</h1>
     <div class="identity-account-skeleton" aria-hidden="true"></div>
     <div class="identity-account-skeleton" aria-hidden="true"></div>
   </section>`;
@@ -162,7 +162,7 @@ export function renderIdentityRegistrationPage(container, options = {}) {
           </label>
           <label class="identity-consent">
             <input name="consent" type="checkbox" required />
-            <span>我已阅读并同意<a href="/privacy.html" target="_blank" rel="noopener">隐私条款</a></span>
+            <span>我已阅读并同意<a href="privacy.html" target="_blank" rel="noopener">隐私条款</a></span>
           </label>
           ${options.policy?.human_verification ? `<label><span>图形验证码</span><span class="identity-captcha-control">
             <input name="captchaAnswer" aria-label="图形验证码" type="text" inputmode="numeric" autocomplete="off" pattern="[0-9]{5}" maxlength="5" required />
@@ -398,14 +398,14 @@ function renderAccountNavigation(state, active) {
     ${active === item.id ? 'aria-current="page"' : ""}>${escapeHtml(item.label)}</a>`;
   const organizationLabel = role === "owner" || role === "admin" ? "进入组织管理" : "进入组织空间";
   const organizationLink = context
-    ? `<a class="identity-account-workspace-link" href="/console.html">${escapeHtml(organizationLabel)}</a>`
+    ? `<a class="identity-account-workspace-link" href="console.html">${escapeHtml(organizationLabel)}</a>`
     : state.hasPendingInvitation
-      ? '<a class="identity-account-workspace-link" href="/console.html">查看组织邀请</a>'
+      ? '<a class="identity-account-workspace-link" href="console.html">查看组织邀请</a>'
       : "";
   return `<nav class="identity-account-navigation" aria-label="账号设置栏目">
     <div class="identity-account-primary-nav">${IDENTITY_SECTIONS.filter((item) => !item.workspace).map(renderLink).join("")}</div>
     ${organizationLink}
-    ${state.platformAccess ? '<a href="/platform.html">SaaS 平台管理</a>' : ""}
+    ${state.platformAccess ? '<a href="platform.html">SaaS 平台管理</a>' : ""}
   </nav>`;
 }
 
@@ -415,14 +415,14 @@ function renderIdentityTopbar(state) {
   const available = Boolean(state.workspaceContext);
   return `
     <header class="identity-topbar">
-      <a class="identity-wordmark" href="/" aria-label="${escapeAttribute(publicBrand.product_name)} 首页">
+      <a class="identity-wordmark" href="./" aria-label="${escapeAttribute(publicBrand.product_name)} 首页">
         ${renderIdentityBrandMark()}
         <strong>${escapeHtml(publicBrand.product_name)}</strong>
       </a>
       ${renderWorkspaceSelector(state)}
       <div class="identity-topbar-actions">
         ${isNewOrganizationAccount(state) ? '<a class="identity-quiet-command" href="#workspaces">返回组织开通</a>' : ""}
-        ${available ? `<a class="identity-quiet-command" href="/console.html">${icon("arrow-left")}${escapeHtml(state.workspaceContext?.role === "owner" || state.workspaceContext?.role === "admin" ? "进入组织管理" : "进入组织空间")}</a>` : ""}
+        ${available ? `<a class="identity-quiet-command" href="console.html">${icon("arrow-left")}${escapeHtml(state.workspaceContext?.role === "owner" || state.workspaceContext?.role === "admin" ? "进入组织管理" : "进入组织空间")}</a>` : ""}
         <button
           class="identity-notification-button"
           type="button"
@@ -1994,7 +1994,7 @@ function renderMfaSection(state) {
           <p>身份保护</p>
           <h2 id="identity-mfa-title">登录保护</h2>
         </div>
-        ${state.platformAccess ? '<a class="identity-primary identity-platform-link" href="/platform.html">进入平台工作台</a>' : ""}
+        ${state.platformAccess ? '<a class="identity-primary identity-platform-link" href="platform.html">进入平台工作台</a>' : ""}
       </div>
       ${renderError(state.identitySecurityError)}
       ${overview ? `
@@ -2262,7 +2262,7 @@ function renderMembershipSection(state) {
         </div>
       </div>
       <p class="identity-empty">组织管理员在组织工作台管理成员、模型、路由、财务和治理；其他成员在这里进入自己的组织空间。</p>
-      <a class="identity-primary identity-membership-console-link" href="/console.html">进入组织工作台</a>
+      <a class="identity-primary identity-membership-console-link" href="console.html">进入组织工作台</a>
     </section>
   `;
 }
@@ -2442,7 +2442,7 @@ function renderOrganizationStart(container, state) {
   container.innerHTML = `
     <div class="identity-organization-shell">
       <header class="identity-organization-topbar">
-        <a class="identity-wordmark" href="/">${renderIdentityBrandMark()}<strong>${escapeHtml(publicBrand.product_name)}</strong></a>
+        <a class="identity-wordmark" href="./">${renderIdentityBrandMark()}<strong>${escapeHtml(publicBrand.product_name)}</strong></a>
         <nav aria-label="账号操作">
           ${state.workspaceCreating ? "" : '<a class="identity-quiet-command" href="#security">账号安全</a>'}
           <button class="identity-quiet-command" type="button" data-identity-action="logout">退出登录</button>

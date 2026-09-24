@@ -8,13 +8,13 @@ function shell(state) {
   const partner = response?.partner;
   return `<div class="partner-shell" data-partner-phase="${escapeAttribute(state.phase)}">
     <header class="partner-topbar">
-      <a class="partner-wordmark" href="/partner.html" aria-label="MetaHub Partner home">
+      <a class="partner-wordmark" href="partner.html" aria-label="MetaHub Partner home">
         <span aria-hidden="true">M</span><strong>MetaHub Partner</strong>
       </a>
       <div class="partner-topbar-actions">
         ${partner ? `<span><strong>${escapeHtml(partner.display_name)}</strong><small>${escapeHtml(roleLabel(response.role_code))}</small></span>` : ""}
         <button type="button" data-partner-action="refresh" title="Refresh" aria-label="Refresh" ${state.phase === "loading" ? "disabled" : ""}>&#8635;</button>
-        <a href="/identity.html?view=account#security">Account security</a>
+        <a href="identity.html?view=account#security">Account security</a>
       </div>
     </header>
     <div class="partner-layout">
@@ -118,7 +118,7 @@ function feedback(state) {
 }
 
 function statePanel(title, detail, action = false) {
-  return `<section class="partner-state"><span aria-hidden="true">${action ? "!" : "..."}</span><div><h1>${escapeHtml(title)}</h1><p>${escapeHtml(detail)}</p>${action ? '<a href="/identity.html?view=account#security">Open account security</a>' : ""}</div></section>`;
+  return `<section class="partner-state"><span aria-hidden="true">${action ? "!" : "..."}</span><div><h1>${escapeHtml(title)}</h1><p>${escapeHtml(detail)}</p>${action ? '<a href="identity.html?view=account#security">Open account security</a>' : ""}</div></section>`;
 }
 
 function metric(name, value, detail) {

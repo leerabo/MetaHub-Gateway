@@ -21,7 +21,7 @@ export function identityLoginHref({ interrupted = false, requestId } = {}) {
     query.set("reason", "session-unavailable");
     if (LOGIN_REQUEST_ID.test(String(requestId ?? ""))) query.set("request_id", requestId);
   }
-  return `/identity.html?${query}`;
+  return `identity.html?${query}`;
 }
 
 export function identityLoginNotice(searchParams) {

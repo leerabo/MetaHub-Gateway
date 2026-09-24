@@ -131,7 +131,7 @@ test("session transitions replace private content with a public loading and exit
   const container = { innerHTML: "old private content" };
   renderConsoleEntryLoading(container);
   assert.match(container.innerHTML, /role="status"[\s\S]*正在加载组织空间/u);
-  assert.match(container.innerHTML, /href="\/">返回首页/u);
+  assert.match(container.innerHTML, /href="\.\/">返回首页/u);
   assert.doesNotMatch(container.innerHTML, /old private content|登录状态已失效/u);
   assert.doesNotThrow(() => renderConsoleEntryLoading(null));
 });

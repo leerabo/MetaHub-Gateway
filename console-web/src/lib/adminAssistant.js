@@ -15,43 +15,43 @@ import {
  * 这个集合；即使后端响应通过 JSON 解析，只要三元组不完全一致，整份成功响应也会失败关闭。
  */
 export const ADMIN_ASSISTANT_SOURCE_DEFINITIONS = Object.freeze({
-  overview: freezeSource("overview", "/#overview", PERMISSIONS.DASHBOARD_READ, "运行概览"),
+  overview: freezeSource("overview", "./#overview", PERMISSIONS.DASHBOARD_READ, "运行概览"),
   request_logs: freezeSource(
     "request-logs",
-    "/#request-logs",
+    "./#request-logs",
     PERMISSIONS.REQUEST_LOG_READ,
     "调用日志",
   ),
   request_explanations: freezeSource(
     "request-explanations",
-    "/#request-explanations",
+    "./#request-explanations",
     PERMISSIONS.REQUEST_EXPLANATION_READ,
     "请求解释",
   ),
-  usage: freezeSource("usage", "/#usage", PERMISSIONS.BILLING_USAGE_READ, "用量账本"),
+  usage: freezeSource("usage", "./#usage", PERMISSIONS.BILLING_USAGE_READ, "用量账本"),
   finops_ledger: freezeSource(
     "finops-ledger",
-    "/#finops-ledger",
+    "./#finops-ledger",
     PERMISSIONS.BILLING_FINOPS_READ,
     "FinOps 账本",
   ),
-  budgets: freezeSource("budgets", "/#budgets", PERMISSIONS.BILLING_BUDGET_READ, "预算"),
+  budgets: freezeSource("budgets", "./#budgets", PERMISSIONS.BILLING_BUDGET_READ, "预算"),
   cost_anomalies: freezeSource(
     "cost-anomalies",
-    "/#cost-anomalies",
+    "./#cost-anomalies",
     PERMISSIONS.BILLING_ANOMALY_READ,
     "成本异常",
   ),
   model_prices: freezeSource(
     "model-prices",
-    "/#model-prices",
+    "./#model-prices",
     PERMISSIONS.MODEL_PRICE_READ,
     "模型价格",
   ),
-  policies: freezeSource("policies", "/#policies", PERMISSIONS.POLICY_READ, "策略"),
+  policies: freezeSource("policies", "./#policies", PERMISSIONS.POLICY_READ, "策略"),
   policy_snapshots: freezeSource(
     "policy-snapshots",
-    "/#policy-snapshots",
+    "./#policy-snapshots",
     PERMISSIONS.POLICY_READ,
     "策略快照",
   ),

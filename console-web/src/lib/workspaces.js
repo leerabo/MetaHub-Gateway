@@ -52,7 +52,7 @@ export function workspaceOnboardingHref(step) {
   ));
   const sourceId = definition?.[3];
   return Object.hasOwn(WORKSPACE_SOURCE_ROUTE_REGISTRY, sourceId)
-    ? `/console.html#${sourceId}` : null;
+    ? `console.html#${sourceId}` : null;
 }
 
 export async function listIdentityWorkspaces({ controlApiUrl, signal } = {}) {

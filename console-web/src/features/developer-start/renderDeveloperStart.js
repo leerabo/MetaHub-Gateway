@@ -616,7 +616,7 @@ function renderLanguageSettingsContent(options) {
         <div><p>${escapeHtml(options.i18n.t("language.account_scope"))}</p><h1 id="language-settings-title">${escapeHtml(options.i18n.t("language.migrated_title"))}</h1></div>
       </header>
       <p>${escapeHtml(options.i18n.t("language.migrated_description"))}</p>
-      <a class="primary-command" href="${escapeAttribute(options.accountPreferenceLocation ?? "/identity.html#account-preferences")}">${escapeHtml(options.i18n.t("language.open_account_settings"))}</a>
+      <a class="primary-command" href="${escapeAttribute(options.accountPreferenceLocation ?? "identity.html#account-preferences")}">${escapeHtml(options.i18n.t("language.open_account_settings"))}</a>
     </section>
   `;
 }

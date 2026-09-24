@@ -1013,7 +1013,7 @@ test("registration exposes eyes, privacy, captcha and immediate duplicate-safe p
   }) });
   await controller.showRegistration();
   assert.equal((root.innerHTML.match(/data-password-toggle/gu) ?? []).length, 2);
-  assert.match(root.innerHTML, /href="\/privacy.html"/u);
+  assert.match(root.innerHTML, /href="privacy.html"/u);
   assert.match(root.innerHTML, /刷新验证码/u);
   const input = { email: "trial@example.test", displayName: "Trial", password: "TrialSecret!2026",
     confirmPassword: "TrialSecret!2026", consent: true, captchaAnswer: "23456" };

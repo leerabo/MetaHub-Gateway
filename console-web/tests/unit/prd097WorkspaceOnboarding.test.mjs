@@ -165,7 +165,7 @@ test("PRD-097 renderer hides organization profile mutations from developers", ()
   renderIdentitySecurityPage(root, state);
   const panel = root.innerHTML.slice(root.innerHTML.indexOf("data-onboarding-step-panel"));
   assert.doesNotMatch(panel.split("</div>\n    </div>", 1)[0], /confirm-onboarding-step|defer-onboarding-step/u);
-  assert.match(panel, /href="\/console\.html#tenant"/u);
+  assert.match(panel, /href="console\.html#tenant"/u);
 });
 
 test("PRD-097 all onboarding links resolve to registered console pages", () => {
@@ -173,7 +173,7 @@ test("PRD-097 all onboarding links resolve to registered console pages", () => {
     "projects", "virtual-keys", "sdk-examples"];
   const onboarding = onboardingPayload();
   for (const [index, step] of onboarding.steps.entries()) {
-    const href = `/console.html#${sources[index]}`;
+    const href = `console.html#${sources[index]}`;
     assert.ok(Object.hasOwn(WORKSPACE_SOURCE_ROUTE_REGISTRY, sources[index]));
     assert.equal(workspaceOnboardingHref(step), href);
     const root = createRoot();
@@ -182,7 +182,7 @@ test("PRD-097 all onboarding links resolve to registered console pages", () => {
       ...securityState({ onboarding }), onboardingSelectedStepId: step.id,
     });
     assert.ok(root.innerHTML.includes(`class="identity-primary identity-onboarding-link" href="${href}"`));
-    assert.doesNotMatch(root.innerHTML, /href="\/#workspace-/u);
+    assert.doesNotMatch(root.innerHTML, /href="\.\/#workspace-/u);
   }
 });
 

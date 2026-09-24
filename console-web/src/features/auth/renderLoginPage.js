@@ -57,15 +57,15 @@ export function renderWorkspaceSessionPrompt(container, { error, requestId, pend
   }
   container.innerHTML = `
     <main class="console-entry-recovery">
-      <a class="console-entry-brand" href="/">MetaHub</a>
+      <a class="console-entry-brand" href="./">MetaHub</a>
       <section aria-labelledby="workspace-recovery-title">
         <h1 id="workspace-recovery-title">${error ? "连接暂时中断" : "登录后继续"}</h1>
         <p role="status">${error ? "请重新连接，继续刚才的操作。" : "登录账号后，即可进入你的组织空间。"}</p>
         <div class="console-entry-actions">
-          ${error ? '<button type="button" data-console-session-retry>重新连接</button>' : '<a href="/identity.html">前往登录</a>'}
-          <a href="/">返回首页</a>
+          ${error ? '<button type="button" data-console-session-retry>重新连接</button>' : '<a href="identity.html">前往登录</a>'}
+          <a href="./">返回首页</a>
         </div>
-        ${error ? `<details class="console-entry-diagnostics"><summary>查看错误详情</summary><p>${escapeHtml(error)}</p>${requestId && requestId !== "-" ? `<small>request_id: ${escapeHtml(requestId)}</small>` : ""}<a href="/identity.html">重新登录或选择组织</a></details>` : ""}
+        ${error ? `<details class="console-entry-diagnostics"><summary>查看错误详情</summary><p>${escapeHtml(error)}</p>${requestId && requestId !== "-" ? `<small>request_id: ${escapeHtml(requestId)}</small>` : ""}<a href="identity.html">重新登录或选择组织</a></details>` : ""}
       </section>
     </main>`;
 }

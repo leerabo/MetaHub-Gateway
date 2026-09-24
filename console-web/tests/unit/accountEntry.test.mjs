@@ -139,13 +139,13 @@ test("interrupted console entry shows a fixed login notice and bounded request r
   assert.match(root.innerHTML, /当前登录状态不可用，请重新登录。/u);
   assert.match(root.innerHTML, /request_id: req_test_123/u);
   assert.match(root.innerHTML, /data-identity-login-form/u);
-  assert.equal(identityLoginHref(), "/identity.html?view=login");
+  assert.equal(identityLoginHref(), "identity.html?view=login");
   controller.destroy();
 });
 
 test("login handoff rejects arbitrary messages, identifiers and non-login views", () => {
   assert.equal(identityLoginHref({ interrupted: true, requestId: '<script>secret</script>' }),
-    "/identity.html?view=login&reason=session-unavailable");
+    "identity.html?view=login&reason=session-unavailable");
   assert.equal(identityLoginNotice(new URLSearchParams("view=register&reason=session-unavailable")), null);
   assert.equal(identityLoginNotice(new URLSearchParams("view=login&reason=arbitrary-message")), null);
   assert.equal(identityLoginNotice(new URLSearchParams("view=login&reason=session-unavailable&request_id=secret")).requestId, "-");

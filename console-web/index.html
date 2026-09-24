@@ -7,18 +7,23 @@
     <meta name="description" content="MetaHub 企业级 AI 网关。自带密钥、统一接入、策略路由，让安全、成本与每一次 AI 调用尽在掌控。" />
     <title>MetaHub · AI 的统一入口</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/src/styles/public-home.css" />
+    <link rel="stylesheet" href="src/styles/public-home.css" />
   </head>
   <body>
     <a class="home-skip" href="#main">跳到主要内容</a>
     <header class="home-header">
-      <a class="home-wordmark" href="/" aria-label="MetaHub 首页"><span class="home-mark" aria-hidden="true">M</span>MetaHub</a>
+      <a class="home-wordmark" href="./" aria-label="MetaHub 首页"><span class="home-mark" aria-hidden="true">M</span>MetaHub</a>
       <nav aria-label="主导航">
         <a href="#capabilities">产品能力</a>
-        <a href="/status.html">服务状态</a>
+        <a href="status.html">服务状态</a>
       </nav>
-      <a class="home-nav-login" href="/identity.html">登录<span data-icon="arrow-right"></span></a>
+      <button class="home-nav-toggle" type="button" data-home-nav-toggle aria-expanded="false" aria-controls="home-mobile-nav">菜单</button>
+      <a class="home-nav-login" href="identity.html">登录<span data-icon="arrow-right"></span></a>
     </header>
+    <nav id="home-mobile-nav" class="home-mobile-nav" data-home-mobile-nav aria-label="移动端主导航" hidden>
+      <a href="#capabilities">产品能力</a>
+      <a href="status.html">服务状态</a>
+    </nav>
     <main id="main">
       <section class="home-hero" aria-labelledby="home-title">
         <div class="home-hero-copy">
@@ -26,14 +31,13 @@
           <h1 id="home-title">MetaHub</h1>
           <p class="home-hero-description">连接每一种模型，掌握每一次调用。</p>
           <div class="home-hero-actions">
-            <a class="home-button" href="/identity.html">登录<span data-icon="arrow-right"></span></a>
-            <a class="home-text-link" href="/identity.html?view=register">创建账号<span data-icon="arrow-right"></span></a>
+            <a class="home-button" href="identity.html">登录<span data-icon="arrow-right"></span></a>
+            <a class="home-text-link" href="identity.html?view=register">创建账号<span data-icon="arrow-right"></span></a>
           </div>
         </div>
         <div class="home-scene" data-gateway-scene aria-hidden="true">
           <div class="gateway-fallback"><span></span><span></span><span></span><strong>M</strong></div>
         </div>
-        <button class="home-motion" type="button" data-motion-toggle aria-label="暂停动画" aria-pressed="false" title="暂停动画" hidden><span data-icon="pause"></span></button>
         <div class="home-hero-bottom"><span>模型 · 密钥 · 团队</span><a href="#capabilities">产品能力<span aria-hidden="true">↓</span></a></div>
       </section>
       <section class="home-capabilities" id="capabilities" aria-labelledby="capabilities-title">
@@ -51,7 +55,7 @@
         </div>
       </section>
     </main>
-    <footer class="home-footer"><a class="home-wordmark" href="/">MetaHub</a><span>AI 的统一入口</span><a href="/status.html">服务状态<span data-icon="arrow-right"></span></a></footer>
-    <script type="module" src="/src/features/public-home/main.js"></script>
+    <footer class="home-footer"><a class="home-wordmark" href="./">MetaHub</a><span>AI 的统一入口</span><a href="status.html">服务状态<span data-icon="arrow-right"></span></a></footer>
+    <script type="module" src="src/features/public-home/main.js"></script>
   </body>
 </html>

@@ -63,7 +63,7 @@ function statusView(value) {
   const shell = element("div", "status-shell");
   const header = element("header", "status-header");
   const brand = element("a", "status-brand", "MetaHub");
-  brand.href = "/";
+  brand.href = "./";
   const updated = element("p", "status-updated", `更新于 ${formatTime(value.updated_at)}`);
   header.append(brand, updated);
   const summary = element("section", `status-summary status-${value.overall_status}`);
@@ -112,7 +112,7 @@ function statusView(value) {
     subscriptionSection.append(form);
   } else {
     const link = element("a", "status-manage-link", "管理订阅");
-    link.href = "/console.html#notifications";
+    link.href = "console.html#notifications";
     subscriptionSection.append(link);
   }
   shell.append(header, summary, componentSection, incidentSection, maintenanceSection, subscriptionSection);
@@ -166,7 +166,7 @@ function errorView(retryAction) {
   retry.type = "button";
   retry.addEventListener("click", retryAction);
   const home = element("a", "status-manage-link", "返回主页");
-  home.href = "/";
+  home.href = "./";
   main.append(retry, home);
   return main;
 }

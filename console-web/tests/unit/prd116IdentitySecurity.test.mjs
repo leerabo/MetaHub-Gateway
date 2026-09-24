@@ -308,7 +308,7 @@ test("PRD-116 renderer shows security facts without credential or grant identifi
 
   assert.match(root.innerHTML, /登录保护/u);
   assert.match(root.innerHTML, /受信设备/u);
-  assert.match(root.innerHTML, /href="\/console\.html"/u);
+  assert.match(root.innerHTML, /href="console\.html"/u);
   assert.doesNotMatch(root.innerHTML, /href="#access"/u);
   assert.doesNotMatch(root.innerHTML, /data-conditional-access-form/u);
   assert.match(root.innerHTML, /data-identity-recovery-dialog/u);

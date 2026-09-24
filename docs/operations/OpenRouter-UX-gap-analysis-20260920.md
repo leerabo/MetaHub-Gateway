@@ -2,6 +2,14 @@
 
 日期：2026-09-21（持续更新）
 
+## 2026-09-24 当前公开入口与子路径走查
+
+本批按静态审查提出的四项问题完成了当前源码修复：删除首页永远隐藏的动画控制和无效状态；为 600px 以下首页补充可用的菜单、Escape 关闭和键盘 Enter 打开；将公开 HTML、动态页面链接和管理助手来源链接改为相对路径；把首页英雄区从固定高度与 `overflow:hidden` 改为内容优先的最小高度，避免横屏、低高度和系统字体放大时裁剪 CTA 或底部提示；同时修复控制台退出后跳回根路径导致子路径部署丢失的问题。
+
+验证绑定：`outputs/prd148-source-current-20260924-public-ui.json`（2702 files，SHA256 `45d1d5f3394ccef281b6b06a2612e81778efa1bc9a0dee70231a9463db6a4e79`）、`outputs/prd148-public-ui-current-20260924.json` 和 `.artifacts/product-qa-current/20260924-public-ui/`。前端全量单测 `2243/2243`、`npm run lint`（842 files）、`npm run build`（295 assets）通过；后端 `test_frontend_release_digest_exactly_matches_production_manifest` 通过，前后端生产资源摘要为 `37310b77af7bfba4697d6601a3a70112ed46381f176a32e265ef2fe0dd33aced`。
+
+Playwright 走查结果：桌面 `1440x900`、移动 `390x844`、低高度 `390x480` 与真实挂载前缀 `/metahub/` 均为 0 横向溢出、0 裁剪、0 静态资源错误、0 非预期浏览器错误；移动菜单的鼠标点击、Escape、Enter 和菜单项焦点通过。匿名登录页桌面首屏约 290ms、移动约 316ms，密码显示/隐藏、错误密码 401、注册策略加载和两种视口布局通过。截图是自动化浏览器证据，不是人工眼睛或原生 computer-use 证据；它也不覆盖已登录组织业务、真实商业权益、生产 Partner/Device、发布回滚、对账、会签或 PRD-148 GA。
+
 ## 结论
 
 OpenRouter 的界面感觉更简单，主要不是因为它没有 Workspace、费用、路由或治理能力，而是它把一个 Workspace 的常见任务收敛为一页概述和少数几个入口：密钥、路由、隐私、护栏、配置与用量。企业治理能力存在，但在概述页作为可理解的工作卡出现，不占用每个使用者的注意力。

@@ -44,7 +44,7 @@ test("tampered source index reaches the fail-closed source handler", async () =>
       if (type === "click") clickHandler = handler;
     },
     getAttribute(name) {
-      return name === "href" ? "/#overview" : null;
+      return name === "href" ? "./#overview" : null;
     },
   };
   const root = {
@@ -63,7 +63,7 @@ test("tampered source index reaches the fail-closed source handler", async () =>
   }, root), true);
   assert.equal(typeof clickHandler, "function");
   await clickHandler({ preventDefault() {} });
-  assert.deepEqual(calls, [[null, "/#overview"]]);
+  assert.deepEqual(calls, [[null, "./#overview"]]);
 });
 
 /** 构造带服务端权限快照的认证上下文，允许用例精确制造租户或 revision 漂移。 */
@@ -171,7 +171,7 @@ function successPayload(overrides = {}) {
         source_id: "src_overview",
         source_type: "overview",
         label: "运行概览",
-        href: "/#overview",
+        href: "./#overview",
         record_count: 120,
         window_started_at: "2026-08-04T00:00:00Z",
         window_ended_at: "2026-08-11T00:00:00Z",
@@ -181,7 +181,7 @@ function successPayload(overrides = {}) {
         source_id: "src_usage",
         source_type: "usage",
         label: "用量账本",
-        href: "/#usage",
+        href: "./#usage",
         record_count: 120,
         window_started_at: "2026-08-04T00:00:00Z",
         window_ended_at: "2026-08-11T00:00:00Z",
@@ -243,7 +243,7 @@ test("client sends exact question-only no-store POST and accepts the frozen clai
   assert.equal("Idempotency-Key" in calls[0].options.headers, false);
   assert.doesNotMatch(calls[0].options.body, /tenant_id|role|permission_codes|source_type|href/);
   assert.equal(result.answer.claims.length, 2);
-  assert.equal(result.sources[0].href, "/#overview");
+  assert.equal(result.sources[0].href, "./#overview");
   assert.equal(Object.isFrozen(result), true);
 });
 
@@ -392,7 +392,7 @@ test("the ten source triples are exact and link access intersects latest permiss
   const source = normalizeAdminAssistantResponse(successPayload()).sources[0];
   assert.deepEqual(adminAssistantSourceAccess(source, context, shell), {
     allowed: true,
-    href: "/#overview",
+    href: "./#overview",
     navigationId: "overview",
     permission: PERMISSIONS.DASHBOARD_READ,
   });
@@ -498,7 +498,7 @@ test("renderer has zero DOM without owner and keeps all question/answer text out
 
   const html = renderAdminAssistant(state.snapshot(), context, shell);
   assert.match(html, /data-admin-assistant-root/);
-  assert.match(html, /href="\/#overview"/);
+  assert.match(html, /href="\.\/#overview"/);
   assert.doesNotMatch(html, /privateQuestionCanary|claimCanary/);
   assert.doesNotMatch(html, /<script>claim/);
 
@@ -507,7 +507,7 @@ test("renderer has zero DOM without owner and keeps all question/answer text out
     context,
     shellState(context, { includeSources: false }),
   );
-  assert.doesNotMatch(noSourcesHtml, /href="\/#overview"/);
+  assert.doesNotMatch(noSourcesHtml, /href="\.\/#overview"/);
   assert.match(noSourcesHtml, /admin-assistant-source-static/);
   const denied = authContext({ permissions: [], role: "admin" });
   assert.equal(renderAdminAssistant({}, denied, shellState(denied)), "");

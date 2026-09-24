@@ -60,7 +60,7 @@ export function renderPlatformGate(container, state = {}) {
           <label><span>动态验证码</span><input name="totpCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required autofocus /></label>
           <button class="platform-primary" type="submit">验证并进入</button>
         </form>
-        <a href="/identity.html?view=account#security">返回账号安全</a>
+        <a href="identity.html?view=account#security">返回账号安全</a>
       </section>
     </div>`;
 }
@@ -79,12 +79,12 @@ export function renderPlatformWorkspace(container, state) {
   container.innerHTML = `
     <div class="platform-shell">
       <header class="platform-topbar">
-        <a class="platform-wordmark" href="/platform.html"><span class="platform-mark" aria-hidden="true">M</span><strong>MetaHub</strong></a>
+        <a class="platform-wordmark" href="platform.html"><span class="platform-mark" aria-hidden="true">M</span><strong>MetaHub</strong></a>
         <div class="platform-operator-summary"><span>${escapeHtml(operator.display_name ?? "-")}</span><strong>${escapeHtml((operator.roles ?? []).map(roleLabel).join(" · "))}</strong></div>
         <div class="platform-topbar-actions">
           <button class="platform-icon-button platform-navigation-toggle" type="button" data-platform-action="toggle-navigation" aria-label="${state.navigationOpen ? "收起平台导航" : "展开平台导航"}" title="${state.navigationOpen ? "收起平台导航" : "展开平台导航"}" aria-expanded="${Boolean(state.navigationOpen)}" aria-controls="platform-navigation">${icon("layers")}</button>
           <button class="platform-icon-button" type="button" data-platform-action="refresh" title="刷新" aria-label="刷新" ${disasterRecoveryBusy ? "disabled" : ""}>${icon("rotate-cw")}</button>
-          <a href="/identity.html?view=account#security">账号安全</a>
+          <a href="identity.html?view=account#security">账号安全</a>
         </div>
       </header>
       <div class="platform-body">

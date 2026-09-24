@@ -15,9 +15,12 @@ button:focus-visible, a:focus-visible { outline: 2px solid #07816a; outline-offs
 .home-header nav { display: flex; gap: 32px; font-size: 15px; color: #53605d; }
 .home-header nav a:hover, .home-text-link:hover, .home-nav-login:hover { color: #08785e; }
 .home-nav-login { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; gap: 14px; font-size: 15px; }
+.home-nav-toggle { display: none; min-height: 44px; padding: 0 12px; border: 1px solid #cdd9d3; border-radius: 4px; background: #fff; color: #31443d; }
+.home-nav-toggle:hover { border-color: #08785e; color: #08785e; }
+.home-mobile-nav { display: none; }
 .home-skip { position: absolute; top: -80px; left: 24px; z-index: 9; padding: 12px; background: white; }
 .home-skip:focus { top: 16px; }
-.home-hero { --home-copy-top: clamp(28px, 5svh, 72px); position: relative; height: calc(100svh - 104px); min-height: 400px; overflow: hidden; isolation: isolate; }
+.home-hero { --home-copy-top: clamp(28px, 5svh, 72px); position: relative; min-height: max(460px, calc(100svh - 104px)); height: auto; padding-bottom: 64px; isolation: isolate; }
 .home-hero-copy { position: relative; z-index: 1; text-align: center; padding: var(--home-copy-top) 20px 0; pointer-events: none; }
 .home-hero-copy a { pointer-events: auto; }
 .home-eyebrow { margin: 0; font-size: 14px; line-height: 1.6; color: #437568; }
@@ -28,11 +31,8 @@ button:focus-visible, a:focus-visible { outline: 2px solid #07816a; outline-offs
 .home-button:hover { background: #08785e; border-color: #08785e; transform: translateY(-2px); }
 .home-text-link { display: inline-flex; min-height: 44px; align-items: center; gap: 10px; font-size: 15px; color: #4c5c57; }
 .home-text-link svg { width: 17px; }
-.home-scene { position: absolute; inset: calc(234px + var(--home-copy-top)) 0 48px; z-index: -1; }
+.home-scene { position: absolute; inset: clamp(220px, 34vh, 320px) 0 64px; min-height: 180px; z-index: -1; }
 .home-scene canvas { width: 100%; height: 100%; display: block; }
-.home-motion { position: absolute; right: max(24px, calc((100% - 1224px) / 2)); bottom: 70px; display: grid; place-items: center; height: 40px; width: 40px; padding: 0; color: #586b62; border: 1px solid #cdd9d3; border-radius: 50%; background: #f5f7f7; }
-.home-motion:hover { color: #08785e; border-color: #08785e; }
-.home-motion svg { width: 16px; height: 16px; }
 .home-hero-bottom { position: absolute; inset: auto max(24px, calc((100% - 1224px) / 2)) 0; height: 49px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border-top: 1px solid #dfe5e5; font-size: 14px; color: #5b6b66; }
 .home-hero-bottom a { display: inline-flex; min-height: 44px; align-items: center; gap: 12px; }
 .home-capabilities { background: #fff; padding: 0 max(24px, calc((100% - 1184px) / 2)) 56px; }
@@ -61,8 +61,16 @@ button:focus-visible, a:focus-visible { outline: 2px solid #07816a; outline-offs
 @media (max-width: 600px) {
   .home-header { height: 64px; gap: 16px; }
   .home-header nav { display: none; }
-  .home-hero { height: calc(100svh - 92px); }
+  .home-nav-toggle { display: inline-flex; align-items: center; justify-content: center; order: 2; }
+  .home-nav-login { order: 3; }
+  .home-mobile-nav { position: absolute; top: 64px; right: 16px; left: 16px; z-index: 8; display: flex; flex-direction: column; gap: 2px; padding: 8px; border: 1px solid #d4dfda; border-radius: 4px; background: #fff; box-shadow: 0 12px 28px rgba(34, 54, 46, .12); }
+  .home-mobile-nav[hidden] { display: none; }
+  .home-mobile-nav a { display: flex; align-items: center; min-height: 44px; padding: 0 12px; color: #31443d; }
+  .home-mobile-nav a:hover, .home-mobile-nav a:focus-visible { background: #eef5f1; color: #08785e; }
+  .home-hero { min-height: max(500px, calc(100svh - 92px)); }
+  .home-hero h1 { font-size: 44px; }
   .home-hero-description { font-size: 16px; }
+  .home-scene { inset: 190px 0 64px; min-height: 190px; }
   .home-capabilities { padding-block: 0 36px; }
   .home-capability-intro { margin-bottom: 24px; }
   .home-section-heading { display: block; margin-bottom: 24px; }
@@ -74,7 +82,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid #07816a; outline-offs
   .home-footer > span { display: none; }
 }
 @media (max-height: 640px) {
-  .home-hero { --home-copy-top: 18px; }
+  .home-hero { --home-copy-top: 18px; min-height: 500px; }
   .home-hero-description { margin-bottom: 14px; }
 }
 @media (prefers-reduced-motion: reduce) {

@@ -167,7 +167,7 @@ function harness() {
     loadPublicBrandingPreview: async () => {},
     app: { replaceChildren: () => effects.push("dom-clear") },
     window: { location: { replace: (url) => {
-      assert.equal(url, "/");
+      assert.equal(url, "./");
       effects.push("home-redirect");
     } } },
     document: { querySelector: (selector) => selector === "#logout-button"
@@ -418,7 +418,7 @@ test("PRD-146 session prompt is escaped, retryable and never exposes a password 
   renderWorkspaceSessionPrompt(container, { error: '<img src=x onerror="bad">', requestId: "<request>" });
   assert.match(container.innerHTML, /&lt;img/);
   assert.match(container.innerHTML, /&lt;request&gt;/);
-  assert.match(container.innerHTML, /href="\/identity.html"/);
+  assert.match(container.innerHTML, /href="identity.html"/);
   assert.match(container.innerHTML, /data-console-session-retry/);
   assert.doesNotMatch(container.innerHTML, /<form|<input|undefined|<img/);
   renderWorkspaceSessionPrompt(container, { pending: true });

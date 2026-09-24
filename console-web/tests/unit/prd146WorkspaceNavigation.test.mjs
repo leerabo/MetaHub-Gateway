@@ -759,7 +759,7 @@ test("PRD-146 renderers expose eight groups, one accordion, tasks, advanced dial
   assert.equal((shell.match(/class="sidebar-group is-collapsed"/gu) ?? []).length, 7);
   assert.match(shell, /data-sidebar-group="gateway"[^>]*>/u);
   assert.match(shell, /data-workspace-task-route="workspace.gateway.providers"/u);
-  assert.match(shell, /class="user-menu-preferences" href="\/identity.html#account-preferences"/u);
+  assert.match(shell, /class="user-menu-preferences" href="identity.html#account-preferences"/u);
   assert.match(shell, /data-workspace-advanced-open/u);
   assert.doesNotMatch(shell, /permission_fingerprint|owner_ref|contract_snapshot_id/u);
   assert.match(dialog, /<dialog class="workspace-advanced-dialog"/u);

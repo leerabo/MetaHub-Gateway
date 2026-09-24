@@ -139,7 +139,7 @@ if (root) {
   const requestedSection = () => {
     const workspaceRoute = workspaceSectionRoute(window.location.hash);
     if (workspaceRoute) {
-      const target = new URL("/console.html", window.location.origin);
+      const target = new URL("console.html", window.location.href);
       target.hash = workspaceRoute;
       window.location.replace(`${target.pathname}${target.search}${target.hash}`);
       return "workspaces";
@@ -152,9 +152,9 @@ if (root) {
     .catch(() => setIdentityPublicBranding(null, globalThis.document));
   const controller = createIdentityPageController({
     root,
-    onWorkspaceCreated: () => window.location.assign("/console.html"),
-    onWorkspaceReady: () => window.location.replace("/console.html"),
-    onLoggedOut: () => window.location.replace("/"),
+    onWorkspaceCreated: () => window.location.assign("console.html"),
+    onWorkspaceReady: () => window.location.replace("console.html"),
+    onLoggedOut: () => window.location.replace("./"),
     onPublicViewChange: (view) => syncIdentityEntryView(window, view),
     initialSection: requestedSection(),
     autoEnterWorkspace: !entryUrl.hash && !["account", "workspaces"].includes(entryUrl.searchParams.get("view")),

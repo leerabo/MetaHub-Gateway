@@ -227,7 +227,8 @@ test("PRD-094 controller switches, manages members, and keeps invitation Token o
   }), true);
   assert.equal(transferred[0].targetMembershipId, MEMBER_ADMIN);
   assert.doesNotMatch(root.innerHTML, /PrivateOwnerPassword/u);
-  assert.match(root.innerHTML, /选择一个空间后可查看成员与职责/u);
+  assert.match(root.innerHTML, /组织管理员在组织工作台管理成员、模型、路由、财务和治理/u);
+  assert.match(root.innerHTML, /进入组织工作台/u);
   assert.ok(channel.messages.length >= 3);
   for (const message of channel.messages) {
     assert.deepEqual(Object.keys(message).sort(), ["generation", "type"]);
@@ -238,7 +239,7 @@ test("PRD-094 controller switches, manages members, and keeps invitation Token o
   assert.equal(channel.closed, true);
 });
 
-test("PRD-094 owner transfer requires explicit inline confirmation", async () => {
+test("PRD-094 legacy account membership route delegates management to Console", async () => {
   let transferCount = 0;
   const root = createRoot();
   const controller = createIdentityPageController({
@@ -252,7 +253,8 @@ test("PRD-094 owner transfer requires explicit inline confirmation", async () =>
   });
 
   await controller.mount();
-  assert.match(root.innerHTML, /name="confirmTransfer" type="checkbox" required/u);
+  assert.match(root.innerHTML, /进入组织工作台/u);
+  assert.doesNotMatch(root.innerHTML, /data-owner-transfer-form|name="confirmTransfer"/u);
   assert.equal(await controller.transferOwner({
     targetIndex: 1,
     currentPassword: "PrivateOwnerPassword",
@@ -392,7 +394,7 @@ test("PRD-094 context lifecycle never uses localStorage or sessionStorage", asyn
   }
 });
 
-test("PRD-094 renderer exposes machine subjects without internal identifiers or login actions", () => {
+test("PRD-094 renderer keeps legacy membership route free of management DOM and internal identifiers", () => {
   const root = createRoot();
   renderIdentitySecurityPage(root, {
     account: accountPayload().account,
@@ -406,10 +408,9 @@ test("PRD-094 renderer exposes machine subjects without internal identifiers or 
     workspaceView: "summary",
   });
 
-  assert.match(root.innerHTML, /机器主体/u);
-  assert.match(root.innerHTML, /data-membership-update-form/u);
-  assert.match(root.innerHTML, /data-owner-transfer-form/u);
-  assert.match(root.innerHTML, /data-membership-invitation-form/u);
+  assert.match(root.innerHTML, /组织管理员在组织工作台管理成员、模型、路由、财务和治理/u);
+  assert.match(root.innerHTML, /进入组织工作台/u);
+  assert.doesNotMatch(root.innerHTML, /机器主体|data-membership-update-form|data-owner-transfer-form|data-membership-invitation-form/u);
   assert.doesNotMatch(
     root.innerHTML,
     new RegExp(`${WSP_ONE}|${WSP_TWO}|${MEMBER_OWNER}|${MEMBER_ADMIN}|${MEMBER_SERVICE}`, "u"),
@@ -418,8 +419,7 @@ test("PRD-094 renderer exposes machine subjects without internal identifiers or 
     root.innerHTML,
     /tenant_id|workspace_id|membership_id|revision|issuer|audience|matrix|authorization_fingerprint/iu,
   );
-  const serviceSection = root.innerHTML.slice(root.innerHTML.indexOf("Automation Runner"));
-  assert.doesNotMatch(serviceSection.split("</article>", 1)[0], /switch-workspace|membership-update/u);
+  assert.doesNotMatch(root.innerHTML, /Automation Runner|membership-update/u);
 });
 
 function responseFor(url) {
