@@ -4580,7 +4580,7 @@ function bindAuthenticatedEvents(consoleShellState) {
       .map((name) => Number(initialData.get(name) ?? 0));
     if (enteredPrices.every((price) => price === 0) && initialData.get("unpricedConfirmed") !== "on") {
       const feedback = createModelForm.querySelector("[data-model-setup-feedback]");
-      if (feedback) feedback.textContent = "请先确认未配置价格或零价格模型的实际用量。";
+      if (feedback) feedback.textContent = "三个价格均为 0。请勾选“价格暂按 0 保存”，或填写实际价格。";
       createModelForm.querySelector('[name="unpricedConfirmed"]')?.focus();
       return;
     }

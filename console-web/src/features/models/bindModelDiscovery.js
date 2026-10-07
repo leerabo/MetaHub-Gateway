@@ -13,13 +13,24 @@ export function bindModelDiscovery(form, { request }) {
   const outputPrice = form.querySelector("[name='outputPricePerMillion']");
   const cachePrice = form.querySelector("[name='cachePricePerMillion']");
   const pricingConfigured = form.querySelector("[data-model-pricing-configured]");
+  const unpricedConfirmation = form.querySelector(".model-unpriced-confirmation");
+  const unpricedCheckbox = form.querySelector("[name='unpricedConfirmed']");
+  const syncUnpricedConfirmation = () => {
+    if (!unpricedConfirmation) return;
+    const hasPrice = [inputPrice, outputPrice, cachePrice]
+      .some((field) => Number(field?.value ?? 0) > 0);
+    unpricedConfirmation.hidden = hasPrice;
+    if (hasPrice && unpricedCheckbox) unpricedCheckbox.checked = false;
+  };
   const markPricingConfigured = () => {
     if (pricingConfigured) pricingConfigured.value = "true";
+    syncUnpricedConfirmation();
   };
   [inputPrice, outputPrice, cachePrice].filter(Boolean).forEach((field) => {
     field.addEventListener("input", markPricingConfigured);
     field.addEventListener("change", markPricingConfigured);
   });
+  syncUnpricedConfirmation();
   if (!provider || !input || !select || !discover || !feedback) return;
   const showManual = () => {
     select.hidden = true; select.disabled = true; select.required = false;

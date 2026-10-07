@@ -105,7 +105,10 @@ function renderCreateModelForm(providersState, feedback, authContext) {
         <button type="button" data-model-manual hidden>手动填写</button>
         <small id="model-discovery-feedback" data-model-discovery-feedback role="status">读取不到模型列表时可手动填写。</small>
       </div>
-      <details class="model-pricing"><summary>计价设置</summary><div class="model-pricing-hint">这里填写组织实际采用的输入、输出单价。中转站价格不能从模型名称推断；官方价格如需采用，请先核对后填写。</div><div class="model-advanced-fields">
+      <section class="model-pricing" aria-labelledby="model-pricing-title">
+      <div class="model-pricing-heading"><h4 id="model-pricing-title">计价设置</h4><span>填写价格或确认暂按 0 保存</span></div>
+      <p class="model-pricing-hint">填写组织实际采用的单价；中转站价格请按实际账单核对。留空或填 0 将按零价格保存。</p>
+      <div class="model-price-fields">
       <label>
         <span>输入价格 / 百万 Token</span>
         <input name="inputPricePerMillion" type="number" min="0" step="0.000001" value="0" />
@@ -119,26 +122,29 @@ function renderCreateModelForm(providersState, feedback, authContext) {
         <input name="cachePricePerMillion" type="number" min="0" step="0.000001" value="0" />
       </label>
       <label>
-        <span>价格倍数</span>
-        <input name="priceMultiplier" type="number" min="0" step="0.01" value="1" aria-describedby="model-price-multiplier-help" />
-        <small id="model-price-multiplier-help">例如 0.12 表示官方价格的 12%，1.05 表示上浮 5%。</small>
-      </label>
-      <label>
         <span>币种</span>
         <select name="currency">
           ${CURRENCY_OPTIONS.map((item) => renderOption(item, item, "CNY")).join("")}
         </select>
       </label>
-      <input type="hidden" name="pricingConfigured" value="false" data-model-pricing-configured />
+      </div>
+      <details class="model-pricing-advanced"><summary>更多选项：价格倍数和备注</summary><div class="model-advanced-fields">
+      <label>
+        <span>价格倍数</span>
+        <input name="priceMultiplier" type="number" min="0" step="0.01" value="1" aria-describedby="model-price-multiplier-help" />
+        <small id="model-price-multiplier-help">例如 0.12 表示官方价格的 12%，1.05 表示上浮 5%。</small>
+      </label>
       <label class="model-description-field">
         <span>备注</span>
         <input name="description" maxlength="240" placeholder="例如：默认聊天模型" />
       </label>
       </div></details>
+      <input type="hidden" name="pricingConfigured" value="false" data-model-pricing-configured />
       <label class="model-unpriced-confirmation">
         <input name="unpricedConfirmed" type="checkbox" />
-        <span>如暂不配置价格或使用零价格，我已确认模型调用仍会产生实际用量。</span>
+        <span><strong>价格暂按 0 保存</strong><small>我已了解：模型调用仍会记录 Token 用量，价格之后可以修改。</small></span>
       </label>
+      </section>
       <div class="model-actions">
         <button type="submit" ${providers.length ? "" : "disabled"}>创建模型</button>
         <span class="model-feedback" data-model-setup-feedback role="status">${escapeHtml(feedback ?? "")}</span>

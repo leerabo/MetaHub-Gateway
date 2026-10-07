@@ -168,6 +168,10 @@ test("renderModelCatalogPanel shows admin controls and escapes unsafe values", (
   assert.match(html, /model-edit-actions model-alias-edit-actions/);
   assert.match(html, /缓存命中价格 \/ 百万 Token/);
   assert.match(html, /data-model-pricing-configured/);
+  assert.match(html, /<section class="model-pricing"/);
+  assert.match(html, /填写价格或确认暂按 0 保存/);
+  assert.match(html, /价格暂按 0 保存/);
+  assert.doesNotMatch(html, /<details class="model-pricing"/);
   assert.doesNotMatch(html, /<span>价格说明<\/span>/u);
 });
 
