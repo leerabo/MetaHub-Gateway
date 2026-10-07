@@ -176,8 +176,8 @@ def test_prd047_dependency_errors_keep_provider_key_and_budget_guidance_safe() -
     assert provider_spec.http_status == 503
     assert provider_spec.retryable is True
     assert provider_spec.suggestion == (
-        "Enable a managed provider key for the current tenant. The environment fallback is "
-        "limited to the non-production default tenant and its configured Provider endpoint."
+        "Check configured keys for failed health checks, upstream authentication errors, "
+        "rate limits, or disabled status. Add a key only if none is configured."
     )
     assert provider_diagnosis.rule_id == "provider_key_unavailable"
     assert provider_diagnosis.category == "provider_key_state"

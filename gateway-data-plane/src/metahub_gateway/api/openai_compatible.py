@@ -3128,11 +3128,12 @@ def _raise_normalized_provider_exception(
 def _should_fallback(plan: GatewayRoutePlan, exc: ApiError) -> bool:
     """判断当前错误是否应继续遍历已冻结的备用候选。"""
 
-    # 流式会话无法建立时当前候选尚未收到请求，换用下一个候选不会重复计费，且符合
-    # “当前候选故障后继续尝试”的路由语义。
+    # 当前候选尚未收到上游请求时，流会话故障或当前 Provider 没有可用 Key
+    # 都可以安全地继续下一个候选。后者是候选自身的可用性问题，不能阻断
+    # 其他 Provider（或模型）的已配置备用链。
     if not (plan.fallback_routes or plan.fallback_route):
         return False
-    if exc.code == "gateway.stream_session_unavailable":
+    if exc.code in {"gateway.stream_session_unavailable", "provider_key.unavailable"}:
         return True
     # 其他本地故障不能盲目重试；只有 Adapter 已归一化且已到达上游的错误进入候选链。
     if not isinstance(exc, UpstreamApiError):

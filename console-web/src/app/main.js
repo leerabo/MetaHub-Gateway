@@ -4338,12 +4338,12 @@ function bindAuthenticatedEvents(consoleShellState) {
         providerActionError = {
           category: actionErrorCategory,
           message: unavailableKey
-            ? "没有可用的 API KEY。"
+            ? "此模型服务当前无法使用 API KEY。"
             : actionErrorStatus >= 500
             ? "MetaHub 暂时无法完成连接测试，请稍后重试。"
             : "连接测试没有完成。",
           detail: unavailableKey
-            ? "请在“管理 API KEY”中启用这把 KEY，或重新配置一把新的 KEY。"
+            ? "请检查已配置 KEY 的健康状态、上游认证与限额；仅在尚未配置时添加 KEY。"
             : actionErrorStatus >= 500
             ? "如果重复出现，请把本次操作时间告诉管理员。"
             : "请检查服务地址和 API KEY 后再试。",

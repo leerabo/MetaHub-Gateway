@@ -357,6 +357,23 @@ def prepare_database(
     apply_migrations(database_url)
     seed = apply_seed_data(database_url)
     connection = connect_database(database_url)
+    # A usable gateway key must be assigned to an active application. Keep the
+    # shared integration fixture aligned with the current authorization rule.
+    connection.execute(
+        "INSERT INTO projects(project_id,tenant_id,project_code,name,status,created_at,updated_at) "
+        "VALUES('project_prd009',?,'prd009','PRD009','active',datetime('now'),datetime('now'))",
+        (seed.tenant_id,),
+    )
+    connection.execute(
+        "INSERT INTO applications(application_id,tenant_id,project_id,application_code,name,status,created_at,updated_at) "
+        "VALUES('application_prd009',?,'project_prd009','prd009','PRD009','active',datetime('now'),datetime('now'))",
+        (seed.tenant_id,),
+    )
+    connection.execute(
+        "UPDATE virtual_keys SET project_id='project_prd009', application_id='application_prd009' "
+        "WHERE tenant_id=?",
+        (seed.tenant_id,),
+    )
     provider = connection.execute(
         "SELECT provider_id FROM providers WHERE tenant_id=? AND provider_code='local_openai'",
         (seed.tenant_id,),
@@ -1837,6 +1854,62 @@ async def test_stream_5xx_uses_handshake_fallback_once(
         (1, "failed", "upstream_5xx", None),
         (2, "succeeded", "other", "gateway.upstream_error"),
     ]
+
+
+@pytest.mark.anyio
+async def test_stream_missing_primary_provider_key_uses_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_upstream,
+) -> None:
+    upstream_url, captured = fake_upstream
+    database_url = prepare_database(monkeypatch, tmp_path, upstream_url)
+    configure_prd036_fallback_alias(database_url)
+    real_provider_request = openai_api._provider_request
+
+    def missing_primary_key(adapter, route, endpoint, payload, config, request, **kwargs):
+        if route.model_alias == "upstream-error":
+            raise ApiError("provider_key.unavailable")
+        return real_provider_request(
+            adapter, route, endpoint, payload, config, request, **kwargs
+        )
+
+    monkeypatch.setattr(openai_api, "_provider_request", missing_primary_key)
+    app = build_gateway_app()
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        async with client.stream(
+            "POST",
+            "/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {VIRTUAL_KEY}",
+                "X-Request-ID": "req_stream_missing_primary_key",
+            },
+            json={
+                "model": "company-fallback",
+                "messages": [{"role": "user", "content": "fallback on missing key"}],
+                "stream": True,
+            },
+        ) as response:
+            body = await response.aread()
+
+    assert response.status_code == 200
+    assert b"[DONE]" in body
+    assert [item["body"]["model"] for item in captured] == ["local-chat-model"]
+    connection = connect_database(database_url)
+    try:
+        attempts = connection.execute(
+            "SELECT attempt_sequence,status,error_code,trigger_error_code "
+            "FROM routing_attempts WHERE request_id='req_stream_missing_primary_key' "
+            "ORDER BY attempt_sequence"
+        ).fetchall()
+        assert [tuple(row) for row in attempts] == [
+            (1, "failed", "provider_key.unavailable", None),
+            (2, "succeeded", None, "provider_key.unavailable"),
+        ]
+    finally:
+        connection.close()
 
 
 @pytest.mark.anyio

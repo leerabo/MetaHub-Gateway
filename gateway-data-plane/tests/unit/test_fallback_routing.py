@@ -7,6 +7,7 @@ import pytest
 from metahub_gateway.api.openai_compatible import _should_fallback
 from metahub_gateway.providers.base import NormalizedProviderError, UpstreamApiError
 from metahub_gateway.routing.models import GatewayRoute, GatewayRoutePlan
+from metahub_shared.runtime.errors import ApiError
 
 
 def _route() -> GatewayRoute:
@@ -95,6 +96,21 @@ def test_auth_error_continues_even_for_a_legacy_partial_policy() -> None:
     )
     auth = _error(category="auth_failed", code="gateway.upstream_auth_failed")
     assert _should_fallback(plan, auth) is True
+
+
+def test_unavailable_provider_key_continues_only_while_candidates_remain() -> None:
+    route = _route()
+    with_fallback = GatewayRoutePlan(
+        initial_route=route,
+        initial_role="primary",
+        fallback_route=route,
+        fallback_routes=(route,),
+        fallback_conditions=("upstream_5xx",),
+    )
+    exhausted = GatewayRoutePlan(initial_route=route, initial_role="fallback")
+    error = ApiError("provider_key.unavailable")
+    assert _should_fallback(with_fallback, error) is True
+    assert _should_fallback(exhausted, error) is False
 
 
 @pytest.mark.parametrize(

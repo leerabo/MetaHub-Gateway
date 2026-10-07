@@ -6589,9 +6589,9 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
     ),
     "provider_key.unavailable": ErrorSpec(
         503,
-        "No usable provider key is available.",
-        "Enable a managed provider key for the current tenant. The environment fallback is "
-        "limited to the non-production default tenant and its configured Provider endpoint.",
+        "The selected model service cannot use a provider key right now.",
+        "Check configured keys for failed health checks, upstream authentication errors, "
+        "rate limits, or disabled status. Add a key only if none is configured.",
         retryable=True,
         owner="provider_key",
     ),
