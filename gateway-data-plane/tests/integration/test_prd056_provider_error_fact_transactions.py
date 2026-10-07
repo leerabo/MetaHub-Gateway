@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ from metahub_gateway.streaming.sessions import (
     create_stream_session,
     safe_finish_stream_session,
 )
+import metahub_gateway.streaming.sessions as stream_sessions_module
 from metahub_gateway.usage.ledger import RequestLogContext
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
 from metahub_shared.runtime.config import load_app_config
@@ -87,6 +89,32 @@ def _invalid_error(tenant_id: str, provider_id: str) -> NormalizedProviderError:
     assert valid.evidence is not None
     invalid_evidence = replace(valid.evidence, overlay_content_hash="f" * 64)
     return replace(valid, evidence=invalid_evidence)
+
+
+def _auth_error(tenant_id: str, provider_id: str) -> NormalizedProviderError:
+    body = b'{"error":{"type":"authentication_error","message":"invalid key"}}'
+    matched = normalize_provider_error(
+        extract_provider_error_facts(
+            upstream_http_status=401,
+            transport_kind="none",
+            raw_body=body,
+            body_truncated=False,
+            known_body_length=len(body),
+        ),
+        lease=builtin_provider_error_map_lease(tenant_id),
+        provider_id=provider_id,
+    )
+    assert matched.code == "gateway.upstream_auth_failed"
+    return NormalizedProviderError(
+        code=matched.code,
+        message=matched.message,
+        http_status=401,
+        retryable=False,
+        provider_error_type="authentication_error",
+        error_category=matched.error_category,
+        transport_kind=matched.transport_kind,
+        evidence=matched.evidence,
+    )
 
 
 def _prepare(
@@ -392,3 +420,57 @@ def test_stream_fact_commits_with_owner_and_trigger_failure_rolls_back(
     assert fact["normalized_output_error_code"] == "gateway.upstream_rate_limited"
     assert fact["owner_terminal_error_code"] == "gateway.upstream_stream_failed"
     assert PRIVATE_SENTINEL not in fact["redacted_projection_json"]
+
+
+def test_stream_auth_failure_in_first_window_second_allows_fallback_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    database_url, config, tenant_id, route, _plan = _prepare(
+        monkeypatch, tmp_path, "stream-auth-first-second.db"
+    )
+    first = create_stream_session(
+        config,
+        _stream_context(tenant_id, route, "auth-first-second"),
+        inter_token_timeout_ms=30_000,
+    )
+    current = datetime.now(UTC)
+    first_window_second = current.replace(second=(current.second // 5) * 5, microsecond=123456)
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return first_window_second
+
+    monkeypatch.setattr(stream_sessions_module, "datetime", FixedDatetime)
+    assert safe_finish_stream_session(
+        config,
+        first,
+        status="upstream_failed",
+        error_code="gateway.upstream_auth_failed",
+        quality_observation_eligible=False,
+        error=_auth_error(tenant_id, route.provider_id),
+    )
+    second = create_stream_session(
+        config,
+        _stream_context(tenant_id, route, "auth-first-second"),
+        inter_token_timeout_ms=30_000,
+    )
+    connection = connect_database(database_url)
+    try:
+        fact = connection.execute(
+            "SELECT created_at FROM provider_error_facts WHERE stream_session_id=?",
+            (first.stream_session_id,),
+        ).fetchone()
+        source = connection.execute(
+            "SELECT occurred_at FROM security_event_sources "
+            "WHERE source_object_id IN (SELECT provider_error_fact_id FROM provider_error_facts "
+            "WHERE stream_session_id=?)",
+            (first.stream_session_id,),
+        ).fetchone()
+        assert fact is not None and source is not None
+        assert fact["created_at"] == source["occurred_at"]
+        assert fact["created_at"] == first_window_second.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        assert second.stream_session_id != first.stream_session_id
+    finally:
+        connection.close()
