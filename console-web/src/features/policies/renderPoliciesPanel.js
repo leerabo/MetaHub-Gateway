@@ -4,6 +4,13 @@
  */
 
 import { hasPermission, PERMISSIONS } from "../../lib/permissions.js";
+import {
+  GUIDED_CONDITION_FIELDS,
+  buildGuidedConditionExpression,
+  emptyGuidedCondition,
+  guidedConditionOperators,
+  parseGuidedConditionExpression,
+} from "./policyConditionBuilder.js";
 
 // 策略状态、动作和默认值只决定前端展示，后端枚举与 RBAC 始终是权威边界。
 const POLICY_STATUSES = ["active", "disabled"];
@@ -65,7 +72,9 @@ export function createEmptyPolicyDraft() {
     status: "active",
     priority: DEFAULT_PRIORITY,
     conditionExpr: "",
-    actionType: "allow",
+    conditionMode: "guided",
+    conditionBuilder: emptyGuidedCondition(),
+    actionType: "",
     targetModelId: null,
     version: null,
   };
@@ -78,12 +87,16 @@ export function createEmptyPolicyDraft() {
 export function policyDraftFromPolicy(policy) {
   const rule = policy?.rule ?? {};
   const action = policy?.action ?? {};
+  const conditionExpr = String(rule.condition_expr ?? "");
+  const guided = parseGuidedConditionExpression(conditionExpr);
   return {
     name: String(policy?.name ?? ""),
     description: String(policy?.description ?? ""),
     status: POLICY_STATUSES.includes(policy?.status) ? policy.status : "disabled",
     priority: String(policy?.priority ?? DEFAULT_PRIORITY),
-    conditionExpr: String(rule.condition_expr ?? ""),
+    conditionExpr,
+    conditionMode: guided ? "guided" : "advanced",
+    conditionBuilder: guided ?? emptyGuidedCondition(),
     actionType: POLICY_ACTIONS.includes(action.type ?? action.action_type)
       ? (action.type ?? action.action_type)
       : "allow",
@@ -103,6 +116,7 @@ export function createEmptyPolicyScope() {
     draft: createEmptyPolicyDraft(),
     dirty: false,
     validation: null,
+    modeError: "",
   };
 }
 
@@ -119,6 +133,8 @@ export function policyDraftSnapshot(draft, { selectedPolicyId = null } = {}) {
     status: String(draft?.status ?? ""),
     priority: String(draft?.priority ?? ""),
     conditionExpr: String(draft?.conditionExpr ?? ""),
+    conditionMode: String(draft?.conditionMode ?? "advanced"),
+    conditionBuilder: draft?.conditionBuilder ?? emptyGuidedCondition(),
     actionType: String(draft?.actionType ?? ""),
     targetModelId: draft?.targetModelId ? String(draft.targetModelId) : null,
   });
@@ -273,7 +289,7 @@ export function shouldLoadPolicies({
  * 渲染具有 ``policy.read`` 权限的策略管理面板。
  * 页面所有动态字段均经过上下文转义，不执行 DSL，也不把策略对象序列化到 data-* 或浏览器存储。
  */
-export function renderPoliciesPanel(policiesState, modelsState, authContext) {
+export function renderPoliciesPanel(policiesState, modelsState, authContext, resources = {}) {
   if (!hasPermission(authContext, PERMISSIONS.POLICY_READ)) {
     // 前端失败关闭只改善体验；后端 GET 仍按同一稳定权限码独立校验。
     return "";
@@ -303,10 +319,11 @@ export function renderPoliciesPanel(policiesState, modelsState, authContext) {
       ${hasPermission(authContext, PERMISSIONS.POLICY_TEMPLATE_READ) ? '<div><strong>常见场景</strong><p>预算、路由、数据保护等，可先选场景模板，预览影响后直接应用。</p><a href="#workspace.governance.policy-templates">查看场景模板</a></div>' : ""}
       <div><strong>特殊条件</strong><p>模板不适用时，在本页写自定义规则；保存草稿后再发布。</p>${hasPermission(authContext, PERMISSIONS.POLICY_PUBLISH) ? '<a href="#workspace.governance.policy-releases">查看上线与版本</a>' : ""}</div>
     </div>
-    ${renderPolicyStateError(policiesState)}
-    ${editorOpen ? renderPolicyEditor(editor, activeModels, policiesState) : ""}
+    ${editorOpen ? "" : renderPolicyStateError(policiesState)}
+    ${!editorOpen && policiesState?.feedback ? `<p class="policy-save-feedback" role="status">${escapeHtml(policiesState.feedback)}</p>` : ""}
     ${policies.length ? renderPolicyFilters(filters, saving) : ""}
     ${policies.length ? renderPolicyList(visiblePolicies, activeModels, saving, canWrite) : editorOpen ? "" : '<p class="policy-list-empty">尚无自定义规则。可以直接使用场景模板，也可以新建规则。</p>'}
+    ${editorOpen ? renderPolicyEditor(editor, activeModels, policiesState, resources) : ""}
   `;
 }
 
@@ -376,7 +393,7 @@ function renderPolicyStateError(policiesState) {
  * 渲染单策略编辑器。
  * 保存按钮只由当前快照的后端 valid=true 结果启用；修改 DOM 属性不能越过事件处理器和后端重编译。
  */
-function renderPolicyEditor(editor, activeModels, policiesState) {
+function renderPolicyEditor(editor, activeModels, policiesState, resources) {
   const draft = editor.draft ?? createEmptyPolicyDraft();
   const editing = Boolean(editor.selectedPolicyId);
   const busy = ["validating", "saving"].includes(editor.operationStatus);
@@ -390,54 +407,67 @@ function renderPolicyEditor(editor, activeModels, policiesState) {
       : policiesState?.feedback ?? "";
 
   return `
-    <section class="policy-editor" aria-labelledby="policy-editor-title">
+    <div class="policy-editor-backdrop" data-policy-editor-backdrop>
+    <section class="policy-editor" role="dialog" aria-modal="true" aria-labelledby="policy-editor-title" tabindex="-1">
       <div class="policy-editor-heading">
         <div>
-          <h3 id="policy-editor-title">${editing ? "编辑自定义规则" : "新建自定义规则"}</h3>
-          <span>规则保存后不会立即生效；请到“上线与版本”发布。</span>
+          <h3 id="policy-editor-title" tabindex="-1">${editing ? "编辑自定义规则" : "新建自定义规则"}</h3>
+          <span>选择条件和处理方式，校验后保存。保存的规则还需在“上线与版本”发布。</span>
         </div>
-        <button class="policy-editor-cancel" id="policy-cancel" type="button" ${saving ? "disabled" : ""}>取消编辑</button>
+        <button class="policy-editor-cancel" id="policy-cancel" type="button" aria-label="关闭规则编辑" ${saving ? "disabled" : ""}>×</button>
       </div>
+      ${renderPolicyStateError(policiesState)}
       <form id="policy-editor-form">
         <label>
           <span>规则名称</span>
           <input name="name" maxlength="80" required value="${escapeAttribute(draft.name)}" ${fieldDisabled} />
         </label>
-        <label>
-          <span>状态</span>
-          <select name="status" ${fieldDisabled}>
-            ${POLICY_STATUSES.map((status) => renderOption(status, STATUS_LABELS[status], draft.status)).join("")}
-          </select>
-        </label>
-        <label>
-          <span>执行顺序（数字越小越靠前）</span>
-          <input name="priority" type="number" min="1" max="10000" step="1" required value="${escapeAttribute(draft.priority)}" ${fieldDisabled} />
-        </label>
         <label class="policy-description-field">
           <span>用途说明（可选）</span>
           <textarea name="description" maxlength="500" rows="2" ${fieldDisabled}>${escapeHtml(draft.description)}</textarea>
         </label>
-        <label class="policy-condition-field">
-          <span>什么情况下执行？</span>
-          <textarea name="conditionExpr" maxlength="1024" rows="5" spellcheck="false" required placeholder='env == "prod" and budget_remaining &lt; 100' ${fieldDisabled}>${escapeHtml(draft.conditionExpr)}</textarea>
-        </label>
-        <p class="policy-condition-help">条件成立时才执行下面的动作。例如 <code>env == "prod"</code> 表示仅生产环境；<code>and</code> 表示两个条件都要满足。复杂场景建议先用模板。</p>
-        <div class="policy-variable-hint" aria-label="可插入的条件变量">
-          <span>点击插入变量：</span>
-          ${POLICY_VARIABLES.map((variable) => `<button type="button" data-policy-variable="${escapeAttribute(variable)}" aria-label="插入变量 ${escapeAttribute(variable)}"><code class="notranslate" translate="no">${escapeHtml(variable)}</code></button>`).join("")}
+        <div class="policy-condition-section">
+          <div class="policy-condition-section__heading">
+            <strong>什么情况下执行？</strong>
+            <div class="policy-condition-modes" aria-label="条件填写方式">
+              <button type="button" data-policy-condition-mode="guided" aria-pressed="${draft.conditionMode !== "advanced"}" ${busy ? "disabled" : ""}>表单填写</button>
+              <button type="button" data-policy-condition-mode="advanced" aria-pressed="${draft.conditionMode === "advanced"}" ${busy ? "disabled" : ""}>高级编辑</button>
+            </div>
+          </div>
+          ${editor.modeError ? `<p class="policy-condition-mode-error" role="alert">${escapeHtml(editor.modeError)}</p>` : ""}
+          ${draft.conditionMode === "advanced"
+            ? renderAdvancedCondition(draft, fieldDisabled)
+            : renderGuidedCondition(draft, resources, fieldDisabled)}
         </div>
         <label>
           <span>条件成立后执行</span>
-          <select name="actionType" ${fieldDisabled}>
+          <select name="actionType" required ${fieldDisabled}>
+            <option value="">请选择处理方式</option>
             ${POLICY_ACTIONS.map((action) => renderOption(action, ACTION_LABELS[action], draft.actionType)).join("")}
           </select>
         </label>
+        <p class="policy-action-help">“拒绝”会阻止请求；“仅记录”只留下命中记录；“路由到模型”会把命中请求交给指定模型。</p>
         <label class="policy-route-target" data-policy-route-target-field${routeTo ? "" : " hidden"}>
           <span>目标模型</span>
           <select name="targetModelId" ${routeTo && !saving ? "required" : "disabled"}>
             ${renderModelOptions(activeModels, draft.targetModelId)}
           </select>
         </label>
+        <details class="policy-advanced-options">
+          <summary>更多设置：状态与执行顺序</summary>
+          <div>
+            <label>
+              <span>状态</span>
+              <select name="status" ${fieldDisabled}>
+                ${POLICY_STATUSES.map((status) => renderOption(status, STATUS_LABELS[status], draft.status)).join("")}
+              </select>
+            </label>
+            <label>
+              <span>执行顺序（数字越小越靠前）</span>
+              <input name="priority" type="number" min="1" max="10000" step="1" required value="${escapeAttribute(draft.priority)}" ${fieldDisabled} />
+            </label>
+          </div>
+        </details>
         <div class="policy-editor-actions">
           <button data-policy-validate type="button" ${busy ? "disabled" : ""}>1. 校验规则</button>
           <button data-policy-save type="submit" ${editor.canSave && !busy ? "" : "disabled"}>2. 保存草稿</button>
@@ -448,7 +478,82 @@ function renderPolicyEditor(editor, activeModels, policiesState) {
         ${renderValidationResult(editor.validation)}
       </div>
     </section>
+    </div>
   `;
+}
+
+function renderGuidedCondition(draft, resources, fieldDisabled) {
+  const condition = draft.conditionBuilder ?? emptyGuidedCondition();
+  const operators = guidedConditionOperators(condition.field);
+  return `
+    <div class="policy-guided-condition">
+      <label>
+        <span>条件类型</span>
+        <select name="conditionField" required ${fieldDisabled}>
+          <option value="">请选择</option>
+          ${GUIDED_CONDITION_FIELDS.map((item) => renderOption(item.value, item.label, condition.field)).join("")}
+        </select>
+      </label>
+      <label>
+        <span>比较方式</span>
+        <select name="conditionOperator" ${fieldDisabled}>
+          ${operators.map((operator) => renderOption(operator, operatorLabel(operator), condition.operator)).join("")}
+        </select>
+      </label>
+      <label>
+        <span>${condition.field === "budget_remaining" ? "金额（元）" : "条件值"}</span>
+        ${renderGuidedConditionValue(condition, resources, fieldDisabled)}
+      </label>
+      <p>选择条件、比较方式和值即可；系统会自动生成规则并校验。</p>
+    </div>
+  `;
+}
+
+function renderGuidedConditionValue(condition, resources, fieldDisabled) {
+  const state = condition.field === "project" ? resources?.projectsState
+    : condition.field === "env" ? resources?.environmentsState : null;
+  const source = condition.field === "project" ? state?.projects : state?.environments;
+  const items = state?.state === "ok" && Array.isArray(source)
+    ? source.filter((item) => item?.status === "active") : [];
+  const options = items.map((item) => condition.field === "project"
+    ? { value: item.project_id, label: item.name ?? item.project_code ?? item.project_id }
+    : { value: item.code, label: item.name ?? item.code }).filter((item) => item.value);
+  if (options.length) {
+    if (condition.value && !options.some((item) => item.value === condition.value)) {
+      options.unshift({ value: condition.value, label: "原条件值（当前列表中不可用）" });
+    }
+    return `<select name="conditionValue" required ${fieldDisabled}>
+      <option value="">请选择${condition.field === "project" ? "项目" : "环境"}</option>
+      ${options.map((item) => renderOption(item.value, item.label, condition.value)).join("")}
+    </select>`;
+  }
+  if (!condition.field) {
+    return '<input name="conditionValue" placeholder="先选择条件类型" disabled />';
+  }
+  const numeric = condition.field === "budget_remaining";
+  const placeholder = numeric ? "例如 100" : condition.field === "env" ? "例如 prod"
+    : condition.field === "project" ? "项目标识" : "例如 sensitive";
+  return `<input name="conditionValue" required maxlength="128" value="${escapeAttribute(condition.value)}"
+    placeholder="${escapeAttribute(placeholder)}" ${numeric ? 'inputmode="decimal" pattern="(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,12})?" title="请输入非负金额，最多 12 位整数和 12 位小数"' : ""} ${fieldDisabled} />`;
+}
+
+function renderAdvancedCondition(draft, fieldDisabled) {
+  return `
+    <label class="policy-condition-field">
+      <span>条件表达式</span>
+      <textarea name="conditionExpr" maxlength="1024" rows="5" spellcheck="false" required
+        placeholder='env == "prod" and budget_remaining &lt; 100' ${fieldDisabled}>${escapeHtml(draft.conditionExpr)}</textarea>
+    </label>
+    <p class="policy-condition-help">仅用于多个条件或特殊逻辑。普通规则请选“表单填写”；这里的表达式会由服务端校验。</p>
+    <div class="policy-variable-hint" aria-label="可插入的条件变量">
+      <span>可插入字段：</span>
+      ${POLICY_VARIABLES.map((variable) => `<button type="button" data-policy-variable="${escapeAttribute(variable)}" aria-label="插入变量 ${escapeAttribute(variable)}"><code class="notranslate" translate="no">${escapeHtml(variable)}</code></button>`).join("")}
+    </div>
+  `;
+}
+
+function operatorLabel(value) {
+  return ({ "==": "等于", "!=": "不等于", "<": "低于", "<=": "不高于", ">": "高于", ">=": "不低于" })[value] ?? value;
 }
 
 /**
@@ -579,7 +684,7 @@ function renderPolicyRow(policy, activeModels, disabled, canWrite) {
       <span data-label="状态">
         <mark class="policy-status policy-status-${status}">${escapeHtml(STATUS_LABELS[status])}</mark>
       </span>
-      <span data-label="条件" class="policy-condition"><code>${escapeHtml(rule.condition_expr ?? "-")}</code></span>
+      <span data-label="条件" class="policy-condition">${renderPolicyConditionSummary(rule.condition_expr)}</span>
       <span data-label="动作" class="policy-action-summary">
         <strong>${escapeHtml(ACTION_LABELS[action.type] ?? action.type ?? "-")}</strong>
         <em>${escapeHtml(targetLabel)}</em>
@@ -590,6 +695,15 @@ function renderPolicyRow(policy, activeModels, disabled, canWrite) {
       </span>
     </div>
   `;
+}
+
+function renderPolicyConditionSummary(expression) {
+  const guided = parseGuidedConditionExpression(expression);
+  if (guided?.field) {
+    const field = GUIDED_CONDITION_FIELDS.find((item) => item.value === guided.field);
+    return `<span>${escapeHtml(field?.label ?? guided.field)} ${escapeHtml(operatorLabel(guided.operator))} ${escapeHtml(guided.value)}</span>`;
+  }
+  return `<code>${escapeHtml(expression ?? "-")}</code>`;
 }
 
 /**

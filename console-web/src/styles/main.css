@@ -18008,13 +18008,41 @@ h3 {
 
 .policy-editor {
   min-width: 0;
-  padding: 16px 0;
-  border-top: 1px solid #d9e0ea;
-  border-bottom: 1px solid #d9e0ea;
+  box-sizing: border-box;
+  width: min(820px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 22px;
+  border: 1px solid #d9e0ea;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 24px 60px rgb(15 35 30 / 24%);
+}
+
+.policy-editor-backdrop {
+  position: fixed;
+  z-index: 1100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(15 35 30 / 52%);
+}
+
+body:has(.policy-editor-backdrop) {
+  overflow: hidden;
 }
 
 .policy-editor-heading {
   margin-bottom: 14px;
+  align-items: flex-start;
+}
+
+.policy-editor-cancel {
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
 }
 
 .policy-mode {
@@ -18029,7 +18057,7 @@ h3 {
 
 #policy-editor-form {
   display: grid;
-  grid-template-columns: minmax(190px, 1fr) 180px 140px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   min-width: 0;
 }
@@ -18077,11 +18105,102 @@ h3 {
 }
 
 .policy-description-field,
+.policy-condition-section,
+.policy-advanced-options,
+.policy-action-help,
 .policy-condition-field,
 .policy-condition-help,
 .policy-variable-hint,
 .policy-editor-actions {
   grid-column: 1 / -1;
+}
+
+.policy-condition-section {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #d6e4df;
+  border-radius: 8px;
+  background: #f8fbfa;
+}
+
+.policy-condition-section__heading,
+.policy-condition-modes,
+.policy-guided-condition {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.policy-condition-section__heading {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.policy-condition-modes button {
+  padding: 6px 10px;
+  border: 1px solid #cbd5d1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #334155;
+  cursor: pointer;
+}
+
+.policy-condition-modes button[aria-pressed="true"] {
+  border-color: #0f766e;
+  background: #e9f6f2;
+  color: #0a5c56;
+  font-weight: 700;
+}
+
+.policy-guided-condition {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+}
+
+.policy-guided-condition p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #53645e;
+  font-size: 12px;
+}
+
+.policy-condition-mode-error {
+  margin: 0;
+  color: #9b1c1c;
+  font-size: 13px;
+}
+
+.policy-advanced-options {
+  padding: 9px 0;
+  color: #475569;
+  font-size: 13px;
+}
+
+.policy-advanced-options summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.policy-advanced-options > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.policy-save-feedback {
+  padding: 9px 12px;
+  border-left: 3px solid #138a43;
+  background: #f3faf5;
+  color: #166534;
+}
+
+.policy-action-help {
+  margin: -6px 0 0;
+  color: #53645e;
+  font-size: 12px;
 }
 
 .policy-variable-hint {
@@ -18318,6 +18437,9 @@ h3 {
   }
 
   .policy-description-field,
+  .policy-condition-section,
+  .policy-advanced-options,
+  .policy-action-help,
   .policy-condition-field,
   .policy-condition-help,
   .policy-variable-hint,
@@ -18331,7 +18453,6 @@ h3 {
 
   .policy-heading,
   .policy-heading-actions,
-  .policy-editor-heading,
   .policy-editor-actions,
   .policy-validation-passed > div {
     align-items: stretch;
@@ -18357,11 +18478,25 @@ h3 {
   }
 
   .policy-description-field,
+  .policy-condition-section,
+  .policy-advanced-options,
+  .policy-action-help,
   .policy-condition-field,
   .policy-variable-hint,
   .policy-editor-actions,
   .policy-error code {
     grid-column: 1;
+  }
+
+  .policy-editor {
+    width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+    padding: 16px;
+  }
+
+  .policy-guided-condition,
+  .policy-advanced-options > div {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .policy-filters button {

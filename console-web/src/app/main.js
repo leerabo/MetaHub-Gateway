@@ -710,6 +710,12 @@ import {
   shouldLoadPolicies,
 } from "../features/policies/renderPoliciesPanel.js";
 import {
+  buildGuidedConditionExpression,
+  emptyGuidedCondition,
+  normalizeGuidedCondition,
+  parseGuidedConditionExpression,
+} from "../features/policies/policyConditionBuilder.js";
+import {
   createPolicySnapshotLoadLifecycle,
   createPolicySnapshotOperationMemory,
   isPolicySnapshotReasonValid,
@@ -1214,6 +1220,8 @@ const policyDraftMemory = createPolicyDraftMemory();
 const policyRequestLifecycle = createPolicyRequestLifecycle();
 let policyListState = null;
 let policyModelsState = null;
+let policyProjectsState = null;
+let policyEnvironmentsState = null;
 let policyListController = null;
 let policyActionError = null;
 let policyFeedback = "";
@@ -2108,7 +2116,11 @@ async function loadAndRenderActiveNavigation({
       state.budgetState = await loadBudgetState(state.virtualKeysState, consoleShellState, refreshId);
       break;
     case "policies":
-      state.modelsState = await loadModelsState();
+      [state.modelsState, state.projectState, state.environmentState] = await Promise.all([
+        loadModelsState(), loadProjectState(), loadEnvironmentState(),
+      ]);
+      policyProjectsState = state.projectState;
+      policyEnvironmentsState = state.environmentState;
       state.policiesState = await loadPoliciesState(consoleShellState, refreshId, state.modelsState);
       break;
     case "policy-simulator":
@@ -14232,7 +14244,7 @@ function buildPoliciesRenderState() {
  * 只重绘策略 panel 并重新绑定其局部事件。
  * 该路径避免校验、筛选和选择编辑项时触发整页租户接口刷新，同时不会复制控制台导航监听器。
  */
-function renderPolicyPanelFromMemory() {
+function renderPolicyPanelFromMemory({ focusSelector = null } = {}) {
   const panel = document.querySelector(".policies-panel");
   const activeNavigation = currentRenderedNavigation();
   // DOM、active navigation 和实时读取权限必须同时成立，旧回调才有资格局部重绘策略正文。
@@ -14248,8 +14260,11 @@ function renderPolicyPanelFromMemory() {
     buildPoliciesRenderState(),
     policyModelsState,
     authSession.context,
+    { projectsState: policyProjectsState, environmentsState: policyEnvironmentsState },
   );
   bindPolicyInteractions({ activeNavigationItemId: "policies" });
+  if (focusSelector) panel.querySelector(focusSelector)?.focus();
+  else panel.querySelector(".policy-editor[role='dialog']")?.focus();
 }
 
 /**
@@ -14288,18 +14303,39 @@ function bindPolicyInteractions(consoleShellState) {
     policyOperationStatus = "idle";
     policyActionError = null;
     policyFeedback = "";
-    renderPolicyPanelFromMemory();
+    renderPolicyPanelFromMemory({ focusSelector: "#policy-editor-form [name='name']" });
   });
 
   document.querySelector("#policy-cancel")?.addEventListener("click", () => {
-    const current = policyDraftMemory.read(identity);
-    if (current?.dirty && !window.confirm("放弃当前尚未保存的修改？")) return;
-    policyRequestLifecycle.invalidate();
-    policyDraftMemory.write(identity, createEmptyPolicyScope());
-    policyOperationStatus = "idle";
-    policyActionError = null;
-    policyFeedback = "";
-    renderPolicyPanelFromMemory();
+    closePolicyEditor(identity);
+  });
+
+  const backdrop = document.querySelector("[data-policy-editor-backdrop]");
+  if (backdrop && !backdrop.contains(document.activeElement)) {
+    backdrop.querySelector(".policy-editor")?.focus();
+  }
+  backdrop?.addEventListener("click", (event) => {
+    if (event.target === backdrop) closePolicyEditor(identity);
+  });
+  backdrop?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closePolicyEditor(identity);
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = [...backdrop.querySelectorAll("button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary")]
+      .filter((element) => element.getClientRects().length);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
   });
 
   for (const editButton of document.querySelectorAll("[data-policy-edit]")) {
@@ -14313,6 +14349,9 @@ function bindPolicyInteractions(consoleShellState) {
   });
 
   const editorForm = document.querySelector("#policy-editor-form");
+  for (const button of editorForm?.querySelectorAll("[data-policy-condition-mode]") ?? []) {
+    button.addEventListener("click", () => switchPolicyConditionMode(editorForm, identity, button.dataset.policyConditionMode));
+  }
   for (const variableButton of editorForm?.querySelectorAll("[data-policy-variable]") ?? []) {
     variableButton.addEventListener("click", () => {
       const field = editorForm.querySelector('[name="conditionExpr"]');
@@ -14328,7 +14367,12 @@ function bindPolicyInteractions(consoleShellState) {
     syncPolicyEditorDomAfterInput(editorForm);
   });
   editorForm?.addEventListener("change", (event) => {
-    if (event.target?.name === "actionType") {
+    if (event.target?.name === "conditionField") {
+      const conditionValue = editorForm.querySelector("[name='conditionValue']");
+      if (conditionValue) conditionValue.value = "";
+      synchronizePolicyDraftFromForm(editorForm, identity);
+      renderPolicyPanelFromMemory({ focusSelector: "#policy-editor-form [name='conditionField']" });
+    } else if (event.target?.name === "actionType") {
       synchronizePolicyDraftFromForm(editorForm, identity);
       syncPolicyEditorDomAfterInput(editorForm);
     }
@@ -14340,6 +14384,43 @@ function bindPolicyInteractions(consoleShellState) {
     event.preventDefault();
     await saveCurrentPolicy(editorForm, identity);
   });
+}
+
+function closePolicyEditor(identity) {
+  if (policyOperationStatus === "saving") return;
+  const current = policyDraftMemory.read(identity);
+  if (current?.dirty && !window.confirm("放弃当前尚未保存的修改？")) return;
+  const selectedId = current?.selectedPolicyId;
+  policyRequestLifecycle.invalidate();
+  policyDraftMemory.write(identity, createEmptyPolicyScope());
+  policyOperationStatus = "idle";
+  policyActionError = null;
+  policyFeedback = "";
+  renderPolicyPanelFromMemory({ focusSelector: selectedId ? `[data-policy-edit="${CSS.escape(selectedId)}"]` : "#policy-new" });
+}
+
+function switchPolicyConditionMode(form, identity, mode) {
+  if (!["guided", "advanced"].includes(mode)) return;
+  synchronizePolicyDraftFromForm(form, identity);
+  const current = policyDraftMemory.read(identity);
+  if (!current || current.draft.conditionMode === mode) return;
+  const draft = { ...current.draft };
+  if (mode === "guided") {
+    const parsed = parseGuidedConditionExpression(draft.conditionExpr);
+    if (!parsed) {
+      policyDraftMemory.write(identity, {
+        ...current,
+        modeError: "这条规则包含多个条件或特殊逻辑，不能自动转换成表单。请继续高级编辑，或新建简单规则。",
+      });
+      renderPolicyPanelFromMemory({ focusSelector: "[data-policy-condition-mode='advanced']" });
+      return;
+    }
+    draft.conditionBuilder = parsed;
+  }
+  draft.conditionMode = mode;
+  policyRequestLifecycle.invalidate();
+  policyDraftMemory.write(identity, { ...current, draft, validation: null, modeError: "" });
+  renderPolicyPanelFromMemory({ focusSelector: mode === "advanced" ? "[name='conditionExpr']" : "[name='conditionField']" });
 }
 
 /**
@@ -14363,7 +14444,7 @@ function selectPolicyForEditing(identity, policyId) {
   policyOperationStatus = "idle";
   policyActionError = null;
   policyFeedback = "";
-  renderPolicyPanelFromMemory();
+  renderPolicyPanelFromMemory({ focusSelector: "#policy-editor-form [name='name']" });
 }
 
 /**
@@ -14372,16 +14453,26 @@ function selectPolicyForEditing(identity, policyId) {
  */
 function readPolicyDraftFromForm(form, currentDraft) {
   const data = new FormData(form);
-  const actionType = String(data.get("actionType") ?? "allow");
+  const actionType = String(data.get("actionType") ?? "");
   const targetModelId = actionType === "route_to"
     ? optionalText(data.get("targetModelId")) ?? null
     : null;
+  const conditionMode = currentDraft?.conditionMode === "advanced" ? "advanced" : "guided";
+  const conditionBuilder = normalizeGuidedCondition({
+    field: data.get("conditionField") ?? currentDraft?.conditionBuilder?.field,
+    operator: data.get("conditionOperator") ?? currentDraft?.conditionBuilder?.operator,
+    value: data.get("conditionValue") ?? currentDraft?.conditionBuilder?.value,
+  });
   return {
     name: String(data.get("name") ?? ""),
     description: String(data.get("description") ?? ""),
     status: String(data.get("status") ?? "active"),
     priority: String(data.get("priority") ?? ""),
-    conditionExpr: String(data.get("conditionExpr") ?? ""),
+    conditionExpr: conditionMode === "advanced"
+      ? String(data.get("conditionExpr") ?? "")
+      : buildGuidedConditionExpression(conditionBuilder),
+    conditionMode,
+    conditionBuilder,
     actionType,
     targetModelId,
     version: currentDraft?.version ?? null,
@@ -14409,6 +14500,7 @@ function synchronizePolicyDraftFromForm(form, identity) {
     draft: nextDraft,
     dirty: true,
     validation: null,
+    modeError: "",
   };
   policyDraftMemory.write(identity, next);
   policyOperationStatus = "idle";
@@ -14581,19 +14673,10 @@ async function saveCurrentPolicy(form, identity) {
     const savedPolicy = normalizedSavedPolicy(result);
     if (savedPolicy) {
       upsertPolicyListItem(savedPolicy);
-      policyDraftMemory.write(identity, {
-        selectedPolicyId: savedPolicy.policy_id,
-        draft: policyDraftFromPolicy(savedPolicy),
-        dirty: false,
-        validation: null,
-      });
+      policyDraftMemory.write(identity, createEmptyPolicyScope());
     } else {
       // 成功响应缺少 PolicyInfo 时不猜测 version；清除校验并等待下一轮 active loader 权威回读。
-      policyDraftMemory.write(identity, {
-        ...scope,
-        dirty: false,
-        validation: null,
-      });
+      policyDraftMemory.write(identity, createEmptyPolicyScope());
     }
     policyOperationStatus = "idle";
     policyActionError = null;
@@ -14742,6 +14825,8 @@ function clearPolicyEditorSessionState() {
   policyDraftMemory.clear();
   policyListState = null;
   policyModelsState = null;
+  policyProjectsState = null;
+  policyEnvironmentsState = null;
   policyActionError = null;
   policyFeedback = "";
   policyOperationStatus = "idle";

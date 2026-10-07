@@ -14,6 +14,10 @@ import {
   renderPoliciesPanel,
   shouldLoadPolicies,
 } from "../../src/features/policies/renderPoliciesPanel.js";
+import {
+  buildGuidedConditionExpression,
+  parseGuidedConditionExpression,
+} from "../../src/features/policies/policyConditionBuilder.js";
 import { AuthApiError } from "../../src/lib/auth.js";
 import { PERMISSIONS } from "../../src/lib/permissions.js";
 import {
@@ -341,11 +345,48 @@ test("policy overview keeps the advanced editor closed until the user starts a r
   assert.doesNotMatch(overview, /id="policy-editor-form"/);
   const started = renderPoliciesPanel({ ...base, editor: { ...createEmptyPolicyScope(), open: true } }, null, policyWriterContext);
   assert.match(started, /id="policy-editor-form"/);
+  assert.match(started, /role="dialog" aria-modal="true"/);
+  assert.match(started, /data-policy-editor-backdrop/);
   assert.doesNotMatch(started, /尚无自定义规则/);
   assert.match(started, /1\. 校验规则/);
   assert.match(started, /2\. 保存草稿/);
-  assert.match(started, /data-policy-variable="tenant"/);
-  assert.match(started, /data-policy-variable="project"/);
+  assert.match(started, /name="conditionField"/);
+  assert.match(started, /name="actionType" required/);
+  assert.match(started, /请选择处理方式/);
+  assert.match(started, /表单填写/);
+  assert.match(started, /高级编辑/);
+  assert.doesNotMatch(started, /name="conditionExpr"/);
+});
+
+test("guided condition builds safe server DSL and keeps complex rules in advanced mode", () => {
+  assert.equal(buildGuidedConditionExpression({ field: "env", operator: "==", value: "prod" }), 'env == "prod"');
+  assert.equal(buildGuidedConditionExpression({ field: "budget_remaining", operator: "<", value: "100.50" }), "budget_remaining < 100.50");
+  assert.equal(buildGuidedConditionExpression({ field: "env", operator: "==", value: 'a"b' }), 'env == "a\\"b"');
+  assert.equal(buildGuidedConditionExpression({ field: "budget_remaining", operator: "<", value: "1e6" }), "");
+  assert.equal(buildGuidedConditionExpression({ field: "tenant", operator: "==", value: "other" }), "");
+  assert.deepEqual(parseGuidedConditionExpression('project != "project_a"'), { field: "project", operator: "!=", value: "project_a" });
+  assert.equal(parseGuidedConditionExpression('env == "prod" and budget_remaining < 100'), null);
+  const simple = policyDraftFromPolicy({ ...policy, rule: { condition_expr: 'env == "prod"' } });
+  assert.equal(simple.conditionMode, "guided");
+  const complex = policyDraftFromPolicy({ ...policy, rule: { condition_expr: 'env == "prod" and budget_remaining < 100' } });
+  assert.equal(complex.conditionMode, "advanced");
+});
+
+test("guided editor offers readable project and environment choices", () => {
+  const scope = createEmptyPolicyScope();
+  scope.open = true;
+  scope.draft.conditionBuilder = { field: "project", operator: "==", value: "project_a" };
+  scope.draft.conditionExpr = 'project == "project_a"';
+  const html = renderPoliciesPanel(
+    { state: "ok", policies: [], editor: scope },
+    { state: "ok", models: [] },
+    policyWriterContext,
+    { projectsState: { state: "ok", projects: [{ project_id: "project_a", name: "客户中心", status: "active" }] } },
+  );
+  assert.match(html, /name="conditionValue" required/);
+  assert.match(html, /客户中心/);
+  assert.match(html, /value="project_a" selected/);
+  assert.doesNotMatch(html, /name="conditionExpr"/);
 });
 
 test("Workspace owner supplies isolated rule editor identity", () => {
@@ -557,6 +598,8 @@ test("main integration and responsive CSS keep active-only no-storage boundaries
   assert.doesNotMatch(clientSource, /tenant_id\s*:/);
   assert.doesNotMatch(featureSource, /data-[^=]+="\$\{escapeAttribute\(JSON/);
   assert.match(css, /\.policy-condition code \{[\s\S]*?overflow: auto;/);
+  assert.match(css, /\.policy-editor-backdrop\s*\{[\s\S]*?position: fixed;[\s\S]*?inset: 0;/);
+  assert.match(css, /\.policy-editor\s*\{[\s\S]*?max-height: calc\(100dvh - 32px\);[\s\S]*?overflow: auto;/);
   assert.match(css, /@media \(max-width: 1100px\)[\s\S]*?\.policy-row:not\(\.policy-row-head\)/);
   assert.match(css, /@media \(max-width: 720px\)[\s\S]*?#policy-editor-form,[\s\S]*?grid-template-columns: minmax\(0, 1fr\);/);
 });
