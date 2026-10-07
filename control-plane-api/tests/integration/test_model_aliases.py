@@ -208,6 +208,7 @@ async def test_multiple_fallbacks_create_and_reorder_keep_audit_atomic(
         monkeypatch, tmp_path,
     )
     second_fallback_id = "model_prd015_second_fallback"
+    third_fallback_id = "model_prd015_third_fallback"
     with connect_database(database_url) as connection:
         connection.execute(
             """INSERT INTO models(
@@ -218,6 +219,16 @@ async def test_multiple_fallbacks_create_and_reorder_keep_audit_atomic(
                      datetime('now'),datetime('now')
               FROM models WHERE model_id=? AND tenant_id=?""",
             (second_fallback_id, fallback_model_id, tenant_id),
+        )
+        connection.execute(
+            """INSERT INTO models(
+              model_id,tenant_id,provider_id,model_alias,upstream_model_name,
+              provider_model_id,display_name,capabilities,status,created_at,updated_at)
+              SELECT ?,tenant_id,provider_id,'third-fallback','third-fallback',
+                     'third-fallback','Third Fallback',capabilities,'active',
+                     datetime('now'),datetime('now')
+              FROM models WHERE model_id=? AND tenant_id=?""",
+            (third_fallback_id, fallback_model_id, tenant_id),
         )
         connection.commit()
 
@@ -252,6 +263,21 @@ async def test_multiple_fallbacks_create_and_reorder_keep_audit_atomic(
         assert updated.json()["model_alias"]["fallback_model_ids"] == [
             second_fallback_id, fallback_model_id,
         ]
+        appended = await client.patch(
+            f"/model-aliases/{alias['model_alias_id']}",
+            headers={**headers, "X-Request-ID": "req_alias_multi_append"},
+            json={
+                "fallback_model_ids": [second_fallback_id, fallback_model_id, third_fallback_id],
+                "expected_routing_policy_version": updated.json()["model_alias"]["routing_policy"]["version"],
+            },
+        )
+        assert appended.status_code == 200, appended.text
+        assert appended.json()["model_alias"]["fallback_model_ids"] == [
+            second_fallback_id, fallback_model_id, third_fallback_id,
+        ]
+        assert appended.json()["model_alias"]["routing_policy"]["version"] == (
+            updated.json()["model_alias"]["routing_policy"]["version"] + 1
+        )
 
     with connect_database(database_url) as connection:
         rows = connection.execute(
@@ -262,9 +288,9 @@ async def test_multiple_fallbacks_create_and_reorder_keep_audit_atomic(
         ).fetchall()
     summaries = [json.loads(row["after_summary_json"]) for row in rows]
     assert [row["action"] for row in rows] == [
-        "routing_policy.created", "routing_policy.updated",
+        "routing_policy.created", "routing_policy.updated", "routing_policy.updated",
     ]
-    assert [item["fallback_model_count"] for item in summaries] == [2, 2]
+    assert [item["fallback_model_count"] for item in summaries] == [2, 2, 3]
     assert summaries[0]["fallback_model_order_sha256"] != summaries[1][
         "fallback_model_order_sha256"
     ]

@@ -672,7 +672,21 @@ def update_model_alias(
                 model_ids=desired_fallback_ids,
                 now=now,
             )
-        routing_changed = bool(set(changed_updates) & ROUTING_ALIAS_FIELDS) or candidates_changed
+        alias_graph_changed = bool(set(changed_updates) & ROUTING_ALIAS_FIELDS)
+        if candidates_changed and not alias_graph_changed:
+            # The Alias trigger only advances the version when a legacy graph
+            # field changes. Appending or reordering later candidates leaves
+            # fallback_model_id unchanged, so advance once here before the
+            # immutable event for this configuration version is inserted.
+            connection.execute(
+                """
+                UPDATE model_alias_routing_policies
+                SET version=version+1, updated_by=?, updated_at=?
+                WHERE tenant_id=? AND model_alias_id=?
+                """,
+                (context.user.user_id, now, context.user.tenant_id, model_alias_id),
+            )
+        routing_changed = alias_graph_changed or candidates_changed
         if routing_changed:
             # Alias AFTER trigger 已推进版本；这里只补可信操作者元数据，不得再次 bump。
             connection.execute(
@@ -732,6 +746,13 @@ def update_model_alias(
     # 唯一键与 owner trigger 都可能抛 IntegrityError，只有明确 Alias 重名可细分。
     except sqlite3.IntegrityError as exc:
         connection.rollback()
+        logger.warning("model_alias.update_sqlite_integrity_failed", extra={
+            "event": "model_alias.update_sqlite_integrity_failed",
+            "request_id": normalized_request_id,
+            "sqlite_errorcode": getattr(exc, "sqlite_errorcode", None),
+            "sqlite_errorname": getattr(exc, "sqlite_errorname", None),
+            "payload": {"constraint": str(exc)[:160]},
+        })
         # 重名是调用方可修正输入；其余约束失败代表当前配置图不可安全更新。
         if _is_alias_duplicate(exc):
             raise ApiError("model_alias.duplicate") from exc
@@ -739,6 +760,12 @@ def update_model_alias(
     # 未分类存储异常不返回 SQL 或文件路径，只提供统一可重试领域码。
     except sqlite3.Error as exc:
         connection.rollback()
+        logger.warning("model_alias.update_sqlite_failed", extra={
+            "event": "model_alias.update_sqlite_failed",
+            "request_id": normalized_request_id,
+            "sqlite_errorcode": getattr(exc, "sqlite_errorcode", None),
+            "sqlite_errorname": getattr(exc, "sqlite_errorname", None),
+        })
         raise ApiError("model_alias.routing_policy_update_failed") from exc
     finally:
         transaction.__exit__(None, None, None)
