@@ -9,7 +9,7 @@ export function renderSystemStatusPanel(systemHealth) {
     return `
       <div class="panel-heading">
         <h2 id="system-status-title">系统状态</h2>
-        <p>正在读取 live、ready 和 version。</p>
+        <p>正在检查服务状态。</p>
       </div>
       <div class="empty-state">等待健康检查响应。</div>
     `;
@@ -19,7 +19,7 @@ export function renderSystemStatusPanel(systemHealth) {
   return `
     <div class="panel-heading">
       <h2 id="system-status-title">系统状态</h2>
-      <p>区分进程存活和依赖可用，便于上线前检查。</p>
+      <p>查看网关和管理服务是否可以正常使用。</p>
     </div>
     <div class="health-grid">
       ${services.map(renderServiceHealth).join("")}
@@ -30,7 +30,7 @@ export function renderSystemStatusPanel(systemHealth) {
 /**
  * 渲染单个服务健康结果。
  *
- * 服务不可达时仍展示 request_id 或错误摘要，方便定位是网关、控制面还是控制台异常。
+ * 服务不可达时展示可行动的状态摘要，不把内部定位号带给用户。
  */
 function renderServiceHealth(service) {
   if (service.state === "error") {
@@ -50,16 +50,13 @@ function renderServiceHealth(service) {
     <article class="health-card">
       <div class="health-card-heading">
         <h3>${escapeHtml(service.name)}</h3>
-        <span class="health-badge ${readyBadge}">${service.ready?.ready ? "ready" : "not ready"}</span>
+        <span class="health-badge ${readyBadge}">${service.ready?.ready ? "可用" : "暂不可用"}</span>
       </div>
       <dl class="health-meta">
-        <div><dt>live</dt><dd><span class="health-badge ${liveBadge}">${service.live?.live ? "ok" : "fail"}</span></dd></div>
-        <div><dt>version</dt><dd>${escapeHtml(service.version?.version ?? "-")}</dd></div>
-        <div><dt>commit</dt><dd>${escapeHtml(service.version?.build_commit ?? "-")}</dd></div>
-        <div><dt>trace_id</dt><dd>${escapeHtml(service.ready?.trace_id ?? service.live?.trace_id ?? "-")}</dd></div>
+        <div><dt>服务状态</dt><dd><span class="health-badge ${liveBadge}">${service.live?.live ? "运行中" : "已停止"}</span></dd></div>
       </dl>
       <div class="dependency-list">
-        ${(service.ready?.checks ?? []).map(renderDependency).join("") || '<span class="dependency muted">无依赖检查</span>'}
+        ${(service.ready?.checks ?? []).map(renderDependency).join("") || '<span class="dependency muted">暂无详细状态</span>'}
       </div>
     </article>
   `;
@@ -72,10 +69,11 @@ function renderServiceHealth(service) {
  */
 function renderDependency(item) {
   const badgeClass = item.status === "ok" ? "badge-ok" : item.status === "fail" ? "badge-fail" : "badge-skip";
+  const label = item.status === "ok" ? "正常" : item.status === "fail" ? "异常" : "未检查";
   return `
     <span class="dependency">
       <strong>${escapeHtml(item.name)}</strong>
-      <em class="${badgeClass}">${escapeHtml(item.status)}</em>
+      <em class="${badgeClass}">${label}</em>
     </span>
   `;
 }

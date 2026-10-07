@@ -1,0 +1,1 @@
+DROP TABLE "workspace_fx_rate_versions";

@@ -1,18 +1,8 @@
 import { hasPermission, PERMISSIONS } from "../../lib/permissions.js";
-import { renderWorkspaceConnectionStatus, workspaceSetupStepComplete } from "../workspace-navigation/renderWorkspaceNavigation.js";
+import { renderWorkspaceConnectionStatus } from "../workspace-navigation/renderWorkspaceNavigation.js";
 
-// 模型目录面板的能力和币种常量用于表单展示，真实模型元数据以控制面接口为准。
-const CAPABILITY_OPTIONS = ["chat", "embeddings", "stream", "tools", "json_mode", "vision"];
+// 计价选项仍由管理员维护；模型能力由目录和后端路由自动判断。
 const CURRENCY_OPTIONS = ["CNY", "USD"];
-
-const CAPABILITY_LABELS = {
-  chat: "对话",
-  embeddings: "向量",
-  stream: "流式输出",
-  tools: "工具调用",
-  json_mode: "JSON",
-  vision: "视觉",
-};
 
 /**
  * 渲染模型目录面板。
@@ -43,7 +33,7 @@ export function renderModelCatalogPanel(modelsState, providersState, authContext
         <p>模型目录暂不可用。</p>
       </div>
       <div class="empty-state error-state">
-        ${escapeHtml(modelsState.message)} request_id: ${escapeHtml(modelsState.requestId ?? "-")}
+        ${escapeHtml(modelsState.message ?? "模型目录读取失败。")}
         <button type="button" data-resource-retry>重试</button>
       </div>
     `;
@@ -51,7 +41,6 @@ export function renderModelCatalogPanel(modelsState, providersState, authContext
 
   const canWrite = hasPermission(authContext, PERMISSIONS.MODEL_WRITE);
   const models = modelsState.models ?? [];
-  const prerequisiteReady = !workspaceTaskHomeState || workspaceSetupStepComplete(workspaceTaskHomeState, "provider_connected");
   return `
     <div class="panel-heading models-heading">
       <div>
@@ -62,21 +51,19 @@ export function renderModelCatalogPanel(modelsState, providersState, authContext
     ${renderWorkspaceConnectionStatus(workspaceTaskHomeState, "workspace.gateway.models", i18n)}
     ${renderActionError(modelsState.actionError)}
     ${modelsState.feedback ? `<p class="model-feedback" role="status">${escapeHtml(modelsState.feedback)}</p>` : ""}
-    ${canWrite ? `<details class="model-create-disclosure"${models.length ? "" : " open"}><summary>添加模型</summary>${renderCreateModelForm(providersState, modelsState.feedback, authContext)}</details>` : ""}
-    ${models.length && hasPermission(authContext, PERMISSIONS.ROUTING_READ) ? `<a class="${prerequisiteReady ? "console-flow-next" : "console-flow-related"}" href="#workspace.gateway.aliases">${prerequisiteReady ? "下一步：" : ""}配置模型路由</a>` : ""}
+    ${canWrite ? `<div class="console-page-toolbar model-toolbar"><button type="button" class="primary-command" data-model-create-open aria-haspopup="dialog">添加模型</button></div><dialog class="model-create-dialog" data-model-create-dialog aria-labelledby="model-create-dialog-title"><div class="model-create-dialog-content"><header><div><span class="eyebrow">模型目录</span><h3 id="model-create-dialog-title">添加模型</h3></div><button type="button" class="icon-button" data-model-create-close aria-label="关闭">×</button></header>${renderCreateModelForm(providersState, modelsState.feedback, authContext)}</div></dialog>` : ""}
     <div class="models-grid" role="table" aria-label="当前租户模型目录">
       <div class="model-row model-head ${canWrite ? "" : "model-readonly-row"}" role="row">
-        <span>模型名称</span>
+        <span>显示名称</span>
         <span>模型服务</span>
-        <span>上游模型</span>
-        <span>能力</span>
-        <span>上下文</span>
-        <span>单价 / 千 Token</span>
+        <span>模型名称</span>
+        <span>单价 / 百万 Token</span>
         <span>状态</span>
         ${canWrite ? "<span>操作</span>" : ""}
       </div>
       ${models.length ? models.map((model) => renderModelRow(model, canWrite)).join("") : renderEmptyRow()}
     </div>
+    ${canWrite ? models.map(renderModelEditDialog).join("") : ""}
   `;
 }
 
@@ -94,7 +81,7 @@ function renderCreateModelForm(providersState, feedback, authContext) {
   const providers = (providersState.providers ?? []).filter((provider) => provider.status === "active");
   if (!providers.length) return '<p class="empty-state" role="status">暂无已启用的模型服务。'
     + (hasPermission(authContext, PERMISSIONS.PROVIDER_READ)
-      ? '<a href="#workspace.gateway.providers">配置模型服务</a>' : '请联系组织管理员。') + '</p>';
+      ? '<button type="button" class="empty-state-action" data-console-nav="providers" data-console-route="workspace.gateway.providers" data-console-target="providers">配置模型服务</button>' : '请联系组织管理员。') + '</p>';
   const selectedProviderId = providers.length === 1 ? providers[0].provider_id : "";
   const providerOptions = providers.length
     ? `${providers.length > 1 ? '<option value="">请选择模型服务</option>' : ""}${providers.map((provider) => renderOption(provider.provider_id, provider.name, selectedProviderId)).join("")}`
@@ -110,40 +97,26 @@ function renderCreateModelForm(providersState, feedback, authContext) {
       </label>
       <div class="model-discovery-field">
         <label>
-          <span>厂家模型名称</span>
-          <input name="providerModelId" maxlength="160" required placeholder="读取列表选择，或手动输入模型名称" aria-describedby="model-discovery-feedback" />
+          <span>模型名称</span>
+          <input name="providerModelId" maxlength="160" required placeholder="从列表选择，或手动输入模型名称" aria-describedby="model-discovery-feedback" />
           <select data-discovered-models aria-label="选择厂家模型" hidden disabled></select>
         </label>
         ${hasPermission(authContext, PERMISSIONS.PROVIDER_HEALTH_PROBE) ? '<button type="button" data-discover-models>自动读取模型列表</button>' : ""}
         <button type="button" data-model-manual hidden>手动填写</button>
-        <small id="model-discovery-feedback" data-model-discovery-feedback role="status">已选服务会自动读取模型列表；读取不到时可以手动填写。</small>
+        <small id="model-discovery-feedback" data-model-discovery-feedback role="status">读取不到模型列表时可手动填写。</small>
       </div>
-      <details class="model-advanced"><summary>高级设置</summary><div class="model-advanced-fields">
+      <details class="model-pricing"><summary>计价设置</summary><div class="model-pricing-hint">这里填写组织实际采用的输入、输出单价。中转站价格不能从模型名称推断；官方价格如需采用，请先核对后填写。</div><div class="model-advanced-fields">
       <label>
-        <span>MetaHub 模型名称</span>
-        <input name="internalModelId" maxlength="120" pattern="[a-z0-9][a-z0-9._-]{0,119}" placeholder="默认与厂家模型名称相同" />
+        <span>输入价格 / 百万 Token</span>
+        <input name="inputPricePerMillion" type="number" min="0" step="0.000001" value="0" />
       </label>
       <label>
-        <span>显示名</span>
-        <input name="displayName" maxlength="120" placeholder="DeepSeek Chat" />
-      </label>
-      <fieldset class="model-capabilities">
-        <legend>能力</legend>
-        ${CAPABILITY_OPTIONS.map((item) => renderCapabilityCheckbox(item)).join("")}
-      </fieldset>
-      <label>
-        <span>上下文长度</span>
-        <input name="contextWindow" type="number" min="0" step="1" value="0" />
-      </label>
-      </div></details>
-      <details class="model-pricing"><summary>计价设置</summary><div class="model-pricing-hint">可自动读取厂家公开价格；最终计价 = 官方价格 × 倍数。读取不到时可手动填写。</div><div class="model-advanced-fields">
-      <label>
-        <span>输入/1K</span>
-        <input name="inputPricePer1k" type="number" min="0" step="0.000001" value="0" />
+        <span>输出价格 / 百万 Token</span>
+        <input name="outputPricePerMillion" type="number" min="0" step="0.000001" value="0" />
       </label>
       <label>
-        <span>输出/1K</span>
-        <input name="outputPricePer1k" type="number" min="0" step="0.000001" value="0" />
+        <span>缓存命中价格 / 百万 Token</span>
+        <input name="cachePricePerMillion" type="number" min="0" step="0.000001" value="0" />
       </label>
       <label>
         <span>价格倍数</span>
@@ -156,13 +129,10 @@ function renderCreateModelForm(providersState, feedback, authContext) {
           ${CURRENCY_OPTIONS.map((item) => renderOption(item, item, "CNY")).join("")}
         </select>
       </label>
-      <label>
-        <span>价格版本</span>
-        <input name="priceSchemaVersion" maxlength="80" placeholder="manual-202607" />
-      </label>
+      <input type="hidden" name="pricingConfigured" value="false" data-model-pricing-configured />
       <label class="model-description-field">
         <span>备注</span>
-        <input name="description" maxlength="240" placeholder="生产候选、测试模型或迁移兼容模型" />
+        <input name="description" maxlength="240" placeholder="例如：默认聊天模型" />
       </label>
       </div></details>
       <div class="model-actions">
@@ -177,33 +147,25 @@ function renderCreateModelForm(providersState, feedback, authContext) {
 /**
  * 渲染模型目录行。
  *
- * 每行展示内部模型 ID、上游模型 ID、能力、价格和状态，方便开发者核对路由目标。
+ * 页面展示用户可理解的模型名称、模型服务、价格和状态；路由所需内部值只留在表单数据中。
  */
 function renderModelRow(model, canWrite) {
   const nextStatus = model.status === "active" ? "disabled" : "active";
   const statusLabel = model.status === "active" ? "禁用" : "启用";
   return `
     <div class="model-row ${canWrite ? "" : "model-readonly-row"}" role="row">
-      <span class="model-identity"><span class="model-field-label">模型名称</span>
-        <strong>${escapeHtml(model.internal_model_id)}</strong>
-        ${model.display_name && model.display_name !== model.internal_model_id ? `<em>${escapeHtml(model.display_name)}</em>` : ""}
+      <span class="model-identity"><span class="model-field-label">显示名称</span>
+        <strong>${escapeHtml(model.display_name ?? model.internal_model_id ?? model.provider_model_id ?? "未命名模型")}</strong>
       </span>
       <span><span class="model-field-label">模型服务</span>${escapeHtml(model.provider_name ?? "未命名服务")}</span>
-      <span><span class="model-field-label">厂家模型名称</span><code title="${escapeAttribute(model.provider_model_id)}">${escapeHtml(model.provider_model_id)}</code></span>
-      <span><span class="model-field-label">能力</span><span class="capability-list">${renderCapabilities(model.capabilities)}</span></span>
-      <span><span class="model-field-label">上下文</span>${escapeHtml(model.context_window > 0 ? model.context_window : "未设置")}</span>
+      <span><span class="model-field-label">模型名称</span><code title="${escapeAttribute(model.provider_model_id)}">${escapeHtml(model.provider_model_id)}</code></span>
       <span><span class="model-field-label">计价</span>${escapeHtml(formatPrice(model))}</span>
       <span><span class="model-field-label">状态</span><mark class="status-mark status-${escapeAttribute(model.status)}">${escapeHtml(model.status === "active" ? "已启用" : model.status === "disabled" ? "已停用" : "状态未知")}</mark></span>
       ${
         canWrite
           ? `
             <div class="model-row-actions">
-              <details class="model-inline-editor"><summary>编辑</summary><form data-model-edit-form data-model-id="${escapeAttribute(model.model_id)}">
-                <label><span>显示名</span><input name="displayName" value="${escapeAttribute(model.display_name ?? "")}" maxlength="120" /></label>
-                <label><span>输入/1K</span><input name="inputPricePer1k" type="number" min="0" step="0.000001" value="${escapeAttribute(model.input_price_per_1k ?? 0)}" /></label>
-                <label><span>输出/1K</span><input name="outputPricePer1k" type="number" min="0" step="0.000001" value="${escapeAttribute(model.output_price_per_1k ?? 0)}" /></label>
-                <button type="submit">保存</button>
-              </form></details>
+              <button type="button" data-model-edit-open="${escapeAttribute(model.model_id)}" aria-haspopup="dialog">编辑</button>
               <form data-model-status-form data-model-id="${escapeAttribute(model.model_id)}">
                 <input type="hidden" name="status" value="${escapeAttribute(nextStatus)}" />
                 <button type="submit">${statusLabel}</button>
@@ -216,38 +178,55 @@ function renderModelRow(model, canWrite) {
   `;
 }
 
-/**
- * 渲染模型能力复选框。
- *
- * Chat 和 Stream 作为常用默认能力预选，后端仍会对 capabilities 做结构化校验。
- */
-function renderCapabilityCheckbox(value) {
-  const checked = value === "chat" || value === "stream" ? " checked" : "";
-  return `
-    <label>
-      <input type="checkbox" name="capabilities" value="${escapeAttribute(value)}"${checked} />
-      <span>${escapeHtml(CAPABILITY_LABELS[value] ?? value)}</span>
-    </label>
-  `;
+function renderModelEditDialog(model) {
+  const name = model.display_name || model.internal_model_id || model.provider_model_id || "未命名模型";
+  // 旧记录可能没有 price_schema_version，但已经保存了有效价格；这些记录也必须
+  // 在编辑窗口中回填，而不能被当成“未配置价格”清空表单。
+  const hasPrice = hasConfiguredPrice(model);
+  const currency = model.currency || "CNY";
+  const currencies = [...new Set([...CURRENCY_OPTIONS, currency])];
+  return `<dialog class="model-edit-dialog" data-model-edit-dialog="${escapeAttribute(model.model_id)}" aria-labelledby="model-edit-dialog-title-${escapeAttribute(model.model_id)}">
+    <div class="model-edit-dialog-content">
+      <div class="model-alias-dialog-heading model-edit-dialog-heading">
+        <div><span class="model-alias-dialog-kicker">模型目录</span><h3 id="model-edit-dialog-title-${escapeAttribute(model.model_id)}">编辑模型</h3><p class="model-edit-context" data-user-content="true"><span>服务：${escapeHtml(model.provider_name || "未命名服务")}</span><span>模型标识：${escapeHtml(model.provider_model_id || "未填写")}</span></p></div>
+        <button type="button" class="icon-button" data-model-edit-close aria-label="关闭">×</button>
+      </div>
+      <form class="model-edit-form" data-model-edit-form data-model-id="${escapeAttribute(model.model_id)}">
+        <div class="model-edit-fields">
+          <label><span>显示名称</span><input name="displayName" value="${escapeAttribute(name)}" maxlength="120" /></label>
+          <label><span>模型名称</span><input name="providerModelId" value="${escapeAttribute(model.provider_model_id ?? "")}" maxlength="160" required data-user-content="true" /></label>
+        </div>
+        <section class="model-edit-pricing">
+          <label class="model-edit-price-toggle"><input type="checkbox" name="pricingEnabled" ${hasPrice ? "checked" : ""} /><span>配置价格</span></label>
+          <div class="model-edit-price-fields" data-model-edit-price-fields ${hasPrice ? "" : "hidden"}>
+            <label><span>输入价格 / 百万 Token</span><input name="inputPricePerMillion" type="number" inputmode="decimal" min="0" step="0.000001" value="${escapeAttribute(hasPrice ? toMillionPrice(model.input_price_per_1k) : "")}" required ${hasPrice ? "" : "disabled"} /></label>
+            <label><span>输出价格 / 百万 Token</span><input name="outputPricePerMillion" type="number" inputmode="decimal" min="0" step="0.000001" value="${escapeAttribute(hasPrice ? toMillionPrice(model.output_price_per_1k) : "")}" required ${hasPrice ? "" : "disabled"} /></label>
+            <label><span>缓存命中价格 / 百万 Token</span><input name="cachePricePerMillion" type="number" inputmode="decimal" min="0" step="0.000001" value="${escapeAttribute(hasPrice ? toMillionPrice(model.cache_price_per_1k ?? model.input_price_per_1k) : "")}" required ${hasPrice ? "" : "disabled"} /></label>
+            <label><span>币种</span><select name="currency" ${hasPrice ? "" : "disabled"}>${currencies.map((item) => renderOption(item, { CNY: "人民币（CNY）", USD: "美元（USD）" }[item] ?? item, currency)).join("")}</select></label>
+          </div>
+        </section>
+        <label><span>价格倍数</span><input name="priceMultiplier" type="number" inputmode="decimal" min="0" step="0.01" value="1" /></label>
+        <label><span>备注</span><input name="description" maxlength="240" value="${escapeAttribute(model.description ?? "")}" /></label>
+        <p class="model-edit-feedback" data-model-edit-feedback role="status" hidden></p>
+        <footer class="model-edit-actions model-alias-edit-actions"><button type="button" data-model-edit-close>取消</button><button type="submit" class="primary-command">保存修改</button></footer>
+      </form>
+    </div>
+  </dialog>`;
 }
 
-/**
- * 渲染模型能力标签。
- *
- * 只展示明确为 true 的能力，避免 false/null 被误读为可用。
- */
-function renderCapabilities(capabilities = {}) {
-  const enabled = CAPABILITY_OPTIONS.filter((item) => capabilities[item] === true);
-  if (!enabled.length) {
-    return `<em>-</em>`;
-  }
-  return enabled.map((item) => `<mark>${escapeHtml(CAPABILITY_LABELS[item] ?? item)}</mark>`).join("");
+function hasConfiguredPrice(model) {
+  if (Boolean(String(model?.price_schema_version ?? "").trim())) return true;
+  return [
+    model?.input_price_per_1k ?? model?.input_price_per_million,
+    model?.output_price_per_1k ?? model?.output_price_per_million,
+    model?.cache_price_per_1k ?? model?.cache_price_per_million,
+  ].some((value) => Number.isFinite(Number(value)) && Number(value) >= 0 && String(value).trim() !== "");
 }
 
 /**
  * 渲染模型目录操作错误。
  *
- * 保留 request_id，便于用户从控制台错误提示跳到后端日志。
+ * 普通用户只需要知道操作未完成；请求关联号保留在客户端错误对象和服务端日志中。
  */
 function renderActionError(error) {
   if (!error) {
@@ -255,7 +234,7 @@ function renderActionError(error) {
   }
   return `
     <div class="model-action-error" role="alert">
-      ${escapeHtml(error.message ?? "模型目录操作失败")} request_id: ${escapeHtml(error.requestId ?? "-")}
+      ${escapeHtml(error.message ?? "模型目录操作失败")}
     </div>
   `;
 }
@@ -276,13 +255,31 @@ function renderEmptyRow() {
 /**
  * 格式化模型价格。
  *
- * 输入/输出价格都按每 1K token 展示，空值按 0 处理以匹配后端 M0 默认成本模型。
+ * 后端字段名保留历史 *_per_1k 兼容性；当前值与界面统一按每百万 Token 处理。
  */
 function formatPrice(model) {
-  const input = Number(model.input_price_per_1k ?? 0).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
-  const output = Number(model.output_price_per_1k ?? 0).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
-  // 成本与币种按模型目录口径处理，避免不同币种或估算值被混成一类。
-  return `输入 ${input} / 输出 ${output} ${model.currency || "CNY"} / 千 Token`;
+  const inputValue = Number(model.input_price_per_1k ?? model.input_price_per_million);
+  const outputValue = Number(model.output_price_per_1k ?? model.output_price_per_million);
+  const cacheValue = Number(model.cache_price_per_1k ?? model.cache_price_per_million ?? model.input_price_per_1k ?? model.input_price_per_million);
+  if (!Number.isFinite(inputValue) || !Number.isFinite(outputValue) || !Number.isFinite(cacheValue)) return "未配置价格";
+  // 兼容旧记录：早期表单可能保存了金额但没有内部价格版本，金额本身仍应在目录中显示。
+  const hasPriceVersion = Boolean(String(model.price_schema_version ?? "").trim());
+  const hasEnteredPrice = [
+    model.input_price_per_1k ?? model.input_price_per_million,
+    model.output_price_per_1k ?? model.output_price_per_million,
+    model.cache_price_per_1k ?? model.cache_price_per_million,
+  ].some((value) => Number.isFinite(Number(value)) && Number(value) >= 0 && String(value).trim() !== "");
+  if (!hasPriceVersion && !hasEnteredPrice) return "未配置价格";
+  const input = toMillionPrice(inputValue);
+  const output = toMillionPrice(outputValue);
+  // 成本与币种按模型目录口径处理，避免缺价被误显示成免费。
+  const cache = toMillionPrice(cacheValue);
+  return `输入 ${input} / 输出 ${output} / 缓存命中 ${cache} ${model.currency || "CNY"} / 百万 Token`;
+}
+
+function toMillionPrice(value) {
+  const number = Number(value);
+  return (Number.isFinite(number) ? number : 0).toFixed(6).replace(/0+$/, "").replace(/\.$/, "") || "0";
 }
 
 /**

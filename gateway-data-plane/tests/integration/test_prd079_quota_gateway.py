@@ -48,7 +48,9 @@ def quota_database_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     database = root / "template.sqlite3"
     database_url = f"sqlite:///{database.as_posix()}"
     result = apply_migrations(database_url)
-    assert result.applied[-1] == "0083"
+    # The current migration chain ends at 0164; this test exercises the same
+    # quota contract against the complete schema used by the application.
+    assert result.applied[-1] == "0164"
     apply_seed_data(database_url)
     connection = connect_database(database_url)
     try:
@@ -204,6 +206,20 @@ def _metadata(config: SimpleNamespace) -> dict[str, str]:
             """,
             (config.tenant_id, row["model_id"]),
         )
+        # This legacy quota fixture exercises model-catalog pricing. Disable
+        # the seeded workspace rate so the resolver intentionally falls back
+        # to the model price it installs below.
+        connection.execute(
+            """
+            UPDATE workspace_provider_cost_rate_heads
+            SET adoption_state='disabled',head_revision=head_revision+1
+            WHERE workspace_provider_cost_rate_id IN(
+              SELECT workspace_provider_cost_rate_id FROM workspace_provider_cost_rates
+              WHERE tenant_id=? AND model_id=?
+            )
+            """,
+            (config.tenant_id, row["model_id"]),
+        )
         connection.commit()
         return {name: str(row[name]) for name in row.keys()}
     finally:
@@ -265,8 +281,9 @@ def _route(config: SimpleNamespace) -> GatewayRoute:
 def _record_usage(config: SimpleNamespace, context: RequestLogContext, amount_micros: int):
     """把精确微元换算为测试 Token，并通过正式用量入口持久化。"""
 
-    assert amount_micros % 1_000 == 0
-    input_tokens = amount_micros // 1_000
+    # Current prices are denominated per million tokens.  The fixture's model
+    # rate is 1 CNY per million, so one token maps to one micro-CNY here.
+    input_tokens = amount_micros
     # 用量必须走正式耐久写入入口，才能同时验证额度和财务原子结算。
     return safe_record_usage_ledger(
         config,
@@ -1148,6 +1165,18 @@ def test_active_plan_with_missing_versioned_price_fails_closed(
             """,
             (config.tenant_id, route.model_id),
         )
+        connection.execute(
+            """
+            UPDATE workspace_provider_cost_rate_heads
+            SET adoption_state='disabled',head_revision=head_revision+1
+            WHERE workspace_provider_cost_rate_id IN(
+              SELECT workspace_provider_cost_rate_id
+              FROM workspace_provider_cost_rates
+              WHERE tenant_id=? AND model_id=?
+            )
+            """,
+            (config.tenant_id, route.model_id),
+        )
         connection.commit()
     finally:
         connection.close()
@@ -1297,7 +1326,7 @@ def test_usage_spool_replay_settles_quota_once(
     claims = spool.claim_batch(limit=1)
     assert len(claims) == 1
     payload = claims[0].payload
-    assert payload["schema_version"] == 7
+    assert payload["schema_version"] == 8
     assert payload["context"]["quota_reservation_outstanding_cny"] == "0.002000"
     monkeypatch.setattr(quota_package, "settle_quota_usage", original_settle)
     committed = replay_usage_spool_record(config, payload)

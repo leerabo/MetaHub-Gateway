@@ -19,10 +19,9 @@ export function renderBrandingSettings(state, owner, i18n = null) {
           <h2 id="branding-settings-title">${escapeHtml(t("branding.title", "白标设置"))}</h2>
           <p>${escapeHtml(t("branding.description", "配置登录页与控制台的品牌呈现。"))}</p>
         </div>
-        <span class="active-section-pill">${escapeHtml(t("branding.revision", "版本"))}: ${escapeHtml(item.revision)}</span>
       </div>
-      ${state.feedback ? `<p class="branding-feedback" role="status">${escapeHtml(t("branding.saved", "白标已保存"))} · ${escapeHtml(state.feedback.requestId)}</p>` : ""}
-      ${state.mutationError ? `<p class="branding-form-error" role="alert">${escapeHtml(t("branding.operation_failed", "操作失败"))} · ${escapeHtml(state.mutationError.code)} · ${escapeHtml(state.mutationError.requestId)}</p>` : ""}
+      ${state.feedback ? `<p class="branding-feedback" role="status">${escapeHtml(t("branding.saved", "白标已保存"))}</p>` : ""}
+      ${state.mutationError ? `<p class="branding-form-error" role="alert">${escapeHtml(state.mutationError.message ?? t("branding.operation_failed", "操作失败"))}</p>` : ""}
       <form class="branding-settings-form" data-branding-form>
         ${field("product_name", t("branding.product_name", "产品名称"), item.product_name, 120, canManage)}
         ${field("primary_color", t("branding.primary_color", "主色"), item.primary_color, 7, canManage, "color")}
@@ -30,11 +29,10 @@ export function renderBrandingSettings(state, owner, i18n = null) {
         ${field("login_title", t("branding.login_title", "登录页标题"), item.login_title, 160, canManage)}
         ${textarea("login_message", t("branding.login_message", "登录页文案"), item.login_message, 400, canManage)}
         <label><span>${escapeHtml(t("branding.custom_domain", "自定义域名预留"))}</span><input name="custom_domain" value="${escapeAttribute(item.custom_domain ?? "")}" maxlength="253" ${canManage ? "" : "disabled"} placeholder="brand.example.com"></label>
-        <p class="branding-domain-status">${escapeHtml(t("branding.domain_status", "域名状态"))}: ${escapeHtml(item.custom_domain_status)} · ${escapeHtml(t("branding.domain_notice", "M2 仅预留配置，不自动签发证书或修改 DNS/TLS。"))}</p>
+        <p class="branding-domain-status">${escapeHtml(t("branding.domain_status", "域名状态"))}: ${escapeHtml(item.custom_domain_status)}</p>
         <label class="branding-logo-field"><span>${escapeHtml(t("branding.logo", "Logo（PNG）"))}</span><input name="logo_png" type="file" accept="image/png" ${canManage ? "" : "disabled"}></label>
         ${item.logo_present && logoUrl ? `<img class="branding-logo-preview" src="${escapeAttribute(logoUrl)}" alt="${escapeAttribute(item.product_name)}">` : `<p class="branding-logo-empty">${escapeHtml(t("branding.logo_empty", "未配置 Logo"))}</p>`}
         ${item.logo_present && canManage ? `<label class="branding-logo-clear"><input name="logo_clear" type="checkbox"> <span>${escapeHtml(t("branding.logo_clear", "清除当前 Logo"))}</span></label>` : ""}
-        <p class="branding-core-notice">${escapeHtml(t("branding.core_notice", "模型路由、Provider、租户权限、审计与数据面品牌内核不可由此页修改。"))}</p>
         ${canManage ? `<button class="primary-button" type="submit" ${state.mutationState === "submitting" ? "disabled" : ""}>${escapeHtml(t("branding.save", "保存白标"))}</button>` : `<p class="branding-readonly-note">${escapeHtml(t("branding.readonly", "当前账号只读"))}</p>`}
       </form>
     </section>
@@ -42,7 +40,7 @@ export function renderBrandingSettings(state, owner, i18n = null) {
 }
 
 function loading(t) { return `<section class="branding-settings-panel" data-branding-page><h2>${escapeHtml(t("branding.title", "白标设置"))}</h2><p>${escapeHtml(t("branding.loading", "正在读取白标配置"))}</p></section>`; }
-function errorState(error, t) { return `<section class="branding-settings-panel" data-branding-page><h2>${escapeHtml(t("branding.title", "白标设置"))}</h2><div class="empty-state error-state" role="alert">${escapeHtml(t("branding.error", "白标服务暂不可用"))} · ${escapeHtml(error?.code ?? "branding.unavailable")} · ${escapeHtml(error?.requestId ?? "-")}</div></section>`; }
+function errorState(error, t) { return `<section class="branding-settings-panel" data-branding-page><h2>${escapeHtml(t("branding.title", "白标设置"))}</h2><div class="empty-state error-state" role="alert">${escapeHtml(error?.message ?? t("branding.error", "白标服务暂不可用"))}</div></section>`; }
 function field(name, label, value, maxlength, enabled, type = "text") { return `<label><span>${escapeHtml(label)}</span><input name="${escapeAttribute(name)}" type="${escapeAttribute(type)}" value="${escapeAttribute(value)}" maxlength="${escapeAttribute(maxlength)}" ${enabled ? "" : "disabled"}></label>`; }
 function textarea(name, label, value, maxlength, enabled) { return `<label><span>${escapeHtml(label)}</span><textarea name="${escapeAttribute(name)}" maxlength="${escapeAttribute(maxlength)}" ${enabled ? "" : "disabled"}>${escapeHtml(value)}</textarea></label>`; }
 function escapeHtml(value) { return String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[character])); }

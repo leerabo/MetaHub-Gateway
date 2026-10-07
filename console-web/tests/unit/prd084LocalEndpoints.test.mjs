@@ -10,6 +10,7 @@ import {
   localEndpointPageOwner,
 } from "../../src/features/local-models/localEndpointPageState.js";
 import { renderLocalEndpoints } from "../../src/features/local-models/renderLocalEndpoints.js";
+import { localizeConsoleStaticHtml } from "../../src/i18n/localizeConsoleStaticHtml.js";
 import { AuthApiError } from "../../src/lib/auth.js";
 import {
   createLocalEndpoint,
@@ -75,6 +76,7 @@ function initialModel(overrides = {}) {
     context_window: 32768,
     input_price_per_1k: 0,
     output_price_per_1k: 0,
+    cache_price_per_1k: 0,
     currency: "CNY",
     status: "active",
     ...overrides,
@@ -130,6 +132,7 @@ function createRequest(overrides = {}) {
       context_window: 32768,
       input_price_per_1k: 0,
       output_price_per_1k: 0,
+      cache_price_per_1k: 0,
       currency: "CNY",
     },
     ...overrides,
@@ -311,6 +314,7 @@ test("form parsing removes bearer_token for none and reads only the closed initi
   form.set("context_window", "32768");
   form.set("input_price_per_1k", "0");
   form.set("output_price_per_1k", "0.250000");
+  form.set("cache_price_per_1k", "0.125000");
   form.set("currency", "CNY");
   form.set("resolved_ip", "192.0.2.1");
   const request = localEndpointCreateFromFormData(form);
@@ -380,6 +384,15 @@ test("renderer shows safe hint and capability commands only, escaping backend di
   assert.match(html, /data-local-endpoint-test/);
   assert.doesNotMatch(html, /<img src=x/);
   assert.doesNotMatch(html, /bearer_token|resolved_ip|KeyPool/);
+
+  state.openCreate(owner);
+  const dialogHtml = renderLocalEndpoints(state.snapshot(), auth, shell(auth));
+  assert.doesNotMatch(dialogHtml, /模型别名|上游模型名称|内部模型 ID|上下文/u);
+  assert.match(dialogHtml, /模型名称/);
+  assert.match(dialogHtml, /显示名称/);
+  const englishDialog = localizeConsoleStaticHtml(dialogHtml, { locale: "en-US" });
+  assert.doesNotMatch(englishDialog, /Model alias|Upstream model name|Internal model ID|Context window/u);
+  assert.match(englishDialog, /Model name/);
 
   const reader = context(READ, "local_endpoint_render_reader");
   const readHtml = renderLocalEndpoints(state.snapshot(), reader, shell(reader));

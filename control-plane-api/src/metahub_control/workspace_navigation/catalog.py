@@ -52,8 +52,9 @@ GROUP_CODES = (
     "finance",
     "governance",
     "applications",
-    "observability",
     "developer-center",
+    # 面向组织用户的支持与反馈入口放在导航末尾，避免与治理数据混在一起。
+    "system",
 )
 
 HUMAN_ROLE_CODES = (
@@ -76,6 +77,7 @@ RETIRED_SOURCE_IDS = frozenset(
         "adapter-contract-runs",
         "competitor-comparison",
         "environments",
+        "tenant-data-lifecycle",
     }
 )
 
@@ -305,7 +307,7 @@ CONTRACT_SPECS: tuple[ContractSpec, ...] = (
         63,
     ),
     _spec(
-        "projects", "D05", "primary", "workspace.gateway.projects", "gateway", ("project.read",), 65
+        "projects", "D05", "primary", "workspace.gateway.projects", "workspace", ("project.read",), 65
     ),
     _spec(
         "virtual-keys",
@@ -489,7 +491,7 @@ CONTRACT_SPECS: tuple[ContractSpec, ...] = (
         "D05",
         "primary",
         "workspace.observability.requests",
-        "observability",
+        "governance",
         ("request_log.read",),
         105,
     ),
@@ -498,7 +500,7 @@ CONTRACT_SPECS: tuple[ContractSpec, ...] = (
         "D17",
         "detail",
         "workspace.observability.request-explanation",
-        "observability",
+        "governance",
         ("request_explanation.read",),
         106,
     ),
@@ -507,7 +509,7 @@ CONTRACT_SPECS: tuple[ContractSpec, ...] = (
         "D05",
         "primary",
         "workspace.observability.feedback",
-        "observability",
+        "system",
         ("feedback.use",),
         107,
     ),
@@ -613,11 +615,15 @@ CONTRACT_SPECS: tuple[ContractSpec, ...] = (
     _spec(
         "tenant-data-lifecycle",
         "D04",
-        "primary",
+        # Persist platform-owned pages with the established internal-only
+        # disposition; the database contract does not accept a new placement
+        # enum value.
+        "retired_internal",
         "workspace.settings.data-management",
         "workspace",
-        # Data lifecycle is a dedicated governance responsibility. Ordinary
-        # Workspace owners/admins must not see a page they cannot operate.
+        # Tenant data lifecycle is operated by the SaaS platform. It remains
+        # registered for backend ownership and migration compatibility, but is
+        # excluded from the Workspace user navigation projection.
         ("tenant_data.read",),
         121,
     ),
@@ -635,7 +641,7 @@ CONTRACT_SPECS: tuple[ContractSpec, ...] = (
         "D01",
         "primary",
         "workspace.observability.status",
-        "observability",
+        "system",
         ("console.basic.read",),
         130,
     ),
@@ -662,7 +668,7 @@ CONTRACT_SPECS: tuple[ContractSpec, ...] = (
         None,
         "primary",
         "workspace.observability.migrations",
-        "observability",
+        "system",
         ("migration.read",),
         46,
         "extra",
@@ -672,7 +678,7 @@ CONTRACT_SPECS: tuple[ContractSpec, ...] = (
         None,
         "primary",
         "workspace.observability.support",
-        "observability",
+        "system",
         ("support.ticket.read",),
         48,
         "extra",
@@ -757,7 +763,9 @@ ROLE_TASK_SPECS: tuple[RoleTaskSpec, ...] = (
     ),
     RoleTaskSpec(
         "provider_connected",
-        ("owner", "admin", "developer"),
+        # Provider credentials are organization configuration. Developers use
+        # the already-published Gateway and never complete this task.
+        ("owner", "admin"),
         ("provider.read",),
         "workspace.gateway.providers",
         "providers",
@@ -765,7 +773,8 @@ ROLE_TASK_SPECS: tuple[RoleTaskSpec, ...] = (
     ),
     RoleTaskSpec(
         "model_catalog_ready",
-        ("owner", "admin", "developer"),
+        # Model publication and routing belong to the organization admin.
+        ("owner", "admin"),
         ("model.read",),
         "workspace.gateway.models",
         "models",
@@ -773,10 +782,12 @@ ROLE_TASK_SPECS: tuple[RoleTaskSpec, ...] = (
     ),
     RoleTaskSpec(
         "project_key_ready",
-        ("owner", "admin", "developer"),
+        # Personal keys are created by the member who will use them; this is
+        # not an organization owner/admin setup task.
+        ("developer",),
         ("virtual_key.read",),
         "workspace.gateway.virtual-keys",
-        "consumer_keys",
+        "member_key_access",
         50,
     ),
     RoleTaskSpec(
@@ -822,14 +833,6 @@ ROLE_TASK_SPECS: tuple[RoleTaskSpec, ...] = (
         "workspace.finance.internal-finops",
         "finops",
         50,
-    ),
-    RoleTaskSpec(
-        "data_lifecycle",
-        ("legal_admin",),
-        ("tenant_data.read",),
-        "workspace.settings.data-management",
-        "data_lifecycle",
-        30,
     ),
     RoleTaskSpec(
         "service_visibility",

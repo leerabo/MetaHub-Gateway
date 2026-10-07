@@ -5,7 +5,7 @@ export function renderAdminOnboarding(state) {
   if (!state) {
     return `
       <section class="admin-onboarding admin-onboarding-loading" aria-labelledby="admin-onboarding-title" aria-busy="true">
-        <div><p class="admin-onboarding-kicker">企业初始化</p><h2 id="admin-onboarding-title">正在确认下一步</h2></div>
+        <div><p class="admin-onboarding-kicker">企业初始化</p><h2 id="admin-onboarding-title">正在确认当前事项</h2></div>
       </section>
     `;
   }
@@ -51,7 +51,7 @@ function renderCurrentStep(step) {
     : "";
   return `
     <div class="admin-onboarding-next">
-      <div><span>下一步</span><h3>${escapeHtml(step.title)}</h3><p>${escapeHtml(step.description)}</p></div>
+      <div><span>当前事项</span><h3>${escapeHtml(step.title)}</h3><p>${escapeHtml(step.description)}</p></div>
       ${action}
     </div>
   `;

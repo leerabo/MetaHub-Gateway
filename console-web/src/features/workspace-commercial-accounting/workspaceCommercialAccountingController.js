@@ -89,20 +89,44 @@ export function createWorkspaceCommercialAccountingController({
     const snapshot = store.snapshot();
     const ticket = store.begin("rates");
     try {
-      const rates = await api.providerCostRates({
-        filters: compactObject(snapshot.rateFilters),
-        cursor: snapshot.rateCursor,
-        limit: 50,
-        signal: ticket.controller.signal,
-      });
+      const [rates, fxRates, models] = await Promise.all([
+        api.providerCostRates({
+          filters: { ...compactObject(snapshot.rateFilters), include_history: true },
+          cursor: snapshot.rateCursor, limit: 50, signal: ticket.controller.signal,
+        }),
+        typeof api.fxRates === "function"
+          ? api.fxRates({ includeHistory: true, limit: 50, signal: ticket.controller.signal })
+          : Promise.resolve(null),
+        typeof api.models === "function"
+          ? api.models({ signal: ticket.controller.signal })
+          : Promise.resolve(null),
+      ]);
       return store.accept(ticket, {
         rates,
+        fxRates,
+        models,
         permissionRevision: rates.permission_revision,
         permissionFingerprint: rates.permission_fingerprint,
       });
     } catch (error) {
       return handleFailure(ticket, error);
     }
+  }
+
+  async function applyFxRate({ command, expectedHeadRevision, resourceId }, stepUp) {
+    const snapshot = store.snapshot();
+    if (!workspaceSession || !isRateNavigation(snapshot.navigation) || !snapshot.canManageRates) return false;
+    const fingerprint = JSON.stringify({ command, expectedHeadRevision, resourceId });
+    return mutate({
+      kind: "fx-rate", fingerprint, actionCode: "routing_fx_rate.create_version",
+      resourceType: "workspace_fx_rate", resourceId: String(resourceId ?? "USD:CNY"), stepUp,
+      invoke: (intent, grant, signal) => api.commandFxRate({
+        command, expectedHeadRevision, idempotencyKey: intent.idempotencyKey,
+        stepUpGrant: grant, signal,
+      }),
+      feedback: (response) => response.idempotent_replay ? "汇率设置已恢复。" : "USD/CNY 汇率已更新。",
+      reload: loadRates,
+    });
   }
 
   async function configureRates(filters = {}) {
@@ -254,6 +278,7 @@ export function createWorkspaceCommercialAccountingController({
     moveRatePage,
     submitDispute,
     applyRate,
+    applyFxRate,
     snapshot: store.snapshot,
   });
 }

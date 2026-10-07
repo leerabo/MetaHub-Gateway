@@ -228,8 +228,7 @@ test("PAGE-090 renders catalog dimensions, escapes data and keeps migration boun
     ...sanitized,
     filters: { view: "default", status: "", provider_type: "" },
   }, specAuth());
-  assert.match(defaultHtml, /国内模型 Endpoint 适配规范/);
-  assert.match(defaultHtml, /adapter-spec-v1/);
+  assert.match(defaultHtml, /模型服务兼容性/);
   assert.match(defaultHtml, /DeepSeek 官方或云服务/);
   for (const providerType of ["zhipu", "dashscope", "wenxin", "volcengine", "hunyuan", "deepseek"]) {
     assert.match(defaultHtml, new RegExp(`data-provider-type="${providerType}"`));
@@ -237,7 +236,6 @@ test("PAGE-090 renders catalog dimensions, escapes data and keeps migration boun
   assert.match(defaultHtml, /openai_compatible_usage_v1/);
   assert.match(defaultHtml, /provider_error_map_v1/);
   assert.match(defaultHtml, /openai_sse_final_usage_v1/);
-  assert.match(defaultHtml, /input_price_per_1k/);
   assert.doesNotMatch(defaultHtml, /客户 &lt;本地&gt; Endpoint/);
 
   const customerHtml = renderAdapterSpecs({
@@ -252,9 +250,7 @@ test("PAGE-090 renders catalog dimensions, escapes data and keeps migration boun
     ...sanitized,
     filters: { view: "migration", status: "optional", provider_type: "" },
   }, specAuth());
-  assert.match(migrationHtml, /OpenRouter、硅基流动只用于对标或受控迁移兼容/);
-  assert.match(migrationHtml, /不是模型厂家，也不是默认上游/);
-  assert.match(migrationHtml, /prd063_migration_compatible_minimum_contract/);
+  assert.match(migrationHtml, /OpenRouter、硅基流动仅用于迁移兼容/);
 });
 
 test("PAGE-090 escapes every free-form catalog and contract field", () => {
@@ -292,8 +288,7 @@ test("PAGE-090 requires provider.health.read and exposes traceable loading/error
     requestId: "req_<spec>",
   }, specAuth());
   assert.match(errorHtml, /目录 &lt;不可用&gt;/);
-  assert.match(errorHtml, /request_id: req_&lt;spec&gt;/);
-  assert.doesNotMatch(errorHtml, /目录 <不可用>|req_<spec>/);
+  assert.doesNotMatch(errorHtml, /request_id|目录 <不可用>|req_<spec>/);
 });
 
 test("adapter spec filters map product views without leaking provider or tenant fields", () => {

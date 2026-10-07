@@ -16,6 +16,7 @@ class LocalInitialModelRequest(BaseModel):
     context_window: int | None = None
     input_price_per_1k: Decimal | None = None
     output_price_per_1k: Decimal | None = None
+    cache_price_per_1k: Decimal | None = None
     currency: str | None = None
 
     model_config = ConfigDict(extra="forbid")
@@ -46,6 +47,7 @@ class LocalInitialModelInfo(BaseModel):
     context_window: int
     input_price_per_1k: float
     output_price_per_1k: float
+    cache_price_per_1k: float = 0.0
     currency: str
     status: str
 

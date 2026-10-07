@@ -268,7 +268,7 @@ test("Workspace state renders bounded sync, usage, failures, and policy updates"
   ), true);
   state.finishLoad(load);
   const html = renderPrivateGateways(state.snapshot(), auth, shell(auth));
-  assert.match(html, /遥测同步[\s\S]*Billing[\s\S]*ACK 2[\s\S]*next 3/u);
+  assert.match(html, /遥测同步[\s\S]*计费[\s\S]*已确认 2[\s\S]*下一项 3/u);
   assert.match(html, /provider_timeout[\s\S]*3/u);
   assert.match(html, /请求[\s\S]*5/u);
   assert.doesNotMatch(html, /model_id|provider_id|raw batch|tags|attributes/u);

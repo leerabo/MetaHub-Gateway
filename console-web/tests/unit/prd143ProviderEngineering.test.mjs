@@ -357,7 +357,7 @@ test("restored error-maps navigation uses the Workspace override contract withou
   assert.equal(snapshot.canManage, true);
   const html = renderWorkspaceProviderErrorMaps(snapshot);
   assert.match(html, /data-workspace-provider-error-maps-root/u);
-  assert.match(html, /Provider error overrides/u);
+  assert.match(html, /高级异常处理/u);
   assert.match(html, /data-workspace-provider-override-create-form/u);
   assert.doesNotMatch(html, /data-error-map|\/error-maps/u);
 });

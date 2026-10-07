@@ -32,10 +32,10 @@ export function renderPlatformCommercialAccounting(state = {}, permissions = new
     + '<section class="platform-band platform-commercial-band">'
       + sectionHeading("官方参考成本", String(references.length) + " 条")
       + commercialTable(
-        '<tr><th>Provider / 模型</th><th>币种</th><th>输入成本</th><th>输出成本</th>'
+        '<tr><th>Provider / 模型</th><th>币种</th><th>输入成本</th><th>缓存命中成本</th><th>输出成本</th>'
           + '<th>生效区间</th><th>状态</th><th>操作</th></tr>',
         references.map((item) => referenceRow(item, canManagePlans)).join("")
-          || emptyRow(state.loading?.includes("plans") ? "正在读取参考成本" : "暂无参考成本", 7),
+          || emptyRow(state.loading?.includes("plans") ? "正在读取参考成本" : "暂无参考成本", 8),
       )
     + '</section>'
     + (canManagePlans ? createReferenceForm(state) : "")
@@ -146,6 +146,7 @@ function referenceRow(item, canManage) {
   return '<tr><td><strong>' + escapeHtml(item.provider_id) + '</strong><small>'
     + escapeHtml(item.model_id) + '</small></td><td>' + escapeHtml(item.currency) + '</td>'
     + '<td>' + micros(item.input_rate_micros_per_1k, item.currency) + '</td>'
+    + '<td>' + micros(item.cache_rate_micros_per_1k, item.currency) + '</td>'
     + '<td>' + micros(item.output_rate_micros_per_1k, item.currency) + '</td>'
     + '<td>' + formatDate(item.effective_from) + '<small>'
       + formatDate(item.effective_until) + '</small></td>'
@@ -179,8 +180,9 @@ function createReferenceForm(state) {
       + field("providerId", "Provider ID", "", true)
       + field("modelId", "模型 ID", "", true)
       + select("currency", "币种", "CNY", [["CNY", "CNY"], ["USD", "USD"]])
-      + numberField("inputRate", "输入微单位 / 1K", 0, 0)
-      + numberField("outputRate", "输出微单位 / 1K", 0, 0)
+      + numberField("inputRate", "输入微单位 / 百万 Token", 0, 0)
+      + numberField("cacheRate", "缓存命中微单位 / 百万 Token", 0, 0)
+      + numberField("outputRate", "输出微单位 / 百万 Token", 0, 0)
       + '<label><span>生效时间</span><input type="datetime-local"'
         + ' name="effectiveFrom" required /></label>'
       + '<label><span>结束时间</span><input type="datetime-local"'
@@ -382,7 +384,7 @@ function money(value, currency) {
   }
 }
 function micros(value, currency) {
-  return escapeHtml(String(value)) + '<small>micro ' + escapeHtml(currency) + " / 1K</small>";
+  return escapeHtml(String(Number(value || 0))) + '<small>micro ' + escapeHtml(currency) + " / 百万 Token</small>";
 }
 function formatDate(value) {
   if (!value) return "-";

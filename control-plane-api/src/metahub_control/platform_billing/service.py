@@ -1178,7 +1178,10 @@ def _csv_cell(value: object) -> str:
 
 def _connect(config: AppConfig) -> sqlite3.Connection:
     try:
-        return connect_database(config.database_url)
+        connection = connect_database(config.database_url)
+        if getattr(connection, "backend", "sqlite") == "sqlite":
+            connection.execute("PRAGMA busy_timeout=250")
+        return connection
     except DbError as exc:
         raise ApiError("platform_billing.unavailable") from exc
 

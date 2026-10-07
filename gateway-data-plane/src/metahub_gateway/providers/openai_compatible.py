@@ -13,6 +13,7 @@ import time
 from collections.abc import AsyncIterator, Mapping
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from metahub_shared.runtime.config import AppConfig
@@ -824,7 +825,16 @@ def upstream_url(route: GatewayRoute, endpoint: str) -> str:
     边界：后续修改必须同时考虑租户隔离、request_id 追踪和敏感信息脱敏。
     """
 
-    return f"{route.provider_base_url.rstrip('/')}/{endpoint.lstrip('/')}"
+    base_url = route.provider_base_url.rstrip("/")
+    # Custom OpenAI-compatible services are commonly entered as an origin
+    # (for example ``https://example.com``), while their API lives below
+    # ``/v1``. Health probes already use that convention; keep runtime calls
+    # consistent without changing providers that declare a non-root API path.
+    if route.provider_type == "openai_compatible":
+        parsed = urlsplit(base_url)
+        if parsed.path in {"", "/"}:
+            base_url = urlunsplit(parsed._replace(path="/v1"))
+    return f"{base_url}/{endpoint.lstrip('/')}"
 
 
 async def post_json(

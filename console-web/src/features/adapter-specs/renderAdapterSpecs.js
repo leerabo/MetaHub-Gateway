@@ -50,11 +50,11 @@ export function renderAdapterSpecs(state, authContext) {
       <div class="empty-state adapter-spec-loading" aria-live="polite">正在读取 Adapter 规范。</div>
     </div>`;
   }
-  // 错误态只展示固定消息与 request_id，禁止拼接后端自由正文、Endpoint 或凭据信息。
+  // 错误态只展示普通用户可理解的恢复提示，内部定位号保留在日志中。
   if (state.state === "error") {
     return `<div class="adapter-spec-page" data-adapter-spec-root>
       ${renderHeading()}
-      <div class="empty-state error-state adapter-spec-loading" role="alert">${escapeHtml(state.message ?? "Adapter 规范读取失败")} · request_id: ${escapeHtml(state.requestId ?? "-")}</div>
+      <div class="empty-state error-state adapter-spec-loading" role="alert">${escapeHtml(state.message ?? "模型服务规范暂不可用，请稍后重试")}</div>
     </div>`;
   }
 
@@ -63,7 +63,7 @@ export function renderAdapterSpecs(state, authContext) {
   const visibleSpecs = allSpecs.filter((spec) => specMatchesView(spec, filters));
   return `<div class="adapter-spec-page" data-adapter-spec-root>
     ${renderHeading()}
-    ${renderCatalogIdentity(state.catalog, state.request_id)}
+    ${renderCatalogIdentity(state.catalog)}
     ${renderViewTabs(filters.view)}
     ${filters.view === "migration" ? renderMigrationBoundary() : ""}
     ${renderFilters(filters)}
@@ -78,26 +78,21 @@ export function renderAdapterSpecs(state, authContext) {
   </div>`;
 }
 
-/** 标题明确这是执行合同页，不把竞品或迁移平台宣传为模型厂家。 */
+/** 标题说明接入能力，不把内部合同术语带给组织用户。 */
 function renderHeading() {
   return `<header class="adapter-spec-heading">
     <div>
-      <p class="eyebrow">Provider 治理 / PAGE-090</p>
-      <h2 id="adapter-specs-title">国内模型 Endpoint 适配规范</h2>
-      <p>鉴权、模型映射、Usage、错误、流式与价格字段的版本化执行合同</p>
+      <p class="eyebrow">模型服务</p>
+      <h2 id="adapter-specs-title">模型服务兼容性</h2>
+      <p>查看已支持的模型服务、连接方式、用量统计和价格能力。</p>
     </div>
   </header>`;
 }
 
-/** 展示当前租户已激活目录身份；hash 完整值保留在 title，正文只显示短摘要。 */
-function renderCatalogIdentity(catalog = {}, requestId = "-") {
-  const hash = String(catalog.hash ?? "-");
-  const shortHash = /^[a-f0-9]{64}$/.test(hash) ? `${hash.slice(0, 12)}…${hash.slice(-8)}` : "-";
+/** 只显示最后更新时间；目录版本和摘要属于系统内部合同。 */
+function renderCatalogIdentity(catalog = {}) {
   return `<dl class="adapter-spec-catalog" aria-label="已激活规范目录">
-    <div><dt>目录版本</dt><dd>${escapeHtml(catalog.version ?? "-")}</dd></div>
-    <div><dt>目录哈希</dt><dd class="break-anywhere" title="${escapeAttribute(hash)}">${escapeHtml(shortHash)}</dd></div>
-    <div><dt>激活时间</dt><dd>${escapeHtml(formatDate(catalog.activated_at))}</dd></div>
-    <div><dt>请求追踪</dt><dd class="break-anywhere">${escapeHtml(requestId ?? "-")}</dd></div>
+    <div><dt>最后更新</dt><dd>${escapeHtml(formatDate(catalog.activated_at))}</dd></div>
   </dl>`;
 }
 
@@ -112,7 +107,7 @@ function renderViewTabs(activeView) {
 function renderMigrationBoundary() {
   return `<div class="adapter-spec-boundary" role="note">
     <strong>竞品 / 迁移兼容平台</strong>
-    <span>OpenRouter、硅基流动只用于对标或受控迁移兼容，不是模型厂家，也不是默认上游。</span>
+    <span>OpenRouter、硅基流动仅用于迁移兼容。</span>
   </div>`;
 }
 
@@ -136,9 +131,8 @@ function renderFilters(filters) {
 /** 固定八列合同表头；窄屏由每个 data-label 转换为键值布局。 */
 function renderTableHead() {
   return `<div class="adapter-spec-row adapter-spec-head" role="row">
-    <span role="columnheader">Provider</span><span role="columnheader">Adapter</span><span role="columnheader">鉴权</span>
-    <span role="columnheader">模型 ID</span><span role="columnheader">Usage</span><span role="columnheader">错误</span>
-    <span role="columnheader">流式</span><span role="columnheader">价格字段</span>
+    <span role="columnheader">模型服务</span><span role="columnheader">连接方式</span><span role="columnheader">用量统计</span>
+    <span role="columnheader">错误处理</span><span role="columnheader">流式支持</span><span role="columnheader">价格能力</span>
   </div>`;
 }
 
@@ -146,18 +140,15 @@ function renderTableHead() {
 function renderSpecRow(spec = {}) {
   const examples = Array.isArray(spec.platform_examples) ? spec.platform_examples : [];
   return `<div class="adapter-spec-row" role="row" data-provider-type="${escapeAttribute(spec.provider_type ?? "")}">
-    <span role="cell" data-label="Provider"><strong>${escapeHtml(spec.display_name ?? PROVIDER_LABELS[spec.provider_type] ?? "-")}</strong><small>${escapeHtml(spec.provider_type ?? "-")}</small><small>${escapeHtml(CLASSIFICATION_LABELS[spec.classification] ?? spec.classification ?? "-")}</small></span>
-    <span role="cell" data-label="Adapter"><strong>${escapeHtml(spec.adapter_name ?? "-")}</strong><small>v${escapeHtml(spec.adapter_version ?? "-")}</small><small>${escapeHtml(spec.protocol_family ?? "-")}</small></span>
-    <span role="cell" data-label="鉴权">${escapeHtml(joinValues(spec.allowed_auth_types))}</span>
-    <span role="cell" data-label="模型 ID">${escapeHtml(spec.model_id_strategy ?? "-")}</span>
-    <span role="cell" data-label="Usage">${escapeHtml(spec.usage_profile ?? "-")}</span>
-    <span role="cell" data-label="错误">${escapeHtml(spec.error_profile ?? "-")}</span>
-    <span role="cell" data-label="流式">${escapeHtml(spec.stream_profile ?? "-")}</span>
-    <span role="cell" data-label="价格字段"><small>${escapeHtml(joinValues(spec.price_fields))}</small>
+    <span role="cell" data-label="模型服务"><strong>${escapeHtml(spec.display_name ?? PROVIDER_LABELS[spec.provider_type] ?? "-")}</strong><small>${escapeHtml(CLASSIFICATION_LABELS[spec.classification] ?? "")}</small></span>
+    <span role="cell" data-label="连接方式">${spec.allowed_auth_types?.includes?.("none") ? "无需额外认证" : "已支持认证"}</span>
+    <span role="cell" data-label="用量统计">${escapeHtml(spec.usage_profile ?? "已支持")}</span>
+    <span role="cell" data-label="错误处理">${escapeHtml(spec.error_profile ?? "已支持")}</span>
+    <span role="cell" data-label="流式支持">${escapeHtml(spec.stream_profile ?? "已支持")}</span>
+    <span role="cell" data-label="价格能力"><small>${escapeHtml(spec.price_fields?.length ? "已支持" : "未配置")}</small>
       <details class="adapter-spec-details"><summary>合同详情</summary><dl>
         <div><dt>状态</dt><dd>${escapeHtml(spec.status ?? "-")}</dd></div>
-        <div><dt>健康探测</dt><dd>${escapeHtml(spec.probe_profile ?? "-")}</dd></div>
-        <div><dt>契约用例</dt><dd class="break-anywhere">${escapeHtml(spec.contract_case_id ?? "-")}</dd></div>
+        <div><dt>健康检查</dt><dd>${spec.probe_profile ? "已支持" : "未配置"}</dd></div>
         ${examples.length ? `<div><dt>平台示例</dt><dd>${escapeHtml(joinValues(examples))}</dd></div>` : ""}
       </dl></details>
     </span>

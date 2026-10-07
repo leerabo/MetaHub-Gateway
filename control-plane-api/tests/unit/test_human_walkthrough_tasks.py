@@ -21,6 +21,7 @@ def facts():
         CREATE TABLE virtual_keys(virtual_key_id,tenant_id,status);
         CREATE TABLE virtual_key_consumers(virtual_key_id,tenant_id,consumer_id);
         CREATE TABLE workspace_consumers(consumer_id,tenant_id,status);
+        CREATE TABLE workspace_memberships(workspace_id,status,role_code);
         CREATE TABLE organization_profiles(workspace_id,name);
         CREATE TABLE request_logs(tenant_id,status);
     """)
@@ -55,37 +56,26 @@ def test_provider_requires_active_credentials_and_successful_health(facts):
     assert count("providers") == 0
 
 
-def test_model_needs_an_enabled_route_to_an_enabled_model(facts):
+def test_model_catalog_is_complete_when_an_enabled_model_is_available(facts):
     connection, count = facts
     connection.execute("INSERT INTO providers VALUES('p','tenant','active','healthy','none')")
     connection.execute("INSERT INTO models VALUES('m','tenant','p','active')")
-    assert count("models") == 0
-    connection.execute("INSERT INTO model_aliases VALUES('other','m','active')")
-    assert count("models") == 0
-    connection.execute("INSERT INTO model_aliases VALUES('tenant','m','active')")
     assert count("models") == 1
     connection.execute("UPDATE models SET status='disabled'")
     assert count("models") == 0
 
 
-def test_model_needs_its_own_healthy_provider_and_usable_credential(facts):
+def test_model_catalog_does_not_wait_for_provider_health_or_credentials(facts):
     connection, count = facts
-    connection.execute("INSERT INTO providers VALUES('p','tenant','active','healthy','bearer')")
+    connection.execute("INSERT INTO providers VALUES('p','tenant','active','unknown','bearer')")
     connection.execute("INSERT INTO models VALUES('m','tenant','p','active')")
-    connection.execute("INSERT INTO model_aliases VALUES('tenant','m','active')")
-    assert count("models") == 0
-    connection.execute("INSERT INTO provider_credentials VALUES('other','tenant','active','key')")
-    connection.execute("INSERT INTO provider_credentials VALUES('p','other','active','key')")
-    assert count("models") == 0
-    connection.execute("INSERT INTO provider_credentials VALUES('p','tenant','active','key')")
+    # The catalog task records that an enabled model has been configured. Provider
+    # health and credentials are reported by the separate provider connection task.
     assert count("models") == 1
     connection.execute("UPDATE providers SET health_status='unhealthy'")
-    assert count("models") == 0
-    connection.execute("UPDATE providers SET health_status='healthy'")
-    connection.execute("UPDATE provider_credentials SET encrypted_key=''")
-    assert count("models") == 0
-    connection.execute("UPDATE providers SET auth_type='none'")
     assert count("models") == 1
+    connection.execute("UPDATE providers SET status='disabled'")
+    assert count("models") == 0
 
 
 def test_completed_task_keeps_review_action_without_becoming_next_task():
@@ -115,18 +105,15 @@ def test_completed_task_keeps_review_action_without_becoming_next_task():
         RoleTask.model_validate({**completed.model_dump(), "status": "blocked"})
 
 
-def test_employee_key_requires_active_employee_and_key(facts):
+def test_member_key_access_requires_an_active_workspace_member(facts):
     connection, count = facts
-    connection.execute("INSERT INTO virtual_keys VALUES('k','tenant','active')")
-    assert count("consumer_keys") == 0
-    connection.execute("INSERT INTO workspace_consumers VALUES('c','tenant','active')")
-    connection.execute("INSERT INTO virtual_key_consumers VALUES('k','tenant','c')")
-    assert count("consumer_keys") == 1
-    connection.execute("UPDATE virtual_keys SET status='disabled'")
-    assert count("consumer_keys") == 0
-    connection.execute("UPDATE virtual_keys SET status='active'")
-    connection.execute("UPDATE workspace_consumers SET status='disabled'")
-    assert count("consumer_keys") == 0
+    assert count("member_key_access") == 0
+    connection.execute("INSERT INTO workspace_memberships VALUES('workspace','active','admin')")
+    assert count("member_key_access") == 1
+    connection.execute("UPDATE workspace_memberships SET status='disabled'")
+    assert count("member_key_access") == 0
+    connection.execute("UPDATE workspace_memberships SET status='active', role_code='service_account'")
+    assert count("member_key_access") == 0
 
 
 def test_existing_name_needs_no_confirmation_and_failed_call_is_not_completed(facts):
@@ -143,6 +130,9 @@ def test_existing_name_needs_no_confirmation_and_failed_call_is_not_completed(fa
 def test_key_and_call_tasks_link_to_actions_with_matching_permissions():
     tasks = {task.task_code: task for task in ROLE_TASK_SPECS}
     assert tasks["project_key_ready"].action_route_code == "workspace.gateway.virtual-keys"
-    assert tasks["project_key_ready"].source_code == "consumer_keys"
+    assert tasks["project_key_ready"].source_code == "member_key_access"
+    assert "owner" not in tasks["project_key_ready"].roles
+    assert "admin" not in tasks["project_key_ready"].roles
+    assert "developer" in tasks["project_key_ready"].roles
     assert tasks["first_gateway_call"].action_route_code == "workspace.developer.sdk"
     assert tasks["first_gateway_call"].permissions == ("developer_portal.read",)

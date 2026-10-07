@@ -14,17 +14,22 @@ from dataclasses import dataclass, replace
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 from typing import Literal
 
-# 两候选是 ModelAlias default/fallback 的产品边界。固定上限同时保护数据库事务和纯计算耗时。
-MAX_ROUTING_CANDIDATES = 2
+# 一个 Alias 允许一个优先模型和最多 31 个备用候选；固定上限保护数据库事务和排序耗时。
+MAX_ROUTING_CANDIDATES = 32
 # Token 遍历和计数上限防止畸形 OpenAI-compatible 结构在选路阶段消耗无界 CPU 或内存。
 MAX_TOKEN_NODES = 100_000
 MAX_INPUT_TOKENS = 1_000_000
 MAX_OUTPUT_TOKENS = 131_072
-# 模型价格入口当前允许每千 Token 单价最多 10 亿、12 位小数；快照恢复必须执行同样校验。
-MAX_PRICE_PER_1K = Decimal("1000000000")
+# 模型价格入口统一使用每百万 Token 单价，最多 10 亿、12 位小数；快照恢复必须执行同样校验。
+MAX_PRICE_PER_MILLION = Decimal("1000000000")
+# 数据库/API 字段名保留 *_per_1k 以兼容既有快照和客户端；字段值的当前语义是每百万 Token。
+MAX_PRICE_PER_1K = MAX_PRICE_PER_MILLION
 MAX_PRICE_DECIMAL_PLACES = 12
-# 除以 1000 后最多产生 15 位小数；排序值和持久化解释必须使用同一量化结果。
+# 除以 1,000,000 后最多产生 15 位小数；排序值和持久化解释必须使用同一量化结果。
 COST_QUANT = Decimal("0.000000000000001")
+# Cost-first comparisons use one deterministic comparison currency. The rate is
+# loaded from the workspace's effective version in the same request snapshot.
+ROUTING_COMPARISON_CURRENCY = "CNY"
 # 平均延迟以毫秒三位小数冻结，和数据库 TEXT CHECK、Control API 展示口径完全一致。
 LATENCY_QUANT = Decimal("0.001")
 # 公式版本会持久化到 RoutingDecision，修改公式时必须新增版本，不能原地改变历史语义。
@@ -167,12 +172,19 @@ class RoutingPriceFact:
     output_price_per_1k: Decimal | None = None
     currency: str | None = None
     price_schema_version: str | None = None
+    # 旧调用方没有缓存 Token 估算时以零价占位；实际快照加载器会填入目录/计划缓存价。
+    cache_price_per_1k: Decimal | None = Decimal("0")
+    # Optional normalized comparison fact.  It is deliberately separate from the
+    # billing currency and amount so USD usage is never persisted as CNY.
+    comparison_currency: str | None = None
+    comparison_fx_rate: Decimal | None = None
+    comparison_fx_rate_version: str | None = None
 
     @classmethod
     def missing(cls, model_id: str) -> RoutingPriceFact:
         """为没有有效 PricePlan/带版本目录价的模型构造明确缺价事实。"""
 
-        return cls(model_id=model_id, source="missing")
+        return cls(model_id=model_id, source="missing", cache_price_per_1k=None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +204,9 @@ class TokenEstimate:
     input_tokens: int
     output_tokens: int
     truncated: bool
+    # 预请求阶段通常无法知道 Provider 会返回多少缓存命中 Token；未知时保持 0，
+    # 真实 usage 路径会以 Provider 返回值覆盖。
+    cache_tokens: int = 0
 
     @property
     def total_tokens(self) -> int:
@@ -224,6 +239,10 @@ class RoutingCandidateResult:
     price_schema_version: str | None = None
     currency: str | None = None
     estimated_cost_amount: Decimal | None = None
+    comparison_currency: str | None = None
+    comparison_fx_rate: Decimal | None = None
+    comparison_fx_rate_version: str | None = None
+    comparison_cost_amount: Decimal | None = None
     # 旧模式和通用资格阶段已拒绝的候选保持 not_evaluated；质量字段必须成组为空。
     quality_evidence_state: QualityEvidenceState = "not_evaluated"
     model_quality_score_id: str | None = None
@@ -243,7 +262,7 @@ class RoutingCandidateResult:
 
 @dataclass(frozen=True, slots=True)
 class RoutingSelectionResult:
-    """一次确定性路由选择及其最多两条候选解释。"""
+    """一次确定性路由选择及其有序候选解释。"""
 
     routing_mode: RoutingMode
     status: SelectionStatus
@@ -262,7 +281,7 @@ class RoutingSelectionResult:
 
 @dataclass(frozen=True, slots=True)
 class RoutingPhaseOneResult:
-    """资格阶段结果；只有两条 cost 候选合格时才要求价格与 Token。"""
+    """资格阶段结果；至少两条 cost 候选合格时才要求价格与 Token。"""
 
     routing_mode: RoutingMode
     candidates: tuple[RoutingPhaseOneCandidate, ...]
@@ -362,7 +381,7 @@ def evaluate_routing_candidates_phase_one(
 ) -> RoutingPhaseOneResult:
     """执行通用资格过滤，并完成旧模式无需后续事实的选择。
 
-    参数：候选最多两项，且角色/优先级必须是 default=0、fallback=1。返回：若
+    参数：候选最多 32 项，且角色/优先级必须是 default=0、fallback 从 1 递增。返回：若
     ``needs_cost_comparison`` 为真时才允许读取价格并估算 Token；``quality_cost`` 至少有一条
     合格候选时只标记 ``needs_quality_evaluation``，此时必须先读 Score，不能提前读价格。
     """
@@ -395,8 +414,8 @@ def evaluate_routing_candidates_phase_one(
             needs_quality_evaluation=True,
         )
 
-    # 只有两条动态成本候选均合格时才允许读取价格或扫描请求长度。
-    if normalized_mode == "cost_first" and len(eligible) == 2:
+    # 至少两条动态成本候选均合格时才允许读取价格或扫描请求长度。
+    if normalized_mode == "cost_first" and len(eligible) >= 2:
         return RoutingPhaseOneResult(
             routing_mode=normalized_mode,
             candidates=phase_candidates,
@@ -454,18 +473,17 @@ def complete_cost_routing(
     price_facts: Iterable[RoutingPriceFact],
     token_estimate: TokenEstimate,
 ) -> RoutingSelectionResult:
-    """用同一 Token 估算和 ``as_of`` 价格完成两候选成本排序。
+    """用同一 Token 估算和价格完成多候选成本排序。
 
-    缺价或混币不会比较数值，而是退回 Alias 固定优先级并记录明确原因。非法 Decimal、
-    未知币种、错误模型映射或不完整价格组属于快照损坏，以 ``ValueError`` 交给包装层映射
-    为统一错误码，不能伪装成正常缺价。
+    原币成本用于计费审计；比较成本先按冻结汇率归一到 CNY。缺价或缺少汇率事实时才
+    退回 Alias 固定优先级，避免把 USD 与 CNY 的数字直接比较。
     """
 
-    # 第二阶段必须绑定第一阶段的两条 cost 候选，禁止拿旧快照或其他模式结果补价格。
+    # 第二阶段必须绑定第一阶段的全部 cost 候选，禁止拿旧快照或其他模式结果补价格。
     if (
         phase_one.routing_mode != "cost_first"
         or not phase_one.needs_cost_comparison
-        or len(phase_one.eligible_candidates) != 2
+        or len(phase_one.eligible_candidates) < 2
         or phase_one.final_selection is not None
     ):
         # 阶段身份不完整时必须拒绝，不能尝试从价格事实反推原候选集合。
@@ -485,19 +503,23 @@ def complete_cost_routing(
         prices.setdefault(model_id, RoutingPriceFact.missing(model_id))
 
     available = all(
-        prices[model_id].source in {"price_plan", "model_catalog"} for model_id in prices
+        prices[model_id].source
+        in {"workspace_provider_cost_rate", "price_plan", "model_catalog"}
+        for model_id in prices
     )
     # 即使另一条候选缺价，已有显式价格的候选仍必须保存可复现成本；否则会形成
     # price_available=1 但 estimated_cost=NULL 的矛盾事实，并被 0036 成组 CHECK 拒绝。
     costs: dict[str, Decimal] = {
         model_id: _estimated_cost(fact, token_estimate)
         for model_id, fact in prices.items()
-        if fact.source in {"price_plan", "model_catalog"}
+        if fact.source in {
+            "workspace_provider_cost_rate",
+            "price_plan",
+            "model_catalog",
+        }
     }
+    comparison_costs, comparison_details = _comparison_costs(prices, costs)
 
-    currencies = {
-        fact.currency for fact in prices.values() if fact.source in {"price_plan", "model_catalog"}
-    }
     stable_eligible = tuple(
         sorted(
             phase_one.eligible_candidates,
@@ -507,7 +529,7 @@ def complete_cost_routing(
     if not available:
         ordered = stable_eligible
         reason = REASON_COST_PRICE_MISSING
-    elif len(currencies) != 1:
+    elif comparison_costs is None:
         ordered = stable_eligible
         reason = REASON_COST_CURRENCY_INCOMPARABLE
     else:
@@ -515,14 +537,14 @@ def complete_cost_routing(
             sorted(
                 phase_one.eligible_candidates,
                 key=lambda item: (
-                    costs[item.candidate.model_id],
+                    comparison_costs[item.candidate.model_id],
                     item.candidate.configured_priority,
                     item.candidate.model_id,
                 ),
             )
         )
-        first_cost = costs[ordered[0].candidate.model_id]
-        second_cost = costs[ordered[1].candidate.model_id]
+        first_cost = comparison_costs[ordered[0].candidate.model_id]
+        second_cost = comparison_costs[ordered[1].candidate.model_id]
         reason = REASON_COST_TIE if first_cost == second_cost else REASON_COST_LOWEST
 
     return _selected_result(
@@ -532,6 +554,8 @@ def complete_cost_routing(
         selection_reason=reason,
         prices=prices,
         costs=costs,
+        comparison_costs=comparison_costs,
+        comparison_details=comparison_details,
         token_estimate=token_estimate,
         cost_comparison_performed=True,
     )
@@ -618,10 +642,8 @@ def complete_quality_cost_routing(
             selection_reason=REASON_QUALITY_COST_SINGLE_ELIGIBLE,
         )
 
-    first_model = executable[0].candidate.model_id
-    second_model = executable[1].candidate.model_id
-    states = (evidence_states[first_model], evidence_states[second_model])
-    if states == ("cold", "cold"):
+    states = tuple(evidence_states[item.candidate.model_id] for item in executable)
+    if all(state == "cold" for state in states):
         # 全 cold 时没有足够事实比较，必须沿 Alias 配置顺序启动且不扫描正文或读取价格。
         return _quality_selection_result(
             phase_one,
@@ -662,7 +684,7 @@ def complete_quality_cost_routing(
             cold_deferred_model=deferred_model,
         )
 
-    # 到这里恰有两条 ready-pass。延迟缺失必须先于 Token/价格，防止无用正文扫描和依赖读取。
+    # 到这里有至少两条 ready-pass。延迟缺失必须先于 Token/价格，防止无用正文扫描和依赖读取。
     if quality_config.latency_weight_bps > 0 and any(
         average_latencies[item.candidate.model_id] is None for item in executable
     ):
@@ -680,10 +702,12 @@ def complete_quality_cost_routing(
     token_estimate: TokenEstimate | None = None
     prices: dict[str, RoutingPriceFact] = {}
     costs: dict[str, Decimal] = {}
+    comparison_costs: dict[str, Decimal] | None = None
+    comparison_details: dict[str, tuple[str, Decimal, str]] = {}
     cost_evaluation_performed = False
     # 成本权重大于零才允许扫描正文并读取同一快照价格，零权重必须完全跳过依赖。
     if quality_config.cost_weight_bps > 0:
-        # 两个成本回调缺一都会破坏事实完整性，必须在任何正文或价格读取前失败关闭。
+        # 成本回调缺一都会破坏事实完整性，必须在任何正文或价格读取前失败关闭。
         if token_estimator is None or price_loader is None:
             raise ValueError("routing_policy.quality_dependencies_missing")
         # Token 只扫描一次并立即强校验；损坏估算不能继续触发价格读取。
@@ -708,8 +732,8 @@ def complete_quality_cost_routing(
                 token_estimate=token_estimate,
                 cost_evaluation_performed=True,
             )
-        currencies = {fact.currency for fact in prices.values()}
-        if len(currencies) != 1:
+        comparison_costs, comparison_details = _comparison_costs(prices, costs)
+        if comparison_costs is None:
             return _quality_selection_result(
                 phase_one,
                 quality_config,
@@ -721,6 +745,8 @@ def complete_quality_cost_routing(
                 selection_reason=REASON_QUALITY_COST_CURRENCY_INCOMPARABLE,
                 prices=prices,
                 costs=costs,
+                comparison_costs=comparison_costs,
+                comparison_details=comparison_details,
                 token_estimate=token_estimate,
                 cost_evaluation_performed=True,
             )
@@ -729,7 +755,11 @@ def complete_quality_cost_routing(
     quality_components = {
         item.candidate.model_id: quality_scores[item.candidate.model_id] for item in executable
     }
-    cost_components = _relative_component_bps(costs) if quality_config.cost_weight_bps > 0 else {}
+    cost_components = (
+        _relative_component_bps(comparison_costs)
+        if quality_config.cost_weight_bps > 0 and comparison_costs is not None
+        else {}
+    )
     latency_values = {
         item.candidate.model_id: average_latencies[item.candidate.model_id]
         for item in executable
@@ -775,6 +805,8 @@ def complete_quality_cost_routing(
         selection_reason=reason,
         prices=prices,
         costs=costs,
+        comparison_costs=comparison_costs,
+        comparison_details=comparison_details,
         token_estimate=token_estimate,
         cost_evaluation_performed=cost_evaluation_performed,
         quality_components=quality_components,
@@ -832,7 +864,7 @@ def select_routing_candidates(
             token_estimator=token_estimator,
             price_loader=price_loader,
         )
-    # 非两候选成本分支必须直接返回第一阶段结果，确保两个延迟回调调用次数都为零。
+    # 少于两条候选的成本分支直接返回第一阶段结果，确保无需读取延迟依赖。
     if not phase_one.needs_cost_comparison:
         if phase_one.final_selection is None:  # pragma: no cover - 数据结构构造已保证完整。
             raise ValueError("routing_policy.phase_one_invalid")
@@ -946,7 +978,7 @@ def _validate_candidates(
 ) -> tuple[RoutingCandidateInput, ...]:
     """校验候选数量、角色、状态与安全枚举，并按配置优先级稳定排序。"""
 
-    # 超过 Alias 主备上限表示调用方混入了非权威候选，必须整体拒绝而非截断。
+    # 超过 Alias 候选上限表示调用方混入了非权威候选，必须整体拒绝而非截断。
     if len(candidates) > MAX_ROUTING_CANDIDATES:
         raise ValueError("routing_policy.candidate_count_invalid")
     roles: set[str] = set()
@@ -955,12 +987,17 @@ def _validate_candidates(
         # 只接受冻结数据结构，字典或动态对象可能在两阶段之间被调用方修改。
         if not isinstance(candidate, RoutingCandidateInput):
             raise ValueError("routing_policy.candidate_invalid")
-        expected_priority = {"default": 0, "fallback": 1}.get(candidate.candidate_role)
-        # 角色与配置优先级必须一一对应，避免伪造 fallback=0 改变稳定平局顺序。
-        if expected_priority is None or candidate.configured_priority != expected_priority:
+        # default 必须是 0；fallback 使用从 1 开始的唯一优先级，保持稳定平局顺序。
+        if candidate.candidate_role == "default":
+            valid_priority = candidate.configured_priority == 0
+        elif candidate.candidate_role == "fallback":
+            valid_priority = 1 <= candidate.configured_priority < MAX_ROUTING_CANDIDATES
+        else:
+            valid_priority = False
+        if not valid_priority:
             raise ValueError("routing_policy.candidate_invalid")
-        # 重复角色或模型无法持久化为两条唯一候选事实，因此在排序前失败关闭。
-        if candidate.candidate_role in roles or candidate.model_id in model_ids:
+        # 只有 default 角色唯一；多个 fallback 通过 configured_priority 区分顺序。
+        if (candidate.candidate_role == "default" and candidate.candidate_role in roles) or candidate.model_id in model_ids:
             raise ValueError("routing_policy.candidate_invalid")
         roles.add(candidate.candidate_role)
         model_ids.add(candidate.model_id)
@@ -1073,6 +1110,8 @@ def _selected_result(
     selection_reason: str,
     prices: Mapping[str, RoutingPriceFact] | None = None,
     costs: Mapping[str, Decimal] | None = None,
+    comparison_costs: Mapping[str, Decimal] | None = None,
+    comparison_details: Mapping[str, tuple[str, Decimal, str]] | None = None,
     token_estimate: TokenEstimate | None = None,
     cost_comparison_performed: bool = False,
 ) -> RoutingSelectionResult:
@@ -1084,6 +1123,8 @@ def _selected_result(
     results: list[RoutingCandidateResult] = []
     prices = prices or {}
     costs = costs or {}
+    comparison_costs = comparison_costs or {}
+    comparison_details = comparison_details or {}
     for item in all_candidates:
         model_id = item.candidate.model_id
         if not item.eligible:
@@ -1117,6 +1158,12 @@ def _selected_result(
                 else None,
                 currency=fact.currency if price_available and fact else None,
                 estimated_cost_amount=costs.get(model_id),
+                comparison_currency=(comparison_details.get(model_id) or (None, None, None))[0],
+                comparison_fx_rate=(comparison_details.get(model_id) or (None, None, None))[1],
+                comparison_fx_rate_version=(
+                    comparison_details.get(model_id) or (None, None, None)
+                )[2],
+                comparison_cost_amount=comparison_costs.get(model_id),
             )
         )
     selected = ordered_eligible[0].candidate
@@ -1146,6 +1193,8 @@ def _quality_selection_result(
     cold_deferred_model: str | None = None,
     prices: Mapping[str, RoutingPriceFact] | None = None,
     costs: Mapping[str, Decimal] | None = None,
+    comparison_costs: Mapping[str, Decimal] | None = None,
+    comparison_details: Mapping[str, tuple[str, Decimal, str]] | None = None,
     token_estimate: TokenEstimate | None = None,
     cost_evaluation_performed: bool = False,
     quality_components: Mapping[str, int] | None = None,
@@ -1161,6 +1210,8 @@ def _quality_selection_result(
     }
     prices = prices or {}
     costs = costs or {}
+    comparison_costs = comparison_costs or {}
+    comparison_details = comparison_details or {}
     # 质量分既用于门槛也属于 ready/cold 行的可复现事实，即使未完成加权也必须持久化。
     if quality_components is None:
         quality_components = {
@@ -1222,6 +1273,12 @@ def _quality_selection_result(
                 ),
                 currency=price.currency if price_available and price is not None else None,
                 estimated_cost_amount=costs.get(model_id),
+                comparison_currency=(comparison_details.get(model_id) or (None, None, None))[0],
+                comparison_fx_rate=(comparison_details.get(model_id) or (None, None, None))[1],
+                comparison_fx_rate_version=(
+                    comparison_details.get(model_id) or (None, None, None)
+                )[2],
+                comparison_cost_amount=comparison_costs.get(model_id),
                 quality_evidence_state=evidence_state,
                 model_quality_score_id=fact.model_quality_score_id,
                 quality_statistics_version=fact.statistics_version,
@@ -1393,9 +1450,70 @@ def _normalize_quality_prices(
     costs = {
         model_id: _estimated_cost(fact, token_estimate)
         for model_id, fact in prices.items()
-        if fact.source in {"price_plan", "model_catalog"}
+        if fact.source in {
+            "workspace_provider_cost_rate",
+            "price_plan",
+            "model_catalog",
+        }
     }
     return prices, costs
+
+
+def _comparison_costs(
+    prices: Mapping[str, RoutingPriceFact],
+    costs: Mapping[str, Decimal],
+) -> tuple[dict[str, Decimal] | None, dict[str, tuple[str, Decimal, str]]]:
+    """Return costs normalized to the comparison currency and their frozen rate facts.
+
+    A missing conversion is intentionally represented by ``None`` so callers can make the
+    documented fixed-priority fallback.  Same-currency prices always use the identity rate;
+    cross-currency prices must carry an explicit rate from the data/control-plane loader.
+    """
+
+    details: dict[str, tuple[str, Decimal, str]] = {}
+    normalized: dict[str, Decimal] = {}
+    for model_id, fact in prices.items():
+        if model_id not in costs:
+            continue
+        detail = _comparison_detail(fact)
+        if detail is None:
+            return None, {}
+        comparison_currency, rate, rate_version = detail
+        try:
+            with localcontext() as context:
+                context.prec = 50
+                amount = (costs[model_id] * rate).quantize(COST_QUANT, rounding=ROUND_HALF_UP)
+        except (InvalidOperation, OverflowError, TypeError) as exc:
+            raise ValueError("routing_policy.price_fact_invalid") from exc
+        if not amount.is_finite():
+            raise ValueError("routing_policy.price_fact_invalid")
+        normalized[model_id] = amount
+        details[model_id] = (comparison_currency, rate, rate_version)
+    return normalized, details
+
+
+def _comparison_detail(
+    fact: RoutingPriceFact,
+) -> tuple[str, Decimal, str] | None:
+    """Resolve an explicit same-currency identity or loader-provided FX fact."""
+
+    if fact.currency == ROUTING_COMPARISON_CURRENCY:
+        return (
+            ROUTING_COMPARISON_CURRENCY,
+            Decimal("1"),
+            fact.comparison_fx_rate_version or "identity-v1",
+        )
+    if (
+        fact.comparison_currency != ROUTING_COMPARISON_CURRENCY
+        or fact.comparison_fx_rate is None
+        or fact.comparison_fx_rate_version is None
+    ):
+        return None
+    return (
+        fact.comparison_currency,
+        fact.comparison_fx_rate,
+        fact.comparison_fx_rate_version,
+    )
 
 
 def _relative_component_bps(values: Mapping[str, Decimal]) -> dict[str, int]:
@@ -1476,10 +1594,20 @@ def _validate_price_fact(fact: RoutingPriceFact) -> None:
     # not_evaluated 只属于未进入成本阶段的持久表示，不能伪装成价格查询结果。
     if fact.source not in _PRICE_SOURCES or fact.source == "not_evaluated":
         raise ValueError("routing_policy.price_fact_invalid")
-    values = (fact.input_price_per_1k, fact.output_price_per_1k)
+    values = (fact.input_price_per_1k, fact.output_price_per_1k, fact.cache_price_per_1k)
     # 正常缺价的所有金额、币种和版本字段都必须为空，以区别损坏的半组价格。
     if fact.source == "missing":
-        if any(value is not None for value in (*values, fact.currency, fact.price_schema_version)):
+        if any(
+            value is not None
+            for value in (
+                *values,
+                fact.currency,
+                fact.price_schema_version,
+                fact.comparison_currency,
+                fact.comparison_fx_rate,
+                fact.comparison_fx_rate_version,
+            )
+        ):
             raise ValueError("routing_policy.price_fact_invalid")
         return
     # 显式价格必须直接使用 Decimal；float 会在排序前产生不可复现的二进制误差。
@@ -1499,6 +1627,22 @@ def _validate_price_fact(fact: RoutingPriceFact) -> None:
     # 未知币种或无版本价格不是“缺价”，而是必须由包装层报错的持久快照损坏。
     if fact.currency not in _CURRENCIES or not _safe_identifier(fact.price_schema_version):
         raise ValueError("routing_policy.price_fact_invalid")
+    comparison_fields = (
+        fact.comparison_currency,
+        fact.comparison_fx_rate,
+        fact.comparison_fx_rate_version,
+    )
+    if any(value is not None for value in comparison_fields):
+        if (
+            fact.comparison_currency != ROUTING_COMPARISON_CURRENCY
+            or type(fact.comparison_fx_rate) is not Decimal
+            or not fact.comparison_fx_rate.is_finite()
+            or fact.comparison_fx_rate <= 0
+            or not _safe_identifier(fact.comparison_fx_rate_version)
+        ):
+            raise ValueError("routing_policy.price_fact_invalid")
+        if fact.currency == ROUTING_COMPARISON_CURRENCY and fact.comparison_fx_rate != Decimal("1"):
+            raise ValueError("routing_policy.price_fact_invalid")
 
 
 def _estimated_cost(fact: RoutingPriceFact, estimate: TokenEstimate) -> Decimal:
@@ -1511,9 +1655,10 @@ def _estimated_cost(fact: RoutingPriceFact, estimate: TokenEstimate) -> Decimal:
         with localcontext() as context:
             context.prec = 50
             amount = (
-                Decimal(estimate.input_tokens) * fact.input_price_per_1k
+                Decimal(estimate.input_tokens - estimate.cache_tokens) * fact.input_price_per_1k
+                + Decimal(estimate.cache_tokens) * fact.cache_price_per_1k
                 + Decimal(estimate.output_tokens) * fact.output_price_per_1k
-            ) / Decimal(1000)
+            ) / Decimal(1_000_000)
             # Decimal 运算结果仍需再次检查有限性，防止异常上下文产生不可持久化金额。
             if not amount.is_finite():
                 raise ValueError("routing_policy.price_fact_invalid")
@@ -1553,6 +1698,8 @@ def _validate_token_estimate(estimate: TokenEstimate) -> None:
         or type(estimate.output_tokens) is not int
         or not 0 <= estimate.output_tokens <= MAX_OUTPUT_TOKENS
         or type(estimate.truncated) is not bool
+        or type(estimate.cache_tokens) is not int
+        or not 0 <= estimate.cache_tokens <= estimate.input_tokens
     ):
         # 非法估算必须由调用包装层统一映射，不能修剪后伪造为原始共享结果。
         raise ValueError("routing_policy.token_estimate_invalid")
@@ -1572,6 +1719,7 @@ __all__ = [
     "CandidateFinalStatus",
     "CandidateRole",
     "COST_QUANT",
+    "ROUTING_COMPARISON_CURRENCY",
     "HealthState",
     "KeyPoolState",
     "LATENCY_QUANT",

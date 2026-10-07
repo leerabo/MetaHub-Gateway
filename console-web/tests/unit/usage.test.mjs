@@ -38,6 +38,17 @@ const summaryPayload = {
     estimated_records: 1,
     real_usage_records: 1,
   },
+  by_consumer: [
+    {
+      consumer_id: "user_1",
+      consumer_name: "李欢",
+      consumer_department: "研发",
+      request_count: 2,
+      total_tokens: 200,
+      cost_cny: 0.42,
+      cost_usd: 0,
+    },
+  ],
   by_day: [
     {
       day: "2026-07-09",
@@ -629,24 +640,116 @@ test("usage panel renders totals records and estimated label for authorized role
     budgetState,
   );
 
-  assert.match(html, /Token 用量与成本/);
+  assert.match(html, /用量与成本/);
   assert.match(html, /200/);
   assert.match(html, /0.42 CNY/);
   assert.match(html, /deepseek-chat/);
-  assert.match(html, /按 Project/);
+  assert.match(html, /按项目/);
+  assert.match(html, /id="usage-dimension"/);
+  assert.match(html, /data-usage-dimension="overview"/);
+  assert.match(html, /data-usage-dimension="model"/);
+  assert.match(html, /data-usage-dimension="project"/);
+  assert.doesNotMatch(html, /data-usage-dimension="key"|data-usage-dimension="application"/);
+  assert.doesNotMatch(html, />按调用 KEY<\/option>|>按应用<\/option>/);
+  assert.match(html, /hidden aria-labelledby="usage-dimension-model"/);
+  assert.doesNotMatch(html, /aria-label="当前租户用量记录"/);
+  assert.match(html, /class="usage-filter-panel"/);
+  assert.match(html, /已设置 1 项/);
   assert.match(html, /账务核心/);
   assert.match(html, /账务 API/);
+  assert.match(html, /李欢 \/ 研发/);
+  assert.match(html, /usage-project-row/);
+  assert.match(html, /usage-project-application/);
   assert.match(html, /估算/);
   assert.match(html, /今日预算状态/);
   assert.match(html, /生产 Key/);
   assert.match(html, /82 \/ 100 CNY/);
-  assert.match(html, /归一化详情/);
-  assert.match(html, /Provider Raw Usage/);
-  assert.match(html, /prompt_tokens/);
+  assert.doesNotMatch(html, /归一化详情|服务商原始用量|prompt_tokens|请求编号|原始用量 JSON|归一化 JSON/u);
   assert.match(html, /id="usage-export-csv"/);
-  for (const label of ["request_id", "模型", "Provider", "Key", "归属", "Token", "成本", "来源", "时间"]) {
-    assert.match(html, new RegExp(`data-label="${label}"`));
-  }
+  assert.match(html, /<select name="consumerId"[^>]*aria-label="使用者"/);
+  assert.match(html, /name="startDate"[^>]*aria-label="开始日期"/);
+  assert.match(html, /name="endDate"[^>]*aria-label="结束日期"/);
+  assert.match(html, /name="modelId"[^>]*aria-label="模型"/);
+  assert.match(html, /name="virtualKeyId"[^>]*aria-label="调用凭据"/);
+  assert.match(html, /name="environmentId"[^>]*aria-label="环境"/);
+  assert.doesNotMatch(html, /virtual_key_id|provider_id|environment_id|project_id|application_id/u);
+});
+
+test("usage hides consumer ids when the directory name is unavailable", () => {
+  const html = renderUsagePanel(
+    {
+      state: "ok",
+      summary: {
+        totals: {},
+        by_consumer: [{
+          consumer_id: "user_internal_123",
+          request_count: 1,
+          total_tokens: 10,
+          cost_cny: 0,
+          cost_usd: 0,
+        }],
+      },
+      dimension: "consumer",
+      filters: {},
+    },
+    withPermissionSnapshot(
+      { user: { role: "admin" } },
+      [PERMISSIONS.BILLING_USAGE_READ],
+    ),
+  );
+
+  assert.match(html, /未绑定使用者/);
+  assert.doesNotMatch(html, />user_internal_123</);
+});
+
+test("project usage keeps applications under their project and groups unbound applications", () => {
+  const html = renderUsagePanel(
+    {
+      state: "ok",
+      summary: {
+        totals: {},
+        by_project: [{
+          project_id: "prj_1",
+          project_name: "账务核心",
+          request_count: 3,
+          total_tokens: 300,
+          cost_cny: 0.6,
+          cost_usd: 0,
+        }],
+        by_application: [
+          {
+            application_id: "app_1",
+            application_name: "账务 API",
+            project_id: "prj_1",
+            request_count: 2,
+            total_tokens: 200,
+            cost_cny: 0.4,
+            cost_usd: 0,
+          },
+          {
+            application_id: "app_2",
+            application_name: "临时工具",
+            request_count: 1,
+            total_tokens: 100,
+            cost_cny: 0.2,
+            cost_usd: 0,
+          },
+        ],
+      },
+      dimension: "project",
+      filters: {},
+    },
+    withPermissionSnapshot(
+      { user: { role: "admin" } },
+      [PERMISSIONS.BILLING_USAGE_READ],
+    ),
+  );
+
+  assert.match(html, /账务核心/);
+  assert.match(html, /账务 API/);
+  assert.match(html, /未绑定项目/);
+  assert.match(html, /临时工具/);
+  assert.match(html, /class="usage-mini-row usage-project-application"/);
 });
 
 test("usage export command is admin only and feedback escapes job and request identifiers", () => {
@@ -664,7 +767,7 @@ test("usage export command is admin only and feedback escapes job and request id
     ),
     budgetState,
   );
-  assert.match(developerHtml, /Token 用量与成本/);
+  assert.match(developerHtml, /用量与成本/);
   assert.doesNotMatch(developerHtml, /usage-export-csv/);
 
   const adminHtml = renderUsagePanel({
@@ -699,6 +802,21 @@ test("usage export command is admin only and feedback escapes job and request id
   assert.match(retryHtml, />重试导出<\/button>/);
 });
 
+test("usage empty state renders a single overview and dimension switcher", () => {
+  const html = renderUsagePanel(
+    { state: "ok", summary: { totals: {} }, records: { usage_records: [], total: 0 }, filters: {} },
+    withPermissionSnapshot(
+      { user: { role: "admin" } },
+      [PERMISSIONS.BILLING_USAGE_READ],
+    ),
+  );
+
+  assert.doesNotMatch(html, /usage-summary-grid/);
+  assert.match(html, /id="usage-dimension"/);
+  assert.match(html, /data-usage-dimension="overview"/);
+  assert.doesNotMatch(html, /当前租户用量记录|usage-record-table/);
+});
+
 test("usage main state retries existing job before create and clears identifiers at session boundaries", () => {
   assert.match(mainSource, /const operationRequestId = usageExportState\.operationRequestId \?\? createUsageExportRequestId\(\)/);
   assert.match(mainSource, /let activeJobId = usageExportState\.jobId \?\? null/);
@@ -708,6 +826,14 @@ test("usage main state retries existing job before create and clears identifiers
   assert.match(mainSource, /function clearUsageExportSessionState\(\)[\s\S]*?usageExportController\?\.abort\(\)[\s\S]*?status: "idle"/);
 });
 
+test("usage dimension switch stays local and exposes one summary view at a time", () => {
+  assert.match(mainSource, /const usageDimensionSelect = document\.querySelector\("#usage-dimension"\)/);
+  assert.match(mainSource, /usageDimensionSelect\?\.addEventListener\("change"/);
+  assert.match(mainSource, /view\.hidden = view\.dataset\.usageDimension !== usageDimension/);
+  assert.match(mainSource, /summary: result, dimension: usageDimension/);
+  assert.doesNotMatch(mainSource, /listUsageRecords\(/);
+});
+
 test("usage responsive css restores labels after hiding the desktop header", () => {
   const css = readFileSync(new URL("../../src/styles/main.css", import.meta.url), "utf8");
   assert.match(css, /\.console-main\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)/);
@@ -715,7 +841,7 @@ test("usage responsive css restores labels after hiding the desktop header", () 
   assert.match(css, /\.usage-record-row:not\(\.usage-record-head\) > \[data-label\]:not\(details\)::before\s*\{[\s\S]*?content:\s*attr\(data-label\)/);
   assert.match(css, /@media \(max-width: 720px\)[\s\S]*?\.usage-record-row:not\(\.usage-record-head\) > \[data-label\]:not\(details\)\s*\{\s*grid-template-columns:\s*88px minmax\(0, 1fr\)/);
   assert.match(css, /\.usage-record-table\s*\{[\s\S]*?overflow-x:\s*auto/);
-  assert.match(css, /\.usage-record-row\s*\{[\s\S]*?min-width:\s*1225px/);
+  assert.match(css, /\.usage-record-row\s*\{[\s\S]*?min-width:\s*1080px/);
   assert.match(css, /\.usage-summary-grid\s*\{[\s\S]*?minmax\(min\(100%, 390px\), 1fr\)/);
   assert.match(css, /@media \(max-width: 1100px\) \{[\s\S]*?\.usage-filter-form\s*\{\s*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
   assert.match(css, /@media \(max-width: 720px\) \{\s*\.audit-log-filter-form,\s*\.usage-filter-form,\s*\.usage-record-row\s*\{\s*grid-template-columns:\s*1fr/);

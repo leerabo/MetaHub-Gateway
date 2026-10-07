@@ -17,19 +17,17 @@ const STANDARD_ENVIRONMENTS = [
  * 渲染 Environment 设置页，admin 可创建和启停，developer 只读。
  */
 export function renderEnvironmentPanel(state, authContext) {
-  // 缺少后端环境读权限时零 DOM，禁止通过角色名猜测授权。
-  if (!hasPermission(authContext, PERMISSIONS.ENVIRONMENT_READ)) {
+  // Environment is platform deployment administration, not a Workspace setup task.
+  if (!isPlatformOperator(authContext) || !hasPermission(authContext, PERMISSIONS.ENVIRONMENT_READ)) {
     return "";
   }
   if (!state) {
     return renderShell("正在读取当前租户环境。", `<div class="empty-state">等待 /environments 响应。</div>`);
   }
-  // 环境读取失败必须保留统一错误的 request_id，便于管理员关联控制面日志。
   if (state.state === "error") {
-    // 错误态必须展示 request_id，便于从控制面日志定位权限或迁移问题。
     return renderShell(
       "环境设置暂不可用。",
-      `<div class="empty-state error-state">${escapeHtml(state.message)} request_id: ${escapeHtml(state.requestId ?? "-")}</div>`,
+      `<div class="empty-state error-state">${escapeHtml(state.message ?? "请稍后重试")}</div>`,
     );
   }
   const environments = state.environments ?? [];
@@ -44,15 +42,14 @@ export function renderEnvironmentPanel(state, authContext) {
     </div>
     <section class="environment-guide" aria-labelledby="environment-guide-title">
       <div>
-        <h3 id="environment-guide-title">这页怎么用</h3>
-        <p>普通中文首发只需要开发环境。只有要把测试流量和正式客户流量分开，或分别设置预算、Key 和路由时，才创建测试、生产环境。</p>
+        <h3 id="environment-guide-title">环境隔离</h3>
+        <p>只有需要分开测试、生产流量或预算时才创建多个环境。</p>
       </div>
       <ol>
-        <li><strong>开发</strong><span>日常联调，系统默认创建。</span></li>
+        <li><strong>开发</strong></li>
         <li><strong>测试</strong><span>上线前验证模型、路由和额度。</span></li>
         <li><strong>生产</strong><span>正式员工和客户使用的独立边界。</span></li>
       </ol>
-      <p class="environment-guide-note">创建环境后，再到模型别名、Virtual Key 和预算页面选择对应环境；不需要隔离时不要重复创建。</p>
     </section>
     ${renderActionError(state.actionError)}
     ${canWrite ? renderCreateForm(environments, state.feedback) : ""}
@@ -60,6 +57,15 @@ export function renderEnvironmentPanel(state, authContext) {
       ${STANDARD_ENVIRONMENTS.map((definition) => renderEnvironmentSegment(definition, environments, canWrite)).join("")}
     </div>
   `;
+}
+
+function isPlatformOperator(authContext) {
+  const roles = authContext?.platform_context?.operator?.roles
+    ?? authContext?.platformSession?.context?.operator?.roles
+    ?? [];
+  return Array.isArray(roles) && roles.some((role) => (
+    typeof role === "string" && (role.startsWith("platform_") || role === "release_manager")
+  ));
 }
 
 /**
@@ -86,7 +92,7 @@ function renderCreateForm(environments, feedback) {
   return `
     <form id="create-environment-form" class="environment-create-form">
       <label>
-        <span>环境代码</span>
+        <span>环境</span>
         <select name="code">${missing.map((item) => `<option value="${item.code}" data-default-name="${item.defaultName}">${item.label}</option>`).join("")}</select>
       </label>
       <label>
@@ -111,7 +117,7 @@ function renderEnvironmentSegment(definition, environments, canWrite) {
   if (!environment) {
     return `
       <section class="environment-segment environment-missing" role="listitem">
-        <header><strong>${definition.label}</strong><code>${definition.code}</code></header>
+        <header><strong>${definition.label}</strong></header>
         <p>尚未创建</p>
       </section>
     `;
@@ -121,14 +127,14 @@ function renderEnvironmentSegment(definition, environments, canWrite) {
   return `
     <section class="environment-segment environment-${escapeAttribute(environment.status)}" role="listitem">
       <header>
-        <div><strong>${escapeHtml(environment.name)}</strong><code>${escapeHtml(environment.code)}</code></div>
-        <mark class="status-mark status-${escapeAttribute(environment.status)}">${escapeHtml(environment.status)}</mark>
+        <div><strong>${escapeHtml(environment.name)}</strong></div>
+        <mark class="status-mark status-${escapeAttribute(environment.status)}">${escapeHtml(environmentStatusLabel(environment.status))}</mark>
       </header>
       <p>${escapeHtml(environment.description ?? "无说明")}</p>
       <dl>
-        ${renderMetric("Virtual Key", environment.virtual_key_count)}
-        ${renderMetric("模型别名", environment.model_alias_count)}
-        ${renderMetric("预算", environment.budget_rule_count)}
+        ${renderMetric("KEY 数量", environment.virtual_key_count)}
+        ${renderMetric("模型路由", environment.model_alias_count)}
+        ${renderMetric("预算规则", environment.budget_rule_count)}
       </dl>
       ${
         canWrite
@@ -149,13 +155,13 @@ function renderMetric(label, value) {
   return `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value ?? 0)}</dd></div>`;
 }
 
-/**
- * 渲染 Environment 操作错误并保留后端 request_id。
- */
 function renderActionError(error) {
-  // 没有操作错误时不占用页面空间，有错误时必须展示可追踪的 request_id。
   if (!error) return "";
-  return `<div class="environment-action-error" role="alert">${escapeHtml(error.message ?? "环境操作失败")} request_id: ${escapeHtml(error.requestId ?? "-")}</div>`;
+  return `<div class="environment-action-error" role="alert">${escapeHtml(error.message ?? "环境操作失败")}</div>`;
+}
+
+function environmentStatusLabel(value) {
+  return ({ active: "启用", disabled: "停用", pending: "准备中" })[value] ?? "状态未知";
 }
 
 /**

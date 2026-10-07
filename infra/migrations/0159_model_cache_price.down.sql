@@ -1,0 +1,2 @@
+-- SQLite cannot drop columns safely on all supported development versions.
+-- The next clean database rebuild omits this additive development field.

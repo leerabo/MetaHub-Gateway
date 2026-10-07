@@ -264,7 +264,7 @@ test("Workspace and Platform render permission-pruned responsive controls withou
   const workspaceHtml = renderPrivateGateways(state.snapshot(), auth, workspaceShell(auth));
   assert.match(workspaceHtml, /data-private-gateway-maintenance/u);
   assert.match(workspaceHtml, /data-private-gateway-upgrade-rollback/u);
-  assert.match(workspaceHtml, /Current[\s\S]*LKG[\s\S]*回滚历史/u);
+  assert.match(workspaceHtml, /当前[\s\S]*可回退版本[\s\S]*回滚历史/u);
   assert.doesNotMatch(workspaceHtml, new RegExp(STEP_UP, "u"));
 
   installWindow(t, "#edge-upgrades");

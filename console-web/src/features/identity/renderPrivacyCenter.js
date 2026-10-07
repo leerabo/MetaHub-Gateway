@@ -30,7 +30,6 @@ function renderPreferences(preference, consentRecords, busy, canManage) {
       <div class="identity-privacy-summary">
         <div><span>条款版本</span><strong>${escapeHtml(preference.terms_version)}</strong></div>
         <div><span>语言</span><strong>${escapeHtml(preference.locale)}</strong></div>
-        <div><span>修订</span><strong>${number(preference.revision)}</strong></div>
         <div><span>更新时间</span><strong>${formatTime(preference.updated_at)}</strong></div>
       </div>
       <div class="identity-privacy-toggles">
@@ -108,7 +107,6 @@ function renderRequest(item, state, busy) {
       <dl class="identity-privacy-request-meta">
         <div><dt>收到</dt><dd>${formatTime(item.received_at)}</dd></div>
         <div><dt>法定期限</dt><dd>${formatTime(item.deadline_at)}</dd></div>
-        <div><dt>修订</dt><dd>${number(item.revision)}</dd></div>
       </dl>
       <div class="identity-privacy-owner-grid" aria-label="分域进度">
         ${item.owner_progress.map(renderOwnerProgress).join("")}
@@ -163,7 +161,7 @@ function renderUnavailable(busy) {
 
 function renderError(error) {
   if (!error) return "";
-  return `<div class="identity-error" role="alert"><span>${escapeHtml(error.message ?? error)}</span>${error.requestId && error.requestId !== "-" ? `<small>request_id: ${escapeHtml(error.requestId)}</small>` : ""}</div>`;
+  return `<div class="identity-error" role="alert"><span>${escapeHtml(error.message ?? "隐私设置暂时无法读取，请稍后重试")}</span></div>`;
 }
 
 function toggle(name, label, checked, busy) {

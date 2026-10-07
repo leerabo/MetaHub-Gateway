@@ -63,36 +63,31 @@ function renderConnectionDetails(state) {
   const handoff = [
     "MetaHub 工具接入说明",
     `统一网关网址：${serviceAddress}`,
-    "API Key：粘贴你在组织空间创建的个人 MetaHub KEY",
+    "个人 KEY：粘贴你在组织空间创建的个人 KEY",
     modelConfigured ? `工具要求模型名称时填写：${state.chat_model_alias}` : "模型路由尚未配置，请联系管理员。",
-    "所有工具共用这个网址和同一把个人 KEY；接入页已为各工具生成可复制的地址格式和配置示例。",
-    "支持自定义模型设置的工具：使用统一网关网址和同一把个人 KEY；Codex 和 Claude Code CLI 请使用接入页中各自的配置示例。",
-    "若工具支持读取模型列表，可从列表选择；否则填写上面的模型名称。",
-    "先登录组织空间创建个人 KEY；各工具连接同一个网关服务，复用这把个人 KEY；地址后缀按工具要求填写。",
-    "只支持官方账号登录、未开放自定义模型接口的工具不能直接接入。",
+    "只支持开放自定义模型接口的工具。",
     ...(localOnly ? ["此地址仅供本机试用，其他电脑需要管理员提供可访问的网关地址。"] : []),
   ].join("\n");
   return `<div class="connection-quickstart">
-    <h3>员工交付规则：一个网关地址＋一把个人 KEY</h3>
-    <p>所有支持自定义模型接口的工具都复用同一个 MetaHub 网关网址和这位成员的个人 KEY。管理员已配置默认路由时，成员通常只需要这两项；工具详情中的协议路径只是同一网址的技术格式，不是另一项服务，也不需要另领 KEY。</p>
-    <p class="tool-connection-simple"><strong>员工不用填写 MetaHub 环境变量。</strong>把这两项交给员工，在工具自己的“自定义模型 / API”设置中粘贴即可；只有客户端强制要求模型名称时，才再填写管理员给出的模型名称。</p>
+    <h3>员工接入</h3>
+    <p>使用统一网关地址和个人 KEY；模型名称仅在工具要求时填写。</p>
+    <p class="tool-connection-simple"><strong>员工不用填写 MetaHub 环境变量。</strong>在工具的“自定义模型 / API”设置中粘贴地址和 KEY。</p>
     <ol class="tool-connection-contract" aria-label="员工接入信息">
-      <li><strong>网关服务地址</strong><span>同一个服务；工具卡片只展示它所需的协议路径格式</span></li>
-      <li><strong>个人 MetaHub KEY</strong><span>成员在组织空间自行创建，一人一把</span></li>
-      <li><strong>模型名称（按需）</strong><span>${modelConfigured ? `只有工具要求时填写 <code>${escapeHtml(state.chat_model_alias)}</code>，也可从工具的模型列表选择` : "管理员配置模型路由后显示"}</span></li>
+      <li><strong>网关服务地址</strong><span>统一地址</span></li>
+      <li><strong>个人 KEY</strong><span>成员在组织空间创建</span></li>
+      <li><strong>模型名称（按需）</strong><span>${modelConfigured ? `<code>${escapeHtml(state.chat_model_alias)}</code>` : "管理员配置后显示"}</span></li>
     </ol>
-    <p class="tool-connection-note">环境变量和配置文件只是 Codex、Claude Code 等客户端保存地址与 KEY 的方式；它们不是员工必须填写的 MetaHub 表单。</p>
   </div>
   <dl class="tool-connection-details">
     <div class="connection-primary-value"><dt>统一 MetaHub 网关网址</dt><dd><code id="tool-service-address">${escapeHtml(serviceAddress)}</code>
       <button type="button" data-copy-code-target="tool-service-address" title="复制统一网关网址" aria-label="复制统一网关网址">${icon("copy")}</button><span class="quickstart-copy-feedback" role="status"></span>
-      <small>同一网关支持多个调用协议；下方可复制各工具所需的地址格式和配置示例。</small></dd></div>
-    <div><dt>个人 MetaHub KEY</dt><dd>粘贴该成员在组织空间创建的个人 KEY（每位成员一把）</dd></div>
+      <small>按工具需要选择协议地址。</small></dd></div>
+    <div><dt>个人 KEY</dt><dd>粘贴成员的个人 KEY</dd></div>
     <div class="quickstart-example"><dt>模型名称（按需）</dt><dd>${modelConfigured ? `<code id="tool-model-name">${escapeHtml(state.chat_model_alias)}</code>
-      <button type="button" data-copy-code-target="tool-model-name" title="复制模型名称" aria-label="复制模型名称">${icon("copy")}</button><span class="quickstart-copy-feedback" role="status"></span><small>工具要求时填写；支持读取模型列表的工具也可直接选择。</small>` : '<span>尚未配置可用模型路由，请先由管理员配置。</span>'}</dd></div>
+      <button type="button" data-copy-code-target="tool-model-name" title="复制模型名称" aria-label="复制模型名称">${icon("copy")}</button><span class="quickstart-copy-feedback" role="status"></span>` : '<span>尚未配置可用模型路由，请先联系管理员。</span>'}</dd></div>
   </dl>${localOnly ? '<p class="tool-local-notice">当前网关地址仅供本机试用。给其他设备上的员工使用前，需部署可访问的网关地址。</p>' : ''}
   <div class="tool-handoff quickstart-example">
-    <button type="button" data-copy-code-target="tool-connection-instructions">复制接入说明给员工</button>
+    <button class="tool-handoff-copy" type="button" data-copy-code-target="tool-connection-instructions">复制接入说明给员工</button>
     <span class="quickstart-copy-feedback" role="status"></span>
     <p>说明不含 KEY，请将该员工的个人 KEY 单独交付。</p>
     <details class="tool-handoff-preview"><summary>查看接入说明</summary><pre><code id="tool-connection-instructions">${escapeHtml(handoff)}</code></pre></details>
@@ -137,7 +132,7 @@ function renderToolGuides(addresses, model) {
       documentation: "https://code.claude.com/docs/en/llm-gateway-connect",
       configuration: model ? JSON.stringify({ env: {
         ANTHROPIC_BASE_URL: addresses.anthropic,
-        ANTHROPIC_AUTH_TOKEN: "粘贴你的个人 MetaHub KEY",
+        ANTHROPIC_AUTH_TOKEN: "粘贴你的个人 KEY",
         ANTHROPIC_MODEL: model,
       } }, null, 2) : null,
       configNote: "只替换 KEY 占位文字即可；这是 Claude Code 保存凭据的方式，不代表还要申请另一把 KEY。请使用个人设置文件，已有设置合并 env 字段。",
@@ -155,7 +150,7 @@ function renderToolGuides(addresses, model) {
   ];
   return `<section class="tool-compatibility" aria-labelledby="tool-compatibility-title">
     <div class="compact-heading"><h3 id="tool-compatibility-title">选择你使用的工具</h3><span>展开查看接入要求</span></div>
-    <p class="tool-compatibility-note">所有工具共用上面的统一网关网址和个人 KEY。展开工具详情后，页面会显示该工具所需的协议路径；这些路径都指向同一个网关服务。工具需要开放自定义模型接口；各项支持范围见展开说明。</p>
+    <p class="tool-compatibility-note">支持自定义模型接口的工具可使用上面的地址和个人 KEY。</p>
     <div class="tool-compatibility-grid">${guides.map((guide) => `<details class="tool-guide" name="metahub-tool-guide" data-tool-guide="${guide.id}">
       <summary><strong>${guide.name}</strong><mark class="compatibility-${guide.kind}">${guide.status}</mark></summary>
       <div class="tool-guide-content"><p>${guide.text}</p>
@@ -400,7 +395,6 @@ function renderOverviewItem(label, value) {
 function renderEnvironmentVariables(language, items) {
   return `
     <details class="python-sdk-section sdk-advanced-environment"><summary><h4 id="${language}-sdk-env-title">可选：程序化客户端配置</h4></summary>
-      <p class="sdk-environment-note">普通成员不需要逐项填写这里的变量。它们只服务于 Python/Node 示例、自动化部署，或某些 CLI 工具自身的凭据入口；成员始终只使用组织提供的同一个网关服务地址和个人 KEY。</p>
       <div class="python-sdk-list">
         ${items.map((item) => `
           <article>

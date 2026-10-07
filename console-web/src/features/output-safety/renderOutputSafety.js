@@ -109,7 +109,7 @@ function renderMetric(label, value) {
 function renderFilters(filters) {
   return `
     <form id="output-safety-filter-form" class="output-safety-filter-form">
-      <label><span>request_id</span><input name="requestId" value="${escapeAttribute(filters.requestId ?? "")}" placeholder="req_xxx" /></label>
+      <label><span>调用编号</span><input name="requestId" value="${escapeAttribute(filters.requestId ?? "")}" placeholder="输入调用编号" /></label>
       <label><span>状态</span><select name="outputSafetyStatus">${renderOptions([
         ["", "全部"], ["completed", "已完成"], ["unavailable", "扫描不可用"], ["pending", "处理中"],
       ], filters.outputSafetyStatus)}</select></label>
@@ -144,7 +144,7 @@ function renderEventTable(logs) {
   return `
     <div class="output-safety-table" role="table" aria-label="当前租户输出安全事件">
       <div class="output-safety-row output-safety-row-head" role="row">
-        <span>时间</span><span>模式 / 状态</span><span>暴露</span><span>已输出</span><span>账单复核</span><span>request_id</span><span>操作</span>
+        <span>时间</span><span>模式 / 状态</span><span>暴露</span><span>已发送</span><span>账单复核</span><span>调用编号</span><span>操作</span>
       </div>
       ${logs.length ? logs.map(renderEventRow).join("") : '<div class="output-safety-empty">当前条件下没有输出安全事件。</div>'}
     </div>
@@ -154,15 +154,15 @@ function renderEventTable(logs) {
 /** 渲染单条事件；缺失摘要时明确显示证据不可用，不把它降级为 clean。 */
 function renderEventRow(item) {
   const scan = safeScan(item);
-  const emitted = `${nonnegative(scan.emitted_token_count)} Token / ${nonnegative(scan.emitted_sse_event_count)} SSE`;
+  const emitted = `${nonnegative(scan.emitted_token_count)} 个令牌 / ${nonnegative(scan.emitted_sse_event_count)} 个事件`;
   return `
     <div class="output-safety-row" role="row">
       <time data-label="时间" datetime="${escapeAttribute(item.created_at ?? "")}">${escapeHtml(formatDateTime(item.created_at))}</time>
       <span data-label="模式 / 状态"><strong>${escapeHtml(MODE_LABELS[scan.scan_mode] ?? scan.scan_mode ?? "证据不可用")}</strong><em>${escapeHtml(STATUS_LABELS[scan.scan_status] ?? scan.scan_status ?? "证据不可用")}</em></span>
       <span data-label="暴露">${escapeHtml(EXPOSURE_LABELS[scan.exposure_state] ?? scan.exposure_state ?? "未知")}</span>
-      <span data-label="已输出">${escapeHtml(emitted)}</span>
+      <span data-label="已发送">${escapeHtml(emitted)}</span>
       <span data-label="账单复核">${escapeHtml(BILLING_LABELS[scan.billing_disposition] ?? scan.billing_disposition ?? "未知")}</span>
-      <code data-label="request_id">${escapeHtml(item.request_id ?? "-")}</code>
+      <code data-label="调用编号">${escapeHtml(item.request_id ?? "-")}</code>
       <span data-label="操作"><button type="button" data-request-log-detail="${escapeAttribute(item.request_id ?? "")}">查看详情</button></span>
     </div>
   `;

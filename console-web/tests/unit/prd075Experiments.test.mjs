@@ -674,7 +674,7 @@ test("create option failures remain visible and cannot create until active Chat 
   assert.equal(state.beginCreate(owner), null);
   const html = renderExperiments(state.snapshot(), context, shell);
   assert.match(html, /创建选项暂不可用/);
-  assert.match(html, /request_models_failed/);
+  assert.doesNotMatch(html, /request_models_failed/);
   assert.match(html, /data-experiment-create-retry/);
 
   const incompatibleOperation = state.beginList(owner, 6);

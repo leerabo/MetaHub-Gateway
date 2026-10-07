@@ -287,7 +287,7 @@ test("Workspace state machine renders drift, approves independently, and recover
   );
   state.finishLoad(load);
   const html = renderPrivateGateways(state.snapshot(), auth, shell(auth));
-  assert.match(html, /期望[\s\S]*2[\s\S]*实际[\s\S]*1[\s\S]*LKG[\s\S]*1/u);
+  assert.match(html, /期望[\s\S]*2[\s\S]*实际[\s\S]*1[\s\S]*可回退[\s\S]*1/u);
   assert.match(html, /apply_failed|从 LKG 恢复/u);
   assert.doesNotMatch(html, /manifest|tenant_id|source_config_snapshot_id/u);
 

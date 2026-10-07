@@ -323,9 +323,12 @@ def test_stream_fact_commits_with_owner_and_trigger_failure_rolls_back(
         )
         is True
     )
+    # A fallback handshake creates a second owner with the same request id after
+    # the first provider error fact is committed. The old PRD-056 trigger
+    # rejected this legitimate retry before the fallback provider was called.
     rejected = create_stream_session(
         config,
-        _stream_context(tenant_id, route, "rejected"),
+        _stream_context(tenant_id, route, "committed"),
         inter_token_timeout_ms=30_000,
     )
     assert (

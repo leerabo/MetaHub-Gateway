@@ -179,7 +179,7 @@ test("Workspace offline exchange view is owner-bound and prunes facts on permiss
 
   const html = renderPrivateGateways(state.snapshot(), auth, shell);
   assert.match(html, /离线介质交换/u);
-  assert.match(html, /Cloud → Edge/u);
+  assert.match(html, /云端 → 设备/u);
   assert.match(html, /1 项冲突/u);
   assert.match(html, /待决策/u);
   assert.doesNotMatch(

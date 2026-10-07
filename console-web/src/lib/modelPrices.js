@@ -28,8 +28,12 @@ export async function createModelPrice({
   controlApiUrl,
   token,
   modelId,
+  inputPricePerMillion,
+  outputPricePerMillion,
+  cachePricePerMillion,
   inputPricePer1k,
   outputPricePer1k,
+  cachePricePer1k,
   currency,
   effectiveFrom,
   priceSchemaVersion,
@@ -42,11 +46,52 @@ export async function createModelPrice({
     },
     body: JSON.stringify({
       model_id: modelId,
-      input_price_per_1k: String(inputPricePer1k ?? ""),
-      output_price_per_1k: String(outputPricePer1k ?? ""),
+      input_price_per_1k: inputPricePerMillion === undefined
+        ? String(inputPricePer1k ?? "")
+        : String(inputPricePerMillion ?? ""),
+      output_price_per_1k: outputPricePerMillion === undefined
+        ? String(outputPricePer1k ?? "")
+        : String(outputPricePerMillion ?? ""),
+      cache_price_per_1k: cachePricePerMillion === undefined
+        ? String(
+          cachePricePer1k
+          ?? inputPricePer1k
+          ?? (inputPricePerMillion === undefined ? "" : String(inputPricePerMillion ?? "")),
+        )
+        : String(cachePricePerMillion ?? ""),
       currency,
       effective_from: effectiveFrom,
       price_schema_version: optionalText(priceSchemaVersion),
+    }),
+  });
+}
+
+/**
+ * 一次性提交多个价格时间段；后端保证整批原子提交，避免补录到一半留下缺口。
+ */
+export async function createModelPricesBatch({ controlApiUrl, token, plans }) {
+  if (!Array.isArray(plans) || plans.length < 1 || plans.length > 100) {
+    throw new TypeError("plans must contain 1 to 100 price periods");
+  }
+  return modelPriceRequest(`${controlApiUrl}/model-prices/batch`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      plans: plans.map((plan) => ({
+        model_id: plan.modelId,
+        input_price_per_1k: String(plan.inputPricePerMillion ?? plan.inputPricePer1k ?? ""),
+        output_price_per_1k: String(plan.outputPricePerMillion ?? plan.outputPricePer1k ?? ""),
+        cache_price_per_1k: String(
+          plan.cachePricePerMillion ?? plan.cachePricePer1k
+          ?? plan.inputPricePerMillion ?? plan.inputPricePer1k ?? "",
+        ),
+        currency: plan.currency,
+        effective_from: plan.effectiveFrom,
+        price_schema_version: optionalText(plan.priceSchemaVersion),
+      })),
     }),
   });
 }

@@ -117,6 +117,137 @@
   .identity-captcha-control img { width: 118px; }
 }
 
+/* Identity surface v2: the sign-in step is a focused gateway into the
+   workspace, with a dark product rail and a quiet, high-contrast form. */
+:root {
+  --identity-ink: #17332c;
+  --identity-ink-soft: #315149;
+  --identity-mint: #087f6b;
+  --identity-paper: #f8faf7;
+  --identity-line: #d8e2dc;
+}
+
+body:has(.identity-is-access) {
+  background: var(--identity-paper);
+}
+
+.identity-is-access .identity-access-visual {
+  width: 46%;
+  background: var(--identity-ink);
+}
+
+.identity-access-wordmark {
+  top: 38px;
+  left: 52px;
+  color: #f1f7f3;
+  font-size: 25px;
+  font-weight: 780;
+  letter-spacing: -.02em;
+}
+
+.identity-access-copy {
+  padding: 176px 52px 0;
+}
+
+.identity-access-copy > p:first-child {
+  color: #9dc6b5;
+  font-size: 10px;
+  letter-spacing: .12em;
+}
+
+.identity-access-copy h2 {
+  max-width: 380px;
+  color: #f3faf6;
+  font-size: 43px;
+  font-weight: 760;
+  letter-spacing: -.045em;
+  line-height: 1.12;
+}
+
+.identity-access-copy h2 span { color: #9cd6bd; }
+.identity-access-description { color: #bdd5ca; font-size: 15px; line-height: 1.8; }
+.identity-access-caption { color: #8db4a4; }
+.identity-access-footnote { border-top-color: #31574b; color: #9ab9ad; }
+.identity-access-static { border-color: #4d806c; background: #2c5749; color: #b5e3cd; }
+
+.identity-is-access .identity-app {
+  margin-left: 46%;
+}
+
+.identity-is-access .identity-access-home {
+  top: 36px;
+  right: 48px;
+  color: var(--identity-ink-soft);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.identity-is-access .identity-login-shell {
+  padding: 104px 52px 72px;
+  background: var(--identity-paper);
+}
+
+.identity-is-access .identity-login-panel {
+  width: min(390px, 100%);
+}
+
+.identity-is-access .identity-brand p,
+.identity-login-welcome {
+  color: #71827b;
+  font-size: 13px;
+}
+
+.identity-is-access .identity-brand h1 {
+  color: var(--identity-ink);
+  font-size: 31px;
+  font-weight: 780;
+  letter-spacing: -.03em;
+}
+
+.identity-login-welcome { margin: 9px 0 32px; }
+
+.identity-is-access .identity-login-form { gap: 18px; }
+.identity-is-access .identity-login-form label { color: #486159; font-size: 13px; font-weight: 750; }
+.identity-is-access .identity-login-form input {
+  height: 48px;
+  border-color: var(--identity-line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--identity-ink);
+  font-size: 15px;
+}
+
+.identity-is-access .identity-login-form input:focus {
+  border-color: var(--identity-mint);
+  box-shadow: 0 0 0 3px rgb(8 127 107 / 16%);
+}
+
+.identity-is-access .identity-login-form .identity-primary {
+  min-height: 48px;
+  border-radius: 6px;
+  background: var(--identity-ink);
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.identity-is-access .identity-login-form .identity-primary:hover {
+  background: var(--identity-mint);
+}
+
+.identity-is-access .identity-access-actions button { color: #537066; font-size: 13px; font-weight: 700; }
+.identity-is-access .identity-access-actions button:hover { color: var(--identity-mint); }
+.identity-login-assurance { border-top-color: var(--identity-line); color: #71827b; font-size: 12px; }
+
+@media (max-width: 860px) {
+  .identity-is-access .identity-access-visual { width: 100%; height: 188px; background: var(--identity-ink); }
+  .identity-is-access .identity-app { margin-left: 0; padding-top: 188px; }
+  .identity-access-wordmark { top: 25px; left: 24px; }
+  .identity-access-copy { padding: 92px 24px 0; }
+  .identity-access-copy h2 { font-size: 25px; }
+  .identity-is-access .identity-access-home { top: 29px; right: 24px; color: #c3ddd2; }
+  .identity-is-access .identity-login-shell { min-height: calc(100svh - 188px); padding: 42px 24px 48px; }
+}
+
 .identity-organization-shell { min-height: 100svh; background: #fafcfc; color: #202e33; }
 .identity-organization-topbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 32px; border-bottom: 1px solid #e0e7e8; }
 .identity-organization-topbar nav { display: flex; flex-wrap: wrap; gap: 12px; }

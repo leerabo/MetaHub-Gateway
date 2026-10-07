@@ -474,41 +474,114 @@ test("renderRequestLogPanel shows logs and details without leaking sensitive sam
   );
 
   assert.match(html, /request-log-filter-form/);
-  assert.match(html, /req_prd016_success/);
   assert.match(html, /deepseek-chat/);
-  assert.match(html, /Policy 快照/);
-  assert.match(html, /v3/);
-  assert.match(html, /当前版本/);
-  assert.match(html, /policy.route_to.matched/);
-  assert.match(html, /model_target_1/);
   assert.match(html, /账务核心/);
   assert.match(html, /账务 API/);
-  assert.match(html, /routing.cost_lowest/);
-  assert.match(html, /RoutingPolicy ID/);
-  assert.match(html, /rpol_1/);
-  assert.match(html, /v4/);
-  assert.match(html, /cost_first/);
-  assert.match(html, /2026-07-18T09:00:00Z/);
-  assert.match(html, /rpe_1/);
-  assert.match(html, /备用角色（初始候选）/);
-  assert.match(html, /0.000000000000000 CNY/);
-  assert.match(html, /healthy \/ fresh/);
-  assert.match(html, /unknown \/ stale/);
-  assert.match(html, /未评估/);
-  assert.match(html, /预算命中/);
-  assert.match(html, /budget.exhausted.block/);
-  assert.match(html, /12.5 CNY/);
+  assert.match(html, /2026-07-08 09:00:00Z/);
   assert.match(html, /0.123456 CNY/);
-  assert.match(html, /错误诊断/);
-  assert.match(html, /上游尝试/);
-  assert.match(html, /#1 初始调用/);
-  assert.match(html, /#2 Fallback 重试/);
-  assert.match(html, /上游未返回用量/);
-  assert.match(html, /上游 &lt;script&gt;限流&lt;\/script&gt;/);
+  assert.match(html, /data-request-log-detail="req_prd016_success"/);
+  assert.match(html, /request-log-detail-dialog/);
+  assert.match(html, /request-log-technical-body-expanded/);
+  assert.doesNotMatch(html, /<details class="request-log-technical-details">/);
+  const visibleText = html.replace(/<[^>]*>/gu, " ");
+  assert.doesNotMatch(visibleText, /request_id\s*[:：]|trace_id|RoutingPolicy ID|价格快照|质量评分|上游尝试|错误诊断|budget\.exhausted|rpol_1|rpe_1/u);
   assert.doesNotMatch(html, /sk-provider-secret/);
   assert.doesNotMatch(html, /<script>限流<\/script>/);
   assert.doesNotMatch(html, /raw_usage/);
   assert.doesNotMatch(html, /CANDIDATE_SUMMARY_MUST_NOT_RENDER|candidate_summary|unsafe_raw_value/);
+});
+
+test("request log detail hides internal output safety integrity errors", async () => {
+  const source = await readFile(
+    new URL("../../src/features/request-logs/renderRequestLogPanel.js", import.meta.url),
+    "utf8",
+  );
+  assert.ok(source.includes('"output_safety.integrity_failed": "这条调用记录的安全详情暂时无法读取，请稍后重试。"'));
+  assert.ok(!source.includes("Output safety evidence failed integrity validation"));
+});
+
+test("request log details show routed attempt and stream states without unknown placeholders", () => {
+  const statusDetail = {
+    ...detailPayload,
+    request_log: {
+      ...detailPayload.request_log,
+      log: {
+        ...detailPayload.request_log.log,
+        price_schema_version: "unpriced-v1",
+        estimated_cost_amount: null,
+      },
+      routing_attempts: [
+        { ...detailPayload.request_log.routing_attempts[0], status: "upstream_failed" },
+        { ...detailPayload.request_log.routing_attempts[1], status: "timed_out" },
+      ],
+      routing_candidates: [
+        ...detailPayload.request_log.routing_candidates,
+        { ...detailPayload.request_log.routing_candidates[1], routing_candidate_id: "rcand_3", rank: 3 },
+      ],
+      stream_session: {
+        stream_session_id: "str_status_detail",
+        status: "upstream_failed",
+        resolved_model: "kimi-k2.7-code",
+        provider_code: "moonshot",
+        provider_name: "Kimi",
+        retryable: true,
+      },
+    },
+  };
+  const html = renderRequestLogPanel({
+    state: "ok",
+    ...requestLogPayload,
+    detail: statusDetail,
+  }, withPermissionSnapshot(
+    { user: { role: "admin" } },
+    [PERMISSIONS.REQUEST_LOG_READ],
+  ));
+
+  assert.match(html, /上游失败/);
+  assert.match(html, /已超时/);
+  assert.doesNotMatch(html, /kimi-k2\.7-code/);
+  assert.doesNotMatch(html, /Kimi/);
+  assert.match(html, /无 Token 用量/);
+  assert.match(html, /2 个模型失败，已停止/);
+  assert.doesNotMatch(html, /status-mark[^>]*>未知</u);
+  assert.doesNotMatch(html, /这是响应传输方式/u);
+});
+
+test("request log never presents an unpriced zero placeholder as a real fee", () => {
+  const pricedDetail = {
+    ...detailPayload,
+    request_log: {
+      ...detailPayload.request_log,
+      log: {
+        ...detailPayload.request_log.log,
+        status: "success",
+        estimated_cost_amount: 0,
+        currency: "CNY",
+        price_schema_version: "unpriced-v1",
+      },
+      routing_attempts: [
+        {
+          ...detailPayload.request_log.routing_attempts[0],
+          status: "succeeded",
+          usage_status: "recorded",
+          total_tokens: 632,
+          estimated_cost_cny: 0,
+          price_schema_version: "unpriced-v1",
+        },
+      ],
+    },
+  };
+  const html = renderRequestLogPanel({
+    state: "ok",
+    ...requestLogPayload,
+    detail: pricedDetail,
+  }, withPermissionSnapshot(
+    { user: { role: "admin" } },
+    [PERMISSIONS.REQUEST_LOG_READ],
+  ));
+
+  assert.match(html, /价格未记录/);
+  assert.doesNotMatch(html, /0 CNY/);
 });
 
 test("request log renders frozen quality decision and candidate fields without current-score recomputation", () => {
@@ -555,20 +628,8 @@ test("request log renders frozen quality decision and candidate fields without c
     [PERMISSIONS.REQUEST_LOG_READ],
   ));
 
-  assert.match(html, /quality_cost_v1&lt;script&gt;/);
-  assert.match(html, /质量评分/);
-  assert.match(html, /未执行/);
-  assert.match(html, /5000 bps/);
-  assert.match(html, /6000 bps/);
-  assert.match(html, /mqs_&lt;unsafe&gt;/);
-  assert.match(html, /统计 v42 \/ 反馈 v3/);
-  assert.match(html, /42 \/ 40 \/ 2/);
-  assert.match(html, /8500 bps/);
-  assert.match(html, /1000.001 ms/);
-  assert.match(html, /8355 bps \/ 7000 bps \/ 6500 bps/);
-  assert.match(html, /7748 bps/);
-  // cold 候选已经加载的 quality_component_bps 必须原样展示，即使 route-level 没有执行完整加权。
-  assert.match(html, /4762 bps/);
+  assert.match(html, /deepseek-chat/);
+  assert.doesNotMatch(html, /quality_cost_v1|质量评分|5000 bps|6000 bps|mqs_|统计 v42|8500 bps|1000\.001 ms|8355 bps|7748 bps|4762 bps/u);
   assert.doesNotMatch(html, /<script>|current_model_quality|model-quality-scores/);
 });
 
@@ -603,12 +664,10 @@ test("request log snapshot rendering escapes policy fields and never invents v0 
     ),
   );
 
-  assert.match(html, /快照不可用/);
-  assert.match(html, /policy.&lt;unsafe&gt;/);
-  assert.match(html, /&lt;script&gt;policy&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /访问策略/);
+  assert.doesNotMatch(html, /policy\.&lt;unsafe&gt;|&lt;script&gt;policy&lt;\/script&gt;|Policy ID|策略版本|快照版本|snapshotVersion/u);
   assert.doesNotMatch(html, /<script>policy<\/script>/);
   assert.doesNotMatch(html, /<strong>v0<|>v0</);
-  assert.match(html, /name="snapshotVersion"/);
 });
 
 test("renderRequestLogPanel escapes unsafe fields and hides viewer role", () => {
@@ -636,8 +695,7 @@ test("renderRequestLogPanel escapes unsafe fields and hides viewer role", () => 
     withPermissionSnapshot({ user: { role: "viewer" } }, []),
   );
 
-  assert.match(developerHtml, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
-  assert.match(developerHtml, /gateway.&lt;unsafe&gt;/);
+  assert.doesNotMatch(developerHtml, /gateway\.&lt;unsafe&gt;|error_code|request_id\s*[:：]|trace_id/u);
   assert.equal(viewerHtml, "");
 });
 
@@ -857,7 +915,7 @@ test("PRD-055 main gates list and mutations with role navigation and owner ticke
   assert.match(source, /listSavedRequestLogFilters\([\s\S]*signal: ticket\.signal/);
   assert.match(source, /beginSavedFilterMutation\(owner\)/);
   assert.match(source, /isCurrentSavedFilterMutation\(ticket, currentOwner\)/);
-  assert.match(source, /runRequestExplanationRead\(button\.dataset\.requestLogExplain, "request_logs", binding/);
+  assert.doesNotMatch(source, /data-request-log-explain|openRequestExplanationDialog/);
   assert.match(source, /function requestLogInteractionAllowed[\s\S]*REQUEST_LOG_NAVIGATION_IDS\.has\(consoleShellState\?\.activeNavigationItemId\)[\s\S]*requestLogIdentitySnapshot/);
   assert.match(source, /terminalStage: optionalText\(data\.get\("terminalStage"\)\)/);
   assert.equal((source.match(/currentRequestLogFiltersFromForm\(\)/g) ?? []).length, 3);

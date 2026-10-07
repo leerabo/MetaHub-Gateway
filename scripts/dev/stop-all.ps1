@@ -2,16 +2,14 @@ $ErrorActionPreference = "Stop"
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $pidFile = Join-Path $Root ".logs\dev-processes.pid"
-if (-not (Test-Path -LiteralPath $pidFile)) {
-  Write-Host "No MetaHub development process record was found."
-  exit 0
+$recordedPids = @()
+if (Test-Path -LiteralPath $pidFile) {
+  $recordedPids = @(
+    Get-Content -LiteralPath $pidFile |
+      Where-Object { $_ -match '^\d+$' } |
+      ForEach-Object { [int]$_ }
+  )
 }
-
-$recordedPids = @(
-  Get-Content -LiteralPath $pidFile |
-    Where-Object { $_ -match '^\d+$' } |
-    ForEach-Object { [int]$_ }
-)
 $processRows = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
 $processById = @{}
 $childrenByParent = @{}
@@ -53,10 +51,37 @@ foreach ($recordedPid in $recordedPids) {
   Add-MetaHubProcessTree -ProcessId $recordedPid
 }
 
+# Manually started services have no launcher PID record. Match both port and
+# command before stopping a listener; leave unknown processes running.
+$listenerCommands = @{
+  5173 = '(^|[\\/\s])scripts[\\/]dev-server\.mjs(\s|$)'
+  8000 = '(^|\s)metahub_gateway\.main(\s|$)'
+  8001 = '(^|\s)metahub_control\.main(\s|$)'
+  8002 = [regex]::Escape((Join-Path $Root 'scripts\dev\run-status.py'))
+}
+$listeners = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+  Where-Object { $listenerCommands.ContainsKey([int]$_.LocalPort) })
+foreach ($listener in $listeners) {
+  $listenerPid = [int]$listener.OwningProcess
+  if ($visited.Contains($listenerPid)) { continue }
+  $process = $processById[$listenerPid]
+  if ($null -eq $process -or [string]$process.CommandLine -notmatch $listenerCommands[[int]$listener.LocalPort]) {
+    Write-Warning "Port $($listener.LocalPort) is used by PID $listenerPid, which is not a recognized MetaHub service. It was left running."
+    continue
+  }
+  Add-MetaHubProcessTree -ProcessId $listenerPid
+}
+
 foreach ($processId in $stopOrder) {
   if (Get-Process -Id $processId -ErrorAction SilentlyContinue) {
     Stop-Process -Id $processId -Force
   }
 }
-Remove-Item -LiteralPath $pidFile
-Write-Host "MetaHub development services stopped."
+if (Test-Path -LiteralPath $pidFile) {
+  Remove-Item -LiteralPath $pidFile
+}
+if ($stopOrder.Count -eq 0) {
+  Write-Host "No managed MetaHub development services were found."
+} else {
+  Write-Host "MetaHub development services stopped."
+}

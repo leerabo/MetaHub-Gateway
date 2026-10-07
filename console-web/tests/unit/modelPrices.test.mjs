@@ -5,7 +5,7 @@ import test from "node:test";
 import { renderDeveloperStart } from "../../src/features/developer-start/renderDeveloperStart.js";
 import { renderModelPricePanel } from "../../src/features/model-prices/renderModelPricePanel.js";
 import { AuthApiError } from "../../src/lib/auth.js";
-import { createModelPrice, listModelPrices } from "../../src/lib/modelPrices.js";
+import { createModelPrice, createModelPricesBatch, listModelPrices } from "../../src/lib/modelPrices.js";
 import { PERMISSIONS, withPermissionSnapshot } from "./permissionTestContext.mjs";
 
 const modelsState = {
@@ -32,6 +32,7 @@ const pricePayload = {
       provider_code: "deepseek",
       input_price_per_1k: "0.001",
       output_price_per_1k: "0.002",
+      cache_price_per_1k: "0.0005",
       currency: "CNY",
       price_schema_version: "manual-202607",
       effective_from: "2026-07-01T00:00:00Z",
@@ -77,6 +78,7 @@ test("model price client sends decimal strings without tenant id", async () => {
     modelId: "model_1",
     inputPricePer1k: "0.001000000001",
     outputPricePer1k: "0.002",
+    cachePricePer1k: "0.0005",
     currency: "CNY",
     effectiveFrom: "2026-07-15T00:00:00.000Z",
     priceSchemaVersion: "manual-20260715",
@@ -88,6 +90,7 @@ test("model price client sends decimal strings without tenant id", async () => {
   assert.equal(calls[0].options.headers.Authorization, "Bearer jwt");
   const body = JSON.parse(calls[1].options.body);
   assert.equal(body.input_price_per_1k, "0.001000000001");
+  assert.equal(body.cache_price_per_1k, "0.0005");
   assert.equal(body.effective_from, "2026-07-15T00:00:00.000Z");
   assert.equal(body.tenant_id, undefined);
 });
@@ -118,6 +121,45 @@ test("model price client preserves unified permission error", async () => {
   );
 });
 
+test("model price batch client keeps all periods in one request", async () => {
+  let call;
+  globalThis.fetch = async (url, options = {}) => {
+    call = { url: String(url), options };
+    return {
+      ok: true,
+      headers: new Map(),
+      async json() { return { price_plans: [], request_id: "req_batch", trace_id: "trc_batch" }; },
+    };
+  };
+  await createModelPricesBatch({
+    controlApiUrl: "http://control.local",
+    token: "jwt",
+    plans: [
+      {
+        modelId: "model_1",
+        inputPricePerMillion: "1.2",
+        outputPricePerMillion: "3.4",
+        cachePricePerMillion: "0.6",
+        currency: "CNY",
+        effectiveFrom: "2026-07-01T00:00:00Z",
+      },
+      {
+        modelId: "model_1",
+        inputPricePerMillion: "1.5",
+        outputPricePerMillion: "3.8",
+        cachePricePerMillion: "0.7",
+        currency: "CNY",
+        effectiveFrom: "2026-08-01T00:00:00Z",
+      },
+    ],
+  });
+  assert.match(call.url, /model-prices\/batch$/);
+  const body = JSON.parse(call.options.body);
+  assert.equal(body.plans.length, 2);
+  assert.equal(body.plans[1].input_price_per_1k, "1.5");
+  assert.equal(body.plans[1].cache_price_per_1k, "0.7");
+});
+
 test("model price panel renders admin timeline and escapes model data", () => {
   const html = renderModelPricePanel(
     {
@@ -141,8 +183,13 @@ test("model price panel renders admin timeline and escapes model data", () => {
 
   assert.match(html, /create-model-price-form/);
   assert.match(html, /model-price-filter-form/);
+  assert.match(html, /name="inputPricePer1k"[^>]*aria-label="输入 \/ 百万 Token"/);
+  assert.match(html, /name="outputPricePer1k"[^>]*aria-label="输出 \/ 百万 Token"/);
+  assert.match(html, /name="cachePricePer1k"[^>]*aria-label="缓存命中 \/ 百万 Token"/);
+  assert.match(html, /name="effectiveFrom"[^>]*aria-label="生效时间"/);
+  assert.match(html, /name="priceSchemaVersion"[^>]*type="hidden"/);
   assert.match(html, /当前生效/);
-  assert.match(html, /&lt;manual&gt;/);
+  assert.doesNotMatch(html, /&lt;manual&gt;|manual-202607|provider_code|request_id/);
   assert.doesNotMatch(html, /<DeepSeek>/);
 });
 
@@ -158,7 +205,7 @@ test("model price panel is readonly for developer and hidden for viewer", () => 
     withPermissionSnapshot({ user: { role: "viewer" } }, [PERMISSIONS.CONSOLE_BASIC_READ]),
   );
 
-  assert.match(developerHtml, /manual-202607/);
+  assert.doesNotMatch(developerHtml, /manual-202607|provider_code|request_id/);
   assert.doesNotMatch(developerHtml, /create-model-price-form/);
   assert.equal(viewerHtml, "");
 });
@@ -203,6 +250,6 @@ test("developer start renders active model price navigation", () => {
   });
 
   assert.match(container.innerHTML, /data-workspace-commercial-root="internal-finops"/);
-  assert.match(container.innerHTML, /企业内部 FinOps/);
+  assert.match(container.innerHTML, /组织成本/);
   assert.doesNotMatch(container.innerHTML, /model-prices-panel|manual-202607/);
 });

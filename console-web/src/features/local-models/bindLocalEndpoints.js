@@ -109,6 +109,10 @@ export function localEndpointCreateFromFormData(formData) {
     throw new TypeError("duplicate capability");
   }
   const capabilities = Object.fromEntries(capabilityValues.map((value) => [value, true]));
+  if (!Object.keys(capabilities).length) Object.assign(capabilities, { chat: true, stream: true });
+  const providerModelId = String(formData.get("provider_model_id") ?? "").trim();
+  const internalModelId = String(formData.get("internal_model_id") ?? "").trim()
+    || providerModelId.toLowerCase().replace(/[^a-z0-9._-]/gu, "-").replace(/^[^a-z0-9]+/u, "").slice(0, 160);
   const candidate = {
     provider_code: String(formData.get("provider_code") ?? ""),
     name: String(formData.get("name") ?? ""),
@@ -117,13 +121,25 @@ export function localEndpointCreateFromFormData(formData) {
     auth_type: authType,
     ...(authType === "bearer" ? { bearer_token: String(formData.get("bearer_token") ?? "") } : {}),
     initial_model: {
-      internal_model_id: String(formData.get("internal_model_id") ?? ""),
-      provider_model_id: String(formData.get("provider_model_id") ?? ""),
+      internal_model_id: internalModelId,
+      provider_model_id: providerModelId,
       display_name: String(formData.get("display_name") ?? ""),
       capabilities,
       context_window: strictPositiveInteger(formData.get("context_window")),
-      input_price_per_1k: strictPrice(formData.get("input_price_per_1k")),
-      output_price_per_1k: strictPrice(formData.get("output_price_per_1k")),
+      input_price_per_1k: formData.has("input_price_per_million")
+        ? strictPrice(formData.get("input_price_per_million"))
+        : strictPrice(formData.get("input_price_per_1k")),
+      output_price_per_1k: formData.has("output_price_per_million")
+        ? strictPrice(formData.get("output_price_per_million"))
+        : strictPrice(formData.get("output_price_per_1k")),
+      cache_price_per_1k: formData.has("cache_price_per_million")
+        ? strictPrice(formData.get("cache_price_per_million"))
+        : strictPrice(
+          formData.get("cache_price_per_1k")
+          || (formData.has("input_price_per_million")
+            ? formData.get("input_price_per_million")
+            : formData.get("input_price_per_1k")),
+        ),
       currency: String(formData.get("currency") ?? ""),
     },
   };

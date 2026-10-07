@@ -315,7 +315,7 @@ function referenceRateCommand(value) {
     const optionalUntil = Object.hasOwn(value, "effective_until") ? ["effective_until"] : [];
     requestExact(value, [
       "action", "model_id", "currency", "input_rate_micros_per_1k",
-      "output_rate_micros_per_1k", "effective_from", "source_version", ...optionalUntil,
+      "output_rate_micros_per_1k", "cache_rate_micros_per_1k", "effective_from", "source_version", ...optionalUntil,
     ]);
     requestPattern(value.model_id, PATTERN.safeId, "model_id");
     requestChoice(value.currency, CURRENCIES, "currency");
@@ -324,6 +324,9 @@ function referenceRateCommand(value) {
     );
     requestInteger(
       value.output_rate_micros_per_1k, 0, Number.MAX_SAFE_INTEGER, "output_rate",
+    );
+    requestInteger(
+      value.cache_rate_micros_per_1k, 0, Number.MAX_SAFE_INTEGER, "cache_rate",
     );
     requestTimestamp(value.effective_from, "effective_from");
     requestString(value.source_version, 1, 128, "source_version");
@@ -389,7 +392,7 @@ function referenceRateInfo(value) {
   exact(value, [
     "provider_reference_rate_release_id", "provider_id", "model_id", "currency",
     "input_rate_micros_per_1k", "output_rate_micros_per_1k", "effective_from",
-    "effective_until", "source_version", "content_sha256", "status", "revision",
+    "cache_rate_micros_per_1k", "effective_until", "source_version", "content_sha256", "status", "revision",
     "release_generation", "head_revision", "is_head", "actions", "created_at",
     "updated_at", "released_at",
   ]);
@@ -401,6 +404,7 @@ function referenceRateInfo(value) {
   choice(value.currency, CURRENCIES, "currency");
   integer(value.input_rate_micros_per_1k, 0, Number.MAX_SAFE_INTEGER, "input_rate");
   integer(value.output_rate_micros_per_1k, 0, Number.MAX_SAFE_INTEGER, "output_rate");
+  integer(value.cache_rate_micros_per_1k, 0, Number.MAX_SAFE_INTEGER, "cache_rate");
   timestamp(value.effective_from, "effective_from");
   nullableTimestamp(value.effective_until, "effective_until");
   safeString(value.source_version, 1, 128, "source_version");

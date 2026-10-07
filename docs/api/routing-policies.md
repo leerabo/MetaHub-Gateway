@@ -85,7 +85,7 @@ X-Request-ID: {request_id}
 | `quality_cost_config` | object | 始终返回五字段休眠/执行配置；旧三模式不执行但保留，`quality_cost` 按该配置执行。 |
 | `status` | string | 当前实现为 `enabled`。 |
 | `version` | integer | 正整数 CAS 版本；路由语义真实变化时严格增加 1，同值不增加。 |
-| `candidates` | array | 从 Alias 当前 default/fallback 关系派生的最多两条配置摘要，不是历史请求结果。 |
+| `candidates` | array | 从 Alias 当前 default/fallback 关系派生的最多 32 条配置摘要，不是历史请求结果。 |
 | `warnings` | array | 有界安全警告；当前正常响应为空数组。 |
 | `created_at`、`updated_at` | datetime | RoutingPolicy 自身时间；mode-only 更新不会修改 Alias 的 `updated_at`。 |
 
@@ -229,7 +229,7 @@ X-Request-ID: {stable_request_id}
 
 RoutingPolicy 只作用于命中当前租户和 Environment 的 ModelAlias 初始选路。Policy DSL `route_to` 已解析出的受控单模型和请求中的 direct internal model 均走单候选路径，不继承原 Alias RoutingPolicy，不产生 `route.policy_selected` 事件。
 
-Alias 候选仍只来自 `default_model_id`、`fallback_model_id`，最多两条。Gateway 在一个短事务中冻结 Policy ID/版本/mode、候选 Model/Provider、健康事实，以及当前 mode 实际需要的 KeyPool、价格和 Fallback 事实，再用 shared 纯排序器得出结果并原子写 Decision/Candidate。
+Alias 候选来自 default 模型和有序 `model_alias_fallback_candidates`，最多 32 条。Gateway 在一个短事务中冻结 Policy ID/版本/mode、候选 Model/Provider、健康事实，以及当前 mode 实际需要的 KeyPool、价格和 Fallback 事实，再用 shared 纯排序器得出结果并原子写 Decision/Candidate。
 
 | mode | 资格与排序 | 不读取的事实 |
 | --- | --- | --- |
@@ -276,7 +276,7 @@ Budget 准入的 `reserved_cost_cny` 始终保存主备最坏总额且终态不�
 - `quality_scoring_performed`：只有全部正权重分量已经计算并生成最终总分时为 `true`；冷启动、单候选或依赖回退为 `false`。
 - `decision_status`、`decision_reason`、选中的 Model/Provider 和 `error_code`：最终初始选择摘要。
 
-`routing_candidates` 是强类型、不可变的请求时事实，最多两条：
+`routing_candidates` 是强类型、不可变的请求时事实，最多 32 条：
 
 - 身份和排序：`routing_candidate_id`、`candidate_role`、`configured_priority`、`rank`、`status`、`reason_code`。
 - 目标：`model_id`、`internal_model_id`、`model_display_name`、`provider_id`、`provider_code`、`provider_name`。

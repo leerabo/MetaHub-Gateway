@@ -403,6 +403,52 @@ async def test_legacy_and_verified_invitation_paths_create_exact_memberships(
 
 
 @pytest.mark.anyio
+async def test_global_login_clears_previous_account_workspace_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    migrated_database: Path,
+) -> None:
+    """A browser changing accounts must not retain the previous owner's shell."""
+    _database_url, app = _prepare(monkeypatch, tmp_path, migrated_database)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="https://testserver") as owner:
+        await _global_login(owner, ADMIN_EMAIL, ADMIN_PASSWORD)
+        workspace_id = (await owner.get("/identity/workspaces")).json()["workspaces"][0]["workspace_id"]
+        await _switch(owner, workspace_id)
+        created = await owner.post(
+            "/membership-invitations",
+            json={"email": "same-browser-developer@example.com", "role": "developer"},
+            headers=_csrf_headers(owner, WORKSPACE_CSRF_COOKIE),
+        )
+        assert created.status_code == 201, created.text
+        invitation_token = created.json()["accept_token"]
+
+        async with AsyncClient(transport=transport, base_url="https://testserver") as invited:
+            await _register_with_invitation(
+                invited,
+                email="same-browser-developer@example.com",
+                invitation_token=invitation_token,
+            )
+
+        logged_in = await owner.post(
+            "/identity/login",
+            json={"email": "same-browser-developer@example.com", "password": MEMBER_PASSWORD},
+            headers=_origin_headers(),
+        )
+        assert logged_in.status_code == 200, logged_in.text
+        assert owner.cookies.get(WORKSPACE_SESSION_COOKIE) is None
+        assert owner.cookies.get(WORKSPACE_CSRF_COOKIE) is None
+        listed = await owner.get("/identity/workspaces")
+        assert listed.status_code == 200, listed.text
+        assert listed.json()["workspaces"][0]["role"] == "developer"
+        stale = await owner.get("/workspace/session")
+        assert stale.status_code == 401
+        assert stale.json()["code"] == "workspace_session.required"
+        switched = await _switch(owner, workspace_id)
+        assert switched.json()["context"]["role"] == "developer"
+
+
+@pytest.mark.anyio
 async def test_workspace_credential_origin_csrf_and_cross_workspace_negative_matrix(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

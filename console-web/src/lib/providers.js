@@ -138,6 +138,25 @@ export async function updateProvider({
 }
 
 /**
+ * 删除一个尚未被模型、调用或历史记录引用的 Provider。
+ * 后端会在同一事务中检查引用并拒绝破坏历史数据的删除。
+ */
+export async function deleteProvider({
+  controlApiUrl,
+  token,
+  authentication,
+  signal,
+  providerId,
+}) {
+  return providersRequest(`${controlApiUrl}/providers/${encodeURIComponent(providerId)}`, {
+    method: "DELETE",
+    authentication,
+    token,
+    signal,
+  });
+}
+
+/**
  * 更新 Provider Key 元数据或状态。
  *
  * 该接口不接收明文 Key；轮换 Key 应创建新记录再禁用旧记录，避免明文回显。
@@ -164,6 +183,22 @@ export async function updateProviderKey({
       weight,
       status,
     }),
+  });
+}
+
+/** 删除一把未被当前运行绑定引用的 Provider Key。 */
+export async function deleteProviderKey({
+  controlApiUrl,
+  token,
+  authentication,
+  signal,
+  providerKeyId,
+}) {
+  return providersRequest(`${controlApiUrl}/provider-keys/${encodeURIComponent(providerKeyId)}`, {
+    method: "DELETE",
+    authentication,
+    token,
+    signal,
   });
 }
 

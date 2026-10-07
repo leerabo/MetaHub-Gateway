@@ -283,6 +283,34 @@ def list_workspace_deployments(
         connection.close()
 
 
+def assert_workspace_private_gateway_enabled(
+    config: AppConfig, *, session_token: str
+) -> None:
+    """Fail closed before any Workspace Edge endpoint is dispatched."""
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN")
+        context = authenticate_workspace_session_in_transaction(
+            connection, config, session_token=session_token, csrf_token=None, touch=False
+        )
+        row = connection.execute(
+            "SELECT enabled FROM workspace_private_gateway_capabilities "
+            "WHERE workspace_id=? AND tenant_id=?",
+            (context.workspace_id, context.tenant_id),
+        ).fetchone()
+        if row is None or not bool(row["enabled"]):
+            raise ApiError("edge.private_gateway_disabled")
+        connection.rollback()
+    except ApiError:
+        _rollback(connection)
+        raise
+    except (sqlite3.Error, DbError, KeyError, TypeError, ValueError):
+        _rollback(connection)
+        raise ApiError("edge.unavailable") from None
+    finally:
+        connection.close()
+
+
 def register_edge_agent(
     config: AppConfig,
     payload: EdgeAgentRegistrationRequest,
@@ -1412,6 +1440,13 @@ def _workspace_context(
     )
     if permission not in context.permission_codes:
         raise ApiError("workspace_session.permission_denied")
+    capability = connection.execute(
+        "SELECT enabled FROM workspace_private_gateway_capabilities "
+        "WHERE workspace_id=? AND tenant_id=?",
+        (context.workspace_id, context.tenant_id),
+    ).fetchone()
+    if capability is None or not bool(capability["enabled"]):
+        raise ApiError("edge.private_gateway_disabled")
     return context
 
 

@@ -147,6 +147,13 @@ async def test_provider_keypool_create_list_and_disable_flow(
             headers=headers,
             json={"status": "disabled"},
         )
+        connection = connect_database(database_url)
+        row = connection.execute(
+            "SELECT encrypted_key, key_fingerprint, key_prefix, status FROM provider_credentials WHERE provider_credential_id=?",
+            (provider_key_id,),
+        ).fetchone()
+        connection.close()
+        deleted = await client.delete(f"/provider-keys/{provider_key_id}", headers=headers)
 
     assert created.status_code == 201, created.text
     assert created.json()["provider_key"]["key_prefix"] == secret[:12]
@@ -160,20 +167,18 @@ async def test_provider_keypool_create_list_and_disable_flow(
     assert disabled.status_code == 200
     assert disabled.json()["provider_key"]["status"] == "disabled"
     assert disabled.json()["provider_key"]["disabled_at"] is not None
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["deleted_provider_key_id"] == provider_key_id
 
-    connection = connect_database(database_url)
-    row = connection.execute(
-        """
-        SELECT encrypted_key, key_fingerprint, key_prefix, status
-        FROM provider_credentials
-        WHERE provider_credential_id=?
-        """,
-        (provider_key_id,),
-    ).fetchone()
     assert row["encrypted_key"].startswith("aesgcm-v1:")
     assert row["key_prefix"] == secret[:12]
     assert row["status"] == "disabled"
     assert secret not in "\n".join(str(value) for value in tuple(row))
+    connection = connect_database(database_url)
+    assert connection.execute(
+        "SELECT 1 FROM provider_credentials WHERE provider_credential_id=?", (provider_key_id,)
+    ).fetchone() is None
+    connection.close()
 
 
 @pytest.mark.anyio

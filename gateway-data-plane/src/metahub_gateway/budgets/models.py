@@ -62,6 +62,8 @@ class EstimatedRequestCost:
     output_tokens: int
     cost_cny: Decimal
     price_available: bool
+    # Provider cache usage is unknown before the request; trusted callers may provide it.
+    cache_tokens: int = 0
 
 
 @dataclass(frozen=True)

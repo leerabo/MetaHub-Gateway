@@ -23,11 +23,11 @@ const CREATE_KEYS = Object.freeze([
 const CREATE_BEARER_KEYS = Object.freeze([...CREATE_KEYS, "bearer_token"]);
 const INITIAL_MODEL_REQUEST_KEYS = Object.freeze([
   "internal_model_id", "provider_model_id", "display_name", "capabilities", "context_window",
-  "input_price_per_1k", "output_price_per_1k", "currency",
+  "input_price_per_1k", "output_price_per_1k", "cache_price_per_1k", "currency",
 ]);
 const INITIAL_MODEL_KEYS = Object.freeze([
   "model_id", "internal_model_id", "provider_model_id", "display_name", "capabilities",
-  "context_window", "input_price_per_1k", "output_price_per_1k", "currency", "status",
+  "context_window", "input_price_per_1k", "output_price_per_1k", "cache_price_per_1k", "currency", "status",
 ]);
 const ENDPOINT_KEYS = Object.freeze([
   "local_endpoint_id", "tenant_id", "provider_id", "provider_code", "name", "engine_kind",
@@ -245,6 +245,7 @@ function normalizeInitialModelRequest(value) {
     || !integer(value.context_window, 1, 10_000_000)
     || !price(value.input_price_per_1k)
     || !price(value.output_price_per_1k)
+    || !price(value.cache_price_per_1k)
     || value.currency !== "CNY"
   ) return null;
   return Object.freeze({ ...value, capabilities: Object.freeze({ ...value.capabilities }) });
@@ -288,6 +289,7 @@ function normalizeInitialModel(value) {
     || !integer(value.context_window, 1, 10_000_000)
     || !price(value.input_price_per_1k)
     || !price(value.output_price_per_1k)
+    || !price(value.cache_price_per_1k)
     || value.currency !== "CNY"
     || !ENDPOINT_STATUSES.has(value.status)
   ) return null;

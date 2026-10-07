@@ -4543,3 +4543,26 @@ a {
 .identity-account-loading { width: min(960px, 100%); margin: 48px auto; padding: 24px; }
 .identity-account-loading h1 { font-size: 24px; margin: 32px 0 24px; }
 .identity-account-skeleton { height: 64px; max-width: 640px; margin: 16px 0; background: #edf1f4; border-radius: 6px; }
+
+/* Shared identity pages use the same foundations as the access screen. */
+:root {
+  --identity-text: #18302a;
+  --identity-muted: #65756e;
+  --identity-line: #d8e2dc;
+  --identity-soft: #edf2ee;
+  --identity-accent: #087f6b;
+  --identity-accent-dark: #066252;
+}
+
+body:has(.identity-app) { background: #f4f7f3; color: var(--identity-text); }
+.identity-app :is(button, input, select, textarea) { border-radius: 6px; }
+.identity-app :is(input, select, textarea) { border-color: var(--identity-line); background: #fff; }
+.identity-app :is(input, select, textarea):focus { border-color: var(--identity-accent); box-shadow: 0 0 0 3px rgb(8 127 107 / 14%); outline: 0; }
+.identity-app button.identity-primary,
+.identity-app button[type="submit"] { border-color: var(--identity-accent); background: var(--identity-accent); color: #fff; font-weight: 750; }
+.identity-app button.identity-primary:hover,
+.identity-app button[type="submit"]:hover { border-color: var(--identity-accent-dark); background: var(--identity-accent-dark); }
+.identity-organization-shell { background: #f4f7f3; }
+.identity-organization-topbar { padding: 18px 32px; border-bottom-color: var(--identity-line); background: #f8faf7; }
+.identity-organization-main { width: min(100%, 760px); padding-top: 64px; }
+.identity-organization-main h1 { color: var(--identity-text); font-weight: 780; letter-spacing: -.025em; }

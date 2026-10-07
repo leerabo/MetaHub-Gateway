@@ -3874,6 +3874,12 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         "Retry with the current registration credential or verified device certificate.",
         owner="edge_management",
     ),
+    "edge.private_gateway_disabled": ErrorSpec(
+        403,
+        "Private Gateway is not enabled for this organization.",
+        "Ask a SaaS administrator to enable Private Gateway for the organization.",
+        owner="edge_management",
+    ),
     "edge.csr_invalid": ErrorSpec(
         422,
         "Private gateway certificate request is invalid.",
@@ -6055,6 +6061,18 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         "Check name, environment, and description.",
         owner="virtual_key",
     ),
+    "virtual_key.personal_limit_reached": ErrorSpec(
+        409,
+        "你已有一把个人 KEY。",
+        "请先删除现有 KEY，再创建新的。",
+        owner="virtual_key",
+    ),
+    "virtual_key.reveal_unavailable": ErrorSpec(
+        409,
+        "这把 KEY 当前无法复制。",
+        "请创建或轮换一把新的 KEY，并在列表中复制保存。",
+        owner="virtual_key",
+    ),
     "virtual_key.name_invalid": ErrorSpec(
         422,
         "Virtual key name is invalid.",
@@ -6139,6 +6157,12 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         "Choose an active user that belongs to the current tenant.",
         owner="project",
     ),
+    "project.delete_in_use": ErrorSpec(
+        409,
+        "Project cannot be deleted after it has been used.",
+        "Remove unused keys or review the project history, then archive the project when records must be retained.",
+        owner="project",
+    ),
     "project.update_empty": ErrorSpec(
         422,
         "Project update has no editable fields.",
@@ -6185,6 +6209,18 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         422,
         "Application update has no editable fields.",
         "Provide at least one editable application field.",
+        owner="application",
+    ),
+    "application.delete_in_use": ErrorSpec(
+        409,
+        "Application cannot be deleted while it still has keys or billing history.",
+        "End the application instead, or remove unused keys first.",
+        owner="application",
+    ),
+    "application.members_invalid": ErrorSpec(
+        422,
+        "Application members are invalid.",
+        "Choose active organization members from the current organization.",
         owner="application",
     ),
     "provider.not_found": ErrorSpec(
@@ -6422,6 +6458,12 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         "Provide at least one editable provider field.",
         owner="provider",
     ),
+    "provider.in_use": ErrorSpec(
+        409,
+        "This model service has dependent models or history and cannot be deleted.",
+        "Disable the service instead, or remove its dependent configuration first.",
+        owner="provider",
+    ),
     "provider.maintenance_note_invalid": ErrorSpec(
         422,
         "Provider maintenance note is invalid.",
@@ -6533,6 +6575,12 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         "Provide at least one editable provider key field.",
         owner="provider_key",
     ),
+    "provider_key.in_use": ErrorSpec(
+        409,
+        "This provider key is still used by an active route.",
+        "Switch the route to another key or disable the key before deleting it.",
+        owner="provider_key",
+    ),
     "provider_key.encryption_failed": ErrorSpec(
         500,
         "Provider key encryption failed.",
@@ -6607,6 +6655,12 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         "Check effective status and pagination parameters.",
         owner="model_price",
     ),
+    "model_price.batch_invalid": ErrorSpec(
+        422,
+        "Model price batch is invalid.",
+        "Provide between 1 and 100 complete price periods.",
+        owner="model_price",
+    ),
     "model.create_invalid": ErrorSpec(
         422,
         "Model creation payload is invalid.",
@@ -6652,7 +6706,7 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
     "model.price_invalid": ErrorSpec(
         422,
         "Model price is invalid.",
-        "Use non-negative numeric prices per 1K tokens.",
+        "Use non-negative numeric prices per million tokens.",
         owner="model",
     ),
     "model.currency_invalid": ErrorSpec(
@@ -8822,8 +8876,8 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
     ),
     "gateway.stream_session_unavailable": ErrorSpec(
         503,
-        "Stream session could not be recorded.",
-        "Retry after the request log database and stream session migration are available.",
+        "MetaHub could not prepare the internal stream session.",
+        "Retry after MetaHub recovers; this is an internal service issue, not an API key error.",
         retryable=True,
         owner="gateway",
     ),

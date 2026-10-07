@@ -6,7 +6,6 @@
 
 import { hasPermission, PERMISSIONS } from "../../lib/permissions.js";
 import { icon } from "../public-home/icons.js";
-import { renderWorkspaceConnectionStatus, workspaceSetupStepComplete } from "../workspace-navigation/renderWorkspaceNavigation.js";
 
 // 环境标签只用于展示和表单选项，提交值仍使用后端枚举。
 const ENVIRONMENT_LABELS = {
@@ -33,7 +32,7 @@ export function renderVirtualKeyPanel(virtualKeysState, authContext, projectStat
       <div class="empty-state" role="status">正在加载...</div>
     `;
   }
-  // 错误态是用户可见反馈入口，需要保留后端 request_id 便于排查。
+  // 错误态只展示恢复提示，定位信息进入后台日志。
   if (virtualKeysState.state === "error") {
     return `
       <div class="panel-heading">
@@ -41,7 +40,7 @@ export function renderVirtualKeyPanel(virtualKeysState, authContext, projectStat
         <p>个人 KEY 暂不可用。</p>
       </div>
       <div class="empty-state error-state">
-        ${escapeHtml(virtualKeysState.message)} request_id: ${escapeHtml(virtualKeysState.requestId ?? "-")}
+        ${escapeHtml(virtualKeysState.message ?? "个人 KEY 暂不可用，请稍后重试")}
         <button type="button" data-resource-retry>重试</button>
       </div>
     `;
@@ -50,99 +49,67 @@ export function renderVirtualKeyPanel(virtualKeysState, authContext, projectStat
   const keys = virtualKeysState.virtual_keys ?? [];
   const canWrite = hasPermission(authContext, PERMISSIONS.VIRTUAL_KEY_WRITE);
   const canManageWorkspace = hasPermission(authContext, PERMISSIONS.USER_MANAGE);
-  const keyTitle = canManageWorkspace ? "组织 KEY" : "个人 KEY";
-  const createKeyLabel = canManageWorkspace ? "创建组织 KEY" : "创建个人 KEY";
-  const readyForConnection = ["provider_connected", "model_catalog_ready", "project_key_ready"]
-    .every((code) => workspaceSetupStepComplete(workspaceTaskHomeState, code));
+  const canManageKeys = canManageWorkspace;
+  const personalOnly = !canManageWorkspace;
+  const projects = projectState?.state === "ok" ? projectState.projects ?? [] : [];
+  const applications = projectState?.state === "ok" ? projectState.applications ?? [] : [];
+  const keyTitle = keyCopy(i18n, "我的 KEY", "My keys");
+  const createKeyLabel = keyCopy(i18n, "创建 KEY", "Create key");
+  const defaultEnvironment = activeEnvironments(environmentState)[0];
+  const personalKeyExists = personalOnly
+    ? keys.length > 0
+    : keys.some((key) => key.owner_user_id === authContext?.user?.user_id);
   return `
     <div class="panel-heading virtual-keys-heading">
       <div>
         <h2 id="virtual-keys-title">${keyTitle}</h2>
+        ${canManageWorkspace ? `<p class="virtual-key-admin-hint">员工创建自己的 KEY；管理员在这里指定项目和应用。</p>` : ""}
       </div>
       <span class="virtual-keys-count">${keys.length} 把 KEY</span>
+      ${canWrite ? `<button type="button" data-open-virtual-key-dialog${personalKeyExists ? ` disabled title="${keyCopy(i18n, "请先删除自己的现有 KEY，再创建新的", "Delete your current key before creating a new one")}"` : ""}>${createKeyLabel}</button>` : ""}
     </div>
-    ${canManageWorkspace ? renderWorkspaceConnectionStatus(workspaceTaskHomeState, "workspace.gateway.virtual-keys", i18n) : ""}
-    ${renderActionError(virtualKeysState.actionError)}
-    <p class="virtual-key-owner-note">${canManageWorkspace ? "组织管理员管理组织 KEY；后台成员登录后自行创建和管理个人 KEY。" : "你可以创建、查看和撤销自己的 MetaHub KEY。"}</p>
-    ${canWrite && canManageWorkspace ? renderEnvironmentReadiness(environmentState) : ""}
-    ${canWrite ? `<details class="key-create-disclosure"${!keys.length || virtualKeysState.keyCreateOpen ? " open" : ""}><summary>${createKeyLabel}</summary>
-    <form class="create-virtual-key-form" id="create-virtual-key-form">
-      <label><span>KEY 名称（可选）</span>
-        <input name="name" maxlength="80" value="${canManageWorkspace ? "组织 KEY" : "个人 KEY"}" placeholder="${canManageWorkspace ? "例如：报表服务 KEY" : "例如：我的开发 KEY"}" required />
-      </label>
-      ${canManageWorkspace ? `<details class="virtual-key-advanced"><summary>高级设置</summary><div class="virtual-key-advanced-fields">
-      <label>
-        <span>环境</span>
-        <select name="environmentId" ${activeEnvironments(environmentState).length ? "" : "disabled"}>
-          ${renderEnvironmentOptions(environmentState)}
-        </select>
-      </label>
-      ${renderProjectBindingFields(projectState)}
-      <label>
-        <span>备注</span>
-        <input name="description" maxlength="240" placeholder="用途、系统或负责人" />
-      </label>
-      </div></details>
-      ` : `<p class="virtual-key-owner-note">组织默认环境、模型与路由会自动应用，无需额外选择。</p>`}
-      <div class="virtual-key-actions">
-        <button type="submit" ${canManageWorkspace && !activeEnvironments(environmentState).length ? "disabled" : ""}>${createKeyLabel}</button>
-        <span class="virtual-key-feedback" role="status">${escapeHtml(virtualKeysState.feedback ?? "")}</span>
-      </div>
-    </form></details>` : ""}
-    ${canWrite ? renderOneTimeSecret(virtualKeysState.created, canManageWorkspace) : ""}
-    ${keys.length && hasPermission(authContext, PERMISSIONS.DEVELOPER_PORTAL_READ) ? `<a class="${readyForConnection ? "console-flow-next" : "console-flow-related"}" href="#workspace.developer.sdk">${readyForConnection ? "下一步：" : ""}接入信息与调用示例</a>` : ''}
-    ${`<div class="virtual-keys-grid" id="issued-keys" role="table" aria-label="已创建的 MetaHub KEY">
+    ${!virtualKeysState.keyCreateOpen ? renderActionError(virtualKeysState.actionError) : ""}
+    ${canWrite ? renderVirtualKeyDialog(virtualKeysState, defaultEnvironment, i18n) : ""}
+    ${`<div class="virtual-keys-grid" id="issued-keys" role="table" aria-label="已创建的 KEY">
       <div class="virtual-key-row virtual-key-head" role="row">
-        <span>名称</span>
-        <span>前缀</span>
-        <span>环境</span>
-        <span>归属范围</span>
-        <span>状态</span>
-        <span>最近使用</span>
-        <span>限制</span>
-        <span>操作</span>
+        <span>${keyCopy(i18n, "名称", "Name")}</span>
+        <span>${keyCopy(i18n, "前缀", "Prefix")}</span>
+        <span>${keyCopy(i18n, "环境", "Environment")}</span>
+        <span>${keyCopy(i18n, "归属范围", "Attribution")}</span>
+        <span>${keyCopy(i18n, "状态", "Status")}</span>
+        <span>${keyCopy(i18n, "最近使用", "Last used")}</span>
+        <span>${keyCopy(i18n, "限制", "Limits")}</span>
+        <span>${keyCopy(i18n, "操作", "Actions")}</span>
       </div>
-      ${keys.length ? keys.map((key) => renderVirtualKeyRow(key, canWrite, !canManageWorkspace)).join("") : renderEmptyRow()}
+      ${keys.length ? keys.map((key) => renderVirtualKeyRow(key, canManageKeys, personalOnly, i18n, projects, applications)).join("") : renderEmptyRow(i18n)}
     </div>`}
   `;
 }
 
-/**
- * 渲染 Project/Application 绑定选择器。
- * Project/Application 来自后端当前租户列表，前端不接受也不提交 tenant_id。
- */
-function renderProjectBindingFields(projectState) {
-  const projects = projectState?.projects ?? [];
-  const applications = projectState?.applications ?? [];
-  // 归属列表失败不能阻塞 Key 页面，但必须阻止用户误以为能安全选择项目。
-  if (projectState?.state === "error") {
-    return `
-      <div class="virtual-key-binding-warning" role="alert">项目归属暂时无法加载
-        <button type="button" data-resource-retry>重试</button>
-      </div>
-    `;
-  }
+function renderVirtualKeyDialog(state, defaultEnvironment, i18n) {
+  const createKeyLabel = keyCopy(i18n, "创建 KEY", "Create key");
   return `
-    <label>
-      <span>项目（可选）</span>
-      <select name="projectId">
-        <option value="">不绑定项目</option>
-        ${projects
-          .filter((item) => item.status === "active")
-          .map((item) => `<option value="${escapeAttribute(item.project_id)}">${escapeHtml(item.name)} / ${escapeHtml(item.project_code)}</option>`)
-          .join("")}
-      </select>
-    </label>
-    <label>
-      <span>应用（可选）</span>
-      <select name="applicationId">
-        <option value="">不绑定应用</option>
-        ${applications
-          .filter((item) => item.status === "active")
-          .map((item) => `<option value="${escapeAttribute(item.application_id)}">${escapeHtml(item.name)} / ${escapeHtml(item.project_name ?? item.project_code ?? "-")}</option>`)
-          .join("")}
-      </select>
-    </label>
+    <dialog class="virtual-key-dialog" data-virtual-key-dialog${state.keyCreateOpen ? " data-virtual-key-auto-open" : ""} aria-labelledby="virtual-key-dialog-title">
+      <div class="virtual-key-dialog-content">
+        <div class="virtual-key-dialog-heading">
+          <h3 id="virtual-key-dialog-title">${state.created?.plainValue ? keyCopy(i18n, "KEY 已创建", "Key created") : createKeyLabel}</h3>
+          <button type="button" class="icon-button" data-virtual-key-dialog-close aria-label="关闭">×</button>
+        </div>
+        ${renderActionError(state.actionError)}
+        ${state.created?.plainValue ? renderOneTimeSecret(state.created, false, i18n) : `
+          <form class="create-virtual-key-form" id="create-virtual-key-form">
+            <label><span>${keyCopy(i18n, "名称（可选）", "Name (optional)")}</span>
+              <input name="name" maxlength="80" value="" placeholder="${keyCopy(i18n, "例如：开发用 KEY", "Example: development key")}" />
+            </label>
+            ${defaultEnvironment?.environment_id ? `<input type="hidden" name="environmentId" value="${escapeAttribute(defaultEnvironment.environment_id)}" />` : ""}
+            <div class="virtual-key-actions">
+              <button type="submit">${createKeyLabel}</button>
+              <span class="virtual-key-feedback" role="status">${escapeHtml(state.feedback ?? "")}</span>
+            </div>
+          </form>
+        `}
+      </div>
+    </dialog>
   `;
 }
 
@@ -150,7 +117,7 @@ function renderProjectBindingFields(projectState) {
  * 渲染创建成功后的一次性明文 Key。
  * 明文只来自刚创建的响应，刷新后不会再出现；页面文案提醒用户立即保存。
  */
-function renderOneTimeSecret(created, organizationKey = false) {
+function renderOneTimeSecret(created, organizationKey = false, i18n = null) {
   if (!created?.plainValue) {
     return "";
   }
@@ -159,22 +126,22 @@ function renderOneTimeSecret(created, organizationKey = false) {
   return `
     <div class="one-time-secret" role="status" aria-label="一次性 Virtual Key 明文">
       <div>
-        <strong>${created.operation === "rotated" ? "KEY 已轮换" : "KEY 已创建"} · 只显示一次</strong>
-        <p class="one-time-secret-owner">${systemKey ? "绑定对象" : "KEY 归属"}：${escapeHtml(owner)}${created.keyName ? ` · ${escapeHtml(created.keyName)}` : ""}</p>
-        <p>${systemKey ? "请先复制保存，将 KEY 配置到对应应用或项目。" : organizationKey ? "请先复制保存，仅配置到授权的组织系统中。" : "请先复制保存；关闭或刷新后无法再次查看此 KEY。"}工具要求时再填写模型名称；各工具接入要求见“接入信息”。</p>
+        <strong>${created.operation === "rotated" ? keyCopy(i18n, "KEY 已轮换", "Key rotated") : keyCopy(i18n, "KEY 已创建", "Key created")} · ${keyCopy(i18n, "只显示一次", "shown once")}</strong>
+        <p class="one-time-secret-owner">${systemKey ? keyCopy(i18n, "绑定对象", "Bound to") : keyCopy(i18n, "KEY 归属", "Key owner")}：${escapeHtml(owner)}${created.keyName ? ` · ${escapeHtml(created.keyName)}` : ""}</p>
+        <p>${keyCopy(i18n, "仅显示一次，请复制保存。", "Shown once. Copy and save it now.")}</p>
       </div>
       <code>${escapeHtml(created.plainValue)}</code>
       <div class="virtual-key-actions">
-        <button type="button" data-copy-virtual-key>复制</button>
-        <button type="button" data-dismiss-virtual-key-secret>隐藏</button>
+        <button type="button" class="icon-button virtual-key-copy-button" data-copy-virtual-key title="${keyCopy(i18n, "复制 KEY", "Copy key")}" aria-label="${keyCopy(i18n, "复制 KEY", "Copy key")}">${icon("copy")}</button>
+        <button type="button" data-dismiss-virtual-key-secret>${keyCopy(i18n, "隐藏", "Hide")}</button>
+        <span class="virtual-key-feedback" role="status">${escapeHtml(created.feedback ?? "")}</span>
       </div>
     </div>
   `;
 }
 
 /**
- * 渲染 Virtual Key 操作错误。
- * 保留 request_id，便于从控制台提示追踪后端失败日志。
+ * 渲染 Virtual Key 操作错误；定位信息保留在后台日志。
  */
 function renderActionError(error) {
   if (!error) {
@@ -182,7 +149,7 @@ function renderActionError(error) {
   }
   return `
     <div class="virtual-key-action-error" role="alert">
-      ${escapeHtml(error.message ?? "Virtual Key 操作失败")} request_id: ${escapeHtml(error.requestId ?? "-")}
+      ${escapeHtml(error.message ?? "Virtual Key 操作失败，请稍后重试")}
     </div>
   `;
 }
@@ -191,68 +158,122 @@ function renderActionError(error) {
  * 渲染单条 Virtual Key。
  * 列表只展示 key_prefix、状态、环境、归属和最近使用时间，不展示明文 Key 或哈希。
  */
-function renderVirtualKeyRow(key, canWrite, personalOnly) {
-  const nextStatus = key.status === "active" ? "disabled" : "active";
-  const actionLabel = key.status === "active" ? "禁用" : "启用";
+function renderVirtualKeyRow(key, canManageKeys, personalOnly, i18n = null, projects = [], applications = []) {
+  const unassigned = key.status === "disabled" && (!key.project_id || !key.application_id) && key.disabled_reason === "manual" && !key.disabled_at;
+  const awaitingActivation = key.status === "disabled" && key.project_id && key.application_id && key.disabled_reason === "manual" && !key.disabled_at;
+  const statusLabel = key.status === "active"
+    ? keyCopy(i18n, "已启用", "Active")
+    : key.disabled_reason === "project_inactive"
+      ? keyCopy(i18n, "已暂停", "Paused")
+      : key.disabled_reason === "member_removed"
+        ? keyCopy(i18n, "成员已移除", "Member removed")
+        : unassigned
+          ? keyCopy(i18n, "待分配", "Unassigned")
+        : awaitingActivation
+          ? keyCopy(i18n, "待启用", "Pending activation")
+        : keyCopy(i18n, "已停用", "Disabled");
   return `
     <div class="virtual-key-row" data-virtual-key-row="${escapeAttribute(key.virtual_key_id)}" role="row">
-      <span class="virtual-key-name"><span class="virtual-key-field-label">KEY 名称</span>
-        <strong>${escapeHtml(key.name)}</strong>
+      <span class="virtual-key-name"><span class="virtual-key-field-label">${keyCopy(i18n, "KEY 名称", "Key name")}</span>
+        <strong>${escapeHtml(displayVirtualKeyName(key))}</strong>
         ${key.description ? `<em>${escapeHtml(key.description)}</em>` : ""}
       </span>
-      <span><span class="virtual-key-field-label">密钥前缀</span><code>${escapeHtml(key.key_prefix)}</code></span>
-      <span><span class="virtual-key-field-label">环境</span>${escapeHtml(key.environment_name ?? ENVIRONMENT_LABELS[key.environment] ?? key.environment)}</span>
-      <span class="virtual-key-binding"><span class="virtual-key-field-label">归属范围</span>
-        ${key.consumer_id ? `<strong>历史成员关联</strong><em>${key.consumer_status === "active" ? "使用者已启用" : "使用者已停用"}</em>` : ""}
-        ${key.project_id ? `<strong>${escapeHtml(key.project_name ?? "已关联项目")}</strong>` : ""}
-        ${key.application_id ? `<em>${escapeHtml(key.application_name ?? "已关联应用")}</em>` : ""}
-        ${!key.consumer_id && !key.project_id && !key.application_id ? `<em>${personalOnly ? "本人" : "当前组织"}</em>` : ""}
+      <span><span class="virtual-key-field-label">${keyCopy(i18n, "密钥前缀", "Key prefix")}</span><code>${escapeHtml(displayVirtualKeyPrefix(key.key_prefix))}</code></span>
+      <span><span class="virtual-key-field-label">${keyCopy(i18n, "环境", "Environment")}</span>${escapeHtml(key.environment_name ?? environmentLabel(key.environment, i18n) ?? key.environment)}</span>
+      <span class="virtual-key-binding"><span class="virtual-key-field-label">${personalOnly ? keyCopy(i18n, "当前项目", "Current project") : keyCopy(i18n, "归属范围", "Attribution")}</span>
+        ${!personalOnly && key.owner_display_name ? `<em class="virtual-key-owner">使用者：${escapeHtml(key.owner_display_name)}</em>` : ""}
+        ${key.consumer_id ? `<strong>${keyCopy(i18n, "历史成员关联", "Former member link")}</strong><em>${key.consumer_status === "active" ? keyCopy(i18n, "使用者已启用", "Consumer active") : keyCopy(i18n, "使用者已停用", "Consumer disabled")}</em>` : ""}
+        ${key.project_id ? `<strong>${escapeHtml(key.project_name ?? keyCopy(i18n, "已关联项目", "Linked project"))}</strong>` : ""}
+        ${key.application_id ? `<em>${escapeHtml(key.application_name ?? keyCopy(i18n, "已关联应用", "Linked application"))}</em>` : ""}
+        ${!key.consumer_id && !key.project_id && !key.application_id ? `<em>${personalOnly ? keyCopy(i18n, "本人", "Personal") : keyCopy(i18n, "当前组织", "Current organization")}</em>` : ""}
+        ${!personalOnly && canManageKeys && projects.length ? `<button type="button" class="virtual-key-binding-open" data-open-virtual-key-binding-dialog="${escapeAttribute(key.virtual_key_id)}">调整归属</button>` : ""}
       </span>
-      <span><span class="virtual-key-field-label">状态</span><mark class="status-mark status-${escapeHtml(key.status)}">${escapeHtml(key.status === "active" ? "已启用" : key.status === "disabled" ? "已停用" : "状态未知")}</mark></span>
-      <span><span class="virtual-key-field-label">最近使用</span>${key.last_used_at ? escapeHtml(formatDateTime(key.last_used_at)) : "尚未使用"}</span>
+      <span><span class="virtual-key-field-label">${keyCopy(i18n, "状态", "Status")}</span><mark class="status-mark status-${escapeHtml(key.status)}">${escapeHtml(statusLabel)}</mark>${unassigned ? `<em class="virtual-key-governed-state">${keyCopy(i18n, "加入项目和应用后启用", "Enabled after project and application assignment")}</em>` : awaitingActivation ? `<em class="virtual-key-governed-state">${keyCopy(i18n, "请重新保存归属", "Save the assignment again")}</em>` : key.status === "disabled" && key.disabled_reason === "project_inactive" ? `<em class="virtual-key-governed-state">${keyCopy(i18n, "项目或应用已暂停", "Project or application paused")}</em>` : key.status === "disabled" && key.disabled_reason === "manual" ? `<em class="virtual-key-governed-state">${keyCopy(i18n, "无法调用", "Cannot be used")}</em>` : ""}</span>
+      <span><span class="virtual-key-field-label">${keyCopy(i18n, "最近使用", "Last used")}</span>${key.last_used_at ? escapeHtml(formatDateTime(key.last_used_at)) : keyCopy(i18n, "尚未使用", "Not used yet")}</span>
       <div class="virtual-key-limits-cell">
-        ${renderLimitSummary(key.rate_limit_rule)}
-        ${canWrite ? `<details class="virtual-key-limit-editor"><summary>调整限制</summary><form class="virtual-key-limit-form" data-virtual-key-limits-form data-virtual-key-id="${escapeAttribute(key.virtual_key_id)}">
-          ${renderLimitInput("rpmLimit", "RPM", key.rate_limit_rule?.rpm_limit)}
-          ${renderLimitInput("tpmLimit", "TPM", key.rate_limit_rule?.tpm_limit)}
-          ${renderLimitInput("concurrencyLimit", "并发", key.rate_limit_rule?.concurrency_limit)}
-          <button type="submit">保存限制</button>
-        </form></details>` : ""}
+        ${renderLimitSummary(key.rate_limit_rule, i18n)}
+        ${canManageKeys ? `<button type="button" class="virtual-key-limit-open" data-open-virtual-key-limit-dialog="${escapeAttribute(key.virtual_key_id)}">${keyCopy(i18n, "调整限制", "Adjust limits")}</button>` : ""}
       </div>
       <span class="virtual-key-row-actions">
-        ${canWrite && Number.isSafeInteger(key.credential_revision) && key.status === "active" ? `<button type="button" data-rotate-virtual-key="${escapeAttribute(key.virtual_key_id)}" data-key-revision="${key.credential_revision}" title="轮换 KEY，旧 KEY 将立即失效" aria-label="轮换 ${escapeAttribute(key.name)}">${icon("rotate-cw")}</button>` : ""}
-        ${canWrite ? `<form data-virtual-key-form data-virtual-key-id="${escapeAttribute(key.virtual_key_id)}">
-          <input type="hidden" name="status" value="${escapeAttribute(nextStatus)}" />
-          <button type="submit">${actionLabel}</button>
+        ${key.disabled_reason !== "member_removed" && key.has_recoverable_secret ? `<button type="button" class="icon-button virtual-key-copy-saved" data-copy-saved-virtual-key="${escapeAttribute(key.virtual_key_id)}" title="复制 KEY" aria-label="复制 KEY">${icon("copy")}</button><span class="virtual-key-copy-feedback" data-virtual-key-copy-feedback role="status"></span>` : ""}
+        ${key.status === "active" && !key.has_recoverable_secret ? `<button type="button" class="icon-button virtual-key-copy-saved virtual-key-copy-unavailable" disabled title="${keyCopy(i18n, "此 KEY 无法恢复，请删除后重新创建", "This key cannot be recovered; delete it and create a new one")}" aria-label="${keyCopy(i18n, "复制 KEY 不可用", "Copy unavailable")}">${icon("copy")}</button><em class="virtual-key-copy-unavailable-label">${keyCopy(i18n, "需重新创建", "Recreate")}</em>` : ""}
+        ${canManageKeys && Number.isSafeInteger(key.credential_revision) && key.status === "active" ? `<button type="button" data-rotate-virtual-key="${escapeAttribute(key.virtual_key_id)}" data-key-revision="${key.credential_revision}" title="${keyCopy(i18n, "轮换 KEY，旧 KEY 将立即失效", "Rotate key; the old key stops working immediately")}" aria-label="${keyCopy(i18n, "轮换", "Rotate")} ${escapeAttribute(key.name)}">${icon("rotate-cw")}</button>` : ""}
+        ${canManageKeys || personalOnly ? `<form data-virtual-key-form data-personal-key-delete="true" data-virtual-key-id="${escapeAttribute(key.virtual_key_id)}">
+          <input type="hidden" name="status" value="disabled" />
+          <button type="submit" class="danger-button">删除</button>
         </form>` : ""}
       </span>
+      ${canManageKeys ? renderLimitDialog(key, i18n) : ""}
     </div>
+    ${!personalOnly && canManageKeys && projects.length ? renderBindingDialog(key, projects, applications, i18n) : ""}
   `;
 }
 
-function renderEnvironmentReadiness(state) {
-  if (state?.state === "error") {
-    return '<p class="empty-state error-state" role="alert">运行环境加载失败，暂不能创建组织 KEY。<button type="button" data-resource-retry>重试</button></p>';
-  }
-  if (state?.state !== "ok") {
-    return '<p role="status">正在加载运行环境...</p>';
-  }
-  return activeEnvironments(state).length ? "" : '<p role="status">暂无可用运行环境，暂不能创建组织 KEY。</p>';
+function renderBindingDialog(key, projects, applications, i18n = null) {
+  const dialogId = `virtual-key-binding-dialog-${String(key.virtual_key_id).replace(/[^a-zA-Z0-9_-]/gu, "-")}`;
+  const activeProjects = projects.filter((project) => project.status === "active");
+  const projectOptions = [`<option value="">未绑定项目</option>`, ...activeProjects.map((project) =>
+    `<option value="${escapeAttribute(project.project_id)}"${project.project_id === key.project_id ? " selected" : ""}>${escapeHtml(project.name)}</option>`)].join("");
+  const applicationOptions = ["<option value=\"\">未绑定应用</option>", ...applications.filter((application) => application.status === "active").map((application) =>
+    `<option value="${escapeAttribute(application.application_id)}" data-project-id="${escapeAttribute(application.project_id)}"${application.application_id === key.application_id ? " selected" : ""}>${escapeHtml(application.name)}</option>`)].join("");
+  return `
+    <dialog class="virtual-key-binding-dialog" id="${escapeAttribute(dialogId)}" data-virtual-key-binding-dialog="${escapeAttribute(key.virtual_key_id)}" aria-labelledby="${escapeAttribute(dialogId)}-title">
+      <form class="virtual-key-binding-dialog-content" method="dialog" data-virtual-key-binding-form data-virtual-key-id="${escapeAttribute(key.virtual_key_id)}">
+        <div class="virtual-key-dialog-heading">
+          <h3 id="${escapeAttribute(dialogId)}-title">调整 KEY 归属</h3>
+          <button type="button" class="icon-button" data-virtual-key-binding-dialog-close aria-label="关闭">×</button>
+        </div>
+        <p class="virtual-key-limit-dialog-key">${escapeHtml(displayVirtualKeyName(key))}${key.owner_display_name ? ` · ${escapeHtml(key.owner_display_name)}` : ""}</p>
+        <label><span>项目</span><select name="projectId" data-virtual-key-binding-project>${projectOptions}</select></label>
+        <label><span>应用</span><select name="applicationId" data-virtual-key-binding-application>${applicationOptions}</select></label>
+        <div class="virtual-key-actions">
+          <button type="submit">保存</button>
+          <button type="button" class="secondary-button" data-virtual-key-binding-dialog-close>取消</button>
+          <span class="virtual-key-feedback" role="status"></span>
+        </div>
+      </form>
+    </dialog>
+  `;
+}
+
+function renderLimitDialog(key, i18n = null) {
+  const dialogId = `virtual-key-limit-dialog-${String(key.virtual_key_id).replace(/[^a-zA-Z0-9_-]/gu, "-")}`;
+  return `
+    <dialog class="virtual-key-limit-dialog" id="${escapeAttribute(dialogId)}" data-virtual-key-limit-dialog="${escapeAttribute(key.virtual_key_id)}" aria-labelledby="${escapeAttribute(dialogId)}-title">
+      <form class="virtual-key-limit-dialog-content" method="dialog" data-virtual-key-limits-form data-virtual-key-id="${escapeAttribute(key.virtual_key_id)}">
+        <div class="virtual-key-dialog-heading">
+          <h3 id="${escapeAttribute(dialogId)}-title">${keyCopy(i18n, "调整限制", "Adjust limits")}</h3>
+          <button type="button" class="icon-button" data-virtual-key-limit-dialog-close aria-label="关闭">×</button>
+        </div>
+        <p class="virtual-key-limit-dialog-key">${escapeHtml(displayVirtualKeyName(key))}</p>
+        <div class="virtual-key-limit-fields">
+          ${renderLimitInput("rpmLimit", "RPM", key.rate_limit_rule?.rpm_limit, i18n)}
+          ${renderLimitInput("tpmLimit", "TPM", key.rate_limit_rule?.tpm_limit, i18n)}
+          ${renderLimitInput("concurrencyLimit", "并发", key.rate_limit_rule?.concurrency_limit, i18n)}
+        </div>
+        <div class="virtual-key-actions">
+          <button type="submit">${keyCopy(i18n, "保存", "Save")}</button>
+          <button type="button" class="secondary-button" data-virtual-key-limit-dialog-close>${keyCopy(i18n, "取消", "Cancel")}</button>
+          <span class="virtual-key-feedback" role="status"></span>
+        </div>
+      </form>
+    </dialog>
+  `;
 }
 
 /**
  * 渲染 Virtual Key 当前限制摘要。
  * 空规则或空字段统一展示“不限制”，避免用户把 0 误解成无限制。
  */
-function renderLimitSummary(rule) {
+function renderLimitSummary(rule, i18n = null) {
   if ([rule?.rpm_limit, rule?.tpm_limit, rule?.concurrency_limit].every((value) => value === null || value === undefined)) {
-    return '<p class="virtual-key-limit-summary">不限速</p>';
+    return `<p class="virtual-key-limit-summary">${keyCopy(i18n, "不限速", "No limits")}</p>`;
   }
   return `
     <p class="virtual-key-limit-summary">
-      RPM ${escapeHtml(limitText(rule?.rpm_limit))} ·
-      TPM ${escapeHtml(limitText(rule?.tpm_limit))} ·
-      并发 ${escapeHtml(limitText(rule?.concurrency_limit))}
+      RPM ${escapeHtml(limitText(rule?.rpm_limit, i18n))} ·
+      TPM ${escapeHtml(limitText(rule?.tpm_limit, i18n))} ·
+      ${keyCopy(i18n, "并发", "Concurrency")} ${escapeHtml(limitText(rule?.concurrency_limit, i18n))}
     </p>
   `;
 }
@@ -261,11 +282,11 @@ function renderLimitSummary(rule) {
  * 渲染单个限制输入框。
  * 输入框允许留空，提交后由 API client 转成 null，表示清除该限制。
  */
-function renderLimitInput(name, label, value) {
+function renderLimitInput(name, label, value, i18n = null) {
   return `
     <label>
       <span>${escapeHtml(label)}</span>
-      <input name="${escapeAttribute(name)}" type="number" min="1" inputmode="numeric" value="${escapeAttribute(value ?? "")}" placeholder="不限" />
+      <input name="${escapeAttribute(name)}" type="number" min="1" inputmode="numeric" value="${escapeAttribute(value ?? "")}" placeholder="${keyCopy(i18n, "不限", "No limit")}" />
     </label>
   `;
 }
@@ -273,9 +294,9 @@ function renderLimitInput(name, label, value) {
 /**
  * 把限制数值转换成列表摘要文本。
  */
-function limitText(value) {
+function limitText(value, i18n = null) {
   if (value === null || value === undefined || value === "") {
-    return "不限制";
+    return keyCopy(i18n, "不限制", "No limit");
   }
   return String(value);
 }
@@ -284,26 +305,35 @@ function limitText(value) {
  * 渲染 Virtual Key 空列表行。
  * 使用表格行结构保持列表布局稳定。
  */
-function renderEmptyRow() {
+function renderEmptyRow(i18n = null) {
   return `
     <div class="virtual-key-row virtual-key-empty" role="row">
-      <span>尚未创建 KEY。</span>
+      <span>${keyCopy(i18n, "尚未创建 KEY。", "No keys created yet.")}</span>
     </div>
   `;
 }
 
 /**
- * 渲染环境选项。
- * value 使用后端枚举，label 使用中文文案，避免提交展示文本。
+ * Hide the local seed identity from organization members. The seed is an
+ * implementation detail used to make a fresh local workspace usable; it is
+ * not a meaningful name for a customer-managed key.
  */
-function renderEnvironmentOptions(environmentState) {
-  const environments = activeEnvironments(environmentState);
-  if (!environments.length) {
-    return `<option value="">请先创建 active Environment</option>`;
+function displayVirtualKeyName(key) {
+  const name = String(key?.name ?? "").trim();
+  const prefix = String(key?.key_prefix ?? "").trim();
+  if (/^local development virtual key$/iu.test(name) || /^mhv_dev_seed(?:_|$)/iu.test(prefix)) {
+    return "默认调用 KEY";
   }
-  return environments
-    .map((item) => `<option value="${escapeAttribute(item.environment_id)}">${escapeHtml(item.name)} / ${escapeHtml(item.code)}</option>`)
-    .join("");
+  return name || "未命名 KEY";
+}
+
+/**
+ * Keep real prefixes useful for distinguishing keys while hiding the seeded
+ * development prefix that would otherwise expose an internal fixture name.
+ */
+function displayVirtualKeyPrefix(prefix) {
+  const value = String(prefix ?? "").trim();
+  return /^mhv_dev_seed(?:_|$)/iu.test(value) ? "已配置" : value || "-";
 }
 
 /**
@@ -314,6 +344,19 @@ function activeEnvironments(environmentState) {
     return [];
   }
   return environmentState.environments.filter((item) => item.status === "active");
+}
+
+function environmentLabel(value, i18n = null) {
+  const labels = {
+    dev: keyCopy(i18n, "开发", "Development"),
+    test: keyCopy(i18n, "测试", "Test"),
+    prod: keyCopy(i18n, "生产", "Production"),
+  };
+  return labels[value];
+}
+
+function keyCopy(i18n, chinese, english) {
+  return i18n?.locale === "en-US" ? english : chinese;
 }
 
 /**

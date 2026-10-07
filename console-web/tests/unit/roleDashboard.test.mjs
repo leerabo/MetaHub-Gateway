@@ -403,8 +403,8 @@ test("renderer escapes API text, preserves card order, and gates navigation agai
   assert.ok(html.indexOf('data-role-dashboard-card="security"') < html.indexOf('data-role-dashboard-card="cost"'));
   assert.match(html, /成本 &lt;今日&gt;/);
   assert.match(html, /安全事实 &lt;script&gt;/);
-  assert.match(html, /href="#usage"/);
-  assert.doesNotMatch(html, /href="#provider-health"/);
+  assert.match(html, /data-console-nav="usage"/);
+  assert.doesNotMatch(html, /data-console-nav="provider-health"/);
   assert.doesNotMatch(html, new RegExp(SENSITIVE_CANARY));
   assert.doesNotMatch(html, /<script>/);
 });
@@ -425,7 +425,7 @@ test("renderer clears protected commands for errors and marks same-view partial"
     error: { requestId: "req_partial" },
   }, dashboardAuth(), dashboardShell());
   assert.match(partialHtml, /最近一次安全快照/);
-  assert.match(partialHtml, /req_partial/);
+  assert.doesNotMatch(partialHtml, /req_partial/);
   assert.match(partialHtml, /data-role-dashboard-card="cost"/);
 });
 
@@ -548,7 +548,7 @@ test("PAGE-092 source and styles forbid persistence, legacy prefetch, overflow a
   assert.doesNotMatch(developerSource, /renderDashboardPanel|renderProviderHealthDashboardCard/);
   assert.doesNotMatch(mainSource, /getDashboardRoleView/);
   assert.match(mainSource, /case "overview":[\s\S]*loadWorkspaceConsoleExperienceState\([\s\S]*"overview"/);
-  assert.match(developerSource, /renderWorkspaceConsoleExperience\(options\.workspaceConsoleExperienceState, "overview"\)/);
+  assert.match(developerSource, /renderWorkspaceConsoleExperience\(options\.workspaceConsoleExperienceState, "overview"(?:, [^)]*)?\)/);
   assert.match(css, /\.console-experience-metrics\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s);
   assert.match(css, /@media \(max-width: 760px\)[\s\S]*\.console-experience-metrics,[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s);
   assert.match(css, /\.console-experience-metrics span,[\s\S]*overflow-wrap:\s*anywhere/s);

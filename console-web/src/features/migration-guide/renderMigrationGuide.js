@@ -366,7 +366,7 @@ function renderConfigurationHint(guide, selectedEnvironment) {
     return `<p class="migration-config-hint">请选择此环境的模型别名。</p>`;
   }
   // 三项配置就绪只代表示例可复制，Virtual Key 明文仍不得进入页面输入框或生成的代码文本。
-  return `<p class="migration-config-hint migration-config-ready">配置已就绪。运行服务端示例时使用你的个人 MetaHub KEY。</p>`;
+  return `<p class="migration-config-hint migration-config-ready">配置已就绪。运行服务端示例时使用你的个人 KEY。</p>`;
 }
 
 /**

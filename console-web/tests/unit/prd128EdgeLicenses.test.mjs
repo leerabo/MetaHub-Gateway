@@ -146,10 +146,10 @@ test("Workspace license state prunes on permission drift and renders capacity wi
   state.enter(owner);
   acceptLicenseLoad(state, owner, licenseResponse());
   const html = renderPrivateGateways(state.snapshot(), auth, shell);
-  assert.match(html, /License 容量/u);
+  assert.match(html, /授权容量/u);
   assert.match(html, /2 \/ 3/u);
   assert.match(html, /在线刷新/u);
-  assert.match(html, /href="#plans"/u);
+  assert.doesNotMatch(html, /href="#plans"/u);
   assert.doesNotMatch(html, /signature|public_key|permission_codes/iu);
 
   const operation = state.beginLicenseRefresh(owner, DEPLOYMENT_ID, IDEMPOTENCY);

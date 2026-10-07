@@ -436,7 +436,7 @@ test("admin validation state retries only failed checks and signs one immutable 
   ), true);
   state.finishValidation(refresh);
   let html = renderPrivateGateways(state.snapshot(), auth, shell(auth));
-  assert.match(html, /Provider 连通性[\s\S]*失败[\s\S]*检查本地 Provider 连接/u);
+  assert.match(html, /模型服务连通性[\s\S]*失败[\s\S]*检查本地模型服务连接/u);
   assert.match(html, /仅重试失败项/u);
 
   const retry = state.beginValidation(owner, DEPLOYMENT_ID, "retry_failed");

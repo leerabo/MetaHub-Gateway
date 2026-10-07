@@ -62,6 +62,36 @@ _PUBLIC_PLACEMENTS = frozenset(
 _SIDEBAR_PLACEMENTS = frozenset({"primary", "task_home", "developer_center"})
 _LEGACY_PLATFORM_INTERNAL_SOURCE_ID = "environments"
 _LEGACY_TENANT_DATA_SOURCE_ID = "tenant-data-lifecycle"
+_LEGACY_INTERNAL_SOURCE_IDS = frozenset(
+    {_LEGACY_PLATFORM_INTERNAL_SOURCE_ID, _LEGACY_TENANT_DATA_SOURCE_ID}
+)
+
+# A Workspace permission can be broader than the role's intended daily
+# surface because the same permission catalog also serves machine and legacy
+# clients. Keep the human navigation contract role-aware at the control-plane
+# boundary so a stale permission grant cannot expose organization setup to an
+# employee-facing account.
+_ROLE_ROUTE_ALLOWLIST: dict[str, frozenset[str]] = {
+    "developer": frozenset(
+        {
+            "workspace.developer.sdk",
+            "workspace.developer.migration",
+            "workspace.developer.api",
+            "workspace.developer.mcp",
+            "workspace.gateway.virtual-keys",
+            "workspace.finance.usage",
+            "identity.preferences",
+        }
+    ),
+    "viewer": frozenset(
+        {
+            "workspace.home.getting-started",
+            "workspace.gateway.virtual-keys",
+            "workspace.finance.usage",
+            "identity.preferences",
+        }
+    ),
+}
 
 
 def get_workspace_navigation(
@@ -78,7 +108,9 @@ def get_workspace_navigation(
         _require_workspace(actor, "workspace.navigation.read")
         contract = _ensure_contract(connection, actor.workspace_id, actor.tenant_id)
         projection = _ensure_projection(connection, contract)
-        visible = _visible_specs(connection, projection, actor.permission_codes)
+        visible = _visible_specs(
+            connection, projection, actor.permission_codes, actor.membership_role,
+        )
         primary = tuple(item for item in visible if item.placement in {"primary", "task_home"})
         primary_groups = {item.group_code for item in primary if item.group_code is not None}
         visible_groups = {
@@ -123,7 +155,9 @@ def get_workspace_navigation(
             trace_id,
         )
         advanced_available = "workspace.advanced_tool.read" in actor.permission_codes and any(
-            _allowed(tool.permissions, actor.permission_codes) for tool in ADVANCED_TOOL_SPECS
+            _allowed(tool.permissions, actor.permission_codes)
+            and _role_route_allowed(tool.route_code, actor.membership_role)
+            for tool in ADVANCED_TOOL_SPECS
         )
         result = WorkspaceNavigationResponse(
             page_visit_session_ref=_pseudonym(
@@ -284,6 +318,7 @@ def get_workspace_advanced_tools(
             _advanced_tool(heads[spec.tool_code], spec)
             for spec in ADVANCED_TOOL_SPECS
             if _allowed(spec.permissions, actor.permission_codes)
+            and _role_route_allowed(spec.route_code, actor.membership_role)
         )
         generation = max((int(row["generation"]) for row in heads.values()), default=1)
         result = AdvancedToolsResponse(
@@ -356,7 +391,9 @@ def change_navigation_preference(
             str(contract["navigation_contract_snapshot_id"]), patch.contract_snapshot_id
         ):
             raise ApiError("identity.revision_conflict")
-        visible = _visible_specs(connection, projection, actor.permission_codes)
+        visible = _visible_specs(
+            connection, projection, actor.permission_codes, actor.membership_role,
+        )
         primary_routes = {
             item.route_code for item in visible if item.placement in {"primary", "task_home"}
         }
@@ -573,7 +610,11 @@ def open_workspace_advanced_tool(
         actor = _workspace_actor(connection, config, session_token)
         _require_workspace(actor, "workspace.advanced_tool.open")
         spec = next((item for item in ADVANCED_TOOL_SPECS if item.tool_code == tool_code), None)
-        if spec is None or not _allowed(spec.permissions, actor.permission_codes):
+        if (
+            spec is None
+            or not _allowed(spec.permissions, actor.permission_codes)
+            or not _role_route_allowed(spec.route_code, actor.membership_role)
+        ):
             raise ApiError("workspace_session.permission_denied")
         contract = _ensure_contract(connection, actor.workspace_id, actor.tenant_id)
         heads = _ensure_advanced_entitlements(connection, actor.workspace_id, actor.tenant_id)
@@ -844,7 +885,14 @@ def _page_visit_authority(
                 item for item in CONTRACT_SPECS
                 if item.route_code == payload.route_code
                 and item.placement in {"primary", "detail", "task_home", "developer_center"}
+                and not (
+                    item.source_id == "private-gateways"
+                    and not _private_gateway_enabled(
+                        connection, actor.workspace_id, actor.tenant_id
+                    )
+                )
                 and _contract_item_allowed(item, actor.permission_codes)
+                and _role_route_allowed(item.route_code, actor.membership_role)
             ),
             None,
         )
@@ -852,7 +900,10 @@ def _page_visit_authority(
             raise ApiError("workspace_session.permission_denied")
         return actor, spec
     visible = _visible_specs(
-        connection, _ensure_projection(connection, contract), actor.permission_codes,
+        connection,
+        _ensure_projection(connection, contract),
+        actor.permission_codes,
+        actor.membership_role,
     )
     spec = next((item for item in visible if item.route_code == payload.route_code
                  and item.placement in {
@@ -925,27 +976,12 @@ def _ensure_contract(
         (workspace_id, tenant_id),
     ).fetchone()
     if head is not None:
-        legacy_disposition_sha = _sha(
-            [
-                (
-                    item.source_id,
-                    item.disposition,
-                    _legacy_placement(item),
-                    item.route_code,
-                )
-                for item in CONTRACT_SPECS
-                if item.source_kind == "excel"
-            ]
-        )
         if (
             head["status"] != "active"
             or head["contract_version"] != _CONTRACT_VERSION
             or int(head["item_count"]) != len(CONTRACT_SPECS)
             or not hmac.compare_digest(str(head["source_catalog_sha256"]), source_sha)
-            or (
-                not hmac.compare_digest(str(head["disposition_sha256"]), disposition_sha)
-                and not hmac.compare_digest(str(head["disposition_sha256"]), legacy_disposition_sha)
-            )
+            or not hmac.compare_digest(str(head["disposition_sha256"]), disposition_sha)
             or not hmac.compare_digest(str(head["extra_sha256"]), extra_sha)
         ):
             raise ApiError("workspace_session.unavailable")
@@ -1045,26 +1081,10 @@ def _ensure_projection(connection: sqlite3.Connection, contract: sqlite3.Row) ->
             for item in public_specs
         ]
     )
-    legacy_content_sha = _sha(
-        [
-            (
-                item.source_id,
-                _legacy_placement(item),
-                item.route_code,
-                _legacy_permissions(item),
-            )
-            for item in CONTRACT_SPECS
-            if item.placement in _PUBLIC_PLACEMENTS
-            or item.source_id == _LEGACY_PLATFORM_INTERNAL_SOURCE_ID
-        ]
-    )
     if projection is not None:
         if projection["navigation_contract_snapshot_id"] != contract[
             "navigation_contract_snapshot_id"
-        ] or (
-            not hmac.compare_digest(str(projection["content_sha256"]), content_sha)
-            and not hmac.compare_digest(str(projection["content_sha256"]), legacy_content_sha)
-        ):
+        ] or not hmac.compare_digest(str(projection["content_sha256"]), content_sha):
             raise ApiError("workspace_session.unavailable")
         return projection
     stamp = _db_time(_now())
@@ -1136,6 +1156,7 @@ def _visible_specs(
     connection: sqlite3.Connection,
     projection: sqlite3.Row,
     permission_codes: tuple[str, ...],
+    role_code: str | None = None,
 ) -> tuple[ContractSpec, ...]:
     projection_id = str(projection["workspace_navigation_projection_id"])
     expected = {
@@ -1149,18 +1170,18 @@ def _visible_specs(
     ).fetchall()
     legacy_rows = [
         row for row in rows
-        if row["source_navigation_id"] == _LEGACY_PLATFORM_INTERNAL_SOURCE_ID
+        if row["source_navigation_id"] in _LEGACY_INTERNAL_SOURCE_IDS
         and row["placement"] == "primary"
     ]
-    if len(legacy_rows) > 1 or len(rows) - len(legacy_rows) != len(expected):
+    if len(legacy_rows) > len(_LEGACY_INTERNAL_SOURCE_IDS) or len(rows) - len(legacy_rows) != len(expected):
         raise ApiError("workspace_session.unavailable")
     visible: list[ContractSpec] = []
     for row in rows:
         source_id = str(row["source_navigation_id"])
-        if source_id == _LEGACY_PLATFORM_INTERNAL_SOURCE_ID and row["placement"] == "primary":
+        if source_id in _LEGACY_INTERNAL_SOURCE_IDS and row["placement"] == "primary":
             legacy_item = next(
                 item for item in CONTRACT_SPECS
-                if item.source_id == _LEGACY_PLATFORM_INTERNAL_SOURCE_ID
+                if item.source_id == source_id
             )
             try:
                 legacy_permissions = tuple(json.loads(str(row["required_permissions_json"])))
@@ -1198,7 +1219,7 @@ def _visible_specs(
         if (
             row["route_code"] != item.route_code
             or row["placement"] != item.placement
-            or row["group_code"] != item.group_code
+            or not _group_code_matches(item, row["group_code"])
             or int(row["display_order"]) != item.order
             or (permissions != item.permissions and permissions != legacy_permissions)
             or row["item_sha256"] != _sha(
@@ -1211,6 +1232,12 @@ def _visible_specs(
             )
         ):
             raise ApiError("workspace_session.unavailable")
+        if item.source_id == "private-gateways" and not _private_gateway_enabled(
+            connection, str(projection["workspace_id"]), str(projection["tenant_id"])
+        ):
+            continue
+        if not _role_route_allowed(item.route_code, role_code):
+            continue
         if _contract_item_allowed(item, permission_codes) or (
             item.source_id == _LEGACY_TENANT_DATA_SOURCE_ID
             and _allowed(legacy_permissions, permission_codes)
@@ -1244,6 +1271,19 @@ def _visible_specs(
     return tuple(visible)
 
 
+def _group_code_matches(item: ContractSpec, persisted_group_code: str | None) -> bool:
+    """Require persisted navigation data to use the current group contract."""
+
+    if item.route_code == "workspace.gateway.projects" and persisted_group_code == "gateway":
+        return True
+    return persisted_group_code == item.group_code
+
+
+def _role_route_allowed(route_code: str, role_code: str | None) -> bool:
+    allowlist = _ROLE_ROUTE_ALLOWLIST.get(str(role_code or "").strip())
+    return allowlist is None or route_code in allowlist
+
+
 def _allowed(required: tuple[str, ...], granted: tuple[str, ...]) -> bool:
     return set(required) <= set(granted)
 
@@ -1259,10 +1299,21 @@ def _contract_item_allowed(item: ContractSpec, granted: tuple[str, ...]) -> bool
     return _allowed(item.permissions, granted)
 
 
+def _private_gateway_enabled(
+    connection: sqlite3.Connection, workspace_id: str, tenant_id: str
+) -> bool:
+    row = connection.execute(
+        "SELECT enabled FROM workspace_private_gateway_capabilities "
+        "WHERE workspace_id=? AND tenant_id=?",
+        (workspace_id, tenant_id),
+    ).fetchone()
+    return row is not None and bool(row["enabled"])
+
+
 def _legacy_placement(item: ContractSpec) -> str:
     return (
         "primary"
-        if item.source_id == _LEGACY_PLATFORM_INTERNAL_SOURCE_ID
+        if item.source_id in _LEGACY_INTERNAL_SOURCE_IDS
         else item.placement
     )
 
@@ -1428,22 +1479,16 @@ _TASK_SOURCE_QUERIES = {
         "tenant",
     ),
     "models": (
-        "SELECT count(*) FROM model_aliases a JOIN models m "
-        "ON m.tenant_id=a.tenant_id AND m.model_id=a.default_model_id "
+        "SELECT count(*) FROM models m "
         "JOIN providers p ON p.tenant_id=m.tenant_id AND p.provider_id=m.provider_id "
-        "WHERE a.tenant_id=? AND a.status='active' AND m.status='active' AND p.status='active' "
-        "AND p.health_status='healthy' AND (p.auth_type='none' OR EXISTS("
-        "SELECT 1 FROM provider_credentials c WHERE c.tenant_id=p.tenant_id "
-        "AND c.provider_id=p.provider_id AND c.status='active' AND length(c.encrypted_key)>0))",
+        "WHERE m.tenant_id=? AND m.status='active' AND p.status='active'",
         "tenant",
     ),
     "projects": ("SELECT count(*) FROM projects WHERE tenant_id=?", "tenant"),
-    "consumer_keys": (
-        "SELECT count(*) FROM virtual_keys k JOIN virtual_key_consumers b "
-        "ON b.tenant_id=k.tenant_id AND b.virtual_key_id=k.virtual_key_id "
-        "JOIN workspace_consumers c ON c.tenant_id=b.tenant_id AND c.consumer_id=b.consumer_id "
-        "WHERE k.tenant_id=? AND k.status='active' AND c.status='active'",
-        "tenant",
+    "member_key_access": (
+        "SELECT count(*) FROM workspace_memberships "
+        "WHERE workspace_id=? AND status='active' AND role_code!='service_account'",
+        "workspace",
     ),
     "usage": (
         "SELECT count(*) FROM request_logs WHERE tenant_id=? AND status='success'",
@@ -1498,6 +1543,7 @@ def _ensure_task_home(
         for task in ROLE_TASK_SPECS
         if actor.membership_role in task.roles
         and _allowed(task.permissions, actor.permission_codes)
+        and _role_route_allowed(task.action_route_code, actor.membership_role)
     )
     facts = _task_source_facts(
         connection,
@@ -1506,7 +1552,7 @@ def _ensure_task_home(
     )
     source_digest = _sha(
         {
-            "task_action_revision": 2,
+            "task_action_revision": 3,
             "role": actor.membership_role,
             "membership_revision": _membership_revision(connection, actor.membership_id),
             "permission_fingerprint": actor.authorization_fingerprint,

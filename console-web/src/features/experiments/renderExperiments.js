@@ -90,11 +90,11 @@ function renderList(state) {
   `;
 }
 
-/** 渲染一条已验证 ExperimentInfo，操作按钮只携带公开 experiment_id。 */
+/** 渲染一条已验证 ExperimentInfo，操作按钮只携带内部 experiment_id。 */
 function renderExperimentRow(item, selectedId) {
   return `
     <div class="experiment-row${item.experiment_id === selectedId ? " is-selected" : ""}" role="row">
-      <span data-label="名称"><strong>${escapeHtml(item.name)}</strong><code>${escapeHtml(item.experiment_id)}</code></span>
+      <span data-label="名称"><strong>${escapeHtml(item.name)}</strong></span>
       <span data-label="状态"><b class="experiment-status tone-${escapeAttribute(item.status)}">${escapeHtml(STATUS_LABELS[item.status] ?? item.status)}</b></span>
       <span data-label="样本"><b>${item.assigned_count}/${item.target_sample_count}</b><small>${formatBps(item.traffic_sample_bps)} 流量</small></span>
       <span data-label="A / B"><b>${item.model_a.assigned_count} / ${item.model_b.assigned_count}</b><small>${formatBps(item.model_a.allocation_bps)} / ${formatBps(item.model_b.allocation_bps)}</small></span>
@@ -110,7 +110,7 @@ function renderDetail(state) {
   if (!state.selectedExperimentId) {
     return `<section class="experiment-detail"><div class="experiment-empty">选择一个实验查看配置和 A/B 结果</div></section>`;
   }
-  // 详情错误只展示固定错误码和 request_id，不能回退到上一次实验配置。
+  // 详情错误只展示用户可理解的固定提示，不能回退到上一次实验配置。
   if (state.detailState === "error") return renderError(state.detailError, "实验详情读取失败");
   if (state.detailState !== "ready" || !state.experiment) {
     return `<section class="experiment-detail"><div class="experiment-empty">正在读取实验详情</div></section>`;
@@ -119,13 +119,13 @@ function renderDetail(state) {
   return `
     <section class="experiment-detail" aria-labelledby="experiment-detail-title">
       <div class="experiment-detail-heading">
-        <div><h3 id="experiment-detail-title">${escapeHtml(item.name)}</h3><code>${escapeHtml(item.experiment_id)}</code></div>
+        <div><h3 id="experiment-detail-title">${escapeHtml(item.name)}</h3></div>
         <b class="experiment-status tone-${escapeAttribute(item.status)}">${escapeHtml(STATUS_LABELS[item.status] ?? item.status)}</b>
       </div>
       <dl class="experiment-metadata">
-        <div><dt>Project</dt><dd>${escapeHtml(item.project_id)}</dd></div>
-        <div><dt>Environment</dt><dd>${escapeHtml(item.environment_id)}</dd></div>
-        <div><dt>Alias</dt><dd>${escapeHtml(item.model_alias_id)}</dd></div>
+        <div><dt>项目</dt><dd>${escapeHtml(item.project_id)}</dd></div>
+        <div><dt>环境</dt><dd>${escapeHtml(item.environment_id)}</dd></div>
+        <div><dt>模型别名</dt><dd>${escapeHtml(item.model_alias_id)}</dd></div>
         <div><dt>模型 A</dt><dd>${escapeHtml(item.model_a.model_id)} · ${escapeHtml(item.model_a.provider_code)}</dd></div>
         <div><dt>模型 B</dt><dd>${escapeHtml(item.model_b.model_id)} · ${escapeHtml(item.model_b.provider_code)}</dd></div>
         <div><dt>A / B 目标</dt><dd>${item.model_a.target_count} (${formatBps(item.model_a.allocation_bps)}) / ${item.model_b.target_count} (${formatBps(item.model_b.allocation_bps)})</dd></div>
@@ -156,7 +156,7 @@ function renderResults(resultsState, response, error) {
     <section class="experiment-results" aria-labelledby="experiment-results-title">
       <div class="experiment-section-heading">
         <h4 id="experiment-results-title">A/B 结果</h4>
-        <span>${response.is_final ? "已冻结" : "进行中"} · facts v${response.facts_version}</span>
+        <span>${response.is_final ? "已冻结" : "进行中"}</span>
       </div>
       <div class="experiment-result-grid">
         ${response.results.map(renderArmResult).join("")}
@@ -223,9 +223,9 @@ function renderCreateDialog(state, owner) {
         </div>
         <form data-experiment-create-form novalidate>
           <label class="experiment-field span-2"><span>名称</span><input name="name" required autocomplete="off"></label>
-          ${selectField("project_id", "Project", options.projects, unavailable)}
-          ${selectField("environment_id", "Environment", options.environments, unavailable)}
-          ${selectField("model_alias_id", "Model Alias", options.modelAliases, unavailable)}
+          ${selectField("project_id", "项目", options.projects, unavailable)}
+          ${selectField("environment_id", "环境", options.environments, unavailable)}
+          ${selectField("model_alias_id", "模型别名", options.modelAliases, unavailable)}
           ${selectField("model_a_id", "模型 A", options.models, unavailable)}
           ${selectField("model_b_id", "模型 B", options.models, unavailable)}
           ${numberField("target_sample_count", "目标样本", 2, 100000, 1000)}
@@ -236,7 +236,7 @@ function renderCreateDialog(state, owner) {
           ${numberField("feedback_window_seconds", "反馈窗口（秒）", 60, 604800, 86400)}
           <div class="experiment-dialog-status span-2" data-experiment-create-live role="status" aria-live="polite">
             ${unavailable
-              ? `${escapeHtml(optionsError?.message ?? "创建选项暂不可用")} · request_id: ${escapeHtml(optionsError?.requestId ?? "-")}`
+              ? escapeHtml(optionsError?.message ?? "创建选项暂不可用")
               : ""}
           </div>
           <div class="experiment-dialog-actions span-2">
@@ -268,16 +268,16 @@ function numberField(name, label, minimum, maximum, value) {
   return `<label class="experiment-field"><span>${label}</span><input type="number" inputmode="numeric" name="${name}" min="${minimum}" max="${maximum}" step="1" value="${value}" required></label>`;
 }
 
-/** 渲染创建成功或固定失败反馈，只展示安全 request_id。 */
+/** 渲染创建成功或固定失败反馈，只展示用户可理解的结果。 */
 function renderCreateFeedback(state) {
-  if (state.createState === "success") return `实验已创建 · request_id: ${escapeHtml(state.createRequestId ?? "-")}`;
-  if (state.createState === "error") return `${escapeHtml(state.createError?.message ?? "实验创建失败")} · request_id: ${escapeHtml(state.createError?.requestId ?? "-")}`;
+  if (state.createState === "success") return "实验已创建";
+  if (state.createState === "error") return escapeHtml(state.createError?.message ?? "实验创建失败");
   return "";
 }
 
-/** 渲染统一错误码和 request_id，不输出服务端 message 或 diagnosis。 */
+/** 渲染统一用户提示，不输出服务端编号、错误码或诊断正文。 */
 function renderError(error, fallback) {
-  return `<div class="experiment-error" role="alert"><strong>${escapeHtml(error?.message ?? fallback)}</strong><code>${escapeHtml(error?.code ?? "experiment.unavailable")}</code><span>request_id: ${escapeHtml(error?.requestId ?? "-")}</span></div>`;
+  return `<div class="experiment-error" role="alert"><strong>${escapeHtml(error?.message ?? fallback)}</strong></div>`;
 }
 
 /** 将整数 basis points 格式化为固定两位百分比。 */

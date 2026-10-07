@@ -28,6 +28,7 @@ import {
   restorePlatformWorkspace,
   revokeSupportGrant,
   suspendPlatformWorkspace,
+  setPlatformWorkspacePrivateGateway,
   updatePlatformOperator,
 } from "../../lib/platform.js";
 import { installUserFacingTextGuard } from "../../lib/userFacingTextGuard.js";
@@ -334,6 +335,7 @@ if (root) {
       workspaceEvents: (input) => listPlatformWorkspaceEvents({ controlApiUrl, ...input }),
       suspendWorkspace: (input) => suspendPlatformWorkspace({ controlApiUrl, ...input }),
       restoreWorkspace: (input) => restorePlatformWorkspace({ controlApiUrl, ...input }),
+      setWorkspacePrivateGateway: (input) => setPlatformWorkspacePrivateGateway({ controlApiUrl, ...input }),
       addWorkspaceRiskTag: (input) => addPlatformWorkspaceRiskTag({ controlApiUrl, ...input }),
       removeWorkspaceRiskTag: (input) => removePlatformWorkspaceRiskTag({ controlApiUrl, ...input }),
       notifyWorkspaceOwner: (input) => createPlatformWorkspaceOwnerNotification({ controlApiUrl, ...input }),

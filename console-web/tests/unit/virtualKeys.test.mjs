@@ -28,6 +28,7 @@ const virtualKeysPayload = {
       application_id: "app_1",
       application_name: "账务 API",
       status: "active",
+      has_recoverable_secret: true,
       last_used_at: "2026-07-08T10:00:00Z",
       created_at: "2026-07-08T09:00:00Z",
       updated_at: "2026-07-08T09:00:00Z",
@@ -193,22 +194,53 @@ test("renderVirtualKeyPanel displays developer controls and one-time secret", ()
     {
       state: "ok",
       projects: [{ project_id: "prj_1", project_code: "billing", name: "账务核心", status: "active" }],
-      applications: [{ application_id: "app_1", name: "账务 API", project_name: "账务核心", status: "active" }],
+      applications: [{ application_id: "app_1", project_id: "prj_1", name: "账务 API", project_name: "账务核心", status: "active" }],
     },
   );
 
-  assert.match(html, /<h2 id="virtual-keys-title">组织 KEY<\/h2>/u);
-  assert.match(html, /create-virtual-key-form/);
+  assert.match(html, /<h2 id="virtual-keys-title">我的 KEY<\/h2>/u);
+  assert.match(html, /data-open-virtual-key-dialog/u);
+  assert.match(html, /data-copy-saved-virtual-key="vk_1"/u);
+  assert.match(html, /<dialog class="virtual-key-dialog"/u);
+  assert.doesNotMatch(html, /create-virtual-key-form/);
+  assert.match(html, /data-dismiss-virtual-key-secret/);
+  assert.doesNotMatch(html, /这里创建的是你自己的调用 KEY/u);
   assert.match(html, /data-virtual-key-form/);
   assert.match(html, /data-virtual-key-limits-form/);
-  assert.match(html, /保存限制/);
-  assert.match(html, /name="projectId"/);
-  assert.match(html, /账务核心/);
-  assert.match(html, /账务 API/);
+  assert.match(html, /data-open-virtual-key-limit-dialog/);
+  assert.match(html, /class="virtual-key-limit-dialog"/);
+  assert.match(html, />保存</u);
+  assert.doesNotMatch(html, /class="virtual-key-limit-editor"/);
+  assert.match(html, /data-open-virtual-key-binding-dialog="vk_1"/u);
+  assert.match(html, /name="projectId"/u);
   assert.match(html, /value="60"/);
   assert.match(html, /mhv_dev_secret_once/);
   assert.doesNotMatch(html, /<Dev Key>/);
   assert.match(html, /&lt;Dev Key&gt;/);
+});
+
+test("renderVirtualKeyPanel hides the local seed identity from organization users", () => {
+  const html = renderVirtualKeyPanel(
+    { state: "ok", virtual_keys: [{ virtual_key_id: "seed", name: "Local Development Virtual Key", key_prefix: "mhv_dev_seed", status: "active", environment: "dev" }] },
+    withPermissionSnapshot({ user: { role: "admin" } }, [PERMISSIONS.VIRTUAL_KEY_READ, PERMISSIONS.USER_MANAGE]),
+  );
+  assert.match(html, /默认调用 KEY/u);
+  assert.match(html, />已配置</u);
+  assert.doesNotMatch(html, /Local Development Virtual Key|mhv_dev_seed/u);
+});
+
+test("administrator can create only when their own key slot is empty", () => {
+  const context = withPermissionSnapshot(
+    { user: { user_id: "admin_1", role: "admin" } },
+    [PERMISSIONS.VIRTUAL_KEY_READ, PERMISSIONS.VIRTUAL_KEY_WRITE, PERMISSIONS.USER_MANAGE],
+  );
+  const ownKey = { ...virtualKeysPayload.virtual_keys[0], owner_user_id: "admin_1" };
+  const otherKey = { ...ownKey, virtual_key_id: "vk_other", owner_user_id: "developer_1" };
+  const withOwnKey = renderVirtualKeyPanel({ state: "ok", virtual_keys: [ownKey, otherKey] }, context);
+  const withOtherKey = renderVirtualKeyPanel({ state: "ok", virtual_keys: [otherKey] }, context);
+  assert.match(withOwnKey, /data-open-virtual-key-dialog disabled/u);
+  assert.match(withOwnKey, />删除<\/button>/u);
+  assert.doesNotMatch(withOtherKey, /data-open-virtual-key-dialog disabled/u);
 });
 
 test("renderVirtualKeyPanel hides controls for viewers", () => {
@@ -218,6 +250,86 @@ test("renderVirtualKeyPanel hides controls for viewers", () => {
   );
 
   assert.equal(html, "");
+});
+
+test("developer sees assigned project context but cannot govern the key", () => {
+  const html = renderVirtualKeyPanel(
+    {
+      state: "ok",
+      virtual_keys: [{
+        ...virtualKeysPayload.virtual_keys[0],
+        status: "disabled",
+        disabled_reason: "project_inactive",
+      }],
+    },
+    withPermissionSnapshot(
+      { user: { role: "developer" } },
+      [PERMISSIONS.PROJECT_READ, PERMISSIONS.VIRTUAL_KEY_READ, PERMISSIONS.VIRTUAL_KEY_WRITE],
+    ),
+    {
+      state: "ok",
+      projects: [{ project_id: "prj_1", name: "账务核心", status: "disabled" }],
+      applications: [{ application_id: "app_1", project_id: "prj_1", name: "账务 API", status: "active" }],
+    },
+  );
+
+  assert.match(html, /账务核心/u);
+  assert.match(html, /账务 API/u);
+  assert.match(html, />已暂停<\/mark>/u);
+  assert.match(html, /项目或应用已暂停/u);
+  assert.match(html, /data-virtual-key-form/u);
+  assert.match(html, /data-personal-key-delete="true"/u);
+  assert.match(html, />删除<\/button>/u);
+  assert.doesNotMatch(html, />禁用<\/button>/u);
+  assert.match(html, /data-open-virtual-key-dialog disabled/u);
+  assert.doesNotMatch(html, /data-open-virtual-key-limit-dialog/u);
+  assert.doesNotMatch(html, /data-open-virtual-key-binding-dialog/u);
+});
+
+test("unassigned developer key is visibly pending and remains copyable", () => {
+  const html = renderVirtualKeyPanel(
+    {
+      state: "ok",
+      virtual_keys: [{
+        ...virtualKeysPayload.virtual_keys[0],
+        project_id: null,
+        project_name: null,
+        application_id: null,
+        application_name: null,
+        status: "disabled",
+        disabled_reason: "manual",
+        has_recoverable_secret: true,
+      }],
+    },
+    withPermissionSnapshot(
+      { user: { role: "developer" } },
+      [PERMISSIONS.VIRTUAL_KEY_READ, PERMISSIONS.VIRTUAL_KEY_WRITE],
+    ),
+  );
+
+  assert.match(html, />待分配<\/mark>/u);
+  assert.match(html, /加入项目和应用后启用/u);
+  assert.match(html, /data-copy-saved-virtual-key/u);
+});
+
+test("a saved disabled key keeps its copy action and explains its status", () => {
+  const key = {
+    ...virtualKeysPayload.virtual_keys[0],
+    status: "disabled",
+    disabled_reason: "manual",
+    disabled_at: "2026-07-08T12:00:00Z",
+  };
+  const html = renderVirtualKeyPanel(
+    { state: "ok", virtual_keys: [key] },
+    withPermissionSnapshot(
+      { user: { role: "admin" } },
+      [PERMISSIONS.VIRTUAL_KEY_READ, PERMISSIONS.VIRTUAL_KEY_WRITE, PERMISSIONS.USER_MANAGE],
+    ),
+  );
+  assert.match(html, />已停用<\/mark>/u);
+  assert.match(html, /无法调用/u);
+  assert.match(html, /data-copy-saved-virtual-key="vk_1"/u);
+  assert.doesNotMatch(html, /data-rotate-virtual-key/u);
 });
 
 test("renderDeveloperStart renders virtual keys for developer but not viewer", () => {

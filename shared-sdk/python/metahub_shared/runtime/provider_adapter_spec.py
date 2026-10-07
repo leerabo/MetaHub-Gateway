@@ -58,6 +58,7 @@ GENERIC_STREAM_PROFILE_ID: Final = "generic_json_sse_v1"
 PRICE_FIELDS: Final = (
     "input_price_per_1k",
     "output_price_per_1k",
+    "cache_price_per_1k",
     "currency",
     "price_schema_version",
 )
@@ -867,9 +868,9 @@ def _assert_catalog_identity(
 # canonical bytes 是迁移种子、Control 激活和 Gateway 发布包共同引用的唯一目录正文。下方长度
 # 与 hash 在生成初版后改为字面量并由导入期双断言保护，不能动态自证正确。
 CATALOG_CANONICAL_BYTES: Final = _canonical_catalog_bytes(_SPECS)
-CATALOG_CANONICAL_BYTE_LENGTH: Final = 15_151
+CATALOG_CANONICAL_BYTE_LENGTH: Final = 15_361
 CATALOG_CANONICAL_LENGTH: Final = CATALOG_CANONICAL_BYTE_LENGTH
-CATALOG_HASH: Final = "c1cc9a5c9f977308fa3e06ab6914c28d9f9bef4ad3fe07eb950d1c6a76a2addf"
+CATALOG_HASH: Final = "25352d9078da2efdb67632805513f0b197d7add6249886ca99a9c665d5f8c078"
 _assert_catalog_identity(
     CATALOG_CANONICAL_BYTES,
     expected_length=CATALOG_CANONICAL_BYTE_LENGTH,

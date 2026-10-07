@@ -115,6 +115,7 @@ EXPORT_ROW_FIELDS = {
             "context_window",
             "input_price_per_1k",
             "output_price_per_1k",
+            "cache_price_per_1k",
             "currency",
             "price_schema_version",
             "description",
@@ -1121,6 +1122,7 @@ def _validate_export_row(collection: str, value: object) -> bool:
             and _plain_int(row["context_window"], maximum=100_000_000)
             and _finite_number(row["input_price_per_1k"])
             and _finite_number(row["output_price_per_1k"])
+            and _finite_number(row["cache_price_per_1k"])
         )
     if collection == "aliases":
         quality = _exact_object(row["quality_cost_config"], QUALITY_FIELDS)

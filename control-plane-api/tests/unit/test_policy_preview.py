@@ -16,6 +16,7 @@ from metahub_shared.runtime.policy_preview import (
     preview_dlp,
     preview_route,
 )
+from metahub_shared.runtime.routing_policy import TokenEstimate
 
 
 def test_candidate_fingerprint_is_stable_and_tenant_bound() -> None:
@@ -153,3 +154,27 @@ def test_budget_ignores_alert_only_stale_block_and_honors_hard_block() -> None:
     assert allowed.rules[0].status == "within_limit"
     assert blocked.blocked is True
     assert blocked.rules[0].reason_code == "budget.active_block"
+
+
+def test_budget_preview_prices_cache_hits_separately() -> None:
+    """预算预演使用缓存命中价格，不把缓存 Token 重复按普通输入价收费。"""
+
+    price = PriceFact(
+        input_price_per_1k=Decimal("10"),
+        output_price_per_1k=Decimal("0"),
+        cache_price_per_1k=Decimal("1"),
+        currency="CNY",
+    )
+    result = preview_budget(
+        400,
+        0,
+        price,
+        (),
+        token_estimate=TokenEstimate(
+            input_tokens=100,
+            output_tokens=0,
+            truncated=False,
+            cache_tokens=80,
+        ),
+    )
+    assert result.estimated_cost_cny == Decimal("0.000280")

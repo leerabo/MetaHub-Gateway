@@ -1,3 +1,5 @@
+import { WORKSPACE_ROUTE_REGISTRY, WORKSPACE_SOURCE_ROUTE_REGISTRY } from "../../lib/workspaceNavigation.js";
+
 /**
  * 渲染开发者快速开始页。
  * 页面只展示安全占位和脱敏 Key 前缀；成员在组织空间自行创建个人 KEY，环境变量只是部分客户端的可选保存方式。
@@ -17,7 +19,7 @@ export function renderDeveloperQuickstart(state) {
       <div class="panel-heading quickstart-heading">
         <div>
           <h2 id="quickstart-title">5分钟快速接入</h2>
-          <p>复制示例到本地执行一次非流式 chat 调用；使用你在组织空间创建的个人 MetaHub KEY。环境变量仅是部分客户端的可选保存方式。</p>
+          <p>复制示例到本地执行一次非流式 chat 调用；使用你在组织空间创建的个人 KEY。</p>
         </div>
         <span class="quickstart-badge">${escapeHtml(state.request_id ?? "-")}</span>
       </div>
@@ -105,7 +107,7 @@ function renderSteps(steps) {
               <div>
                 <strong>${escapeHtml(step.title ?? "")}</strong>
                 <p>${escapeHtml(step.description ?? "")}</p>
-                <a href="${escapeAttribute(step.target_hash ?? "#quickstart")}">${escapeHtml(step.action_label ?? "查看")}</a>
+                ${renderInternalAction(step.target_hash, step.action_label ?? "查看")}
               </div>
             </li>
           `,
@@ -165,7 +167,7 @@ function renderCommonErrors(errors) {
                 <code>${escapeHtml(error.code ?? "")}</code>
                 <strong>${escapeHtml(error.title ?? "")}</strong>
                 <p>${escapeHtml(error.cause ?? "")}</p>
-                <a href="${escapeAttribute(error.link_target ?? "#quickstart")}">${escapeHtml(error.fix ?? "")}</a>
+                ${renderInternalAction(error.link_target, error.fix ?? "")}
               </article>
             `,
           )
@@ -180,6 +182,19 @@ function renderCommonErrors(errors) {
  */
 function safeDomId(value) {
   return String(value).replace(/[^a-zA-Z0-9_-]/g, "-");
+}
+
+function renderInternalAction(targetHash, label) {
+  const target = String(targetHash ?? "#quickstart").replace(/^#/u, "");
+  const routeCode = WORKSPACE_ROUTE_REGISTRY[target]
+    ? target
+    : WORKSPACE_SOURCE_ROUTE_REGISTRY[target] ?? "";
+  const route = routeCode ? WORKSPACE_ROUTE_REGISTRY[routeCode] : null;
+  const navigationId = route?.sourceId ?? target;
+  if (/^[A-Za-z0-9_.:-]{1,80}$/u.test(navigationId)) {
+    return `<button type="button" class="quickstart-action" data-console-nav="${escapeAttribute(navigationId)}"${routeCode ? ` data-console-route="${escapeAttribute(routeCode)}"` : ""} data-console-target="${escapeAttribute(navigationId)}">${escapeHtml(label)}</button>`;
+  }
+  return `<a href="${escapeAttribute(targetHash ?? "#quickstart")}">${escapeHtml(label)}</a>`;
 }
 
 /**

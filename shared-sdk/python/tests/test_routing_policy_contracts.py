@@ -234,6 +234,23 @@ def test_route_policy_selected_accepts_both_exact_persistent_variants() -> None:
     assert config_event.actor_id == "user_prd047_admin"
 
 
+def test_route_policy_selected_accepts_multiple_ordered_fallback_candidates() -> None:
+    """一个主模型加多个备用模型必须能记录安全选路事件。"""
+
+    payload = _request_selected_payload()
+    payload["candidate_count"] = 3
+    payload["eligible_candidate_count"] = 3
+    event = build_webhook_event(
+        tenant_id="tenant_prd047",
+        event_type="route.policy_selected",
+        payload=payload,
+        object_id="rpol_prd047",
+        trace_id="trc_prd047_multi",
+        event_id=_event_id("c"),
+    )
+    assert event.event_id == _event_id("c")
+
+
 @pytest.mark.parametrize(
     ("mutate", "event_id"),
     [

@@ -3299,6 +3299,20 @@ export function createPlatformPageController({
         }),
       );
     },
+    async toggleWorkspacePrivateGateway() {
+      const workspace = currentWorkspace();
+      if (!workspace || typeof api.setWorkspacePrivateGateway !== "function") return false;
+      const enabled = !Boolean(workspace.private_gateway_enabled);
+      return workspaceWrite(
+        enabled ? "私有 Gateway 已为组织开通。" : "私有 Gateway 已为组织关闭。",
+        (signal) => api.setWorkspacePrivateGateway({
+          workspaceId: workspace.workspace_id,
+          revision: workspace.private_gateway_revision,
+          enabled,
+          signal,
+        }),
+      );
+    },
     async addWorkspaceRiskTag(tagCode, reasonCode) {
       const workspace = currentWorkspace();
       if (!workspace) return false;
@@ -5346,6 +5360,7 @@ export function createPlatformPageController({
             currency: data.get("currency"),
             input_rate_micros_per_1k: Number(data.get("inputRate")),
             output_rate_micros_per_1k: Number(data.get("outputRate")),
+            cache_rate_micros_per_1k: Number(data.get("cacheRate")),
             effective_from: localTimestamp(data.get("effectiveFrom")),
             source_version: data.get("sourceVersion"),
             ...(effectiveUntil ? { effective_until: effectiveUntil } : {}),
@@ -6680,6 +6695,7 @@ export function createPlatformPageController({
       if (action === "open-job") controller.openJob(target.dataset.jobId);
       if (action === "close-job") controller.closeJob();
       if (action === "prepare-workspace-lifecycle") controller.prepareWorkspaceLifecycle(target.dataset.lifecycleAction);
+      if (action === "toggle-private-gateway") controller.toggleWorkspacePrivateGateway();
       if (action === "remove-workspace-risk") controller.removeWorkspaceRiskTag(target.dataset.tagCode, target.dataset.reasonCode);
     });
     root.addEventListener("change", (event) => {

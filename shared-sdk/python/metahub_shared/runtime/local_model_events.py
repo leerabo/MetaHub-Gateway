@@ -53,7 +53,7 @@ def validate_local_model_called_payload(payload: object) -> dict[str, Any]:
             for field in ("provider_id", "model_id", "request_id")
         )
         or type(payload["attempt_sequence"]) is not int
-        or payload["attempt_sequence"] not in {1, 2}
+        or not 1 <= payload["attempt_sequence"] <= 32
         or payload["attempt_role"] not in {"primary", "fallback"}
         or (payload["attempt_sequence"] == 1) != (payload["attempt_role"] == "primary")
         or payload["execution_status"] != "called"

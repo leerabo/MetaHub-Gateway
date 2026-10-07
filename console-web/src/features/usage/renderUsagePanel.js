@@ -43,28 +43,27 @@ export function renderUsagePanel(usageState, authContext, budgetState) {
     return renderErrorPanel(usageState);
   }
 
-  const records = usageState.records?.usage_records ?? [];
   const summary = usageState.summary ?? {};
   const exportState = usageState.exportState ?? { status: "idle" };
   const canExport = hasPermission(authContext, PERMISSIONS.BILLING_USAGE_EXPORT);
   return `
     <div class="panel-heading usage-heading">
       <div>
-        <h2 id="usage-title">Token 用量与成本</h2>
+        <h2 id="usage-title">用量与成本</h2>
       </div>
       <div class="usage-heading-actions">
-        <span class="usage-count">${escapeHtml(records.length)} / ${escapeHtml(usageState.records?.total ?? 0)}</span>
+        <span class="usage-scope-label">组织汇总</span>
         ${renderUsageExportButton(canExport, exportState)}
       </div>
     </div>
-    ${renderActionError(usageState.actionError)}
-    ${renderFilterForm(usageState.filters ?? {}, summary.by_consumer ?? [])}
+    <div class="console-page-toolbar usage-toolbar">
+      ${renderActionError(usageState.actionError)}
+      ${renderFilterForm(usageState.filters ?? {}, summary.by_consumer ?? [])}
+    </div>
     ${renderUsageExportFeedback(canExport, exportState)}
     ${renderTotals(summary.totals)}
     ${renderBudgetOverview(budgetState)}
-    ${renderSummaryTables(summary)}
-    ${renderRecordTable(records)}
-    ${renderPager(usageState.records ?? {})}
+    ${renderSummaryTables(summary, usageState.dimension ?? "overview")}
   `;
 }
 
@@ -73,32 +72,29 @@ function renderPersonalUsagePanel(usageState) {
     return '<div class="panel-heading"><h2 id="usage-title">我的用量</h2><p>正在读取本人调用统计。</p></div><div class="empty-state" role="status">正在加载...</div>';
   }
   if (usageState.state === "error") {
-    return `<div class="panel-heading"><h2 id="usage-title">我的用量</h2><p>个人用量暂不可用。</p></div><div class="empty-state error-state" role="alert">${escapeHtml(usageState.message ?? "用量接口读取失败")} request_id: ${escapeHtml(usageState.requestId ?? "-")}</div>`;
+    return `<div class="panel-heading"><h2 id="usage-title">我的用量</h2><p>个人用量暂不可用。</p></div><div class="empty-state error-state" role="alert">${escapeHtml(usageState.message ?? "用量接口读取失败")}</div>`;
   }
   const totals = usageState.personalSummary?.totals ?? {};
-  const records = usageState.personalRecords?.usage_records ?? [];
   const days = usageState.personalSummary?.by_day ?? [];
   return `
-    <div class="panel-heading usage-heading"><div><h2 id="usage-title">我的用量</h2><p>只显示本人通过个人 KEY 的调用统计。</p></div><span class="usage-count">${escapeHtml(records.length)} / ${escapeHtml(usageState.personalRecords?.total ?? 0)}</span></div>
+    <div class="panel-heading usage-heading"><div><h2 id="usage-title">我的用量</h2><p>只显示本人通过个人 KEY 的统计。</p></div><span class="usage-scope-label">个人汇总</span></div>
     ${renderActionError(usageState.actionError)}
-    <form class="usage-filter-form usage-personal-filter" id="usage-filter-form">
-      <label><span>开始日期</span><input type="date" name="startDate" value="${escapeAttribute(usageState.filters?.startDate ?? "")}" /></label>
-      <label><span>结束日期</span><input type="date" name="endDate" value="${escapeAttribute(usageState.filters?.endDate ?? "")}" /></label>
+    <details class="usage-filter-panel usage-personal-filter-panel"${hasUsageFilters(usageState.filters) ? " open" : ""}>
+      <summary><span>筛选我的用量</span>${hasUsageFilters(usageState.filters) ? "<small>已设置筛选条件</small>" : ""}</summary>
+      <form class="usage-filter-form usage-personal-filter" id="usage-filter-form">
+      <label><span>开始日期</span><input type="date" name="startDate" aria-label="开始日期" value="${escapeAttribute(usageState.filters?.startDate ?? "")}" /></label>
+      <label><span>结束日期</span><input type="date" name="endDate" aria-label="结束日期" value="${escapeAttribute(usageState.filters?.endDate ?? "")}" /></label>
       <div class="usage-filter-actions"><button type="submit">查询</button><button type="button" id="usage-filter-reset">清除筛选</button></div>
-    </form>
-    <section class="usage-total-grid" aria-label="个人 Token 汇总">
+      </form>
+    </details>
+    <section class="usage-total-grid" aria-label="个人令牌汇总">
       <div><strong>${escapeHtml(totals.request_count ?? 0)}</strong><span>请求次数</span></div>
-      <div><strong>${escapeHtml(totals.input_tokens ?? 0)}</strong><span>输入 Token</span></div>
-      <div><strong>${escapeHtml(totals.output_tokens ?? 0)}</strong><span>输出 Token</span></div>
-      <div><strong>${escapeHtml(totals.total_tokens ?? 0)}</strong><span>总 Token</span></div>
+      <div><strong>${escapeHtml(totals.input_tokens ?? 0)}</strong><span>输入令牌</span></div>
+      <div><strong>${escapeHtml(totals.output_tokens ?? 0)}</strong><span>输出令牌</span></div>
+      <div><strong>${escapeHtml(totals.total_tokens ?? 0)}</strong><span>总令牌</span></div>
     </section>
     ${days.length ? `<section class="usage-personal-days"><h3>每日用量</h3><div class="usage-record-table" role="table"><div class="usage-record-row usage-record-head" role="row"><span>日期</span><span>请求次数</span><span>输入 Token</span><span>输出 Token</span><span>总 Token</span></div>${days.map((item) => `<div class="usage-record-row" role="row"><time>${escapeHtml(item.day)}</time><span>${escapeHtml(item.request_count)}</span><span>${escapeHtml(item.input_tokens)}</span><span>${escapeHtml(item.output_tokens)}</span><span>${escapeHtml(item.total_tokens)}</span></div>`).join("")}</div></section>` : ""}
-    <h3>调用记录</h3>
-    <div class="usage-record-table" role="table" aria-label="个人调用记录">
-      <div class="usage-record-row usage-record-head" role="row"><span>时间</span><span>模型</span><span>输入</span><span>输出</span><span>总计</span></div>
-      ${records.length ? records.map((item) => `<div class="usage-record-row" role="row"><time>${escapeHtml(formatDateTime(item.created_at))}</time><span>${escapeHtml(item.resolved_model ?? item.model_id ?? item.request_model ?? "默认路由")}</span><span>${escapeHtml(item.input_tokens)}</span><span>${escapeHtml(item.output_tokens)}</span><span>${escapeHtml(item.total_tokens)}</span></div>`).join("") : renderRecordEmpty()}
-    </div>
-    ${renderPager(usageState.personalRecords ?? {})}
+    <p class="usage-detail-handoff">需要查看单次调用、失败原因或路由尝试时，请到“治理 → 调用记录”。</p>
   `;
 }
 
@@ -110,13 +106,13 @@ function renderBudgetOverview(budgetState) {
   if (!budgetState) {
     return "";
   }
-  // 预算摘要读取失败不能影响用量账本展示，但要保留 request_id 便于排查预算接口。
+  // 预算摘要读取失败不能影响用量账本展示；关联号仍保留在状态对象中。
   if (budgetState.state === "error") {
     return `
       <section class="usage-budget-summary usage-budget-error" aria-label="预算状态">
         <div>
           <strong>预算状态暂不可用</strong>
-          <span>${escapeHtml(budgetState.message ?? "预算接口读取失败")} request_id: ${escapeHtml(budgetState.requestId ?? "-")}</span>
+          <span>${escapeHtml(budgetState.message ?? "预算接口读取失败")}</span>
         </div>
       </section>
     `;
@@ -155,7 +151,7 @@ function renderUsageBudgetChip(item) {
   return `
     <article class="usage-budget-chip status-${escapeAttribute(item.status)}">
       <div>
-        <strong>${escapeHtml(item.scope_label ?? item.scope_type ?? "-")}</strong>
+        <strong>${escapeHtml(displayUsageScope(item.scope_label ?? item.scope_type ?? "-"))}</strong>
         <mark>${escapeHtml(BUDGET_STATUS_LABELS[item.status] ?? item.status ?? "-")}</mark>
       </div>
       <span>${escapeHtml(item.spent_cny ?? "0")} / ${escapeHtml(item.budget_cny ?? "0")} CNY</span>
@@ -170,7 +166,7 @@ function renderUsageBudgetChip(item) {
 function renderLoadingPanel() {
   return `
     <div class="panel-heading">
-      <h2 id="usage-title">Token 用量与成本</h2>
+      <h2 id="usage-title">用量与成本</h2>
       <p>正在读取当前租户的用量账本。</p>
     </div>
     <div class="empty-state">等待 /usage/summary 和 /usage/records 响应。</div>
@@ -178,16 +174,16 @@ function renderLoadingPanel() {
 }
 
 /**
- * 渲染接口失败状态，并展示 request_id 方便定位控制面日志。
+ * 普通用户只需要知道读取失败；关联号保留在客户端错误对象和服务端日志中。
  */
 function renderErrorPanel(state) {
   return `
     <div class="panel-heading">
-      <h2 id="usage-title">Token 用量与成本</h2>
+      <h2 id="usage-title">用量与成本</h2>
       <p>用量账本暂不可用。</p>
     </div>
     <div class="empty-state error-state">
-      ${escapeHtml(state.message ?? "用量接口读取失败")} request_id: ${escapeHtml(state.requestId ?? "-")}
+      ${escapeHtml(state.message ?? "用量接口读取失败")}
     </div>
   `;
 }
@@ -196,65 +192,87 @@ function renderErrorPanel(state) {
  * 渲染用量筛选表单，字段名与后端 Query 参数保持一一对应。
  */
 function renderFilterForm(filters, consumers) {
+  const activeFilters = countActiveUsageFilters(filters);
+  const selectedConsumerId = String(filters.consumerId ?? "").trim();
+  const consumerOptions = consumers
+    .filter((row) => row.consumer_id && row.consumer_name)
+    .map((row) => `<option value="${escapeAttribute(row.consumer_id)}"${String(row.consumer_id) === selectedConsumerId ? " selected" : ""}>${escapeHtml(row.consumer_name)}${row.consumer_department ? ` / ${escapeHtml(row.consumer_department)}` : ""}</option>`)
+    .join("");
+  const selectedConsumerFallback = selectedConsumerId && !consumers.some((row) => String(row.consumer_id) === selectedConsumerId)
+    ? `<option value="${escapeAttribute(selectedConsumerId)}" selected>当前使用者</option>`
+    : "";
   return `
-    <form class="usage-filter-form" id="usage-filter-form">
+    <details class="usage-filter-panel"${activeFilters ? " open" : ""}>
+        <summary><span>筛选统计</span>${activeFilters ? `<small>已设置 ${activeFilters} 项</small>` : ""}</summary>
+      <form class="usage-filter-form" id="usage-filter-form">
       <label>
         <span>使用者</span>
-        <input name="consumerId" list="usage-consumer-options" value="${escapeAttribute(filters.consumerId ?? "")}" />
-        <datalist id="usage-consumer-options">
-          ${consumers.filter((row) => row.consumer_id).map((row) => `<option value="${escapeAttribute(row.consumer_id)}">${escapeHtml(row.consumer_name ?? row.consumer_id)}</option>`).join("")}
-        </datalist>
-      </label>
-      <label>
-        <span>开始日期</span>
-        <input type="date" name="startDate" value="${escapeAttribute(filters.startDate ?? "")}" />
-      </label>
-      <label>
-        <span>结束日期</span>
-        <input type="date" name="endDate" value="${escapeAttribute(filters.endDate ?? "")}" />
-      </label>
-      <label>
-        <span>模型 ID</span>
-        <input name="modelId" value="${escapeAttribute(filters.modelId ?? "")}" placeholder="model_xxx / default-chat" />
-      </label>
-      <label>
-        <span>Virtual Key</span>
-        <input name="virtualKeyId" value="${escapeAttribute(filters.virtualKeyId ?? "")}" placeholder="virtual_key_id" />
-      </label>
-      <label>
-        <span>Environment ID</span>
-        <input name="environmentId" value="${escapeAttribute(filters.environmentId ?? "")}" placeholder="environment_id" />
-      </label>
-      <label>
-        <span>Project</span>
-        <input name="projectId" value="${escapeAttribute(filters.projectId ?? "")}" placeholder="project_id" />
-      </label>
-      <label>
-        <span>Application</span>
-        <input name="applicationId" value="${escapeAttribute(filters.applicationId ?? "")}" placeholder="application_id" />
-      </label>
-      <label>
-        <span>Provider</span>
-        <input name="providerId" value="${escapeAttribute(filters.providerId ?? "")}" placeholder="provider_id" />
-      </label>
-      <label>
-        <span>usage 来源</span>
-        <select name="estimated">
-          ${renderOption("", "全部", filters.estimated)}
-          ${renderOption("false", "真实 usage", filters.estimated)}
-          ${renderOption("true", "估算 usage", filters.estimated)}
+        <select name="consumerId" aria-label="使用者">
+          <option value="">全部使用者</option>
+          ${selectedConsumerFallback}
+          ${consumerOptions}
         </select>
       </label>
       <label>
-        <span>request_id</span>
-        <input name="requestId" value="${escapeAttribute(filters.requestId ?? "")}" placeholder="req_xxx" />
+        <span>开始日期</span>
+        <input type="date" name="startDate" aria-label="开始日期" value="${escapeAttribute(filters.startDate ?? "")}" />
+      </label>
+      <label>
+        <span>结束日期</span>
+        <input type="date" name="endDate" aria-label="结束日期" value="${escapeAttribute(filters.endDate ?? "")}" />
+      </label>
+      <label>
+        <span>模型</span>
+        <input name="modelId" aria-label="模型" value="${escapeAttribute(filters.modelId ?? "")}" placeholder="输入模型名称" />
+      </label>
+      <label>
+        <span>调用凭据</span>
+        <input name="virtualKeyId" aria-label="调用凭据" value="${escapeAttribute(filters.virtualKeyId ?? "")}" placeholder="输入 KEY 名称或前缀" />
+      </label>
+      <label>
+        <span>环境</span>
+        <input name="environmentId" aria-label="环境" value="${escapeAttribute(filters.environmentId ?? "")}" placeholder="输入环境名称" />
+      </label>
+      <label>
+        <span>项目</span>
+        <input name="projectId" aria-label="项目" value="${escapeAttribute(filters.projectId ?? "")}" placeholder="输入项目名称" />
+      </label>
+      <label>
+        <span>应用</span>
+        <input name="applicationId" aria-label="应用" value="${escapeAttribute(filters.applicationId ?? "")}" placeholder="输入应用名称" />
+      </label>
+      <label>
+        <span>模型服务</span>
+        <input name="providerId" aria-label="模型服务" value="${escapeAttribute(filters.providerId ?? "")}" placeholder="输入服务名称" />
+      </label>
+      <label>
+        <span>用量来源</span>
+        <select name="estimated" aria-label="用量来源">
+          ${renderOption("", "全部", filters.estimated)}
+          ${renderOption("false", "真实用量", filters.estimated)}
+          ${renderOption("true", "估算用量", filters.estimated)}
+        </select>
+      </label>
+      <label>
       </label>
       <div class="usage-filter-actions">
         <button type="submit">筛选</button>
         <button type="button" id="usage-filter-reset">清空</button>
       </div>
-    </form>
+      </form>
+    </details>
   `;
+}
+
+function countActiveUsageFilters(filters = {}) {
+  return [
+    "consumerId", "startDate", "endDate", "modelId", "virtualKeyId", "environmentId",
+    "projectId", "applicationId", "providerId", "estimated",
+  ].filter((key) => String(filters[key] ?? "").trim() !== "").length;
+}
+
+function hasUsageFilters(filters = {}) {
+  return countActiveUsageFilters(filters) > 0;
 }
 
 /**
@@ -264,8 +282,8 @@ function renderTotals(totals = {}) {
   return `
     <div class="usage-total-grid" aria-label="用量总览">
       ${renderMetric("请求数", totals.request_count ?? 0, "条")}
-      ${renderMetric("总 Token", totals.total_tokens ?? 0, "tokens")}
-      ${renderMetric("缓存 Token", totals.cache_tokens ?? 0, "tokens")}
+      ${renderMetric("总令牌", totals.total_tokens ?? 0, "条")}
+      ${renderMetric("缓存令牌", totals.cache_tokens ?? 0, "条")}
       ${renderMetric("成本 CNY", formatCost(totals.cost_cny, "CNY"), "")}
       ${renderMetric("成本 USD", formatCost(totals.cost_usd, "USD"), "")}
       ${renderMetric("估算记录", totals.estimated_records ?? 0, `真实 ${totals.real_usage_records ?? 0}`)}
@@ -287,18 +305,37 @@ function renderMetric(label, value, unit) {
 }
 
 /**
- * 渲染按天、模型和 Virtual Key 的聚合表，帮助快速定位主要成本来源。
+ * 渲染按维度切换的聚合表；项目视图同时承载其下的应用明细。
  */
-function renderSummaryTables(summary = {}) {
+function renderSummaryTables(summary = {}, activeDimension = "overview") {
+  const dimensions = [
+    ["overview", "总览", "当前筛选范围的汇总指标。", ""],
+    ["day", "按日期", "按日期查看请求量、令牌和成本变化。", renderDaySummary(summary.by_day ?? [])],
+    ["consumer", "按使用者", "查看每位成员的请求量和成本。", renderConsumerSummary(summary.by_consumer ?? [])],
+    ["model", "按模型", "查看各模型的请求量和成本。", renderModelSummary(summary.by_model ?? [])],
+    ["project", "按项目", "查看项目总量，应用会缩进显示在所属项目下。", renderProjectSummary(summary.by_project ?? [], summary.by_application ?? [])],
+    ["environment", "按环境", "查看各环境的请求量和成本。", renderEnvironmentSummary(summary.by_environment ?? [])],
+  ];
+  const selected = dimensions.some(([value]) => value === activeDimension) ? activeDimension : "overview";
   return `
-    <div class="usage-summary-grid">
-      ${renderConsumerSummary(summary.by_consumer ?? [])}
-      ${renderDaySummary(summary.by_day ?? [])}
-      ${renderModelSummary(summary.by_model ?? [])}
-      ${renderKeySummary(summary.by_virtual_key ?? [])}
-      ${renderEnvironmentSummary(summary.by_environment ?? [])}
-      ${renderProjectSummary(summary.by_project ?? [])}
-      ${renderApplicationSummary(summary.by_application ?? [])}
+    <section class="usage-view-switcher" aria-labelledby="usage-view-label">
+      <div class="usage-view-switcher-heading">
+        <label id="usage-view-label" for="usage-dimension">统计视图</label>
+        <span>单次调用记录请到“治理 → 调用记录”查看。</span>
+      </div>
+      <select id="usage-dimension" name="usageDimension" aria-label="统计视图">
+        ${dimensions.map(([value, label]) => `<option value="${escapeAttribute(value)}"${value === selected ? " selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+      </select>
+    </section>
+    <div class="usage-summary-views">
+      ${dimensions.map(([value, label, description, content]) => `
+        <section class="usage-summary-view" data-usage-dimension="${escapeAttribute(value)}"${value === selected && value !== "overview" ? "" : " hidden"} aria-labelledby="usage-dimension-${escapeAttribute(value)}">
+          <div class="usage-summary-view-heading">
+            <div><h3 id="usage-dimension-${escapeAttribute(value)}">${escapeHtml(label)}</h3><p>${escapeHtml(description)}</p></div>
+          </div>
+          ${content || (value === "overview" ? "" : `<div class="usage-summary-empty">当前筛选范围暂无${escapeHtml(label)}数据。</div>`)}
+        </section>
+      `).join("")}
     </div>
   `;
 }
@@ -307,28 +344,28 @@ function renderSummaryTables(summary = {}) {
  * 渲染按天聚合表，展示趋势所需的核心字段。
  */
 function renderConsumerSummary(rows) {
+  if (!rows.length) return "";
   return `
     <section class="usage-summary-block">
-      <h3>按使用者</h3>
       <div class="usage-mini-table" role="table" aria-label="按使用者用量">
         <div class="usage-mini-row usage-mini-head" role="row">
-          <span>使用者</span><span>请求</span><span>Token</span><span>成本</span>
+          <span>使用者</span><span>请求</span><span>令牌</span><span>成本</span>
         </div>
-        ${rows.length ? rows.map((row) => renderMiniRow(row.consumer_name ? `${row.consumer_name}${row.consumer_department ? ` / ${row.consumer_department}` : ""}` : row.consumer_id ?? "未绑定使用者", row.request_count, row.total_tokens, formatDualCost(row))).join("") : renderMiniEmpty()}
+        ${rows.map((row) => renderMiniRow(row.consumer_name ? `${row.consumer_name}${row.consumer_department ? ` / ${row.consumer_department}` : ""}` : "未绑定使用者", row.request_count, row.total_tokens, formatDualCost(row))).join("")}
       </div>
     </section>
   `;
 }
 
 function renderDaySummary(rows) {
+  if (!rows.length) return "";
   return `
     <section class="usage-summary-block">
-      <h3>按天</h3>
       <div class="usage-mini-table" role="table" aria-label="按天用量">
         <div class="usage-mini-row usage-mini-head" role="row">
-          <span>日期</span><span>请求</span><span>Token</span><span>成本</span>
+          <span>日期</span><span>请求</span><span>令牌</span><span>成本</span>
         </div>
-        ${rows.length ? rows.map((row) => renderMiniRow(row.day, row.request_count, row.total_tokens, formatDualCost(row))).join("") : renderMiniEmpty()}
+        ${rows.map((row) => renderMiniRow(row.day, row.request_count, row.total_tokens, formatDualCost(row))).join("")}
       </div>
     </section>
   `;
@@ -338,51 +375,32 @@ function renderDaySummary(rows) {
  * 渲染按模型聚合表，展示模型 ID、请求数、Token 和成本。
  */
 function renderModelSummary(rows) {
+  if (!rows.length) return "";
   return `
     <section class="usage-summary-block">
-      <h3>按模型</h3>
       <div class="usage-mini-table" role="table" aria-label="按模型用量">
         <div class="usage-mini-row usage-mini-head" role="row">
-          <span>模型</span><span>请求</span><span>Token</span><span>成本</span>
+          <span>模型</span><span>请求</span><span>令牌</span><span>成本</span>
         </div>
-        ${rows.length ? rows.map((row) => renderMiniRow(row.resolved_model ?? row.model_id ?? "-", row.request_count, row.total_tokens, formatDualCost(row))).join("") : renderMiniEmpty()}
+        ${rows.map((row) => renderMiniRow(row.resolved_model ?? row.model_name ?? "-", row.request_count, row.total_tokens, formatDualCost(row))).join("")}
       </div>
     </section>
   `;
 }
 
 /**
- * 渲染按 Virtual Key 聚合表，只展示 key_prefix 或 ID，不展示密钥明文。
- */
-function renderKeySummary(rows) {
-  return `
-    <section class="usage-summary-block">
-      <h3>按 Key</h3>
-      <div class="usage-mini-table" role="table" aria-label="按 Virtual Key 用量">
-        <div class="usage-mini-row usage-mini-head" role="row">
-          <span>Key</span><span>请求</span><span>Token</span><span>成本</span>
-        </div>
-        ${rows.length ? rows.map((row) => renderMiniRow(row.virtual_key_prefix ?? row.virtual_key_id ?? "-", row.request_count, row.total_tokens, formatDualCost(row))).join("") : renderMiniEmpty()}
-      </div>
-    </section>
-  `;
-}
-
-/**
- * 渲染按 Environment 聚合表，帮助管理员核对各环境请求量、Token 和成本。
+ * 渲染按环境聚合表，帮助管理员核对各环境请求量、Token 和成本。
  */
 function renderEnvironmentSummary(rows) {
-  /** 按 Environment 展示请求、Token 和成本，名称缺失时回退到代码或稳定 ID。 */
+  if (!rows.length) return "";
+  /** 按环境展示请求、Token 和成本，名称缺失时回退到代码或稳定 ID。 */
   return `
     <section class="usage-summary-block">
-      <h3>按 Environment</h3>
-      <div class="usage-mini-table" role="table" aria-label="按 Environment 用量">
+      <div class="usage-mini-table" role="table" aria-label="按环境用量">
         <div class="usage-mini-row usage-mini-head" role="row">
-          <span>环境</span><span>请求</span><span>Token</span><span>成本</span>
+          <span>环境</span><span>请求</span><span>令牌</span><span>成本</span>
         </div>
-        ${rows.length
-          ? rows.map((row) => renderMiniRow(row.environment_name ?? row.environment ?? row.environment_id ?? "未知", row.request_count, row.total_tokens, formatDualCost(row))).join("")
-          : renderMiniEmpty()}
+        ${rows.map((row) => renderMiniRow(row.environment_name ?? row.environment ?? "未知", row.request_count, row.total_tokens, formatDualCost(row))).join("")}
       </div>
     </section>
   `;
@@ -415,7 +433,7 @@ function renderUsageExportButton(canExport, exportState) {
 
 /**
  * 渲染独立导出反馈，避免 CSV 失败把整个用量概览替换为错误页。
- * message 只包含固定状态、文件名、job ID 和 request_id，仍统一转义以阻止异常响应写入 HTML。
+ * message 只包含固定状态和导出进度，关联号仍保留在状态对象中而不进入页面。
  */
 function renderUsageExportFeedback(canExport, exportState) {
   if (!canExport) {
@@ -436,34 +454,40 @@ function renderUsageExportFeedback(canExport, exportState) {
 }
 
 /**
- * 渲染按 Project 聚合表，帮助财务按一级业务系统核对成本。
+ * 渲染按项目聚合表，帮助财务按一级业务系统核对成本。
  */
-function renderProjectSummary(rows) {
+function renderProjectSummary(rows, applicationRows) {
+  if (!rows.length && !applicationRows.length) return "";
+  const groups = new Map();
+  for (const row of rows) {
+    const key = String(row.project_id ?? row.project_name ?? "unbound");
+    groups.set(key, { project: row, applications: [] });
+  }
+  for (const row of applicationRows) {
+    const key = String(row.project_id ?? row.project_name ?? "unbound");
+    const group = groups.get(key) ?? { project: null, applications: [] };
+    group.applications.push(row);
+    groups.set(key, group);
+  }
+  const projectRows = [...groups.values()].map(({ project, applications }) => {
+    if (project) return renderMiniRow(project.project_name ?? "未绑定项目", project.request_count, project.total_tokens, formatDualCost(project), "usage-project-row")
+      + applications.map((row) => renderMiniRow(row.application_name ?? "未命名应用", row.request_count, row.total_tokens, formatDualCost(row), "usage-project-application")).join("");
+    const aggregate = applications.reduce((total, row) => ({
+      request_count: total.request_count + Number(row.request_count ?? 0),
+      total_tokens: total.total_tokens + Number(row.total_tokens ?? 0),
+      cost_cny: total.cost_cny + Number(row.cost_cny ?? 0),
+      cost_usd: total.cost_usd + Number(row.cost_usd ?? 0),
+    }), { request_count: 0, total_tokens: 0, cost_cny: 0, cost_usd: 0 });
+    return renderMiniRow("未绑定项目", aggregate.request_count, aggregate.total_tokens, formatDualCost(aggregate), "usage-project-row")
+      + applications.map((row) => renderMiniRow(row.application_name ?? "未命名应用", row.request_count, row.total_tokens, formatDualCost(row), "usage-project-application")).join("");
+  }).join("");
   return `
     <section class="usage-summary-block">
-      <h3>按 Project</h3>
-      <div class="usage-mini-table" role="table" aria-label="按 Project 用量">
+      <div class="usage-mini-table" role="table" aria-label="按项目用量">
         <div class="usage-mini-row usage-mini-head" role="row">
-          <span>Project</span><span>请求</span><span>Token</span><span>成本</span>
+          <span>项目</span><span>请求</span><span>令牌</span><span>成本</span>
         </div>
-        ${rows.length ? rows.map((row) => renderMiniRow(row.project_name ?? row.project_id ?? "未绑定", row.request_count, row.total_tokens, formatDualCost(row))).join("") : renderMiniEmpty()}
-      </div>
-    </section>
-  `;
-}
-
-/**
- * 渲染按 Application 聚合表，帮助定位同一项目下的具体调用来源。
- */
-function renderApplicationSummary(rows) {
-  return `
-    <section class="usage-summary-block">
-      <h3>按 Application</h3>
-      <div class="usage-mini-table" role="table" aria-label="按 Application 用量">
-        <div class="usage-mini-row usage-mini-head" role="row">
-          <span>Application</span><span>请求</span><span>Token</span><span>成本</span>
-        </div>
-        ${rows.length ? rows.map((row) => renderMiniRow(row.application_name ?? row.application_id ?? "未绑定", row.request_count, row.total_tokens, formatDualCost(row))).join("") : renderMiniEmpty()}
+        ${projectRows}
       </div>
     </section>
   `;
@@ -472,12 +496,12 @@ function renderApplicationSummary(rows) {
 /**
  * 渲染聚合小表的一行，保持各列稳定对齐。
  */
-function renderMiniRow(label, requestCount, totalTokens, cost) {
+function renderMiniRow(label, requestCount, totalTokens, cost, rowClass = "") {
   return `
-    <div class="usage-mini-row" role="row">
+    <div class="usage-mini-row${rowClass ? ` ${escapeAttribute(rowClass)}` : ""}" role="row">
       <span title="${escapeAttribute(label)}">${escapeHtml(label)}</span>
       <span data-label="请求">${escapeHtml(requestCount ?? 0)}</span>
-      <span data-label="Token">${escapeHtml(totalTokens ?? 0)}</span>
+      <span data-label="令牌">${escapeHtml(totalTokens ?? 0)}</span>
       <span data-label="成本">${escapeHtml(cost)}</span>
     </div>
   `;
@@ -490,138 +514,13 @@ function renderMiniEmpty() {
   return `<div class="usage-mini-row usage-mini-empty" role="row"><span>暂无数据</span></div>`;
 }
 
-/**
- * 渲染用量明细表，只展示规范化 usage 和脱敏元数据。
- */
-function renderRecordTable(records) {
-  return `
-    <div class="usage-record-table" role="table" aria-label="当前租户用量记录">
-      <div class="usage-record-row usage-record-head" role="row">
-        <span>request_id</span>
-        <span>模型</span>
-        <span>Provider</span>
-        <span>Key</span>
-        <span>归属</span>
-        <span>Token</span>
-        <span>成本</span>
-        <span>来源</span>
-        <span>时间</span>
-      </div>
-      ${records.length ? records.map(renderRecordRow).join("") : renderRecordEmpty()}
-    </div>
-  `;
-}
-
-/**
- * 渲染单条 UsageRecord，估算记录会用 mark 明确标识。
- */
-function renderRecordRow(item) {
-  return `
-    <div class="usage-record-row" role="row">
-      <span class="usage-record-id" data-label="request_id">
-        <code>${escapeHtml(item.request_id)}</code>
-        <em>${escapeHtml(item.price_snapshot_id ?? "-")}</em>
-      </span>
-      <span class="usage-record-model" data-label="模型">
-        <strong>${escapeHtml(item.request_model ?? "-")}</strong>
-        <em>${escapeHtml(item.resolved_model ?? item.model_id ?? "-")}</em>
-      </span>
-      <span data-label="Provider">${escapeHtml(item.provider_code ?? "-")}</span>
-      <span data-label="Key">${escapeHtml(item.virtual_key_prefix ?? item.virtual_key_id ?? "-")}</span>
-      <span class="usage-record-scope" data-label="归属">
-        <em>${escapeHtml(item.consumer_id ?? "未绑定使用者")}</em>
-        <strong>${escapeHtml(item.project_name ?? item.project_id ?? "未绑定项目")}</strong>
-        <em>${escapeHtml(item.application_name ?? item.application_id ?? "未绑定应用")}</em>
-      </span>
-      <span data-label="Token">${escapeHtml(formatTokens(item))}</span>
-      <span data-label="成本">${escapeHtml(formatDualCost(item))}</span>
-      <span data-label="来源">${renderUsageSource(item)}</span>
-      <time data-label="时间" datetime="${escapeAttribute(item.created_at)}">${escapeHtml(formatDateTime(item.created_at))}</time>
-      ${renderNormalizationDetails(item)}
-    </div>
-  `;
-}
-
-/**
- * 渲染用量明细空状态，提示当前筛选条件下没有记录。
- */
-function renderRecordEmpty() {
-  return `
-    <div class="usage-record-row usage-record-empty" role="row">
-      <span>当前条件下没有用量记录。</span>
-    </div>
-  `;
-}
-
-/**
- * 渲染分页状态和上一页/下一页按钮。
- */
-function renderPager(recordsState) {
-  const limit = Number(recordsState.limit ?? 20);
-  const offset = Number(recordsState.offset ?? 0);
-  const total = Number(recordsState.total ?? 0);
-  const canPrev = offset > 0;
-  const canNext = offset + limit < total;
-  return `
-    <div class="usage-pager" data-limit="${escapeAttribute(limit)}" data-offset="${escapeAttribute(offset)}">
-      <button type="button" id="usage-prev" ${canPrev ? "" : "disabled"}>上一页</button>
-      <span>${escapeHtml(total ? offset + 1 : 0)}-${escapeHtml(Math.min(offset + limit, total))} / ${escapeHtml(total)}</span>
-      <button type="button" id="usage-next" ${canNext ? "" : "disabled"}>下一页</button>
-    </div>
-  `;
-}
-
-/**
- * 渲染 usage 来源标签，估算记录用醒目标记提醒用户不要当成厂商账单。
- */
-function renderUsageSource(item) {
-  const label = item.estimated ? "估算" : "真实";
-  const status = item.estimated ? "estimated" : "real";
-  return `<mark class="usage-source usage-source-${status}">${escapeHtml(label)}</mark>`;
-}
-
-/**
- * 渲染可展开归一化详情，展示内部成本与已脱敏 Provider usage 双口径。
- */
-function renderNormalizationDetails(item) {
-  const normalized = item.normalized_usage ?? {};
-  const providerCost = normalized.provider_cost_amount
-    ? `${normalized.provider_cost_amount} ${normalized.provider_cost_currency ?? "未知币种"}`
-    : "未上报";
-  const warnings = Array.isArray(normalized.normalization_warnings)
-    ? normalized.normalization_warnings.join(", ") || "无"
-    : "无";
-  return `
-    <details class="usage-normalization-details">
-      <summary>归一化详情</summary>
-      <dl>
-        <div><dt>Provider 成本</dt><dd>${escapeHtml(providerCost)}</dd></div>
-        <div><dt>归一警告</dt><dd>${escapeHtml(warnings)}</dd></div>
-      </dl>
-      <strong>Normalized Usage</strong>
-      <pre>${escapeHtml(safeJson(normalized))}</pre>
-      <strong>Provider Raw Usage</strong>
-      <pre>${escapeHtml(safeJson(item.provider_raw_usage ?? {}))}</pre>
-    </details>
-  `;
-}
-
-/**
- * 把安全用量对象格式化为稳定 JSON，序列化失败时返回空对象占位。
- */
-function safeJson(value) {
-  try {
-    return JSON.stringify(value ?? {}, null, 2);
-  } catch {
-    return "{}";
+function displayUsageScope(value) {
+  const label = String(value ?? "").trim();
+  const cleaned = label.replace(/\s*\((?:mhv|mh|sk|pk|key)[a-z0-9_*:-]*\)\s*$/iu, "").trim();
+  if (/^local development virtual key$/iu.test(cleaned) || /^mhv_dev_seed(?:_|$)/iu.test(cleaned)) {
+    return "默认调用 KEY";
   }
-}
-
-/**
- * 格式化 Token 摘要，缓存 Token 单独展示以免被重复计入总量。
- */
-function formatTokens(item) {
-  return `${item.total_tokens ?? 0} total / ${item.cache_tokens ?? 0} cache`;
+  return cleaned || "-";
 }
 
 /**
@@ -659,7 +558,7 @@ function renderActionError(error) {
   }
   return `
     <div class="usage-action-error" role="alert">
-      ${escapeHtml(error.message ?? "用量操作失败")} request_id: ${escapeHtml(error.requestId ?? "-")}
+      ${escapeHtml(error.message ?? "用量操作失败")}
     </div>
   `;
 }
@@ -670,16 +569,6 @@ function renderActionError(error) {
 function renderOption(value, label, selectedValue) {
   const selected = value === (selectedValue ?? "") ? " selected" : "";
   return `<option value="${escapeAttribute(value)}"${selected}>${escapeHtml(label)}</option>`;
-}
-
-/**
- * 格式化 ISO 时间字符串，避免表格中出现过长的小数秒。
- */
-function formatDateTime(value) {
-  if (!value) {
-    return "-";
-  }
-  return String(value).replace("T", " ").replace(/\.\d+Z?$/, "Z");
 }
 
 /**

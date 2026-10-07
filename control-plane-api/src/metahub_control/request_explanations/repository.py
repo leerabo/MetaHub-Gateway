@@ -86,7 +86,7 @@ def load_explanation_snapshot(
           rl.project_id, project.name AS project_name,
           rl.application_id, application.name AS application_name,
           rl.provider_id, rl.model_id, rl.request_model, rl.resolved_model,
-          rl.provider_code, rl.status, rl.error_code,
+          provider.name AS provider_name, rl.provider_code, rl.status, rl.error_code,
           rl.stream_session_id, rl.stream_status,
           rl.snapshot_version, rl.policy_snapshot_status,
           rl.policy_decision, rl.policy_reason_code, rl.policy_id,
@@ -115,6 +115,9 @@ def load_explanation_snapshot(
         LEFT JOIN applications application
           ON application.tenant_id=rl.tenant_id
          AND application.application_id=rl.application_id
+        LEFT JOIN providers provider
+          ON provider.tenant_id=rl.tenant_id
+         AND provider.provider_id=rl.provider_id
         WHERE rl.tenant_id=? AND rl.request_id=?
         """,
         (tenant_id, source_request_id),
@@ -177,15 +180,28 @@ def load_explanation_snapshot(
         connection,
         """
         SELECT
-          routing_attempt_id, attempt_sequence, attempt_role, trigger_type,
-          trigger_error_code, model_id, internal_model_id, provider_id,
-          provider_code, status, error_code, error_category,
-          upstream_http_status, retryable, latency_ms, usage_status,
-          CAST(estimated_cost_cny AS TEXT) AS estimated_cost_cny_text,
-          created_at, completed_at
+          routing_attempts.routing_attempt_id, routing_attempts.attempt_sequence,
+          routing_attempts.attempt_role, routing_attempts.trigger_type,
+          routing_attempts.trigger_error_code, routing_attempts.model_id,
+          routing_attempts.internal_model_id, routing_attempts.provider_id,
+          routing_attempts.provider_code, p.name AS provider_name,
+          m.display_name AS model_name, routing_attempts.status,
+          routing_attempts.error_code, routing_attempts.error_category,
+          routing_attempts.upstream_http_status, routing_attempts.retryable,
+          routing_attempts.latency_ms, routing_attempts.usage_status,
+          CAST(routing_attempts.estimated_cost_cny AS TEXT) AS estimated_cost_cny_text,
+          routing_attempts.created_at, routing_attempts.completed_at
         FROM routing_attempts
-        WHERE tenant_id=? AND request_id=?
-        ORDER BY attempt_sequence ASC, created_at ASC, routing_attempt_id ASC
+        LEFT JOIN providers p
+          ON p.tenant_id=routing_attempts.tenant_id
+         AND p.provider_id=routing_attempts.provider_id
+        LEFT JOIN models m
+          ON m.tenant_id=routing_attempts.tenant_id
+         AND m.model_id=routing_attempts.model_id
+        WHERE routing_attempts.tenant_id=? AND routing_attempts.request_id=?
+        ORDER BY routing_attempts.attempt_sequence ASC,
+                 routing_attempts.created_at ASC,
+                 routing_attempts.routing_attempt_id ASC
         LIMIT ?
         """,
         (tenant_id, source_request_id),

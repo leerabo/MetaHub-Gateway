@@ -39,7 +39,6 @@ export function renderTenantPanel(tenantState, authContext, workspaceContext) {
       </div>
       <div class="empty-state error-state">
         ${escapeHtml(tenantState.message)}
-        ${tenantState.requestId ? `<br /><small>request_id: ${escapeHtml(tenantState.requestId)}</small>` : ""}
       </div>
     `;
   }
@@ -86,7 +85,7 @@ function renderWorkspaceProfile(state, authContext, context) {
   const title = context.kind === "personal" ? "空间资料" : "组织资料";
   const heading = `<div class="panel-heading tenant-heading"><h2 id="tenant-title">${title}</h2></div>`;
   if (state?.state === "error") {
-    return `${heading}<p class="error-state" role="alert">${escapeHtml(state.message)} <small>request_id: ${escapeHtml(state.requestId ?? "-")}</small></p>`;
+    return `${heading}<p class="error-state" role="alert">${escapeHtml(state.message ?? "组织资料暂时无法读取，请稍后重试")}</p>`;
   }
   if (!state?.workspace) return `${heading}<p role="status">正在读取资料。</p>`;
   const workspace = state.workspace;

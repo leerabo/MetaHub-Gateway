@@ -59,7 +59,6 @@ function renderFilters(state, t) {
       <label><span>${t("billing_dispute.scope_type", "范围")}</span>
         <select name="scope_type"${disabled ? " disabled" : ""}>
           <option value="">${t("billing_dispute.all", "全部")}</option>
-          <option value="request_ids"${filters.scope_type === "request_ids" ? " selected" : ""}>Request IDs</option>
           <option value="time_range"${filters.scope_type === "time_range" ? " selected" : ""}>${t("billing_dispute.time_range", "时间段")}</option>
         </select>
       </label>
@@ -88,7 +87,7 @@ function renderList(state, t) {
       ${items.length ? `
         <div class="billing-dispute-table-scroll">
           <table class="billing-dispute-table">
-            <thead><tr><th>${t("billing_dispute.id", "争议 ID")}</th><th>${t("billing_dispute.status", "状态")}</th><th>${t("billing_dispute.scope_type", "范围")}</th><th>${t("billing_dispute.items", "项目")}</th><th>${t("billing_dispute.total", "争议金额")}</th><th>${t("billing_dispute.created_at", "创建时间")}</th><th><span class="sr-only">${t("billing_dispute.action", "操作")}</span></th></tr></thead>
+            <thead><tr><th>${t("billing_dispute.status", "状态")}</th><th>${t("billing_dispute.scope_type", "范围")}</th><th>${t("billing_dispute.items", "项目")}</th><th>${t("billing_dispute.total", "争议金额")}</th><th>${t("billing_dispute.created_at", "创建时间")}</th><th><span class="sr-only">${t("billing_dispute.action", "操作")}</span></th></tr></thead>
             <tbody>${items.map((item) => renderListRow(item, state.selectedId, t)).join("")}</tbody>
           </table>
         </div>
@@ -105,7 +104,6 @@ function renderListRow(item, selectedId, t) {
   const selected = item.billing_dispute_id === selectedId;
   return `
     <tr${selected ? " class=\"is-selected\"" : ""}>
-      <td data-label="${t("billing_dispute.id", "争议 ID")}"><code>${escapeHtml(item.billing_dispute_id)}</code></td>
       <td data-label="${t("billing_dispute.status", "状态")}"><span class="billing-dispute-status tone-${escapeAttribute(item.status)}">${statusLabel(item.status, t)}</span></td>
       <td data-label="${t("billing_dispute.scope_type", "范围")}">${scopeLabel(item.scope_type, t)}</td>
       <td data-label="${t("billing_dispute.items", "项目")}">${integerText(item.item_count)}</td>
@@ -130,16 +128,15 @@ function renderDetail(state, owner, t) {
   return `
     <section class="billing-dispute-detail" aria-labelledby="billing-dispute-detail-title">
       <header class="billing-dispute-detail-heading">
-        <div><h3 id="billing-dispute-detail-title">${t("billing_dispute.detail", "争议详情")}</h3><code>${escapeHtml(detail.billing_dispute_id)}</code></div>
+        <div><h3 id="billing-dispute-detail-title">${t("billing_dispute.detail", "争议详情")}</h3></div>
         <button type="button" class="billing-dispute-icon-command" data-billing-dispute-close-detail title="${t("common.close", "关闭")}" aria-label="${t("common.close", "关闭")}">&times;</button>
       </header>
       <dl class="billing-dispute-summary">
         <div><dt>${t("billing_dispute.status", "状态")}</dt><dd><span class="billing-dispute-status tone-${escapeAttribute(detail.status)}">${statusLabel(detail.status, t)}</span></dd></div>
-        <div><dt>Revision</dt><dd>${integerText(detail.state_revision)}</dd></div>
         <div><dt>${t("billing_dispute.scope_type", "范围")}</dt><dd>${scopeLabel(detail.scope_type, t)}</dd></div>
         <div><dt>${t("billing_dispute.items", "项目")}</dt><dd>${integerText(detail.item_count)}</dd></div>
-        <div><dt>${t("billing_dispute.created_by", "申请人")}</dt><dd><code>${escapeHtml(detail.created_by_user_id)}</code></dd></div>
-        <div><dt>${t("billing_dispute.reviewer", "审核人")}</dt><dd><code>${escapeHtml(detail.reviewer_user_id ?? "-")}</code></dd></div>
+        <div><dt>${t("billing_dispute.created_by", "申请人")}</dt><dd>${escapeHtml(detail.created_by_display_name ?? (self ? "我" : "组织成员"))}</dd></div>
+        <div><dt>${t("billing_dispute.reviewer", "审核人")}</dt><dd>${escapeHtml(detail.reviewer_display_name ?? (detail.reviewer_user_id ? "组织审核人" : "尚未审核"))}</dd></div>
       </dl>
       ${renderPrivateText("reason", state.revealed?.reason, t("billing_dispute.reason", "申请原因"), t)}
       ${state.privateTextAvailable?.decisionReason ? renderPrivateText("decision", state.revealed?.decisionReason, t("billing_dispute.decision_reason", "决定原因"), t) : ""}
@@ -193,7 +190,7 @@ function renderItems(items, t) {
       <div class="billing-dispute-item-list">
         ${items.map((item) => `
           <div class="billing-dispute-item">
-            <code>${escapeHtml(item.source_request_id ?? item.billing_dispute_item_id)}</code>
+            <strong>调用记录</strong>
             <span>${escapeHtml(item.currency ?? "-")} ${escapeHtml(item.disputable_amount ?? item.disputable ?? item.amount ?? "-")}</span>
             <span>${formatTime(item.created_at)}</span>
             <small>${escapeHtml(item.price_evidence_status ?? "-")}</small>
@@ -246,11 +243,9 @@ function renderCreateDialog(state, owner, t) {
         <form data-billing-dispute-create-form novalidate>
           <fieldset class="billing-dispute-segmented"${busy ? " disabled" : ""}>
             <legend>${t("billing_dispute.scope_type", "范围")}</legend>
-            <label><input type="radio" name="scope_type" value="request_ids"${state.dialog.scopeType === "request_ids" ? " checked" : ""}><span>Request IDs</span></label>
-            <label><input type="radio" name="scope_type" value="time_range"${state.dialog.scopeType === "time_range" ? " checked" : ""}><span>${t("billing_dispute.time_range", "时间段")}</span></label>
+            <label><input type="radio" name="scope_type" value="time_range" checked><span>${t("billing_dispute.time_range", "时间段")}</span></label>
           </fieldset>
-          <div data-billing-dispute-request-scope${state.dialog.scopeType === "request_ids" ? "" : " hidden"}>
-            <label class="billing-dispute-field"><span>Request IDs</span><textarea name="request_ids" rows="5" maxlength="16100" autocomplete="off" placeholder="req_..."${busy ? " disabled" : ""}></textarea></label>
+          <div data-billing-dispute-request-scope hidden>
           </div>
           <div class="billing-dispute-time-fields" data-billing-dispute-time-scope${state.dialog.scopeType === "time_range" ? "" : " hidden"}>
             <label class="billing-dispute-field"><span>${t("billing_dispute.period_start", "开始时间")}</span><input type="datetime-local" name="period_start" step="1"${busy ? " disabled" : ""}></label>
@@ -307,7 +302,7 @@ function renderApprovalInputs(items, t, busy) {
         const maximum = item.current_disputable_amount ?? item.disputable_amount ?? item.disputable ?? item.amount ?? "";
         return `
           <label>
-            <span><code>${escapeHtml(item.source_request_id ?? item.billing_dispute_item_id)}</code><small>${escapeHtml(item.currency ?? "-")} · ${t("billing_dispute.maximum", "上限")} ${escapeHtml(maximum || "-")}</small></span>
+            <span><strong>调用记录</strong><small>${escapeHtml(item.currency ?? "-")} · ${t("billing_dispute.maximum", "上限")} ${escapeHtml(maximum || "-")}</small></span>
             <input name="adjustment:${escapeAttribute(item.billing_dispute_item_id)}" inputmode="decimal" maxlength="24" placeholder="0.000000" autocomplete="off">
           </label>
         `;
@@ -327,15 +322,15 @@ function renderDialogStatus(state, t) {
 
 function renderFeedback(state) {
   if (!state.feedback) return "";
-  return `<div class="billing-dispute-feedback${state.feedback.error ? " is-error" : ""}" role="status">${escapeHtml(state.feedback.message)} · request_id: ${escapeHtml(state.feedback.requestId ?? "-")}</div>`;
+  return `<div class="billing-dispute-feedback${state.feedback.error ? " is-error" : ""}" role="status">${escapeHtml(state.feedback.message)}</div>`;
 }
 
 function renderError(error) {
-  return `<div class="billing-dispute-error" role="alert"><strong>${escapeHtml(error?.message ?? "账单争议暂不可用")}</strong><code>${escapeHtml(error?.code ?? "billing_dispute.unavailable")}</code><span>request_id: ${escapeHtml(error?.requestId ?? "-")}</span></div>`;
+  return `<div class="billing-dispute-error" role="alert"><strong>账单争议暂不可用</strong><span>${escapeHtml(error?.message ?? "请稍后重试")}</span></div>`;
 }
 
 function renderErrorText(error) {
-  return `${escapeHtml(error.message)} · ${escapeHtml(error.code)} · request_id: ${escapeHtml(error.requestId)}`;
+  return escapeHtml(error.message ?? "操作未完成，请稍后重试");
 }
 
 function renderCurrencyTotals(value) {
@@ -349,7 +344,7 @@ function statusLabel(value, t) {
 }
 
 function scopeLabel(value, t) {
-  return value === "request_ids" ? "Request IDs" : t("billing_dispute.time_range", "时间段");
+  return t("billing_dispute.time_range", "时间段");
 }
 
 function translator(i18n) {

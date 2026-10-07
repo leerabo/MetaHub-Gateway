@@ -8,8 +8,12 @@ import { AuthApiError } from "../../src/lib/auth.js";
 import {
   createApplication,
   createProject,
+  deleteApplication,
+  deleteProject,
   listApplications,
+  listApplicationMembers,
   listProjects,
+  updateApplicationMembers,
   updateApplication,
   updateProject,
 } from "../../src/lib/projects.js";
@@ -85,6 +89,8 @@ test("projects client lists creates and updates without tenant id", async () => 
   await updateProject({ controlApiUrl: "http://control.local", token: "jwt-token", projectId: "prj_1", status: "disabled" });
   await createApplication({ controlApiUrl: "http://control.local", token: "jwt-token", projectId: "prj_1", applicationCode: "api", name: "账务 API" });
   await updateApplication({ controlApiUrl: "http://control.local", token: "jwt-token", applicationId: "app_1", status: "disabled" });
+  await deleteApplication({ controlApiUrl: "http://control.local", token: "jwt-token", applicationId: "app_1" });
+  await deleteProject({ controlApiUrl: "http://control.local", token: "jwt-token", projectId: "prj_1" });
 
   assert.equal(projects.projects[0].project_code, "billing");
   assert.equal(applications.applications[0].application_code, "api");
@@ -95,6 +101,8 @@ test("projects client lists creates and updates without tenant id", async () => 
   assert.equal(JSON.parse(calls[3].options.body).status, "disabled");
   assert.equal(JSON.parse(calls[4].options.body).project_id, "prj_1");
   assert.equal(JSON.parse(calls[5].options.body).status, "disabled");
+  assert.equal(calls[6].options.method, "DELETE");
+  assert.equal(calls[7].options.method, "DELETE");
 });
 
 test("projects client returns structured errors", async () => {
@@ -123,6 +131,35 @@ test("projects client returns structured errors", async () => {
   );
 });
 
+test("application member client uses scoped list and exact membership set", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      headers: new Map(),
+      async json() {
+        return {
+          application_id: "app_1",
+          members: [],
+          selected_membership_ids: ["wmb_1"],
+          limit: 25,
+          offset: 0,
+          total: 0,
+          request_id: "req_members",
+          trace_id: "trc_members",
+        };
+      },
+    };
+  };
+
+  await listApplicationMembers({ controlApiUrl: "http://control.local", token: "jwt-token", applicationId: "app_1", search: "李", limit: 25, offset: 0 });
+  await updateApplicationMembers({ controlApiUrl: "http://control.local", token: "jwt-token", applicationId: "app_1", membershipIds: ["wmb_1", "wmb_1"] });
+  assert.match(calls[0].url, /\/applications\/app_1\/members\?search=%E6%9D%8E&limit=25&offset=0/u);
+  assert.equal(calls[1].options.method, "PUT");
+  assert.deepEqual(JSON.parse(calls[1].options.body), { membership_ids: ["wmb_1"] });
+});
+
 test("renderProjectApplicationPanel shows admin forms and developer readonly state", () => {
   const state = { state: "ok", projects: projectPayload.projects, applications: applicationPayload.applications, feedback: "项目已创建" };
   const adminHtml = renderProjectApplicationPanel(
@@ -145,10 +182,38 @@ test("renderProjectApplicationPanel shows admin forms and developer readonly sta
   assert.match(adminHtml, /create-application-form/);
   assert.match(adminHtml, /账务核心/);
   assert.match(adminHtml, /账务 API/);
+  assert.match(adminHtml, /class="project-children"/u);
+  assert.match(adminHtml, /class="application-child-row application-child-head"/u);
+  assert.match(adminHtml, /应用<\/span>\s*<span>状态<\/span>\s*<span>KEY 数量<\/span>\s*<span>更新时间<\/span>\s*<span>成员<\/span>/u);
+  assert.match(adminHtml, /application-child-name/u);
+  assert.match(adminHtml, /data-manage-application-members="app_1"/u);
+  assert.match(adminHtml, /data-application-members-dialog/u);
+  assert.match(adminHtml, /class="model-alias-dialog project-members-dialog"/u);
+  assert.match(adminHtml, /class="model-alias-dialog-heading"/u);
+  assert.doesNotMatch(adminHtml, /class="applications-grid"/u);
   assert.match(adminHtml, /项目已创建/);
   assert.match(developerHtml, /当前角色可查看项目与应用归属/);
   assert.doesNotMatch(developerHtml, /create-project-form/);
   assert.equal(viewerHtml, "");
+});
+
+test("renderProjectApplicationPanel allows deleting an unused project tree", () => {
+  const html = renderProjectApplicationPanel(
+    {
+      state: "ok",
+      projects: [{ ...projectPayload.projects[0], virtual_key_count: 0 }],
+      applications: [{ ...applicationPayload.applications[0], virtual_key_count: 0 }],
+    },
+    withPermissionSnapshot(
+      { user: { role: "admin" } },
+      [PERMISSIONS.PROJECT_READ, PERMISSIONS.PROJECT_WRITE],
+    ),
+  );
+
+  assert.match(html, /data-delete-project="prj_1"/);
+  assert.doesNotMatch(html, /data-delete-project="prj_1"[^>]*disabled/);
+  assert.match(html, /data-delete-application="app_1"/);
+  assert.doesNotMatch(html, /data-delete-application="app_1"[^>]*disabled/);
 });
 
 test("renderDeveloperStart renders projects active navigation", () => {

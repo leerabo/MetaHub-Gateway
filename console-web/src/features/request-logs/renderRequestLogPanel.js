@@ -34,6 +34,25 @@ const STATUS_LABELS = {
   failed: "失败",
 };
 
+const PROVIDER_LABELS = Object.freeze({
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  claude: "Anthropic",
+  google: "Google",
+  gemini: "Google",
+  deepseek: "DeepSeek",
+  qwen: "通义千问",
+  kimi: "Kimi",
+  moonshot: "Kimi",
+  zhipu: "智谱 AI",
+  glm: "智谱 AI",
+  grok: "Grok",
+  mistral: "Mistral",
+  meta: "Meta",
+  openrouter: "OpenRouter",
+  custom: "自定义模型服务",
+});
+
 // PAGE-097 只解释后端冻结的语义风险枚举；未知值仍经过转义显示，不能成为 HTML 或状态推断入口。
 const INTENT_STATUS_LABELS = Object.freeze({
   disabled: "未启用",
@@ -73,14 +92,14 @@ const TERMINAL_STAGE_OPTIONS = [
   ["authentication", "认证"],
   ["rate_limit", "限流"],
   ["budget", "预算"],
-  ["dlp", "DLP"],
+  ["dlp", "内容安全"],
   ["output_safety", "输出安全"],
   ["policy", "策略"],
   ["routing", "路由"],
-  ["keypool", "Key Pool"],
-  ["provider", "Provider"],
-  ["usage_and_finops", "用量与 FinOps"],
-  ["logs_and_webhooks", "日志与 Webhook"],
+  ["keypool", "模型服务"],
+  ["provider", "模型服务"],
+  ["usage_and_finops", "用量与成本"],
+  ["logs_and_webhooks", "日志与通知"],
   ["unknown", "未知"],
 ];
 // 该集合只做前端内存白名单收敛；任何未知阶段都清空并交由后端合同最终校验。
@@ -93,6 +112,12 @@ const OUTPUT_SAFETY_FILTER_VALUES = Object.freeze({
   mode: new Set(["non_stream_full", "stream_window"]),
   exposure: new Set(["none", "partial", "complete", "unknown"]),
   billing: new Set(["not_required", "dispute_pending"]),
+});
+const REQUEST_LOG_PUBLIC_ERROR_MESSAGES = Object.freeze({
+  "request_log.query_audit_unavailable": "调用记录暂时无法读取，请稍后重试。",
+  "request_log.unavailable": "调用记录暂时无法读取，请稍后重试。",
+  "request_log.query_invalid": "筛选条件无效，请检查后重试。",
+  "output_safety.integrity_failed": "这条调用记录的安全详情暂时无法读取，请稍后重试。",
 });
 
 /**
@@ -623,9 +648,11 @@ function detailPayloadMatchesOwner(payload, ticket) {
 
 /** 错误内存只保留统一公开字段，不能把响应正文、Header 或异常栈传给 renderer。 */
 function safeRequestLogError(error, fallbackMessage) {
+  const code = requestLogText(error?.code);
+  const publicMessage = REQUEST_LOG_PUBLIC_ERROR_MESSAGES[code];
   return {
-    code: requestLogText(error?.code),
-    message: requestLogText(error?.message || fallbackMessage),
+    code,
+    message: publicMessage ?? requestLogText(error?.message || fallbackMessage),
     requestId: requestLogText(error?.requestId ?? error?.request_id ?? "-") || "-",
   };
 }
@@ -668,8 +695,8 @@ export function renderRequestLogPanel(requestLogsState, authContext, feedbackSta
   return `
     <div class="panel-heading request-logs-heading">
       <div>
-        <h2 id="request-logs-title">调用日志</h2>
-        <p>按请求、模型、归属、时间、延迟、Token 和成本组合查询当前租户调用日志。</p>
+        <h2 id="request-logs-title">调用记录</h2>
+        <p>按请求、模型、归属、时间、延迟、Token 和成本组合查询当前组织调用记录。</p>
       </div>
       <span class="request-logs-count">${escapeHtml(logs.length)} / ${escapeHtml(requestLogsState.total ?? 0)}</span>
     </div>
@@ -678,7 +705,9 @@ export function renderRequestLogPanel(requestLogsState, authContext, feedbackSta
     ${renderFilterForm(requestLogsState.filters ?? {})}
     ${renderLogTable(logs)}
     ${renderPager(requestLogsState)}
-    ${renderRequestLogDetail(requestLogsState.detail, requestLogsState.detailError, feedbackState, authContext, i18n)}
+    ${requestLogsState.detail || requestLogsState.detailError
+      ? renderRequestLogDetail(requestLogsState.detail, requestLogsState.detailError, feedbackState, authContext, i18n, { dialog: true })
+      : ""}
   `;
 }
 
@@ -688,24 +717,28 @@ export function renderRequestLogPanel(requestLogsState, authContext, feedbackSta
 function renderLoadingPanel() {
   return `
     <div class="panel-heading">
-      <h2 id="request-logs-title">调用日志</h2>
-      <p>正在读取当前租户的调用日志。</p>
+      <h2 id="request-logs-title">调用记录</h2>
+      <p>正在读取当前组织的调用记录。</p>
     </div>
-    <div class="empty-state">等待 /request-logs 响应。</div>
+    <div class="empty-state">正在连接调用记录。</div>
   `;
 }
 
 /**
- * 渲染接口失败态，并保留 request_id 便于定位控制面日志。
+ * 普通用户只需要知道读取失败；关联号保留在状态对象和服务端日志中。
  */
 function renderErrorPanel(state) {
+  const code = requestLogText(state?.code);
+  const message = REQUEST_LOG_PUBLIC_ERROR_MESSAGES[code]
+    ?? requestLogText(state?.message)
+    ?? "调用记录暂时无法读取，请稍后重试。";
   return `
     <div class="panel-heading">
-      <h2 id="request-logs-title">调用日志</h2>
-      <p>调用日志暂不可用。</p>
+      <h2 id="request-logs-title">调用记录</h2>
+      <p>调用记录暂时无法读取，请稍后重试。</p>
     </div>
     <div class="empty-state error-state">
-      ${escapeHtml(state.message ?? "调用日志读取失败")} request_id: ${escapeHtml(state.requestId ?? "-")}
+      ${escapeHtml(message)}
     </div>
   `;
 }
@@ -718,28 +751,19 @@ function renderErrorPanel(state) {
 function renderFilterForm(filters) {
   return `
     <form class="request-log-filter-form" id="request-log-filter-form">
-      <label><span>request_id</span><input name="requestId" value="${escapeAttribute(filters.requestId ?? "")}" placeholder="req_xxx" /></label>
-      <label><span>trace_id</span><input name="traceId" value="${escapeAttribute(filters.traceId ?? "")}" placeholder="trc_xxx" /></label>
       <label><span>状态</span><select name="status">
         ${renderOption("", "全部", filters.status)}
         ${renderOption("success", "成功", filters.status)}
         ${renderOption("failed", "失败", filters.status)}
       </select></label>
       <label><span>请求模型</span><input name="requestModel" value="${escapeAttribute(filters.requestModel ?? filters.model ?? "")}" placeholder="company-default" /></label>
-      <label><span>解析模型</span><input name="resolvedModel" value="${escapeAttribute(filters.resolvedModel ?? "")}" placeholder="deepseek-chat" /></label>
-      <label><span>Provider</span><input name="providerCode" value="${escapeAttribute(filters.providerCode ?? "")}" placeholder="deepseek" /></label>
+      <label><span>实际模型</span><input name="resolvedModel" value="${escapeAttribute(filters.resolvedModel ?? "")}" placeholder="模型名称" /></label>
       <label><span>开始时间</span><input type="datetime-local" name="createdFrom" value="${escapeAttribute(requestLogDateTimeLocalValue(filters.createdFrom))}" /></label>
       <label><span>结束时间</span><input type="datetime-local" name="createdTo" value="${escapeAttribute(requestLogDateTimeLocalValue(filters.createdTo))}" /></label>
 
       <details class="request-log-advanced-fields">
         <summary>更多条件</summary>
         <div class="request-log-advanced-grid">
-          <label><span>Virtual Key ID</span><input name="virtualKeyId" value="${escapeAttribute(filters.virtualKeyId ?? "")}" /></label>
-          <label><span>Environment ID</span><input name="environmentId" value="${escapeAttribute(filters.environmentId ?? "")}" /></label>
-          <label><span>Project ID</span><input name="projectId" value="${escapeAttribute(filters.projectId ?? "")}" /></label>
-          <label><span>Application ID</span><input name="applicationId" value="${escapeAttribute(filters.applicationId ?? "")}" /></label>
-          <label><span>快照版本</span><input name="snapshotVersion" type="number" min="1" step="1" value="${escapeAttribute(filters.snapshotVersion ?? "")}" /></label>
-          <label><span>错误码</span><input name="errorCode" value="${escapeAttribute(filters.errorCode ?? "")}" /></label>
           <label><span>终止阶段</span><select name="terminalStage">
             ${renderOption("", "全部", filters.terminalStage)}
             ${TERMINAL_STAGE_OPTIONS.map(([value, label]) => renderOption(value, label, filters.terminalStage)).join("")}
@@ -765,11 +789,6 @@ function renderFilterForm(filters) {
           ${renderOption("total_tokens", "Token", filters.sortBy)}
           ${renderOption("estimated_cost_amount", "成本", filters.sortBy)}
         </select></label>
-        <fieldset class="request-log-sort-direction">
-          <legend>排序方向</legend>
-          <label><input type="radio" name="sortDirection" value="desc" ${filters.sortDirection !== "asc" ? "checked" : ""} /><span>降序</span></label>
-          <label><input type="radio" name="sortDirection" value="asc" ${filters.sortDirection === "asc" ? "checked" : ""} /><span>升序</span></label>
-        </fieldset>
         <div class="request-log-filter-actions">
           <button type="submit">查询</button>
           <button type="button" id="request-log-filter-reset">清空</button>
@@ -795,7 +814,7 @@ function renderSavedFilterControls(state) {
       </label>
       <label class="request-log-saved-filter-name">
         <span>名称</span>
-        <input id="request-log-saved-filter-name" maxlength="64" value="${escapeAttribute(selected?.name ?? "")}" />
+        <input id="request-log-saved-filter-name" aria-label="筛选名称" maxlength="64" value="${escapeAttribute(selected?.name ?? "")}" />
       </label>
       <div class="request-log-saved-filter-actions">
         <button type="button" id="request-log-saved-filter-apply" ${selected ? "" : "disabled"}>应用</button>
@@ -803,7 +822,7 @@ function renderSavedFilterControls(state) {
         <button type="button" id="request-log-saved-filter-update" ${selected ? "" : "disabled"}>更新</button>
         <button type="button" id="request-log-saved-filter-delete" ${selected ? "" : "disabled"}>删除</button>
       </div>
-      ${state.savedFiltersError ? `<span class="request-log-saved-filter-error" role="alert">${escapeHtml(state.savedFiltersError.message)} request_id: ${escapeHtml(state.savedFiltersError.requestId)}</span>` : ""}
+      ${state.savedFiltersError ? `<span class="request-log-saved-filter-error" role="alert">${escapeHtml(state.savedFiltersError.message ?? "筛选保存失败")}</span>` : ""}
     </section>
   `;
 }
@@ -826,18 +845,16 @@ export function requestLogDateTimeLocalValue(value) {
 
 /**
  * 渲染调用日志表格。
- * 表格只显示脱敏元数据，详情按钮通过 request_id 查询后端详情接口。
+ * 表格只显示用户可理解的调用摘要；详情按钮使用隐藏的日志引用查询后端。
  */
 function renderLogTable(logs) {
   return `
-    <div class="request-log-table" role="table" aria-label="当前租户调用日志">
+    <div class="request-log-table" role="table" aria-label="当前组织调用记录">
       <div class="request-log-row request-log-head" role="row">
-        <span>request_id</span>
         <span>状态</span>
-        <span>快照</span>
         <span>模型</span>
-        <span>Provider</span>
-        <span>归属</span>
+        <span>模型服务</span>
+        <span>使用者 / 项目</span>
         <span>延迟</span>
         <span>Token / 成本</span>
         <span>时间</span>
@@ -854,33 +871,23 @@ function renderLogTable(logs) {
 function renderLogRow(item) {
   return `
     <div class="request-log-row" role="row">
-      <span class="request-log-id" data-label="request_id">
-        <code>${escapeHtml(item.request_id)}</code>
-        <em>${escapeHtml(item.endpoint ?? "-")}</em>
-      </span>
       <span data-label="状态">
         <mark class="status-mark status-${escapeAttribute(item.status)}">${escapeHtml(STATUS_LABELS[item.status] ?? item.status)}</mark>
-        ${item.error_code ? `<em class="request-log-error-code">${escapeHtml(item.error_code)}</em>` : ""}
-      </span>
-      <span class="request-log-snapshot" data-label="快照">
-        <strong>${escapeHtml(snapshotVersionLabel(item))}</strong>
-        <em>${escapeHtml(policySnapshotStatusLabel(item.policy_snapshot_status))}</em>
       </span>
       <span class="request-log-model" data-label="模型">
         <strong>${escapeHtml(item.request_model ?? "-")}</strong>
         <em>${escapeHtml(item.resolved_model ?? "-")}</em>
       </span>
-      <span data-label="Provider">${escapeHtml(item.provider_code ?? "-")}</span>
-      <span class="request-log-scope" data-label="归属">
-        <strong>${escapeHtml(item.project_name ?? item.project_id ?? "未绑定项目")}</strong>
-        <em>${escapeHtml(item.application_name ?? item.application_id ?? "未绑定应用")}</em>
+      <span data-label="模型服务">${escapeHtml(providerDisplayName(item))}</span>
+      <span class="request-log-scope" data-label="使用者 / 项目">
+        <strong>${escapeHtml(ownerDisplayName(item))}</strong>
+        <em>${escapeHtml(scopeDisplayName(item))}</em>
       </span>
       <span data-label="延迟">${escapeHtml(formatLatency(item.latency_ms))}</span>
       <span data-label="Token / 成本">${escapeHtml(formatUsageAndCost(item))}</span>
       <time data-label="时间" datetime="${escapeAttribute(item.created_at)}">${escapeHtml(formatDateTime(item.created_at))}</time>
       <span class="request-log-row-actions" data-label="操作">
-        <button type="button" data-request-log-detail="${escapeAttribute(item.request_id)}">查看并反馈</button>
-        <button type="button" data-request-log-explain="${escapeAttribute(item.request_id)}">解释</button>
+        <button type="button" data-request-log-detail="${escapeAttribute(item.request_id)}">查看详情</button>
         ${item.has_feedback === true ? `<em class="request-log-feedback-state">已反馈</em>` : ""}
       </span>
     </div>
@@ -893,7 +900,7 @@ function renderLogRow(item) {
 function renderEmptyRow() {
   return `
     <div class="request-log-row request-log-empty" role="row">
-      <span>当前条件下没有调用日志。</span>
+      <span>当前条件下没有调用记录。</span>
     </div>
   `;
 }
@@ -920,46 +927,70 @@ function renderPager(state) {
 /**
  * 渲染详情区，包含路由决策和用量账本摘要。
  */
-export function renderRequestLogDetail(detail, error, feedbackState, authContext, i18n) {
+export function renderRequestLogDetail(detail, error, feedbackState, authContext, i18n, { dialog = false } = {}) {
   if (error) {
-    return `
+    const errorMarkup = `
       <div class="request-log-detail error-state" role="alert">
-        ${escapeHtml(error.message ?? "调用日志详情读取失败")} request_id: ${escapeHtml(error.requestId ?? "-")}
+        ${escapeHtml(error.message ?? "调用日志详情读取失败")}
       </div>
     `;
+    return dialog ? renderRequestLogDialog(errorMarkup, null) : errorMarkup;
   }
   // 该分支影响安全或治理链路，需要用中文说明处理边界。
   if (!detail?.request_log) {
-    return `
+    const emptyMarkup = `
       <div class="request-log-detail empty-state">
-        选择一条调用日志查看路由决策和用量详情。
+        选择一条调用记录查看路由决策和用量详情。
       </div>
     `;
+    return dialog ? renderRequestLogDialog(emptyMarkup, null) : emptyMarkup;
   }
   const log = detail.request_log.log;
-  return `
+  const detailMarkup = `
     <div class="request-log-detail">
       <div class="request-log-detail-heading">
-        <h3>日志详情</h3>
-        <button type="button" data-request-log-detail-refresh="${escapeAttribute(log.request_id)}">刷新详情</button>
+        <div><h3>调用详情</h3><p>查看这次调用的结果、实际模型、用量和成本。</p></div>
+        <div class="request-log-detail-actions">
+          <button type="button" data-request-log-detail-refresh="${escapeAttribute(log.request_id)}">刷新</button>
+          ${dialog ? '<button type="button" class="secondary" data-request-log-detail-close>关闭</button>' : ""}
+        </div>
       </div>
-      ${renderDetailSummary(log)}
+      ${renderDetailSummary(log, detail.request_log)}
       ${renderRequestFeedbackSection(feedbackState, authContext, i18n)}
-      ${renderCacheAffinitySelections(detail.request_log.cache_affinity_selections ?? [])}
-      ${renderResponseCacheEvidence(detail.request_log.response_cache ?? null, log.tenant_id)}
-      ${renderPolicySnapshotDecision(log)}
-      ${renderDlpDecision(log, detail.request_log.dlp_matches ?? [])}
-      ${renderIntentRisk(detail.request_log.intent_risk, log.request_id)}
-      ${renderOutputSafetyEvidence(detail.request_log.output_safety)}
-      ${renderBudgetDecision(log, detail.request_log.budget_evaluations ?? [])}
-      ${renderDiagnosisCard(detail.request_log.error_diagnosis)}
-      ${renderRoutingDecision(
-        detail.request_log.routing_decision,
-        detail.request_log.routing_candidates ?? detail.request_log.routing_decision?.routing_candidates,
-      )}
-      ${renderRoutingAttempts(detail.request_log.routing_attempts ?? [])}
-      ${renderStreamSessions(requestLogStreamSessions(detail.request_log))}
-      ${renderUsage(detail.request_log.usage ?? [])}
+      ${dialog
+        ? `<div class="request-log-technical-body request-log-technical-body-expanded">
+            ${renderFriendlyFailure(log, detail.request_log)}
+            ${renderRoutingDecision(detail.request_log.routing_decision, detail.request_log.routing_attempts ?? [])}
+            ${renderRoutingAttempts(detail.request_log.routing_attempts ?? [], detail.request_log, { compact: true })}
+            ${renderUsage(detail.request_log.usage ?? [])}
+          </div>`
+        : `<details class="request-log-technical-details">
+            <summary>查看完整诊断</summary>
+            <div class="request-log-technical-body">
+              ${renderPolicySnapshotDecision(log)}
+              ${renderDlpDecision(log, detail.request_log.dlp_matches ?? [])}
+              ${renderIntentRisk(detail.request_log.intent_risk)}
+              ${renderOutputSafetyEvidence(detail.request_log.output_safety)}
+              ${renderBudgetDecision(log, detail.request_log.budget_evaluations ?? [])}
+              ${renderDiagnosisCard(detail.request_log.error_diagnosis)}
+              ${renderRoutingDecision(detail.request_log.routing_decision, detail.request_log.routing_attempts ?? [])}
+              ${renderRoutingAttempts(detail.request_log.routing_attempts ?? [], detail.request_log)}
+              ${renderStreamSessions(requestLogStreamSessions(detail.request_log), detail.request_log)}
+              ${renderUsage(detail.request_log.usage ?? [])}
+            </div>
+          </details>`}
+    </div>
+  `;
+  return dialog ? renderRequestLogDialog(detailMarkup, log.request_id) : detailMarkup;
+}
+
+function renderRequestLogDialog(content, requestId) {
+  return `
+    <div class="request-log-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="request-log-detail-title">
+      <div class="request-log-detail-backdrop" data-request-log-detail-close></div>
+      <div class="request-log-detail-dialog-card">
+        ${content.replace("<h3>调用详情</h3>", '<h3 id="request-log-detail-title">调用详情</h3>')}
+      </div>
     </div>
   `;
 }
@@ -1053,11 +1084,6 @@ const OUTPUT_SAFETY_DECISION_LABELS = Object.freeze({
   blocked: "已阻断",
   unknown: "未知",
 });
-// 执行模式标签只消费后端冻结枚举，不能根据 stream 参数或响应内容重新推导。
-const OUTPUT_SAFETY_MODE_LABELS = Object.freeze({
-  non_stream_full: "非流式全文",
-  stream_window: "流式滑窗",
-});
 // 暴露标签表示已持久化的客户可见范围，未知状态必须明确显示而不是按未暴露处理。
 const OUTPUT_SAFETY_EXPOSURE_LABELS = Object.freeze({
   none: "未暴露",
@@ -1099,23 +1125,11 @@ function renderOutputSafetyEvidence(outputSafety) {
       </div>
       ${blockedWarning}
       <dl class="request-log-detail-grid">
-        ${renderPair("扫描 ID", outputSafety.output_safety_scan_id ?? "-")}
-        ${renderPair("模式", OUTPUT_SAFETY_MODE_LABELS[outputSafety.scan_mode] ?? outputSafety.scan_mode ?? "-")}
         ${renderPair("状态", OUTPUT_SAFETY_SCAN_STATUS_LABELS[status] ?? (status || "未知"))}
         ${renderPair("判定", OUTPUT_SAFETY_DECISION_LABELS[decision] ?? (decision || "未知"))}
         ${renderPair("动作", OUTPUT_SAFETY_ACTION_LABELS[outputSafety.action] ?? outputSafety.action ?? "-")}
-        ${renderPair("规则 ID", outputSafety.dlp_rule_id ?? "-")}
-        ${renderPair("规则类型", outputSafety.rule_type ?? "-")}
-        ${renderPair("检测器", outputSafety.detector_version ?? "-")}
-        ${renderPair("检查点", outputSafety.checkpoint_count ?? 0)}
-        ${renderPair("Provider 已观察 Token", outputSafety.observed_output_token_count ?? 0)}
-        ${renderPair("已扫描 Token", outputSafety.scanned_token_count ?? 0)}
-        ${renderPair("已输出 Token", outputSafety.emitted_token_count ?? 0)}
-        ${renderPair("已输出 SSE 事件", outputSafety.emitted_sse_event_count ?? 0)}
-        ${renderPair("已输出字节", outputSafety.emitted_bytes ?? 0)}
         ${renderPair("暴露状态", OUTPUT_SAFETY_EXPOSURE_LABELS[outputSafety.exposure_state] ?? outputSafety.exposure_state ?? "未知")}
         ${renderPair("账单复核", reviewLabel)}
-        ${renderPair("失败原因", outputSafety.failure_reason_code ?? "-")}
       </dl>
     </section>
   `;
@@ -1125,12 +1139,9 @@ function renderOutputSafetyEvidence(outputSafety) {
  * 渲染 PAGE-097 的不可变语义风险摘要。
  * 只消费后端独立 intent_risk DTO；缺少终态的 queued 请求必须保持 pending/best-effort，不能推断为 clean。
  */
-function renderIntentRisk(intentRisk, requestId) {
+function renderIntentRisk(intentRisk) {
   if (!intentRisk || typeof intentRisk !== "object" || Array.isArray(intentRisk)) return "";
   const status = String(intentRisk.status ?? "");
-  const score = Number.isSafeInteger(intentRisk.risk_score)
-    ? `${intentRisk.risk_score}/${Number.isSafeInteger(intentRisk.risk_score_scale) ? intentRisk.risk_score_scale : 10_000}`
-    : "-";
   return `
     <section class="request-log-subsection intent-risk-section" data-intent-risk-status="${escapeAttribute(status)}">
       <div class="intent-risk-heading">
@@ -1140,19 +1151,8 @@ function renderIntentRisk(intentRisk, requestId) {
       <p class="intent-risk-guidance">${escapeHtml(intentRiskGuidance(status))}</p>
       <dl class="request-log-detail-grid">
         ${renderPair("状态", intentEnumLabel(INTENT_STATUS_LABELS, status))}
-        ${renderPair("分类模式", intentEnumLabel(INTENT_MODE_LABELS, intentRisk.classification_mode))}
         ${renderPair("风险类型", intentEnumLabel(INTENT_RISK_LABELS, intentRisk.risk_type))}
-        ${renderPair("风险分数", score)}
-        ${renderPair("动作", intentEnumLabel(INTENT_ACTION_LABELS, intentRisk.action))}
-        ${renderPair("原因码", intentRisk.reason_code ?? "-")}
-        ${renderPair("分类器版本", intentRisk.detector_version ?? "-")}
-        ${renderPair("规则版本", intentRisk.ruleset_version ?? "-")}
-        ${renderPair("结果 ID", intentRisk.intent_risk_result_id ?? "-")}
-        ${renderPair("覆盖截断", booleanLabel(intentRisk.input_truncated))}
-        ${renderPair("输入长度", Number.isSafeInteger(intentRisk.input_code_points) ? `${intentRisk.input_code_points} code points` : "-")}
-        ${renderPair("耗时", Number.isSafeInteger(intentRisk.duration_ms) ? `${intentRisk.duration_ms} ms` : "-")}
-        ${renderPair("完成时间", formatDateTime(intentRisk.completed_at))}
-        ${renderPair("request_id", requestId ?? "-")}
+        ${renderPair("处理结果", intentEnumLabel(INTENT_ACTION_LABELS, intentRisk.action))}
       </dl>
     </section>
   `;
@@ -1179,98 +1179,120 @@ function intentEnumLabel(labels, value) {
 }
 
 /**
- * 渲染请求级 CacheAffinity Selection 白名单。
- * 空数组只显示中性未记录状态，不读取 Prompt 属性，也不猜测是配置关闭还是前缀不足。
+ * 渲染详情顶部摘要。Virtual Key 只显示 key_prefix，不显示完整密钥。
  */
-function renderCacheAffinitySelections(value) {
-  const selections = Array.isArray(value) ? value.slice(0, 2) : [];
+function renderDetailSummary(log, detail = null) {
+  const attempts = Array.isArray(detail?.routing_attempts) ? detail.routing_attempts : [];
+  const routeSummary = routingSummaryLabel(attempts, detail);
   return `
-    <section class="request-log-subsection cache-affinity-selection-section">
-      <h4>Prompt Cache 亲和</h4>
-      ${selections.length
-        ? `<div class="cache-affinity-selection-list">${selections.map(renderCacheAffinitySelection).join("")}</div>`
-        : `<div class="cache-affinity-selection-empty">本次请求未记录 Prompt Cache 亲和选择。</div>`}
+    <dl class="request-log-detail-grid">
+      ${renderPair("状态", STATUS_LABELS[log.status] ?? log.status)}
+      ${renderPair("请求模型", log.request_model ?? "-")}
+      ${renderPair("解析模型", publicModelLabel(log.resolved_model))}
+      ${renderPair("模型服务", providerDisplayName(log))}
+      ${renderPair("路由结果", routeSummary)}
+      ${renderPair("延迟", formatLatency(log.latency_ms))}
+      ${renderPair("成本估算", formatRequestCost(log, detail))}
+      ${renderPair("安全检查", dlpSummaryLabel(log))}
+    </dl>
+  `;
+}
+
+/** 详情摘要按真实用量判断成本；价格已配置但上游没有 Token 时仍显示未计价。 */
+function formatRequestCost(log, detail = null) {
+  const usage = Array.isArray(detail?.usage) ? detail.usage : [];
+  const hasUsage = usage.some((item) => (
+    item?.usage_status === "recorded"
+      || Number(item?.input_tokens) > 0
+      || Number(item?.output_tokens) > 0
+      || Number(item?.total_tokens) > 0
+      || Number(item?.cache_tokens) > 0
+  ));
+  return hasUsage
+    ? formatCost(log?.estimated_cost_amount, log?.currency, log?.price_schema_version)
+    : "无 Token 用量";
+}
+
+/** 失败详情使用诊断结论；缺少归因时从已记录的尝试状态给出可操作的中文说明。 */
+function renderFriendlyFailure(log, detail) {
+  if (String(log?.status ?? "").toLowerCase() !== "failed") return "";
+  const diagnosis = detail?.error_diagnosis;
+  const attempts = Array.isArray(detail?.routing_attempts) ? detail.routing_attempts : [];
+  const values = [
+    diagnosis?.reason,
+    diagnosis?.error_category,
+    diagnosis?.error_code,
+    ...attempts.map((item) => `${item?.error_category ?? ""} ${item?.error_code ?? ""} ${item?.trigger_error_code ?? ""} ${item?.status ?? ""}`),
+  ].join(" ").toLowerCase();
+  let reason = diagnosis?.reason;
+  let suggestion = diagnosis?.suggestion;
+  if (!reason || diagnosis?.rule_id === "unknown_error" || diagnosis?.matched_by === "unknown") {
+    if (/quota|insufficient|billing|balance|credit/.test(values)) {
+      reason = "模型服务额度不足或账单受限。";
+      suggestion = "请检查模型服务账户余额、账单和额度。";
+    } else if (/auth|unauthorized|forbidden|invalid_api_key|permission/.test(values)) {
+      reason = "模型服务密钥无效或没有权限。";
+      suggestion = "请检查模型服务的 API Key 和权限。";
+    } else if (/timeout|timed.out/.test(values)) {
+      reason = "模型服务响应超时。";
+      suggestion = "请稍后重试；如果仍失败，检查模型服务地址和网络。";
+    } else if (/rate.limit|too.many/.test(values)) {
+      reason = "模型服务当前限流。";
+      suggestion = "请稍后重试，或等待模型服务恢复。";
+    } else if (/invalid_request|validation|bad.request|parameter/.test(values)) {
+      reason = "请求参数不符合模型服务要求。";
+      suggestion = "请检查模型名称和请求参数。";
+    } else if (/stream_session_unavailable/.test(values)) {
+      reason = "网关无法建立流式连接，该候选模型没有收到请求。";
+      suggestion = "系统会继续尝试下一个可用模型；如果所有候选都失败，请检查网关状态。";
+    } else if (/upstream_transport_failed/.test(values)) {
+      reason = "模型服务网络连接失败。";
+      suggestion = "系统已继续尝试下一个候选；请检查模型服务地址和网络。";
+    } else if (/routing_decision_unavailable|routing_snapshot_unavailable/.test(values)) {
+      reason = "系统没有取得路由快照，因此没有可靠的模型选择记录。";
+      suggestion = "检查路由配置后重新发起调用。";
+    } else if (/routing_attempt_unavailable/.test(values)) {
+      reason = "系统没有保存模型调用尝试，无法判断模型端结果。";
+      suggestion = "稍后重试；如果仍然发生，请检查网关日志。";
+    } else if (/unavailable|network|connection|upstream|provider|failed/.test(values)) {
+      reason = "模型服务暂时不可用。";
+      suggestion = "请检查模型服务配置和网络后重试。";
+    } else {
+      reason = "这次调用未能完成，暂时没有足够信息判断具体原因。";
+      suggestion = "请检查模型服务配置、API Key 和额度后重试。";
+    }
+  }
+  return `
+    <section class="request-log-subsection diagnosis-card">
+      <h4>失败说明</h4>
+      <dl class="request-log-detail-grid">
+        ${renderPair("原因", reason)}
+        ${renderPair("建议", suggestion)}
+        ${renderPair("后续处理", attempts.length > 1 ? `已尝试 ${attempts.length} 个模型` : "没有可用的备用模型")}
+      </dl>
     </section>
   `;
 }
 
-/**
- * 渲染单次 attempt 的预计复用事实。
- * 只消费 DTO 公布字段；Selection/Binding/Credential ID、data_class、digest 和 Key prefix 不进入模板。
- */
-function renderCacheAffinitySelection(item) {
-  const expected = item?.estimated_hit === true ? "预计复用绑定" : "未预计命中";
-  return `
-    <article class="cache-affinity-selection-item">
-      <header>
-        <strong>#${escapeHtml(item?.attempt_sequence ?? "-")} ${escapeHtml(cacheAffinitySelectionReasonLabel(item?.selection_reason))}</strong>
-        <mark class="${item?.estimated_hit === true ? "is-estimated-hit" : ""}">${expected}</mark>
-      </header>
-      <dl class="request-log-detail-grid">
-        ${renderPair("配置版本", item?.cache_affinity_version == null ? "-" : `v${item.cache_affinity_version}`)}
-        ${renderPair("模型", item?.model_id ?? "-")}
-        ${renderPair("Provider", item?.provider_code ?? "-")}
-        ${renderPair("端点偏好", cacheAffinityPreferenceLabel(item?.endpoint_preference_applied))}
-        ${renderPair("目标类型", cacheAffinityTargetKindLabel(item?.target_kind))}
-        ${renderPair("选择时间", formatDateTime(item?.created_at))}
-      </dl>
-    </article>
-  `;
-}
-
-/** 把四类稳定 Selection reason 转为操作语义，未知值保留原枚举并统一转义。 */
-function cacheAffinitySelectionReasonLabel(value) {
-  const labels = {
-    binding_created: "新建绑定",
-    binding_pending_reused: "复用待确认绑定",
-    binding_warm_reused: "预计复用绑定",
-    binding_rebound: "重新绑定",
-  };
-  return labels[value] ?? value ?? "未记录";
-}
-
-/** 端点偏好只显示布尔结果，缺失字段不能被前端推断为未应用。 */
-function cacheAffinityPreferenceLabel(value) {
-  if (value === true) return "已应用";
-  if (value === false) return "未应用";
-  return "未记录";
-}
-
-/** 目标类型只说明凭据来源类别，不展示 Provider Credential 或稳定 Binding 引用。 */
-function cacheAffinityTargetKindLabel(value) {
-  const labels = {
-    managed: "托管目标",
-    environment: "环境目标",
-    none: "无凭据目标",
-  };
-  return labels[value] ?? value ?? "未记录";
-}
-
-/**
- * 渲染详情顶部摘要。Virtual Key 只显示 key_prefix，不显示完整密钥。
- */
-function renderDetailSummary(log) {
-  return `
-    <dl class="request-log-detail-grid">
-      ${renderPair("request_id", log.request_id)}
-      ${renderPair("trace_id", log.trace_id)}
-      ${renderPair("Virtual Key", log.virtual_key_prefix ?? "-")}
-      ${renderPair("Project", log.project_name ?? log.project_id ?? "-")}
-      ${renderPair("Application", log.application_name ?? log.application_id ?? "-")}
-      ${renderPair("endpoint", log.endpoint ?? "-")}
-      ${renderPair("状态", STATUS_LABELS[log.status] ?? log.status)}
-      ${renderPair("错误码", log.error_code ?? "-")}
-      ${renderPair("请求模型", log.request_model ?? "-")}
-      ${renderPair("解析模型", log.resolved_model ?? "-")}
-      ${renderPair("Provider", log.provider_code ?? "-")}
-      ${renderPair("策略快照", snapshotVersionLabel(log))}
-      ${renderPair("快照状态", policySnapshotStatusLabel(log.policy_snapshot_status))}
-      ${renderPair("Fallback", log.fallback_triggered ? `已触发 / ${log.routing_attempt_count ?? 2} 次尝试` : "未触发")}
-      ${renderPair("延迟", formatLatency(log.latency_ms))}
-      ${renderPair("成本估算", formatCost(log.estimated_cost_amount, log.currency))}
-      ${renderPair("DLP", dlpSummaryLabel(log))}
-    </dl>
-  `;
+/** 说明是否已遍历全部候选，避免“尝试两次后停止”在详情里看起来像无故中断。 */
+function routingSummaryLabel(attempts, detail = null) {
+  if (!attempts.length) return "未进入模型调用";
+  const succeeded = attempts.some((item) => ["succeeded", "provider_succeeded", "completed"].includes(item?.status));
+  if (succeeded) {
+    return attempts.length > 1 ? `${attempts.length} 个模型，已切换成功` : "首次调用成功";
+  }
+  if (attempts.length === 1 && !Array.isArray(detail?.routing_candidates)) {
+    return "首次调用失败";
+  }
+  const candidateCount = Array.isArray(detail?.routing_candidates) ? detail.routing_candidates.length : attempts.length;
+  if (attempts.length < candidateCount) {
+    const last = attempts.at(-1);
+    if (last?.error_code === "gateway.stream_session_unavailable" || last?.trigger_error_code === "gateway.stream_session_unavailable") {
+      return `${attempts.length} 个模型已记录，剩余候选未执行`;
+    }
+    return last?.retryable === false ? `${attempts.length} 个模型失败，已停止` : `${attempts.length} 个模型失败，仍有备用模型`;
+  }
+  return `${attempts.length} 个模型，全部失败`;
 }
 
 /**
@@ -1283,45 +1305,13 @@ function renderDlpDecision(log, matches) {
   }
   return `
     <section class="request-log-subsection dlp-decision-card">
-      <h4>DLP 命中</h4>
+      <h4>内容安全检查</h4>
       <dl class="request-log-detail-grid">
         ${renderPair("状态", dlpStatusLabel(log.dlp_status))}
-        ${renderPair("规则", log.dlp_rule_id ?? "-")}
         ${renderPair("动作", dlpActionLabel(log.dlp_action))}
         ${renderPair("命中数", log.dlp_match_count ?? matches.length)}
-        ${renderPair("原因码", log.dlp_reason_code ?? "-")}
       </dl>
-      ${renderDlpMatches(matches)}
     </section>
-  `;
-}
-
-/**
- * 渲染 DLP 命中明细列表。
- * match_text_hash 是后端用 tenant_id/rule_id/命中文本计算的摘要，前端只展示哈希，不反推出原文。
- */
-function renderDlpMatches(matches) {
-  if (!matches.length) {
-    return "";
-  }
-  return `
-    <div class="dlp-match-list">
-      ${matches
-        .map(
-          (item) => `
-            <dl class="request-log-detail-grid">
-              ${renderPair("规则名称", item.rule_name)}
-              ${renderPair("规则 ID", item.dlp_rule_id)}
-              ${renderPair("类型", item.rule_type)}
-              ${renderPair("动作", dlpActionLabel(item.action))}
-              ${renderPair("消息索引", item.message_index)}
-              ${renderPair("命中长度", item.match_length)}
-              ${renderPair("命中哈希", item.match_text_hash)}
-            </dl>
-          `,
-        )
-        .join("")}
-    </div>
   `;
 }
 
@@ -1335,269 +1325,58 @@ function renderBudgetDecision(log, evaluations) {
   }
   return `
     <section class="request-log-subsection budget-decision-card">
-      <h4>预算命中</h4>
+      <h4>预算检查</h4>
       <dl class="request-log-detail-grid">
         ${renderPair("状态", budgetStatusLabel(log.budget_status))}
-        ${renderPair("规则", log.budget_rule_id ?? "-")}
-        ${renderPair("维度", log.budget_scope_type ?? "-")}
-        ${renderPair("动作", budgetActionLabel(log.budget_action))}
-        ${renderPair("原因码", log.budget_reason_code ?? "-")}
-        ${renderPair("命中成本", formatCost(log.budget_current_cost_cny ?? 0, "CNY"))}
-        ${renderPair("预算上限", formatCost(log.budget_limit_cny ?? 0, "CNY"))}
+        ${renderPair("处理结果", budgetActionLabel(log.budget_action))}
+        ${renderPair("命中成本", formatCost(log.budget_current_cost_cny ?? 0, "CNY", "ledger-v1"))}
+        ${renderPair("预算上限", formatCost(log.budget_limit_cny ?? 0, "CNY", "ledger-v1"))}
       </dl>
-      ${renderBudgetEvaluations(evaluations)}
     </section>
   `;
 }
 
 /**
- * 渲染预算评估明细列表，便于从调用日志直接解释 80%/100% 命中原因。
+ * 渲染模型选择摘要，帮助管理员了解本次调用使用了哪个模型。
  */
-function renderBudgetEvaluations(evaluations) {
-  if (!evaluations.length) {
-    return "";
-  }
-  return `
-    <div class="budget-evaluation-list">
-      ${evaluations
-        .map(
-          (item) => `
-            <dl class="request-log-detail-grid">
-              ${renderPair("业务日", item.budget_date)}
-              ${renderPair("阈值", `${item.threshold_percent}%`)}
-              ${renderPair("命中前成本", formatCost(item.spent_before_cny, "CNY"))}
-              ${renderPair("本次估算", formatCost(item.estimated_request_cost_cny, "CNY"))}
-              ${renderPair("预计成本", formatCost(item.projected_cost_cny, "CNY"))}
-              ${renderPair("预算", formatCost(item.budget_cny, "CNY"))}
-              ${renderPair("动作", budgetActionLabel(item.action_taken))}
-              ${renderPair("原因码", item.reason_code)}
-            </dl>
-          `,
-        )
-        .join("")}
-    </div>
-  `;
-}
-
-/**
- * 渲染路由决策摘要，帮助开发者解释为什么选中某个模型或失败。
- */
-function renderRoutingDecision(decision, routingCandidates) {
+function renderRoutingDecision(decision, attempts = []) {
   if (!decision) {
-    return `<div class="empty-state">该请求没有路由决策记录。</div>`;
+    return attempts.length
+      ? `<div class="empty-state">已记录实际调用过程。</div>`
+      : `<div class="empty-state">这次请求未进入模型服务。</div>`;
   }
-  const candidates = Array.isArray(routingCandidates) ? routingCandidates.slice(0, 2) : [];
   return `
     <section class="request-log-subsection">
-      <h4>路由决策</h4>
+      <h4>模型选择</h4>
       <dl class="request-log-detail-grid">
-        ${renderPair("状态", decision.decision_status)}
-        ${renderPair("选择原因", decision.selection_reason ?? decision.decision_reason)}
-        ${renderPair("环境", decision.environment)}
-        ${renderPair("候选模型", decision.selected_internal_model_id ?? "-")}
-        ${renderPair("Provider", decision.provider_code ?? "-")}
-        ${renderPair("路由模式", decision.routing_mode ?? "-")}
-        ${renderPair("RoutingPolicy ID", decision.routing_policy_id ?? "-")}
-        ${renderPair("RoutingPolicy 版本", routingPolicyVersionLabel(decision.routing_policy_version))}
-        ${renderPair("价格时点", decision.price_as_of ?? "未进行成本比较")}
-        ${renderPair("Token 估算", routingTokenEstimateLabel(decision))}
-        ${renderPair("质量时点", decision.quality_as_of ?? "未进行质量评估")}
-        ${renderPair("质量公式", decision.quality_formula_version ?? "-")}
-        ${renderPair("质量评分", qualityScoringPerformedLabel(decision.quality_scoring_performed))}
-        ${renderPair("质量权重", frozenBpsLabel(decision.quality_weight_bps))}
-        ${renderPair("成本权重", frozenBpsLabel(decision.cost_weight_bps))}
-        ${renderPair("延迟权重", frozenBpsLabel(decision.latency_weight_bps))}
-        ${renderPair("质量门槛", frozenBpsLabel(decision.quality_floor_bps))}
-        ${renderPair("最小样本数", frozenValueLabel(decision.minimum_sample_count))}
-        ${renderPair("策略事件", decision.routing_policy_event_id ?? "-")}
-        ${renderPair("初始选中角色", selectedCandidateRoleLabel(candidates))}
-        ${renderPair("错误码", decision.error_code ?? "-")}
+        ${renderPair("状态", routingCandidateEligibilityLabel(decision))}
+        ${renderPair("已选模型", publicModelLabel(decision.selected_model_display_name))}
+        ${renderPair("模型服务", providerDisplayName(decision))}
       </dl>
-      ${renderRoutingCandidates(candidates)}
     </section>
   `;
-}
-
-/**
- * 渲染请求发生时冻结的强类型 RoutingCandidate 事实。
- * 不解析或回显 candidate_summary 原始 JSON，避免损坏数据和未来扩展字段进入 DOM。
- */
-function renderRoutingCandidates(candidates) {
-  if (!candidates.length) {
-    return `<div class="empty-state">该请求没有可展示的强类型候选事实。</div>`;
-  }
-  return `
-    <div class="request-routing-candidate-table" role="table" aria-label="冻结路由候选">
-      <div class="request-routing-candidate-row request-routing-candidate-head" role="row">
-        <span>排名</span><span>角色</span><span>模型</span><span>Provider</span><span>资格</span><span>健康</span><span>KeyPool</span><span>价格 / 成本</span><span>原因</span>
-      </div>
-      ${candidates.map((item) => `
-        <div class="request-routing-candidate-row" role="row">
-          <span role="cell" data-label="排名">${escapeHtml(item.rank ?? "-")}</span>
-          <span role="cell" data-label="角色">${escapeHtml(routingCandidateRoleLabel(item.candidate_role ?? item.role))}</span>
-          <code role="cell" data-label="模型">${escapeHtml(item.internal_model_id ?? item.model_id ?? "-")}</code>
-          <span role="cell" data-label="Provider">${escapeHtml(item.provider_code ?? item.provider_id ?? "-")}</span>
-          <strong role="cell" data-label="资格">${escapeHtml(routingCandidateEligibilityLabel(item))}</strong>
-          <span role="cell" data-label="健康">${escapeHtml(routingCandidateHealthLabel(item))}</span>
-          <span role="cell" data-label="KeyPool">${escapeHtml(item.keypool_state ?? item.keypool_status ?? item.key_pool_status ?? "not_evaluated")}</span>
-          <code role="cell" data-label="价格 / 成本">${escapeHtml(routingCandidatePriceLabel(item))}</code>
-          <code role="cell" data-label="原因">${escapeHtml(item.selection_reason ?? item.reason_code ?? "-")}</code>
-          ${renderRoutingCandidateQuality(item)}
-        </div>
-      `).join("")}
-    </div>
-  `;
-}
-
-/**
- * 展示 Candidate 行在请求发生时冻结的质量证据、三项分量和最终分。
- * 页面只拼接原始强类型字段与单位，不 JOIN 当前 Score、不重算成功率、质量分或 weighted score。
- */
-function renderRoutingCandidateQuality(item) {
-  return `
-    <div class="request-routing-quality" role="group" aria-label="冻结质量评分事实">
-      <span><small>证据状态</small><strong>${escapeHtml(qualityEvidenceStateLabel(item.quality_evidence_state))}</strong></span>
-      <span><small>Score ID</small><code>${escapeHtml(item.model_quality_score_id ?? "-")}</code></span>
-      <span><small>版本</small><code>${escapeHtml(qualityVersionsLabel(item))}</code></span>
-      <span><small>样本 / 成功 / 错误</small><code>${escapeHtml(qualityCountsLabel(item))}</code></span>
-      <span><small>人工评分</small><code>${escapeHtml(frozenBpsLabel(item.manual_quality_bps))}</code></span>
-      <span><small>冻结平均延迟</small><code>${escapeHtml(frozenLatencyLabel(item.average_latency_ms))}</code></span>
-      <span><small>质量 / 成本 / 延迟分量</small><code>${escapeHtml(qualityComponentsLabel(item))}</code></span>
-      <span><small>最终加权分</small><strong>${escapeHtml(frozenBpsLabel(item.weighted_score_bps))}</strong></span>
-    </div>
-  `;
-}
-
-/** true/false 和 SQLite 1/0 都按冻结布尔展示，缺字段不推断为未执行。 */
-function qualityScoringPerformedLabel(value) {
-  if (value === true || value === 1) return "已执行";
-  if (value === false || value === 0) return "未执行";
-  return "-";
-}
-
-/** 质量证据枚举转换为固定中文，未知服务端值保留原文并在最终模板统一转义。 */
-function qualityEvidenceStateLabel(value) {
-  return { ready: "证据充分", cold: "冷启动", not_evaluated: "未评估" }[value] ?? value ?? "未记录";
-}
-
-/** nullable bps 保留整数精度和单位；0 是合法冻结事实，不能被 truthy 判断吞掉。 */
-function frozenBpsLabel(value) {
-  return value === null || value === undefined || value === "" ? "-" : `${value} bps`;
-}
-
-/** nullable 普通字段统一使用短横线，不把 null 转成字符串。 */
-function frozenValueLabel(value) {
-  return value === null || value === undefined || value === "" ? "-" : String(value);
-}
-
-/** 版本展示不补 v0；statistics/feedback 彼此独立，不能用一个版本替代另一个。 */
-function qualityVersionsLabel(item) {
-  return `统计 ${item?.quality_statistics_version == null ? "-" : `v${item.quality_statistics_version}`} / 反馈 ${item?.quality_feedback_version == null ? "-" : `v${item.quality_feedback_version}`}`;
-}
-
-/** 按后端冻结顺序展示总样本、成功和错误计数，不在浏览器重新计算成功率。 */
-function qualityCountsLabel(item) {
-  return `${frozenValueLabel(item?.quality_sample_count)} / ${frozenValueLabel(item?.quality_success_count)} / ${frozenValueLabel(item?.quality_error_count)}`;
-}
-
-/** Decimal 延迟保持后端字符串精度；页面只追加 ms，不转为 Number。 */
-function frozenLatencyLabel(value) {
-  return value === null || value === undefined || value === "" ? "-" : `${value} ms`;
-}
-
-/** 三分量逐字段展示，零权重或未执行的 null 保持短横线，不伪造为 0 分。 */
-function qualityComponentsLabel(item) {
-  return [item?.quality_component_bps, item?.cost_component_bps, item?.latency_component_bps]
-    .map(frozenBpsLabel)
-    .join(" / ");
-}
-
-/** nullable policy version 保持短横线，direct/route_to/历史记录绝不显示虚构 v0。 */
-function routingPolicyVersionLabel(value) {
-  return value === null || value === undefined || value === "" ? "-" : `v${value}`;
-}
-
-/** 决策没有实际成本比较时 token 估算保持“未评估”，0 token 仍按有效事实展示。 */
-function routingTokenEstimateLabel(decision) {
-  const input = decision?.estimated_input_tokens;
-  const output = decision?.estimated_output_tokens;
-  if (input === null || input === undefined || output === null || output === undefined) {
-    return "未评估";
-  }
-  // 截断估算不能伪装成完整 token 事实，日志详情必须显式保留该标记。
-  return `${input} / ${output}${decision?.token_estimate_truncated ? " / 已截断" : ""}`;
-}
-
-/** 从强类型候选查找 status=selected 的配置角色，不借 candidate_summary 猜测。 */
-function selectedCandidateRoleLabel(candidates) {
-  const selected = candidates.find((item) => item?.status === "selected" || item?.selected === true);
-  return selected ? routingCandidateRoleLabel(selected.candidate_role ?? selected.role) : "-";
-}
-
-/** 备用角色是动态初始候选身份，不等于上游失败后触发 Fallback。 */
-function routingCandidateRoleLabel(role) {
-  return role === "fallback" ? "备用角色（初始候选）" : role === "default" ? "默认角色" : role ?? "-";
 }
 
 /** 用 typed eligible/status 解释候选资格，未知状态保持原枚举而不推断为可调用。 */
 function routingCandidateEligibilityLabel(item) {
-  if (item?.eligible === true) return item.status === "selected" ? "合格 / 已选" : "合格";
+  const status = item?.status ?? item?.decision_status;
+  if (item?.eligible === true) return status === "selected" ? "已选" : "合格";
   if (item?.eligible === false) return "已剔除";
-  const labels = { selected: "合格 / 已选", standby: "合格 / 备用", rejected: "已剔除" };
-  return labels[item?.status] ?? item?.eligibility ?? item?.status ?? "未知";
-}
-
-/** 组合冻结健康状态和新鲜度，避免 stale healthy 被页面误解为新鲜健康证据。 */
-function routingCandidateHealthLabel(item) {
-  const state = item?.health_state
-    ?? item?.provider_health_status
-    ?? item?.health_status
-    ?? item?.health
-    ?? "not_evaluated";
-  // API 布尔和数据库整数投影都可能表达新鲜事实，页面统一显示 fresh。
-  if (item?.health_fresh === true || item?.health_fresh === 1) return `${state} / fresh`;
-  // false/0 均表示 stale，不能因 JavaScript falsy 规则吞掉该事实。
-  if (item?.health_fresh === false || item?.health_fresh === 0) return `${state} / stale`;
-  return state;
+  const labels = { selected: "已选", standby: "备用", rejected: "已剔除" };
+  return labels[status] ?? item?.eligibility ?? status ?? "未知";
 }
 
 /**
- * 保持后端 Decimal 文本精度并区分零价、缺价和未评估。
- * 页面不使用 Number 重算路由成本，避免 15 位量化结果在浏览器浮点中失真。
- */
-function routingCandidatePriceLabel(item) {
-  const currency = item?.currency ?? item?.price_currency ?? "-";
-  // Decimal 零金额是合法成本，非空判断不能使用 truthy 语义。
-  if (item?.estimated_cost_amount !== null && item?.estimated_cost_amount !== undefined) {
-    // 页面沿用冻结事实的原始精度，只拼接币种而不做浏览器浮点重算。
-    return `${item.estimated_cost_amount} ${currency}`;
-  }
-  const input = item?.input_price_per_1k;
-  const output = item?.output_price_per_1k;
-  if ((input !== null && input !== undefined) || (output !== null && output !== undefined)) {
-    return `${input ?? "-"} / ${output ?? "-"} ${currency} / 1K`;
-  }
-  return item?.price_status === "not_evaluated" || item?.price_source === "not_evaluated"
-    ? "未评估"
-    : "缺价";
-}
-
-/**
- * 渲染调用实际使用的 Policy 快照与安全决策摘要。
- * 这里只展示版本、状态、稳定 reason code、Policy ID、动作和目标模型，不展示 DSL、AST、上下文值或请求正文。
+ * 渲染调用实际使用的访问策略结果，只保留用户可理解的状态和动作。
  */
 function renderPolicySnapshotDecision(log) {
   return `
     <section class="request-log-subsection policy-snapshot-decision-card">
-      <h4>Policy 快照</h4>
+      <h4>访问策略</h4>
       <dl class="request-log-detail-grid">
-        ${renderPair("版本", snapshotVersionLabel(log))}
         ${renderPair("状态", policySnapshotStatusLabel(log.policy_snapshot_status))}
         ${renderPair("决策", policyDecisionLabel(log.policy_decision))}
-        ${renderPair("原因码", log.policy_reason_code ?? "-")}
-        ${renderPair("Policy ID", log.policy_id ?? "-")}
         ${renderPair("动作", policyActionLabel(log.policy_action_type))}
-        ${renderPair("路由目标", log.policy_target_model_id ?? "-")}
       </dl>
     </section>
   `;
@@ -1660,35 +1439,48 @@ function policyActionLabel(value) {
  *
  * 失败尝试没有可信 usage 时明确显示“不可得”，预算准入估算不会冒充正式账单。
  */
-function renderRoutingAttempts(attempts) {
+function renderRoutingAttempts(attempts, detail = null, { compact = false } = {}) {
   if (!attempts.length) {
     return "";
   }
+  const candidateCount = Array.isArray(detail?.routing_candidates) && detail.routing_candidates.length
+    ? detail.routing_candidates.length
+    : attempts.length;
+  const providerNames = new Map();
+  for (const candidate of Array.isArray(detail?.routing_candidates) ? detail.routing_candidates : []) {
+    const name = String(candidate?.provider_name ?? "").trim();
+    if (!name) continue;
+    if (candidate?.provider_id) providerNames.set(String(candidate.provider_id), name);
+    if (candidate?.provider_code) providerNames.set(String(candidate.provider_code).toLowerCase(), name);
+  }
   return `
     <section class="request-log-subsection routing-attempt-section">
-      <h4>上游尝试</h4>
+      <h4>模型服务尝试</h4>
+      <p class="request-log-subsection-note">已尝试 ${escapeHtml(attempts.length)} / ${escapeHtml(candidateCount)} 个候选模型。</p>
       <div class="routing-attempt-list">
-        ${attempts.map(renderRoutingAttempt).join("")}
+         ${attempts.map((item) => renderRoutingAttempt(item, detail, providerNames, { compact })).join("")}
       </div>
     </section>
   `;
 }
 
 /** 渲染单次上游尝试，只展示后端白名单字段。 */
-function renderRoutingAttempt(item) {
+function renderRoutingAttempt(item, detail = null, providerNames = null, { compact = false } = {}) {
   // primary 表示第一次调用而非 Alias default 角色；动态模式可能初始选中 fallback 配置候选。
-  const role = item.attempt_role === "fallback" ? "Fallback 重试" : "初始调用";
-  const status = {
-    started: "结果未知",
-    succeeded: "成功",
-    failed: "失败",
-  }[item.status] ?? item.status;
+  const role = item.attempt_role === "fallback" ? "备用模型重试" : "初始调用";
+  const status = routingAttemptStatusLabel(item.status);
   const usage = {
     recorded: "已记录",
-    unavailable: "上游未返回用量",
+    unavailable: "未返回用量",
     not_applicable: "未发出上游调用",
     pending: "待记录",
   }[item.usage_status] ?? item.usage_status;
+  const providerName = providerDisplayName(item, detail, providerNames);
+  const response = ["succeeded", "provider_succeeded", "completed"].includes(item.status)
+    ? "已完成"
+    : item.upstream_http_status
+      ? `已响应（HTTP ${item.upstream_http_status}）`
+      : "未收到响应";
   return `
     <article class="routing-attempt-item status-${escapeAttribute(item.status)}">
       <header>
@@ -1696,19 +1488,50 @@ function renderRoutingAttempt(item) {
         <mark class="status-mark status-${escapeAttribute(item.status)}">${escapeHtml(status)}</mark>
       </header>
       <dl class="request-log-detail-grid">
-        ${renderPair("模型", item.resolved_model)}
-        ${renderPair("Provider", item.provider_code)}
-        ${renderPair("触发错误", item.trigger_error_code ?? "-")}
-        ${renderPair("本次错误", item.error_code ?? "-")}
-        ${renderPair("错误分类", item.error_category ?? "-")}
-        ${renderPair("HTTP", item.upstream_http_status ?? "-")}
+        ${renderPair("模型", publicModelLabel(item.resolved_model))}
+        ${renderPair("模型服务", providerName)}
+        ${renderPair("服务响应", response)}
         ${renderPair("耗时", formatLatency(item.latency_ms))}
         ${renderPair("用量", usage)}
-        ${renderPair("预算准入估算", item.estimated_cost_cny == null ? "不可得" : formatCost(item.estimated_cost_cny, "CNY"))}
+        ${renderPair("费用预估", formatAttemptCost(item))}
       </dl>
-      ${renderProviderErrorFact(item.provider_error_fact, "attempt")}
+      ${compact ? "" : renderProviderErrorFact(item.provider_error_fact, "attempt")}
     </article>
   `;
+}
+
+/** 没有模型返回用量时，0 只是预算占位，不能伪装成本已经核算完成。 */
+function formatAttemptCost(item) {
+  const hasUsage = item?.usage_status === "recorded"
+    || Number(item?.input_tokens ?? 0) > 0
+    || Number(item?.output_tokens ?? 0) > 0
+    || Number(item?.total_tokens ?? 0) > 0
+    || Number(item?.cache_tokens ?? 0) > 0;
+  if (!hasUsage) return "无 Token 用量";
+  const schema = String(item?.price_schema_version ?? "").trim().toLowerCase();
+  // The ledger uses an explicit unpriced version and a zero amount as a
+  // bookkeeping placeholder. Never present that placeholder as a real fee.
+  if (!schema || schema.startsWith("unpriced")) return "价格未记录";
+  return formatEstimatedCost(item?.estimated_cost_cny, "CNY");
+}
+
+/** 把路由尝试的全部后端终态收敛为用户可理解的状态，避免合法状态落入“未知”。 */
+function routingAttemptStatusLabel(value) {
+  return {
+    started: "进行中",
+    calling: "调用中",
+    provider_calling: "调用中",
+    succeeded: "成功",
+    provider_succeeded: "成功",
+    completed: "成功",
+    failed: "失败",
+    upstream_failed: "上游失败",
+    timed_out: "已超时",
+    cancelled: "已取消",
+    client_disconnected: "客户端中断",
+    output_blocked: "输出被阻断",
+    output_safety_unavailable: "安全检查失败",
+  }[value] ?? (value || "状态不可用");
 }
 
 /**
@@ -1727,27 +1550,26 @@ function requestLogStreamSessions(detail) {
 }
 
 /**
- * 渲染流式握手终态与其 Provider 错误归一事实。
+ * 渲染流式调用终态与其模型服务错误处理结果。
  * 流式失败由 StreamSession 自己持有 Fact，前端不能为展示方便伪造 RoutingAttempt 或合并两个 owner。
  */
-function renderStreamSessions(sessions) {
+function renderStreamSessions(sessions, detail = null) {
   const safeSessions = Array.isArray(sessions) ? sessions : [];
+  const fallbackLog = detail?.log ?? detail;
   // 没有可信会话时不生成占位 DOM，避免用户误以为请求曾进入流式 Provider。
   if (!safeSessions.length) {
     return "";
   }
   return `
     <section class="request-log-subsection stream-session-section">
-      <h4>流式会话</h4>
+       <h4>流式传输</h4>
       <div class="stream-session-list">
         ${safeSessions.map((item) => `
           <article class="stream-session-item status-${escapeAttribute(item?.status ?? "unknown")}">
-            <header><strong>${escapeHtml(item?.stream_session_id ?? "-")}</strong><mark class="status-mark status-${escapeAttribute(item?.status ?? "unknown")}">${escapeHtml(streamSessionStatusLabel(item?.status))}</mark></header>
+             <header><strong>流式传输</strong><mark class="status-mark status-${escapeAttribute(item?.status ?? "unknown")}">${escapeHtml(streamSessionStatusLabel(item?.status))}</mark></header>
             <dl class="request-log-detail-grid">
-              ${renderPair("模型", item?.resolved_model ?? item?.model_id ?? "-")}
-              ${renderPair("Provider", item?.provider_code ?? "-")}
-              ${renderPair("本次错误", item?.error_code ?? "-")}
-              ${renderPair("HTTP", item?.upstream_http_status ?? "-")}
+              ${renderPair("模型", publicModelLabel(item?.resolved_model ?? fallbackLog?.resolved_model))}
+              ${renderPair("模型服务", providerDisplayName(item, fallbackLog))}
               ${renderPair("可重试", booleanLabel(item?.retryable))}
               ${renderPair("结束时间", formatDateTime(item?.completed_at))}
             </dl>
@@ -1760,7 +1582,7 @@ function renderStreamSessions(sessions) {
 }
 
 /**
- * 渲染冻结的 ProviderErrorFact 安全投影。
+ * 渲染冻结的模型服务错误处理结果。
  * 只消费后端 DTO 的枚举、ID、hash、存在位和长度桶；原始 code/type/message/body 即使意外出现
  * 也不会被模板读取，避免日志详情成为上游响应泄漏通道。
  */
@@ -1768,32 +1590,13 @@ function renderProviderErrorFact(fact, ownerKind) {
   if (!fact || typeof fact !== "object" || Array.isArray(fact)) {
     return "";
   }
-  const source = fact.matched_rule_source ?? "-";
-  const ruleId = fact.matched_error_map_id ?? "-";
   return `
     <section class="provider-error-fact" data-provider-error-fact-owner="${escapeAttribute(ownerKind)}">
-      <h5>错误归一事实</h5>
+      <h5>模型服务结果</h5>
       <dl class="request-log-detail-grid">
-        ${renderPair("Fact ID", fact.provider_error_fact_id ?? "-")}
-        ${renderPair("归一输出", fact.normalized_output_error_code ?? "-")}
-        ${renderPair("Owner 终态", fact.owner_terminal_error_code ?? "-")}
-        ${renderPair("规则来源", providerErrorSourceLabel(source))}
-        ${renderProviderErrorRuleReference(source, ruleId, fact)}
-        ${renderPair("规则版本", fact.matched_rule_version == null ? "-" : `v${fact.matched_rule_version}`)}
-        ${renderPair("规则指纹", fact.matched_pattern_hash ?? "-")}
-        ${renderPair("命中依据", fact.match_basis ?? "-")}
-        ${renderPair("覆盖 revision", fact.error_map_revision ?? 0)}
-        ${renderPair("快照来源", fact.error_map_snapshot_source ?? "-")}
-        ${renderPair("传输类型", fact.transport_kind ?? "-")}
-        ${renderPair("HTTP", fact.upstream_http_status ?? "-")}
+        ${renderPair("处理结果", fact.normalized_output_error_code ? "已统一处理" : "未统一处理")}
         ${renderPair("可重试", booleanLabel(fact.retryable))}
-        ${renderPair("Provider code 类", fact.provider_error_code_class ?? "-")}
-        ${renderPair("Provider type 类", fact.provider_error_type_class ?? "-")}
-        ${renderPair("字段存在位", providerErrorPresenceLabel(fact))}
-        ${renderPair("正文长度", fact.body_length_bucket ?? "unknown")}
-        ${renderPair("正文状态", `${fact.is_json === true ? "JSON" : "非 JSON / 未确认"} · ${fact.body_truncated === true ? "已截断" : "未截断"}`)}
-        ${renderPair("投影哈希", fact.projection_hash ?? "-")}
-        ${renderPair("覆盖哈希", fact.overlay_content_hash ?? "-")}
+        ${renderPair("连接状态", fact.upstream_http_status ? "服务已响应" : "未收到响应")}
       </dl>
     </section>
   `;
@@ -1849,11 +1652,25 @@ function booleanLabel(value) {
 
 /** StreamSession 状态只做显示转换，不从 HTTP 或错误码重新推导终态。 */
 function streamSessionStatusLabel(value) {
-  return { started: "进行中", streaming: "传输中", succeeded: "成功", failed: "失败", cancelled: "已取消" }[value] ?? value ?? "-";
+  return {
+    starting: "准备中",
+    active: "传输中",
+    started: "进行中",
+    streaming: "传输中",
+    succeeded: "成功",
+    completed: "已完成",
+    failed: "失败",
+    upstream_failed: "上游失败",
+    timed_out: "已超时",
+    client_disconnected: "客户端中断",
+    output_blocked: "输出被阻断",
+    output_safety_unavailable: "安全检查不可用",
+    cancelled: "已取消",
+  }[value] ?? value ?? "-";
 }
 
 /**
- * 渲染调用日志详情里的错误诊断。
+ * 渲染调用日志详情里的失败说明。
  *
  * 成功请求没有诊断字段；失败请求只展示后端派生的安全原因和操作建议，不展示上游原始正文。
  */
@@ -1861,16 +1678,17 @@ function renderDiagnosisCard(diagnosis) {
   if (!diagnosis) {
     return "";
   }
-  const retryableLabel = diagnosis.retryable ? "可重试" : "不可直接重试";
+  const isUnknown = diagnosis.rule_id === "unknown_error" || diagnosis.matched_by === "unknown";
+  const retryableLabel = diagnosis.retryable ? "可以重试" : "不建议直接重试";
+  const reason = isUnknown ? "暂时无法判断具体原因。" : diagnosis.reason;
+  const suggestion = isUnknown ? "请检查模型服务配置、API Key 和额度；仍失败时联系管理员。" : diagnosis.suggestion;
   return `
     <section class="request-log-subsection diagnosis-card">
-      <h4>错误诊断</h4>
+      <h4>失败说明</h4>
       <dl class="request-log-detail-grid">
-        ${renderPair("原因", diagnosis.reason)}
-        ${renderPair("建议", diagnosis.suggestion)}
-        ${renderPair("操作", diagnosis.action)}
-        ${renderPair("级别", `${diagnosis.severity ?? "warning"} / ${retryableLabel}`)}
-        ${renderPair("规则", diagnosis.rule_id)}
+        ${renderPair("原因", reason)}
+        ${renderPair("建议", suggestion)}
+        ${renderPair("是否可重试", retryableLabel)}
       </dl>
     </section>
   `;
@@ -1881,8 +1699,7 @@ function renderDiagnosisCard(diagnosis) {
  */
 function renderUsage(usage) {
   if (!usage.length) {
-    // 用量成本是审计账本字段，缺失或异常必须进入可追踪分支。
-    return `<div class="empty-state">该请求暂无 usage_ledger 记录。</div>`;
+    return `<div class="empty-state">这次调用没有产生可计费用量。</div>`;
   }
   return `
     <section class="request-log-subsection">
@@ -1894,13 +1711,19 @@ function renderUsage(usage) {
               ${renderPair("输入 Token", item.input_tokens)}
               ${renderPair("输出 Token", item.output_tokens)}
               ${renderPair("总 Token", item.total_tokens)}
-              ${renderPair("上游实报缓存 Token", item.cache_tokens ?? 0)}
-              ${renderPair("成本", formatCost(item.cost_amount, item.currency))}
-              ${renderPair("成本 CNY", formatCost(item.cost_cny ?? 0, "CNY"))}
-              ${renderPair("成本 USD", formatCost(item.cost_usd ?? 0, "USD"))}
-              ${renderPair("价格版本", item.price_schema_version ?? "-")}
-              ${renderPair("价格快照", item.price_snapshot_id ?? "-")}
-              ${renderPair("usage 来源", item.estimated ? "估算" : "真实")}
+              ${renderPair("缓存令牌", item.cache_tokens ?? "未返回")}
+              ${renderPair("成本", formatCost(item.cost_amount, item.currency, item.price_schema_version))}
+              ${renderPair("成本 CNY", formatCost(
+                item.cost_cny ?? (item.currency === "CNY" ? item.cost_amount : null),
+                "CNY",
+                item.price_schema_version,
+              ))}
+              ${renderPair("成本 USD", formatCost(
+                item.cost_usd ?? (item.currency === "USD" ? item.cost_amount : null),
+                "USD",
+                item.price_schema_version,
+              ))}
+              ${renderPair("用量来源", item.estimated ? "系统估算" : "模型服务返回")}
             </dl>
           `,
         )
@@ -2000,15 +1823,75 @@ function formatLatency(value) {
  * 格式化 token 和成本，便于表格中一眼扫描。
  */
 function formatUsageAndCost(item) {
-  return `${item.total_tokens ?? 0} tokens / ${formatCost(item.estimated_cost_amount, item.currency)}`;
+  const hasUsage = Number(item?.total_tokens) > 0
+    || Number(item?.input_tokens) > 0
+    || Number(item?.output_tokens) > 0;
+  const usage = hasUsage ? `${item.total_tokens} tokens` : "用量未返回";
+  const cost = hasUsage
+    ? formatCost(item.estimated_cost_amount, item.currency, item.price_schema_version)
+    : "价格未记录";
+  return `${usage} / ${cost}`;
 }
 
 /**
  * 格式化成本估算，金额来自后端按模型价格快照计算的结果。
  */
-function formatCost(amount, currency) {
-  const value = Number(amount ?? 0).toFixed(6).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+function formatCost(amount, currency, priceSchemaVersion = "") {
+  const schema = String(priceSchemaVersion ?? "").trim().toLowerCase();
+  if (!schema || schema.startsWith("unpriced") || amount === null || amount === undefined || amount === "") {
+    return "价格未记录";
+  }
+  const value = Number(amount).toFixed(6).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
   return `${value} ${currency ?? "CNY"}`;
+}
+
+function formatEstimatedCost(amount, currency = "CNY") {
+  if (amount === null || amount === undefined || amount === "") {
+    return "无可计费用量";
+  }
+  const value = Number(amount);
+  if (!Number.isFinite(value)) {
+    return "无可计费用量";
+  }
+  return `${value.toFixed(6).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1")} ${currency}`;
+}
+
+function providerDisplayName(item, fallback = null, providerNames = null) {
+  const fallbackLog = fallback?.log ?? fallback;
+  const name = String(item?.provider_name ?? "").trim();
+  if (name) return name;
+  const providerId = String(item?.provider_id ?? "").trim();
+  const providerCode = String(item?.provider_code ?? "").trim().toLowerCase();
+  if (providerNames instanceof Map) {
+    const mapped = providerNames.get(providerId) ?? providerNames.get(providerCode);
+    if (mapped) return mapped;
+  }
+  const fallbackName = String(fallbackLog?.provider_name ?? "").trim();
+  if (fallbackName) return fallbackName;
+  const code = providerCode;
+  const fallbackCode = String(fallbackLog?.provider_code ?? "").trim().toLowerCase();
+  if (!code && fallbackCode) return PROVIDER_LABELS[fallbackCode] ?? fallbackCode;
+  // Provider code is an internal routing key; never expose it when the
+  // tenant-facing name is missing.
+  return PROVIDER_LABELS[code] ?? "自定义模型服务";
+}
+
+function publicModelLabel(value) {
+  const text = String(value ?? "").trim();
+  if (!text || /^(?:mdl|model|provider|prv|route|rte)_[a-z0-9_-]{8,}$/i.test(text)) return "未识别模型";
+  return text;
+}
+
+function ownerDisplayName(item) {
+  const value = String(item?.consumer_name ?? item?.key_owner_name ?? item?.virtual_key_name ?? "").trim();
+  return value || "未标记使用者";
+}
+
+function scopeDisplayName(item) {
+  const project = String(item?.project_name ?? "").trim();
+  const application = String(item?.application_name ?? "").trim();
+  if (project && application) return `${project} / ${application}`;
+  return project || application || "未绑定项目";
 }
 
 /**
@@ -2030,7 +1913,7 @@ function renderActionError(error) {
   }
   return `
     <div class="request-log-action-error" role="alert">
-      ${escapeHtml(error.message ?? "调用日志操作失败")} request_id: ${escapeHtml(error.requestId ?? "-")}
+      ${escapeHtml(error.message ?? "调用日志操作失败")}
     </div>
   `;
 }

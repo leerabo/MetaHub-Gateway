@@ -28,10 +28,10 @@ test("multiple services require a visible choice, zero services offers an author
   assert.doesNotMatch(html, /value="(?:one|two)" selected/u);
   const empty = models([provider("retired", "disabled")]);
   assert.match(empty, /暂无已启用的模型服务/u);
-  assert.match(empty, /href="#workspace.gateway.providers"/u);
+  assert.match(empty, /data-console-nav="providers"/u);
   assert.doesNotMatch(empty, /id="create-model-form"/u);
   assert.doesNotMatch(models([], { permission_codes: [PERMISSIONS.MODEL_READ, PERMISSIONS.MODEL_WRITE] }),
-    /href="#workspace.gateway.providers"/u);
+    /data-console-nav="providers"/u);
 });
 
 test("route names validate at the field and expose the naming constraint", () => {
@@ -41,7 +41,7 @@ test("route names validate at the field and expose the naming constraint", () =>
   for (const value of ["chat", "company-default", "model.v1_test", "1"]) assert.equal(constraint.test(value), true);
   for (const value of ["", "日常办公", "UPPER", "has space", "-prefix", "a".repeat(121)]) assert.equal(constraint.test(value), false);
   assert.match(html, /aria-describedby="model-alias-name-format"/u);
-  assert.match(html, /id="model-alias-name-format">小写字母/u);
+  assert.match(html, /id="model-alias-name-format">请输入小写字母/u);
 });
 
 test("a single environment is automatic; multiple environments cannot hide a random default", () => {
@@ -85,16 +85,29 @@ test("saved provider credentials lead to a visible connection test before model 
   for (const health of ["unknown", "unhealthy", "degraded"]) {
     const html = render(health);
     const action = html.indexOf('data-provider-test-form');
-    assert.ok(action > 0 && action < html.indexOf('<details class="provider-maintenance"'));
+    assert.ok(action > 0 && action < html.indexOf('data-provider-delete-form'));
     assert.match(html, /class="provider-setup-action" type="submit">测试连接/u);
     assert.equal((html.match(/data-provider-test-form/gu) ?? []).length, 1);
     assert.doesNotMatch(html, /下一步：配置可用模型/u);
   }
-  assert.match(render("healthy"), /下一步：配置可用模型/u);
-  assert.doesNotMatch(render("healthy", "disabled"), /下一步：配置可用模型/u);
-  assert.doesNotMatch(render("healthy", "active", []), /下一步：配置可用模型/u);
+  assert.doesNotMatch(render("healthy"), /下一步：配置可用模型|console-flow-(?:next|related)/u);
+  assert.doesNotMatch(render("healthy", "disabled"), /下一步：配置可用模型|console-flow-(?:next|related)/u);
+  assert.doesNotMatch(render("healthy", "active", []), /下一步：配置可用模型|console-flow-(?:next|related)/u);
   const restricted = renderProviderPanel({ state: "ok", providers: [
     { provider_id: "service", name: "Service", auth_type: "none", status: "active", health_status: "healthy" },
   ] }, { permission_codes: [PERMISSIONS.PROVIDER_READ, PERMISSIONS.PROVIDER_WRITE] });
   assert.doesNotMatch(restricted, /href="#workspace.gateway.models"/u);
+});
+
+test("a just-saved provider key keeps the connection test visible while keys refresh", () => {
+  const html = renderProviderPanel({
+    state: "ok",
+    providers: [{ provider_id: "service", name: "Service", auth_type: "bearer", status: "active", health_status: "unknown" }],
+    providerKeysByProviderId: { service: { state: "error" } },
+    optimisticKeyProviderIds: ["service"],
+  }, auth);
+  assert.match(html, /管理 API KEY/u);
+  assert.match(html, /data-provider-test-form/u);
+  assert.match(html, />测试连接<\/button>/u);
+  assert.doesNotMatch(html, /待配置密钥/u);
 });

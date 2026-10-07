@@ -281,6 +281,10 @@ test("finops renderer shows exact amounts, detail evidence and escaped reason", 
     },
     actor_display_name: "不应优先的旧操作者",
     price_evidence_status: "not_applicable",
+    model_display_name: "Kimi",
+    provider_name: "Moonshot",
+    project_name: "研发项目",
+    application_name: "Chatbox",
   };
   const html = renderFinOpsLedger(
     {
@@ -295,9 +299,13 @@ test("finops renderer shows exact amounts, detail evidence and escaped reason", 
     finOpsContext(),
   );
 
-  assert.match(html, /FinOps 正式账本/);
+  assert.match(html, /成本账本/);
   assert.match(html, /12\.345678/);
   assert.match(html, /id="finops-detail-title">分录详情/);
+  assert.match(html, /<dialog class="finops-detail-panel" id="finops-detail-dialog" open/u);
+  assert.match(html, /方向 \/ 金额[\s\S]*增加 · 12\.345678/);
+  assert.match(html, /模型服务用量/);
+  assert.match(html, /Moonshot|研发项目|Chatbox/u);
   assert.doesNotMatch(html, /PAGE-075/);
   assert.match(html, /fadj|人工贷记/);
   assert.match(html, /财务管理员/);
@@ -327,7 +335,7 @@ test("finops renderer labels legacy evidence and never renders sensitive extra f
 
   assert.match(html, /仅历史金额证据/);
   assert.match(html, /不可按单价重算/);
-  assert.match(html, /finops_legacy_backfill/);
+  assert.doesNotMatch(html, /finops_legacy_backfill/);
   for (const secret of ["raw-secret-usage", "secret-prompt", "secret-response", "sk-secret", "secret-endpoint", "must-not-render"]) {
     assert.doesNotMatch(html, new RegExp(secret));
   }
@@ -355,13 +363,27 @@ test("finops renderer covers loading, error, empty, modal and backend permission
   );
 
   assert.match(loading, /正在加载账本/);
-  assert.match(error, /finops\.query_invalid/);
-  assert.match(error, /req_bad/);
+  assert.doesNotMatch(error, /finops\.query_invalid|req_bad/);
   assert.match(error, /finops-filter-form/);
   assert.match(empty, /当前筛选下没有正式分录/);
   assert.match(empty, /<dialog[^>]*open/);
-  assert.match(empty, new RegExp(ledgerEntry.finops_ledger_entry_id));
+  assert.doesNotMatch(empty, new RegExp(ledgerEntry.finops_ledger_entry_id));
   assert.equal(developer, "");
+});
+
+test("finops renderer keeps empty filters out of the first scan and reopens active filters", () => {
+  const base = { state: "ok", ledger_entries: [], total: 0, dialog: { open: false } };
+  const collapsed = renderFinOpsLedger({ ...base, filters: {} }, finOpsContext());
+  assert.match(collapsed, /<details class="finops-filter-panel">/u);
+  assert.doesNotMatch(collapsed, /<details class="finops-filter-panel" open>/u);
+  assert.doesNotMatch(collapsed, /按需筛选，默认显示全部分录/u);
+
+  const active = renderFinOpsLedger({
+    ...base,
+    filters: { startDate: "2026-07-01" },
+  }, finOpsContext());
+  assert.match(active, /<details class="finops-filter-panel" open>/u);
+  assert.match(active, /已设置 1 项/u);
 });
 
 test("ordinary adjustment cannot create a reversal without a target entry", () => {

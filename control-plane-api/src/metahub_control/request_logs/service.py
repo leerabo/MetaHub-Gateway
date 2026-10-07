@@ -177,10 +177,11 @@ def list_request_logs(
             f"""
             SELECT
               rl.request_id, rl.tenant_id, rl.trace_id, rl.virtual_key_id, vk.key_prefix AS virtual_key_prefix,
+              vk.name AS virtual_key_name, wc.display_name AS consumer_name, key_owner.display_name AS key_owner_name,
               rl.environment_id, rl.environment_code AS environment, e.name AS environment_name,
               rl.project_id, p.name AS project_name, rl.application_id, a.name AS application_name,
               rl.provider_id, rl.model_id, rl.endpoint, rl.request_model, rl.resolved_model,
-              rl.provider_code, rl.status, rl.error_code, rl.stream_session_id, rl.stream_status,
+              rl.provider_code, provider.name AS provider_name, rl.status, rl.error_code, rl.stream_session_id, rl.stream_status,
               rl.snapshot_version, rl.policy_snapshot_status, rl.policy_decision, rl.policy_reason_code,
               rl.policy_id, rl.policy_action_type, rl.policy_target_model_id,
               rl.policy_mask_applied, rl.policy_mask_policy_id,
@@ -198,6 +199,10 @@ def list_request_logs(
               rl.created_at, rl.updated_at
             FROM request_logs rl
             LEFT JOIN virtual_keys vk ON vk.virtual_key_id = rl.virtual_key_id AND vk.tenant_id = rl.tenant_id
+            LEFT JOIN virtual_key_consumers vkc ON vkc.virtual_key_id=rl.virtual_key_id AND vkc.tenant_id=rl.tenant_id
+            LEFT JOIN workspace_consumers wc ON wc.consumer_id=vkc.consumer_id AND wc.tenant_id=rl.tenant_id
+            LEFT JOIN users key_owner ON key_owner.user_id=vk.created_by AND key_owner.tenant_id=rl.tenant_id
+            LEFT JOIN providers provider ON provider.provider_id=rl.provider_id AND provider.tenant_id=rl.tenant_id
             LEFT JOIN environments e ON e.environment_id=rl.environment_id AND e.tenant_id=rl.tenant_id
             LEFT JOIN projects p ON p.project_id = rl.project_id AND p.tenant_id = rl.tenant_id
             LEFT JOIN applications a ON a.application_id = rl.application_id AND a.tenant_id = rl.tenant_id
@@ -283,10 +288,11 @@ def load_request_log_detail_from_connection(
         """
         SELECT
           rl.request_id, rl.tenant_id, rl.trace_id, rl.virtual_key_id, vk.key_prefix AS virtual_key_prefix,
+          vk.name AS virtual_key_name, wc.display_name AS consumer_name, key_owner.display_name AS key_owner_name,
           rl.environment_id, rl.environment_code AS environment, e.name AS environment_name,
           rl.project_id, p.name AS project_name, rl.application_id, a.name AS application_name,
           rl.provider_id, rl.model_id, rl.endpoint, rl.request_model, rl.resolved_model,
-          rl.provider_code, rl.status, rl.error_code, rl.stream_session_id, rl.stream_status,
+          rl.provider_code, provider.name AS provider_name, rl.status, rl.error_code, rl.stream_session_id, rl.stream_status,
           rl.snapshot_version, rl.policy_snapshot_status, rl.policy_decision, rl.policy_reason_code,
           rl.policy_id, rl.policy_action_type, rl.policy_target_model_id,
           rl.policy_mask_applied, rl.policy_mask_policy_id,
@@ -308,6 +314,10 @@ def load_request_log_detail_from_connection(
           rl.created_at, rl.updated_at
         FROM request_logs rl
         LEFT JOIN virtual_keys vk ON vk.virtual_key_id = rl.virtual_key_id AND vk.tenant_id = rl.tenant_id
+        LEFT JOIN virtual_key_consumers vkc ON vkc.virtual_key_id=rl.virtual_key_id AND vkc.tenant_id=rl.tenant_id
+        LEFT JOIN workspace_consumers wc ON wc.consumer_id=vkc.consumer_id AND wc.tenant_id=rl.tenant_id
+        LEFT JOIN users key_owner ON key_owner.user_id=vk.created_by AND key_owner.tenant_id=rl.tenant_id
+        LEFT JOIN providers provider ON provider.provider_id=rl.provider_id AND provider.tenant_id=rl.tenant_id
         LEFT JOIN environments e ON e.environment_id=rl.environment_id AND e.tenant_id=rl.tenant_id
         LEFT JOIN projects p ON p.project_id = rl.project_id AND p.tenant_id = rl.tenant_id
         LEFT JOIN applications a ON a.application_id = rl.application_id AND a.tenant_id = rl.tenant_id
@@ -709,20 +719,25 @@ def _load_routing_decision(
         SELECT
           routing_decision_id, model_alias_id, decision_status, decision_reason,
           requested_model, environment, environment_id, selected_model_id,
-          selected_internal_model_id, provider_id, provider_code, error_code,
+          selected_internal_model_id, routing_decisions.provider_id,
+          routing_decisions.provider_code,
+          provider.name AS provider_name, error_code,
           routing_policy_id, routing_policy_version, routing_mode, price_as_of,
           estimated_input_tokens, estimated_output_tokens, token_estimate_truncated,
           routing_policy_event_id,
           quality_weight_bps, cost_weight_bps, latency_weight_bps,
           quality_floor_bps, minimum_sample_count, quality_as_of,
           quality_formula_version, quality_scoring_performed,
-          candidate_summary, created_at
+          candidate_summary, routing_decisions.created_at
         FROM routing_decisions
-        WHERE tenant_id=? AND request_id=?
+        LEFT JOIN providers provider
+          ON provider.tenant_id=routing_decisions.tenant_id
+         AND provider.provider_id=routing_decisions.provider_id
+        WHERE routing_decisions.tenant_id=? AND routing_decisions.request_id=?
         ORDER BY
           CASE WHEN routing_policy_id IS NOT NULL THEN 0 ELSE 1 END,
-          created_at DESC,
-          routing_decision_id DESC
+          routing_decisions.created_at DESC,
+          routing_decisions.routing_decision_id DESC
         LIMIT 1
         """,
         (tenant_id, request_id),
@@ -741,6 +756,7 @@ def _load_routing_decision(
         selected_internal_model_id=row["selected_internal_model_id"],
         provider_id=row["provider_id"],
         provider_code=row["provider_code"],
+        provider_name=row["provider_name"],
         error_code=row["error_code"],
         routing_policy_id=row["routing_policy_id"],
         routing_policy_version=_optional_int(row["routing_policy_version"]),
@@ -815,6 +831,8 @@ def _load_routing_candidates(
           c.health_state, c.health_fresh, c.keypool_state,
           c.price_available, c.price_source, c.price_schema_version,
           c.currency, c.estimated_cost_amount,
+          c.comparison_currency, c.comparison_fx_rate,
+          c.comparison_fx_rate_version, c.comparison_cost_amount,
           c.model_quality_score_id, c.quality_statistics_version,
           c.quality_feedback_version, c.quality_evidence_state,
           c.quality_sample_count, c.quality_success_count, c.quality_error_count,
@@ -853,6 +871,10 @@ def _load_routing_candidates(
             price_schema_version=row["price_schema_version"],
             currency=row["currency"],
             estimated_cost_amount=_optional_cost_text(row["estimated_cost_amount"]),
+            comparison_currency=row["comparison_currency"],
+            comparison_fx_rate=row["comparison_fx_rate"],
+            comparison_fx_rate_version=row["comparison_fx_rate_version"],
+            comparison_cost_amount=_optional_cost_text(row["comparison_cost_amount"]),
             model_quality_score_id=row["model_quality_score_id"],
             quality_statistics_version=_optional_int(row["quality_statistics_version"]),
             quality_feedback_version=_optional_int(row["quality_feedback_version"]),
@@ -902,18 +924,22 @@ def _load_routing_attempts(
     tenant_id: str,
     request_id: str,
 ) -> list[RequestLogRoutingAttempt]:
-    """按租户和请求 ID 读取最多两条上游尝试，禁止仅凭全局 ID 跨租户查询。"""
+    """按租户和请求 ID 读取冻结的上游尝试序列，禁止仅凭全局 ID 跨租户查询。"""
 
     rows = connection.execute(
         """
         SELECT
-          routing_attempt_id, attempt_sequence, attempt_role, trigger_type, trigger_error_code,
-          model_id, internal_model_id, provider_id, provider_code, status, error_code,
-          error_category, upstream_http_status, retryable, latency_ms, usage_status,
-          usage_ledger_id, estimated_cost_cny, created_at, completed_at
-        FROM routing_attempts
-        WHERE tenant_id=? AND request_id=?
-        ORDER BY attempt_sequence ASC
+          ra.routing_attempt_id, ra.attempt_sequence, ra.attempt_role, ra.trigger_type,
+          ra.trigger_error_code, ra.model_id, ra.internal_model_id, ra.provider_id,
+          ra.provider_code, p.name AS provider_name, ra.status, ra.error_code,
+          ra.error_category, ra.upstream_http_status, ra.retryable, ra.latency_ms,
+          ra.usage_status, ra.usage_ledger_id, ra.estimated_cost_cny, ra.created_at,
+          ra.completed_at
+        FROM routing_attempts ra
+        LEFT JOIN providers p
+          ON p.tenant_id=ra.tenant_id AND p.provider_id=ra.provider_id
+        WHERE ra.tenant_id=? AND ra.request_id=?
+        ORDER BY ra.attempt_sequence ASC
         """,
         (tenant_id, request_id),
     ).fetchall()
@@ -928,6 +954,7 @@ def _load_routing_attempts(
             resolved_model=str(row["internal_model_id"]),
             provider_id=str(row["provider_id"]),
             provider_code=str(row["provider_code"]),
+            provider_name=row["provider_name"],
             status=str(row["status"]),
             error_code=row["error_code"],
             error_category=row["error_category"],
@@ -1063,11 +1090,16 @@ def _load_stream_session(
     row = connection.execute(
         """
         SELECT
-          stream_session_id, status, inter_token_timeout_ms, chunk_count, bytes_sent,
-          first_chunk_at, last_chunk_at, error_code, started_at, completed_at,
-          upstream_http_status, retryable
-        FROM stream_sessions
-        WHERE tenant_id=? AND request_id=? AND stream_session_id=?
+          ss.stream_session_id, ss.status, ss.inter_token_timeout_ms, ss.chunk_count, ss.bytes_sent,
+          ss.first_chunk_at, ss.last_chunk_at, ss.error_code, ss.started_at, ss.completed_at,
+          ss.upstream_http_status, ss.retryable, ss.model_id, m.model_alias AS resolved_model,
+          ss.provider_id, ss.provider_code, p.name AS provider_name
+        FROM stream_sessions ss
+        LEFT JOIN models m
+          ON m.tenant_id=ss.tenant_id AND m.model_id=ss.model_id
+        LEFT JOIN providers p
+          ON p.tenant_id=ss.tenant_id AND p.provider_id=ss.provider_id
+        WHERE ss.tenant_id=? AND ss.request_id=? AND ss.stream_session_id=?
         """,
         (tenant_id, request_id, stream_session_id),
     ).fetchone()
@@ -1088,6 +1120,11 @@ def _load_stream_session(
         completed_at=_parse_optional_db_time(row["completed_at"]),
         upstream_http_status=_optional_int(row["upstream_http_status"]),
         retryable=bool(row["retryable"]),
+        model_id=row["model_id"],
+        resolved_model=row["resolved_model"],
+        provider_id=row["provider_id"],
+        provider_code=row["provider_code"],
+        provider_name=row["provider_name"],
         provider_error_fact=_load_provider_error_fact(
             connection,
             tenant_id,
@@ -1284,13 +1321,32 @@ def _load_output_safety(
     scan、dispute、Usage 和 charge 任一 owner 或状态矛盾都返回统一 503。
     """
 
-    rows = connection.execute(
-        "SELECT * FROM output_safety_scans WHERE tenant_id=? AND request_id=?",
-        (tenant_id, log_request_id),
-    ).fetchall()
-    if len(rows) > 1:
-        # 0063 声明 tenant/request 唯一；重复 owner 代表 schema 或数据已损坏。
-        raise ApiError("output_safety.integrity_failed")
+    # 0170 之后每次模型尝试可以有自己的安全扫描 owner。流式请求用最终
+    # stream_session_id 精确定位；非流式请求没有会话 ID，按开始时间取最终一次尝试。
+    # 这与列表查询的投影规则一致，备用模型切换不会再被误报为数据损坏。
+    if log_info.stream_session_id is not None:
+        rows = connection.execute(
+            """
+            SELECT * FROM output_safety_scans
+            WHERE tenant_id=? AND request_id=? AND stream_session_id=?
+            ORDER BY started_at DESC, output_safety_scan_id DESC
+            LIMIT 2
+            """,
+            (tenant_id, log_request_id, log_info.stream_session_id),
+        ).fetchall()
+        if len(rows) > 1:
+            # 同一个最终流会话只能有一个安全扫描 owner。
+            raise ApiError("output_safety.integrity_failed")
+    else:
+        rows = connection.execute(
+            """
+            SELECT * FROM output_safety_scans
+            WHERE tenant_id=? AND request_id=? AND stream_session_id IS NULL
+            ORDER BY started_at DESC, output_safety_scan_id DESC
+            LIMIT 1
+            """,
+            (tenant_id, log_request_id),
+        ).fetchall()
     if not rows:
         return _missing_output_safety_detail(connection, request_row, log_info)
     scan = rows[0]
@@ -1766,6 +1822,9 @@ def _request_log_info(row: sqlite3.Row) -> RequestLogInfo:
         tenant_id=row["tenant_id"],
         virtual_key_id=row["virtual_key_id"],
         virtual_key_prefix=row["virtual_key_prefix"],
+        virtual_key_name=row["virtual_key_name"],
+        consumer_name=row["consumer_name"],
+        key_owner_name=row["key_owner_name"],
         environment_id=row["environment_id"],
         environment=row["environment"],
         environment_name=row["environment_name"],
@@ -1778,6 +1837,7 @@ def _request_log_info(row: sqlite3.Row) -> RequestLogInfo:
         resolved_model=row["resolved_model"],
         provider_id=row["provider_id"],
         provider_code=row["provider_code"],
+        provider_name=row["provider_name"],
         snapshot_version=_optional_int(row["snapshot_version"]),
         policy_snapshot_status=row["policy_snapshot_status"] or "disabled",
         policy_decision=row["policy_decision"],

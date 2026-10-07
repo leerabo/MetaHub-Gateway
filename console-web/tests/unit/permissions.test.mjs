@@ -374,6 +374,7 @@ test("PAGE-085 renderer uses permission DTO for locked and grantable DOM", () =>
   assert.match(html, /role-permission-tabs/);
   assert.match(html, /FinanceAdmin/);
   assert.match(html, /data-permission-code="audit\.export"/);
+  assert.doesNotMatch(html, /<code>audit\.export<\/code>/);
   assert.match(html, /Admin · 锁定/);
   assert.match(html, /按权限分组查看/);
   assert.match(html, /role-permission-category-help/);
@@ -396,6 +397,22 @@ test("PAGE-085 defaults to one-role editing and exposes full comparison explicit
   const comparison = renderRolePermissionMatrix(state.snapshot(), authContext());
   assert.match(comparison, /data-rbac-view-mode="all"[^>]*aria-pressed="true"/);
   assert.match(comparison, /role-permission-matrix/);
+});
+
+test("PAGE-085 groups the current role by responsibility so the first scan stays short", () => {
+  const state = createRolePermissionPageState();
+  const owner = pageOwner();
+  state.acceptLoad(state.beginLoad(owner), matrixPayload(), owner);
+  const html = renderRolePermissionMatrix(state.snapshot(), authContext());
+  const focusStart = html.indexOf('class="role-permission-focus"');
+  const compareStart = html.indexOf('class="role-permission-compare"');
+  const focusHtml = html.slice(focusStart, compareStart > focusStart ? compareStart : undefined);
+  const groups = [...focusHtml.matchAll(/<details class="role-permission-group"([^>]*)>/gu)];
+  assert.ok(groups.length >= 2);
+  assert.match(groups[0][1], / open/u);
+  assert.doesNotMatch(groups.slice(1).map((match) => match[1]).join(" "), / open/u);
+  assert.match(html, /<summary><span>/u);
+  assert.match(html, /项权限/u);
 });
 
 test("PAGE-085 English projection does not mix Chinese matrix chrome", () => {

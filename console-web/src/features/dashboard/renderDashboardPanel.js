@@ -28,7 +28,7 @@ export function renderDashboardPanel(dashboardState, authContext) {
   if (!dashboardState) {
     return renderLoadingPanel();
   }
-  // 后端聚合失败时只展示统一错误摘要和 request_id，避免把数据库异常细节暴露到控制台页面。
+  // 后端聚合失败时只展示统一错误摘要，定位信息进入后台日志。
   if (dashboardState.state === "error") {
     return renderErrorPanel(dashboardState);
   }
@@ -73,7 +73,7 @@ function renderLoadingPanel() {
 }
 
 /**
- * 渲染 Dashboard 错误态，并展示 request_id 方便定位聚合查询失败。
+ * 渲染 Dashboard 错误态。
  */
 function renderErrorPanel(state) {
   return `
@@ -83,7 +83,7 @@ function renderErrorPanel(state) {
         <p>今日指标暂不可用。</p>
       </div>
       <div class="empty-state error-state">
-        ${escapeHtml(state.message ?? "Dashboard 读取失败")} request_id: ${escapeHtml(state.requestId ?? "-")}
+        ${escapeHtml(state.message ?? "Dashboard 读取失败，请稍后重试")}
       </div>
     </section>
   `;
@@ -114,11 +114,12 @@ function renderEmptyState(emptyState) {
  * 渲染单个空状态推荐动作。
  */
 function renderRecommendedAction(action) {
+  const target = escapeAttribute(action.target ?? "overview");
   return `
-    <a class="dashboard-empty-action" href="#${escapeAttribute(action.target ?? "overview")}">
-      <strong>${escapeHtml(action.label ?? "下一步")}</strong>
+    <button type="button" class="dashboard-empty-action" data-console-nav="${target}" data-console-target="${target}">
+      <strong>${escapeHtml(action.label ?? "操作")}</strong>
       <span>${escapeHtml(action.description ?? "")}</span>
-    </a>
+    </button>
   `;
 }
 
@@ -165,8 +166,8 @@ function renderTopModel(item) {
   return `
     <article class="dashboard-list-row">
       <div>
-        <strong>${escapeHtml(item.resolved_model ?? item.model_id ?? "unknown")}</strong>
-        <span>${escapeHtml(item.provider_code ?? "-")}</span>
+        <strong>${escapeHtml(item.model_display_name ?? item.resolved_model ?? "默认路由")}</strong>
+        <span>${escapeHtml(item.provider_name ?? "已接入模型服务")}</span>
       </div>
       <dl>
         <div><dt>请求</dt><dd>${escapeHtml(formatInteger(item.request_count))}</dd></div>
@@ -203,7 +204,7 @@ function renderTopVirtualKey(item) {
   return `
     <article class="dashboard-list-row">
       <div>
-        <strong>${escapeHtml(item.virtual_key_name ?? item.virtual_key_id ?? "unknown")}</strong>
+        <strong>${escapeHtml(item.virtual_key_name ?? "调用 KEY")}</strong>
         <span>${escapeHtml(item.virtual_key_prefix ?? "-")}</span>
       </div>
       <dl>
@@ -241,16 +242,16 @@ function renderRecentError(item, canOpenLogs) {
   return `
     <article class="dashboard-error-row">
       <div>
-        <strong>${escapeHtml(item.error_code ?? "unknown")}</strong>
+        <strong>调用失败</strong>
         <span>${escapeHtml(item.diagnosis_title ?? "未命中特定错误归因规则。")}</span>
       </div>
       <dl>
         <div><dt>模型</dt><dd>${escapeHtml(item.model ?? "-")}</dd></div>
-        <div><dt>Provider</dt><dd>${escapeHtml(item.provider_code ?? "-")}</dd></div>
+        <div><dt>模型服务</dt><dd>${escapeHtml(item.provider_name ?? "已接入模型服务")}</dd></div>
         <div><dt>延迟</dt><dd>${escapeHtml(item.latency_ms == null ? "-" : `${formatInteger(item.latency_ms)} ms`)}</dd></div>
         <div><dt>时间</dt><dd>${escapeHtml(formatDateTime(item.created_at))}</dd></div>
       </dl>
-      ${canOpenLogs ? `<a href="#request-logs" data-request-id="${escapeAttribute(requestId)}">${escapeHtml(requestId)}</a>` : `<code>${escapeHtml(requestId)}</code>`}
+      ${canOpenLogs ? `<button type="button" data-console-nav="request-logs" data-console-route="workspace.observability.requests" data-console-target="request-logs" data-request-id="${escapeAttribute(requestId)}">查看日志</button>` : ""}
     </article>
   `;
 }

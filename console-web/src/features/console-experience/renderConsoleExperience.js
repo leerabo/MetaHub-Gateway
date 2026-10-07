@@ -55,9 +55,18 @@ const LABELS = Object.freeze({
   unknown: "待确认",
 });
 
-export function renderConsoleExperience(state, { domain, view, resolveCitationNavigation } = {}) {
-  const domainLabel = domain === "platform" ? "平台" : "Workspace";
-  if (view === "overview") return renderOverview(state, domainLabel);
+export function renderConsoleExperience(state, {
+  domain,
+  view,
+  resolveCitationNavigation,
+  domainLabel = domain === "platform" ? "平台" : "Workspace",
+  hiddenOverviewSources = [],
+  collapseEmptyOverview = false,
+} = {}) {
+  if (view === "overview") return renderOverview(state, domainLabel, {
+    hiddenSources: hiddenOverviewSources,
+    collapseEmpty: collapseEmptyOverview,
+  });
   if (view === "admin-assistant") return renderAssistant(state, domainLabel, domain, resolveCitationNavigation);
   if (view === "approvals") return renderApprovals(state, domainLabel);
   if (view === "deployment-summary" && domain === "workspace") return renderDeployments(state);
@@ -107,15 +116,20 @@ export function bindConsoleExperienceInteractions(root, handlers = {}) {
   return Boolean(assistantForm || filter || refresh);
 }
 
-function renderOverview(state, domainLabel) {
+function renderOverview(state, domainLabel, { hiddenSources = [], collapseEmpty = false } = {}) {
   const overview = state?.overview;
   const status = state?.status ?? "idle";
   if (!overview) return shellHeading(domainLabel, "总览", stateBlock(status, state?.error));
-  const sections = overview.sections.map((section) => `
-    <section class="console-experience-section" data-freshness="${escapeAttribute(section.freshness)}">
+  const hidden = new Set(hiddenSources.map((value) => String(value)));
+  const candidateSections = (overview.sections ?? []).filter((section) => !hidden.has(String(section?.source_code ?? "")));
+  const sectionIsEmpty = (section) => {
+    const metrics = Array.isArray(section?.metrics) ? section.metrics : [];
+    return metrics.length > 0 && metrics.every((metric) => metric?.value === null || Number(metric?.value) === 0);
+  };
+  const renderSection = (section) => `
+    <section class="console-experience-section" data-freshness="${escapeAttribute(section.freshness)}" data-source-revision="${escapeAttribute(section.source_revision)}">
       <div class="console-experience-section-heading">
-        <div><p>${escapeHtml(label(section.source_code))}</p><h2>${freshnessLabel(section.freshness)}</h2></div>
-        <span>修订 ${Number(section.source_revision)}</span>
+        <div><p>${escapeHtml(label(section.source_code))}</p><h2>${sectionFreshnessLabel(section)}</h2></div>
       </div>
       <div class="console-experience-metrics">
         ${section.metrics.map((metric) => `
@@ -127,7 +141,15 @@ function renderOverview(state, domainLabel) {
         `).join("")}
       </div>
     </section>
-  `).join("");
+  `;
+  const populatedSections = collapseEmpty ? candidateSections.filter((section) => !sectionIsEmpty(section)) : candidateSections;
+  const emptySections = collapseEmpty ? candidateSections.filter(sectionIsEmpty) : [];
+  const sections = populatedSections.map(renderSection).join("")
+    + (emptySections.length ? `
+      <details class="console-experience-empty-sections">
+        <summary>暂无数据的区域（${emptySections.length}）</summary>
+        <div class="console-experience-empty-section-list">${emptySections.map(renderSection).join("")}</div>
+      </details>` : "");
   return `
     <header class="console-experience-heading">
       <div><p>${escapeHtml(domainLabel)}运营</p><h1>${escapeHtml(domainLabel)}总览</h1></div>
@@ -137,7 +159,7 @@ function renderOverview(state, domainLabel) {
       </div>
     </header>
     ${stateBlock(status, state?.error)}
-    <div class="console-experience-section-list">${sections || empty("当前没有可用摘要。")}</div>
+    <div class="console-experience-section-list${populatedSections.length <= 1 ? " is-single-section" : ""}">${sections || empty("当前没有可用摘要。")}</div>
   `;
 }
 
@@ -274,6 +296,11 @@ function options(items, selected) { return items.map(([value, text]) => `<option
 function empty(text) { return `<p class="console-experience-empty">${escapeHtml(text)}</p>`; }
 function label(value) { const text = String(value ?? ""); return Object.hasOwn(LABELS, text) ? LABELS[text] : "未识别事项"; }
 function freshnessLabel(value) { return ({ fresh: "数据已更新", stale: "最近快照", unavailable: "来源不可用" })[value] ?? "状态待确认"; }
+function sectionFreshnessLabel(section) {
+  const metrics = Array.isArray(section?.metrics) ? section.metrics : [];
+  const empty = metrics.length > 0 && metrics.every((metric) => metric?.value === null || Number(metric?.value) === 0);
+  return empty && section?.freshness === "fresh" ? "暂无记录" : freshnessLabel(section?.freshness);
+}
 function overviewStatus(value) { return ({ ready: "已就绪", partial: "部分可用", stale: "最近快照" })[value] ?? "状态待确认"; }
 function queryTypeLabel(value) { return ({ operations_summary: "运营摘要", security_summary: "安全摘要", billing_summary: "账务摘要", provider_summary: "Provider 摘要", unknown: "未识别问题" })[value] ?? "查询结果"; }
 function outcomeLabel(value) { return ({ answered: "已回答", partial: "部分回答", unsupported: "暂不支持" })[value] ?? "已完成"; }

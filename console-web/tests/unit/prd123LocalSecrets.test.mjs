@@ -278,7 +278,7 @@ test("security_admin state renders safe references and never stores input bytes"
   ), true);
   state.finishLoad(load);
   let html = renderPrivateGateways(state.snapshot(), auth, shell(auth));
-  assert.match(html, /本地 Secret 引用[\s\S]*Primary provider credential/u);
+  assert.match(html, /本地密钥引用[\s\S]*Primary provider credential/u);
   assert.match(html, /连接本地托管/u);
   assert.doesNotMatch(html, /ciphertext|provider-key|handoff-browser-test/u);
 

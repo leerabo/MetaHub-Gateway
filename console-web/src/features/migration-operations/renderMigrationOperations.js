@@ -47,7 +47,7 @@ export function renderMigrationOperations(state, authContext, consoleShellState)
   return `<div class="migration-operations" data-migration-root>
     <header class="migration-toolbar">
       <div>
-        <p class="migration-eyebrow">Workspace migration</p>
+        <p class="migration-eyebrow">平台运维</p>
         <h2 id="migration-operations-title">迁移中心</h2>
         <p>${assessment ? escapeHtml(SOURCE_LABELS[assessment.source_kind]) : "尚未建立评估"} · ${run ? escapeHtml(STATUS_LABELS[run.status] ?? run.status) : "无活动运行"}</p>
       </div>

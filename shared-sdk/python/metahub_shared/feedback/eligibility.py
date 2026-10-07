@@ -27,7 +27,7 @@ def evaluate_feedback_eligibility(
     """计算是否可反馈，并返回唯一可信的最终 model/provider 快照。
 
     优先级固定为已有反馈、请求失败、流未完成、归因不可用。legacy 仅允许零 attempt 且
-    final ID 为空；1/2 次 attempt 必须存在完全匹配且 succeeded 的 final 行。
+    final ID 为空；1..32 次 attempt 必须存在完全匹配且 succeeded 的 final 行。
     """
 
     if type(has_feedback) is not bool:
@@ -60,7 +60,7 @@ def evaluate_feedback_eligibility(
         )
     if (
         type(routing_attempt_count) is int
-        and routing_attempt_count in (1, 2)
+        and 1 <= routing_attempt_count <= 32
         and _present(final_routing_attempt_id)
         and final_attempt_id == final_routing_attempt_id
         and final_attempt_status == "succeeded"

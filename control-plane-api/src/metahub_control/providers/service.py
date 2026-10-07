@@ -40,9 +40,11 @@ from .models import (
     CreateProviderRequest,
     ProviderInfo,
     ProviderKeyInfo,
+    ProviderKeyDeleteResponse,
     ProviderKeyListResponse,
     ProviderKeyResponse,
     ProviderListResponse,
+    ProviderDeleteResponse,
     ProviderResponse,
     ProviderTestResponse,
     ProviderTestResult,
@@ -314,6 +316,83 @@ def update_provider(
         return ProviderResponse(provider=provider, request_id=request_id, trace_id=trace_id)
 
 
+def delete_provider(
+    config: AppConfig,
+    context: AuthContext,
+    provider_id: str,
+    *,
+    audit_request_meta: AuditRequestMeta | None = None,
+    request_id: str,
+    trace_id: str,
+) -> ProviderDeleteResponse:
+    """删除没有业务或历史引用的 Provider，并在同一事务中清理其凭据。"""
+
+    with ResourceWriteTransaction(_connect(config), config, context, "provider.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        provider = _load_provider(connection, context.user.tenant_id, provider_id)
+        _reject_local_endpoint_provider(provider)
+        if _provider_has_references(connection, context.user.tenant_id, provider_id):
+            raise ApiError("provider.in_use")
+        now = _to_db_time(_utcnow())
+        disabled_provider = provider.model_copy(update={
+            "status": "disabled",
+            "disabled_at": _parse_optional_db_time(now),
+            "updated_at": _parse_db_time(now),
+        })
+        try:
+            # 先写入已有 Provider 更新审计，再删除业务行，避免扩展审计枚举和迁移基线。
+            connection.execute(
+                """
+                UPDATE providers
+                SET status='disabled', disabled_at=?, disabled_by=?, updated_at=?
+                WHERE tenant_id=? AND provider_id=?
+                """,
+                (now, context.user.user_id, now, context.user.tenant_id, provider_id),
+            )
+            audit_record = record_audit_log(
+                connection,
+                context,
+                action="provider.updated",
+                object_type="provider",
+                object_id=provider.provider_id,
+                object_name=provider.name,
+                before_summary=_provider_audit_summary(provider),
+                after_summary=_provider_audit_summary(disabled_provider),
+                request_meta=_audit_request_meta(audit_request_meta),
+                request_id=request_id,
+                trace_id=trace_id,
+            )
+            # 健康探测日志是可重建的运行诊断，不是模型、路由、调用或计费事实；
+            # 清理空 Provider 时一并删除，避免无业务数据的服务被历史探测记录卡住。
+            connection.execute(
+                "DELETE FROM provider_health_probe_logs WHERE tenant_id=? AND provider_id=?",
+                (context.user.tenant_id, provider_id),
+            )
+            connection.execute(
+                "DELETE FROM provider_credentials WHERE tenant_id=? AND provider_id=?",
+                (context.user.tenant_id, provider_id),
+            )
+            connection.execute(
+                "DELETE FROM providers WHERE tenant_id=? AND provider_id=?",
+                (context.user.tenant_id, provider_id),
+            )
+            transaction.commit(commit_audited_transaction)
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            raise ApiError("provider.in_use") from exc
+        except Exception:
+            connection.rollback()
+            raise
+        if audit_record is not None:
+            dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
+        return ProviderDeleteResponse(
+            deleted_provider_id=provider_id,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+
+
 def list_provider_keys(
     config: AppConfig,
     context: AuthContext,
@@ -551,6 +630,75 @@ def update_provider_key(
             _log_provider_key_disabled(context, provider, provider_key, request_id, trace_id)
         # 令牌和密钥只允许哈希、指纹或密文参与判断，失败时不能暴露明文或有效性细节。
         return ProviderKeyResponse(provider_key=provider_key, request_id=request_id, trace_id=trace_id)
+
+
+def delete_provider_key(
+    config: AppConfig,
+    context: AuthContext,
+    provider_key_id: str,
+    *,
+    audit_request_meta: AuditRequestMeta | None = None,
+    request_id: str,
+    trace_id: str,
+) -> ProviderKeyDeleteResponse:
+    """删除一把未被当前运行绑定引用的 Provider Key，并保留脱敏审计事实。"""
+
+    with ResourceWriteTransaction(_connect(config), config, context, "provider.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        before = _load_provider_key(connection, context.user.tenant_id, provider_key_id)
+        provider = _load_provider(connection, context.user.tenant_id, before.provider_id)
+        _reject_local_endpoint_provider(provider)
+        now = _to_db_time(_utcnow())
+        disabled_snapshot = before.model_copy(update={
+            "status": "disabled",
+            "disabled_at": _parse_optional_db_time(now),
+            "updated_at": _parse_db_time(now),
+        })
+        try:
+            # 探测日志是可重建的运行诊断；删除密钥时一并清理，历史计量快照不受影响。
+            connection.execute(
+                "DELETE FROM provider_health_probe_logs WHERE tenant_id=? AND provider_credential_id=?",
+                (context.user.tenant_id, provider_key_id),
+            )
+            audit_record = record_audit_log(
+                connection,
+                context,
+                action="provider_key.updated",
+                object_type="provider_key",
+                object_id=before.provider_key_id,
+                object_name=f"{before.name} / {before.key_prefix}",
+                before_summary=_provider_key_audit_summary(before),
+                after_summary=_provider_key_audit_summary(disabled_snapshot),
+                request_meta=_audit_request_meta(audit_request_meta),
+                request_id=request_id,
+                trace_id=trace_id,
+            )
+            connection.execute(
+                "DELETE FROM provider_credentials WHERE tenant_id=? AND provider_credential_id=?",
+                (context.user.tenant_id, provider_key_id),
+            )
+            _reset_provider_health(
+                connection,
+                context.user.tenant_id,
+                before.provider_id,
+                active=provider.status == "active",
+                now=now,
+            )
+            transaction.commit(commit_audited_transaction)
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            raise ApiError("provider_key.in_use") from exc
+        except Exception:
+            connection.rollback()
+            raise
+        if audit_record is not None:
+            dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
+        return ProviderKeyDeleteResponse(
+            deleted_provider_key_id=provider_key_id,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
 
 
 def test_provider_connection(
@@ -801,6 +949,40 @@ def _load_provider(connection: sqlite3.Connection, tenant_id: str, provider_id: 
         # 关键异常统一映射为业务错误码，避免底层实现细节穿透到 API 响应。
         raise ApiError("provider.not_found")
     return _provider_info(row)
+
+
+def _provider_has_references(connection: sqlite3.Connection, tenant_id: str, provider_id: str) -> bool:
+    """检查带 provider_id 的业务表，保护模型、路由、调用和计费事实。
+
+    健康探测日志是运行诊断，删除 Provider 时由 delete_provider 一并清理，不能把
+    一个没有业务配置的空服务误判为已被业务使用。
+    """
+
+    ignored_tables = {"provider_health_probe_logs"}
+
+    tables = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    ).fetchall()
+    for table_row in tables:
+        table_name = str(table_row[0])
+        if table_name in {"providers", "provider_credentials", *ignored_tables}:
+            continue
+        columns = connection.execute(
+            f'PRAGMA table_info("{table_name.replace(chr(34), chr(34) * 2)}")'
+        ).fetchall()
+        column_names = {str(column[1]) for column in columns}
+        if "provider_id" not in column_names:
+            continue
+        tenant_clause = " AND tenant_id=?" if "tenant_id" in column_names else ""
+        params: tuple[object, ...] = (provider_id, tenant_id) if tenant_clause else (provider_id,)
+        quoted_table = table_name.replace('"', '""')
+        row = connection.execute(
+            f'SELECT 1 FROM "{quoted_table}" WHERE provider_id=?{tenant_clause} LIMIT 1',
+            params,
+        ).fetchone()
+        if row:
+            return True
+    return False
 
 
 def _load_provider_key(connection: sqlite3.Connection, tenant_id: str, provider_key_id: str) -> ProviderKeyInfo:

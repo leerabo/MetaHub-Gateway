@@ -56,14 +56,32 @@ VALID_ENVIRONMENTS = {"dev", "test", "prod"}
 VALID_STATUSES = {"active", "disabled"}
 ALIAS_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,119}$")
 MAX_DESCRIPTION_LENGTH = 240
-# 运行时只接受 Excel 明确列出的三类上游失败，固定顺序保证 JSON、版本比较和测试结果稳定。
+MAX_FALLBACK_CANDIDATES = 31
+# 运行时只接受 Excel 明确列出的上游失败类别，固定顺序保证 JSON、版本比较和测试结果稳定。
 FALLBACK_CONDITION_ORDER = (
     "upstream_timeout",
+    "upstream_unavailable",
     "upstream_rate_limited",
+    "upstream_quota_exceeded",
     "upstream_5xx",
+    # 上游已经收到请求但返回任何可归一化的 Provider 错误时继续尝试候选。
+    # 细分条件保留用于兼容旧策略；新策略默认启用该总开关。
+    "upstream_any_error",
 )
 FALLBACK_CONDITIONS = frozenset(FALLBACK_CONDITION_ORDER)
-FALLBACK_ACTION = {"type": "use_alias_fallback", "max_attempts": 1}
+# A route may consume the initial model plus up to 31 ordered fallback models.
+# The data plane still stops earlier when a request succeeds or the error is not
+# in the configured retryable failure set.
+FALLBACK_ACTION = {"type": "use_alias_fallback", "max_attempts": 31}
+
+
+def _fallback_max_attempts(action: object) -> int:
+    """读取 Fallback 动作的公开上限，兼容旧库中曾写入的 max_attempts=1。"""
+
+    if not isinstance(action, dict) or action.get("type") != "use_alias_fallback":
+        return 1
+    # 该动作没有可配置的更小上限；旧 PRD-036 策略中的 1 只是历史单备用表示。
+    return MAX_FALLBACK_CANDIDATES
 
 # RoutingPolicy 的四种执行模式是跨 Control/Gateway/Webhook 的机器合同，不能接受自由文本。
 ROUTING_MODES = frozenset({"fixed", "cost_first", "availability_first", "quality_cost"})
@@ -80,7 +98,10 @@ QUALITY_COST_CONFIG_FIELDS = frozenset(
 )
 # 这些 Alias 字段会改变实际初始路由图，数据库 AFTER trigger 会为一次 SQL 更新严格推进一版。
 ROUTING_ALIAS_FIELDS = frozenset(
-    {"alias", "environment_id", "environment", "status", "default_model_id", "fallback_model_id"}
+    {
+        "alias", "environment_id", "environment", "status", "default_model_id",
+        "fallback_model_id", "fallback_model_ids",
+    }
 )
 
 
@@ -162,13 +183,23 @@ def list_model_aliases(
           a.fallback_model_id, a.status, a.description, a.created_at, a.updated_at,
           a.disabled_at,
           dm.model_alias AS default_internal_model_id,
+          dm.provider_model_id AS default_provider_model_id,
           dm.display_name AS default_display_name,
+          dm.input_price_per_1k AS default_input_price_per_1k,
+          dm.output_price_per_1k AS default_output_price_per_1k,
+          dm.cache_price_per_1k AS default_cache_price_per_1k,
+          dm.currency AS default_currency,
           dm.status AS default_model_status,
           dp.provider_code AS default_provider_code,
           dp.name AS default_provider_name,
           dp.status AS default_provider_status,
           fm.model_alias AS fallback_internal_model_id,
+          fm.provider_model_id AS fallback_provider_model_id,
           fm.display_name AS fallback_display_name,
+          fm.input_price_per_1k AS fallback_input_price_per_1k,
+          fm.output_price_per_1k AS fallback_output_price_per_1k,
+          fm.cache_price_per_1k AS fallback_cache_price_per_1k,
+          fm.currency AS fallback_currency,
           fm.status AS fallback_model_status,
           fp.provider_code AS fallback_provider_code,
           fp.name AS fallback_provider_name,
@@ -208,8 +239,19 @@ def list_model_aliases(
             """,
             params,
         ).fetchall()
+        fallback_rows_by_alias = _load_fallback_candidate_rows_by_alias(
+            connection,
+            context.user.tenant_id,
+            [row["model_alias_id"] for row in rows],
+        )
         result = ModelAliasListResponse(
-            model_aliases=[_model_alias_info(row) for row in rows],
+            model_aliases=[
+                _model_alias_info(
+                    row,
+                    fallback_rows_by_alias.get(row["model_alias_id"], []),
+                )
+                for row in rows
+            ],
             request_id=request_id,
             trace_id=trace_id,
         )
@@ -239,7 +281,12 @@ def create_model_alias(
     status = _normalize_status(payload.status)
     description = _normalize_description(payload.description)
     default_model_id = _normalize_model_id(payload.default_model_id)
-    fallback_model_id = _normalize_optional_model_id(payload.fallback_model_id)
+    fallback_model_ids = _normalize_fallback_model_ids(
+        payload.fallback_model_ids,
+        legacy_value=payload.fallback_model_id,
+        default_model_id=default_model_id,
+    )
+    fallback_model_id = fallback_model_ids[0] if fallback_model_ids else None
     fingerprint = _mutation_fingerprint(
         "create",
         {
@@ -256,6 +303,7 @@ def create_model_alias(
             ),
             "default_model_id": default_model_id,
             "fallback_model_id": fallback_model_id,
+            "fallback_model_ids": fallback_model_ids,
             "description_hash": _description_hash(description),
             "status": status,
         },
@@ -301,6 +349,7 @@ def create_model_alias(
             context.user.tenant_id,
             default_model_id=default_model_id,
             fallback_model_id=fallback_model_id,
+            fallback_model_ids=fallback_model_ids,
             require_active=status == "active",
         )
         model_alias_id = str(uuid4())
@@ -329,6 +378,13 @@ def create_model_alias(
                 now,
                 now,
             ),
+        )
+        _sync_fallback_candidates(
+            connection,
+            tenant_id=context.user.tenant_id,
+            model_alias_id=model_alias_id,
+            model_ids=fallback_model_ids,
+            now=now,
         )
         # 创建时已经配置备用模型，应在同一事务建立标准策略；否则别名可见但 Gateway 看不到策略。
         if fallback_model_id is not None:
@@ -459,6 +515,20 @@ def update_model_alias(
         normalized_intent["fallback_model_id"] = _normalize_optional_model_id(
             payload.fallback_model_id
         )
+    if "fallback_model_ids" in editable_fields:
+        normalized_ids = _normalize_fallback_model_ids(
+            payload.fallback_model_ids,
+            legacy_value=None,
+            default_model_id=str(normalized_intent.get("default_model_id") or payload.default_model_id or ""),
+        )
+        normalized_intent["fallback_model_ids"] = tuple(normalized_ids)
+        normalized_intent["fallback_model_id"] = normalized_ids[0] if normalized_ids else None
+    elif "fallback_model_id" in editable_fields:
+        normalized_intent["fallback_model_ids"] = tuple(
+            [normalized_intent["fallback_model_id"]]
+            if normalized_intent["fallback_model_id"] is not None
+            else []
+        )
     if "description" in editable_fields:
         normalized_intent["description"] = _normalize_description(payload.description)
     if "status" in editable_fields:
@@ -478,7 +548,9 @@ def update_model_alias(
     fingerprint = _mutation_fingerprint("alias_update", fingerprint_values)
 
     connection = _connect(config)
-    updates: dict[str, object | None] = dict(normalized_intent)
+    updates: dict[str, object | None] = {
+        key: value for key, value in normalized_intent.items() if key != "fallback_model_ids"
+    }
     now = _to_db_time(_utcnow())
     audit_record: AuditRecord | None = None
     event: _RoutingPolicyEventRecord | None = None
@@ -527,7 +599,16 @@ def update_model_alias(
             for field, value in updates.items()
             if getattr(before, field) != value
         }
-        if not changed_updates:
+        before_fallback_ids = tuple(before.fallback_model_ids or (
+            [before.fallback_model_id] if before.fallback_model_id else []
+        ))
+        desired_fallback_ids = (
+            tuple(normalized_intent["fallback_model_ids"])
+            if "fallback_model_ids" in normalized_intent
+            else before_fallback_ids
+        )
+        candidates_changed = desired_fallback_ids != before_fallback_ids
+        if not changed_updates and not candidates_changed:
             transaction.verify()
             connection.rollback()
             return ModelAliasResponse(
@@ -548,6 +629,7 @@ def update_model_alias(
             context.user.tenant_id,
             default_model_id=final_default_model_id,
             fallback_model_id=str(final_fallback_model_id) if final_fallback_model_id else None,
+            fallback_model_ids=list(desired_fallback_ids),
             require_active=final_status == "active",
         )
 
@@ -582,7 +664,15 @@ def update_model_alias(
                 actor_id=context.user.user_id,
                 now=now,
             )
-        routing_changed = bool(set(changed_updates) & ROUTING_ALIAS_FIELDS)
+        if candidates_changed:
+            _sync_fallback_candidates(
+                connection,
+                tenant_id=context.user.tenant_id,
+                model_alias_id=model_alias_id,
+                model_ids=desired_fallback_ids,
+                now=now,
+            )
+        routing_changed = bool(set(changed_updates) & ROUTING_ALIAS_FIELDS) or candidates_changed
         if routing_changed:
             # Alias AFTER trigger 已推进版本；这里只补可信操作者元数据，不得再次 bump。
             connection.execute(
@@ -611,7 +701,12 @@ def update_model_alias(
             # 路由图版本没有同事务审计就不可验收，必须中止而不是仅记录告警。
             if audit_record is None:
                 raise ApiError("model_alias.routing_policy_update_failed")
-            changed_routing_fields = _ordered_routing_fields(set(changed_updates))
+            # 事件协议继续使用单值 fallback_model_id 标记候选图变化；完整有序集合
+            # 由候选表保存，审计摘要以数量和顺序哈希追踪，避免把数组扩展进旧触发器合同。
+            event_fields = set(changed_updates)
+            if candidates_changed:
+                event_fields.add("fallback_model_id")
+            changed_routing_fields = _ordered_routing_fields(event_fields)
             event = _insert_routing_policy_event(
                 connection,
                 context,
@@ -696,9 +791,18 @@ def update_fallback_policy(
     conditions = _normalize_fallback_conditions(payload.trigger_conditions)
     expected_version = _normalize_expected_version(payload.expected_routing_policy_version)
     # 目标 ID 先按真实落库规则去空白；精确重试不能因等价文本表示产生 request conflict。
+    normalized_target_ids = (
+        _normalize_fallback_model_ids(
+            payload.fallback_model_ids,
+            legacy_value=payload.fallback_model_id,
+            default_model_id="",
+        )
+        if "fallback_model_ids" in supplied_fields or "fallback_model_id" in supplied_fields
+        else "__omitted__"
+    )
     normalized_target_intent = (
-        _normalize_optional_model_id(payload.fallback_model_id)
-        if "fallback_model_id" in supplied_fields
+        tuple(normalized_target_ids)
+        if normalized_target_ids != "__omitted__"
         else "__omitted__"
     )
     fingerprint = _mutation_fingerprint(
@@ -707,7 +811,7 @@ def update_fallback_policy(
             "model_alias_id": model_alias_id,
             "expected_version": expected_version,
             "enabled": payload.enabled,
-            "fallback_model_id": normalized_target_intent,
+            "fallback_model_ids": normalized_target_intent,
             "trigger_conditions": conditions,
         },
     )
@@ -742,10 +846,14 @@ def update_fallback_policy(
         # 即使本次只改 Fallback 条件，也先 CAS，防止与并发候选目标更新交错提交。
         if before_routing_policy.version != expected_version:
             raise ApiError("model_alias.routing_policy_version_conflict")
-        target_model_id = before.fallback_model_id
+        before_target_ids = list(before.fallback_model_ids or (
+            [before.fallback_model_id] if before.fallback_model_id else []
+        ))
+        target_ids = before_target_ids
         # 未提供目标字段时沿用旧目标，避免仅切换 enabled 状态意外清空模型绑定。
-        if "fallback_model_id" in supplied_fields:
-            target_model_id = normalized_target_intent
+        if normalized_target_intent != "__omitted__":
+            target_ids = list(normalized_target_intent)
+        target_model_id = target_ids[0] if target_ids else None
 
         # 显式清空目标优先于 enabled=true，不能留下启用但没有执行目标的悬空策略。
         effective_enabled = payload.enabled and target_model_id is not None
@@ -756,14 +864,13 @@ def update_fallback_policy(
             # 对外仅返回固定业务错误码，不能暴露模型表和约束实现细节。
             raise ApiError("model_alias.fallback_invalid")
         # 只有实际存在的目标才做租户归属和 active 状态校验；清空目标允许直接禁用策略。
-        if target_model_id is not None:
-            _require_active_fallback_model(connection, context.user.tenant_id, target_model_id)
+        for target_id in target_ids:
+            if target_id == before.default_model_id:
+                raise ApiError("model_alias.fallback_invalid")
+            _require_active_fallback_model(connection, context.user.tenant_id, target_id)
 
         # 仅在目标发生真实变化时更新别名，保证重复 PATCH 不产生无意义的更新时间漂移。
-        target_changed = (
-            "fallback_model_id" in supplied_fields
-            and target_model_id != before.fallback_model_id
-        )
+        target_changed = target_ids != before_target_ids
         if target_changed:
             connection.execute(
                 """
@@ -772,6 +879,13 @@ def update_fallback_policy(
                 WHERE tenant_id=? AND model_alias_id=?
                 """,
                 (target_model_id, now, context.user.tenant_id, model_alias_id),
+            )
+            _sync_fallback_candidates(
+                connection,
+                tenant_id=context.user.tenant_id,
+                model_alias_id=model_alias_id,
+                model_ids=target_ids,
+                now=now,
             )
         policy = _write_fallback_policy(
             connection,
@@ -1117,13 +1231,23 @@ def _load_model_alias(connection: sqlite3.Connection, tenant_id: str, model_alia
           a.fallback_model_id, a.status, a.description, a.created_at, a.updated_at,
           a.disabled_at,
           dm.model_alias AS default_internal_model_id,
+          dm.provider_model_id AS default_provider_model_id,
           dm.display_name AS default_display_name,
+          dm.input_price_per_1k AS default_input_price_per_1k,
+          dm.output_price_per_1k AS default_output_price_per_1k,
+          dm.cache_price_per_1k AS default_cache_price_per_1k,
+          dm.currency AS default_currency,
           dm.status AS default_model_status,
           dp.provider_code AS default_provider_code,
           dp.name AS default_provider_name,
           dp.status AS default_provider_status,
           fm.model_alias AS fallback_internal_model_id,
+          fm.provider_model_id AS fallback_provider_model_id,
           fm.display_name AS fallback_display_name,
+          fm.input_price_per_1k AS fallback_input_price_per_1k,
+          fm.output_price_per_1k AS fallback_output_price_per_1k,
+          fm.cache_price_per_1k AS fallback_cache_price_per_1k,
+          fm.currency AS fallback_currency,
           fm.status AS fallback_model_status,
           fp.provider_code AS fallback_provider_code,
           fp.name AS fallback_provider_name,
@@ -1165,7 +1289,73 @@ def _load_model_alias(connection: sqlite3.Connection, tenant_id: str, model_alia
     if not row:
         # 关键异常统一映射为业务错误码，避免底层实现细节穿透到 API 响应。
         raise ApiError("model_alias.not_found")
-    return _model_alias_info(row)
+    return _model_alias_info(
+        row,
+        _load_fallback_candidate_rows(connection, tenant_id, model_alias_id),
+    )
+
+
+def _load_fallback_candidate_rows(
+    connection: sqlite3.Connection,
+    tenant_id: str,
+    model_alias_id: str,
+) -> list[sqlite3.Row]:
+    """读取有序备用模型；迁移未执行时退回空集合，由旧字段保持兼容。"""
+
+    try:
+        return connection.execute(
+            """
+            SELECT c.model_id, c.configured_priority,
+                   m.model_alias AS internal_model_id, m.provider_model_id,
+                   m.display_name, m.input_price_per_1k, m.output_price_per_1k,
+                   m.cache_price_per_1k, m.currency,
+                   m.status AS model_status, p.provider_code, p.name AS provider_name,
+                   p.status AS provider_status
+            FROM model_alias_fallback_candidates c
+            JOIN models m ON m.tenant_id=c.tenant_id AND m.model_id=c.model_id
+            JOIN providers p ON p.tenant_id=m.tenant_id AND p.provider_id=m.provider_id
+            WHERE c.tenant_id=? AND c.model_alias_id=?
+            ORDER BY c.configured_priority ASC
+            """,
+            (tenant_id, model_alias_id),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+
+
+def _load_fallback_candidate_rows_by_alias(
+    connection: sqlite3.Connection,
+    tenant_id: str,
+    model_alias_ids: list[str],
+) -> dict[str, list[sqlite3.Row]]:
+    """批量读取列表页的备用模型，避免每条路由重复执行一次 SELECT。"""
+
+    if not model_alias_ids:
+        return {}
+    placeholders = ",".join("?" for _ in model_alias_ids)
+    try:
+        rows = connection.execute(
+            f"""
+            SELECT c.model_alias_id, c.model_id, c.configured_priority,
+                   m.model_alias AS internal_model_id, m.provider_model_id,
+                   m.display_name, m.input_price_per_1k, m.output_price_per_1k,
+                   m.cache_price_per_1k, m.currency,
+                   m.status AS model_status, p.provider_code, p.name AS provider_name,
+                   p.status AS provider_status
+            FROM model_alias_fallback_candidates c
+            JOIN models m ON m.tenant_id=c.tenant_id AND m.model_id=c.model_id
+            JOIN providers p ON p.tenant_id=m.tenant_id AND p.provider_id=m.provider_id
+            WHERE c.tenant_id=? AND c.model_alias_id IN ({placeholders})
+            ORDER BY c.model_alias_id ASC, c.configured_priority ASC
+            """,
+            (tenant_id, *model_alias_ids),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    grouped: dict[str, list[sqlite3.Row]] = {}
+    for row in rows:
+        grouped.setdefault(str(row["model_alias_id"]), []).append(row)
+    return grouped
 
 
 def _validate_target_models(
@@ -1175,6 +1365,7 @@ def _validate_target_models(
     default_model_id: str,
     fallback_model_id: str | None,
     require_active: bool,
+    fallback_model_ids: list[str] | tuple[str, ...] | None = None,
 ) -> None:
     """在 模型别名路由 内部复用 validate target models 辅助逻辑，集中处理边界值和错误映射。
     
@@ -1186,16 +1377,48 @@ def _validate_target_models(
     if require_active and default_model["status"] != "active":
         # 关键异常统一映射为业务错误码，避免底层实现细节穿透到 API 响应。
         raise ApiError("model_alias.model_invalid")
-    if fallback_model_id is None:
+    target_ids = list(fallback_model_ids or ([] if fallback_model_id is None else [fallback_model_id]))
+    if not target_ids:
         return
-    # 模型路由结果决定上游调用，异常时必须用统一错误码停止。
-    if fallback_model_id == default_model_id:
-        # 关键异常统一映射为业务错误码，避免底层实现细节穿透到 API 响应。
-        raise ApiError("model_alias.model_invalid")
-    fallback_model = _require_model(connection, tenant_id, fallback_model_id)
-    if require_active and fallback_model["status"] != "active":
-        # 路由和模型判断决定实际上游调用，必须保持可解释和可追踪。
-        raise ApiError("model_alias.model_invalid")
+    seen: set[str] = set()
+    for candidate_id in target_ids:
+        if candidate_id == default_model_id or candidate_id in seen:
+            raise ApiError("model_alias.model_invalid")
+        seen.add(candidate_id)
+        fallback_model = _require_model(connection, tenant_id, candidate_id)
+        if require_active and fallback_model["status"] != "active":
+            raise ApiError("model_alias.model_invalid")
+
+
+def _sync_fallback_candidates(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    model_alias_id: str,
+    model_ids: list[str] | tuple[str, ...],
+    now: str,
+) -> None:
+    """在 Alias 同一事务内保存备用模型顺序，并同步旧单字段兼容投影。"""
+
+    try:
+        connection.execute(
+            "DELETE FROM model_alias_fallback_candidates WHERE tenant_id=? AND model_alias_id=?",
+            (tenant_id, model_alias_id),
+        )
+        for priority, model_id in enumerate(model_ids, start=1):
+            connection.execute(
+                """
+                INSERT INTO model_alias_fallback_candidates(
+                  model_alias_fallback_candidate_id, tenant_id, model_alias_id, model_id,
+                  configured_priority, created_at, updated_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                """,
+                (f"mafc_{uuid4().hex}", tenant_id, model_alias_id, model_id, priority, now, now),
+            )
+    except sqlite3.OperationalError as exc:
+        # 迁移缺失时保留旧单字段行为；正式数据库会在迁移完成后使用完整集合。
+        if "no such table" not in str(exc).lower():
+            raise
 
 
 def _require_model(connection: sqlite3.Connection, tenant_id: str, model_id: str) -> sqlite3.Row:
@@ -1261,7 +1484,9 @@ def _write_fallback_policy(
 
     normalized_conditions = _normalize_fallback_conditions(trigger_conditions)
     condition_json = json.dumps(normalized_conditions, ensure_ascii=False, separators=(",", ":"))
-    action_json = json.dumps(FALLBACK_ACTION, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    action_json = json.dumps(
+        FALLBACK_ACTION, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    )
     target_status = "enabled" if enabled else "disabled"
     row = connection.execute(
         "SELECT * FROM fallback_policies WHERE tenant_id=? AND model_alias_id=?",
@@ -1345,7 +1570,7 @@ def _fallback_policy_info(row: sqlite3.Row) -> FallbackPolicyInfo:
         # 返回固定可重试错误，不把原始 JSON 或解析异常暴露给调用者。
         raise ApiError("model_alias.fallback_update_unavailable") from exc
     normalized_conditions = _normalize_fallback_conditions(conditions if isinstance(conditions, list) else [])
-    max_attempts = int(action.get("max_attempts", 1)) if isinstance(action, dict) else 1
+    max_attempts = _fallback_max_attempts(action)
     return FallbackPolicyInfo(
         fallback_policy_id=str(row["fallback_policy_id"]),
         model_alias_id=str(row["model_alias_id"]),
@@ -1365,7 +1590,10 @@ def _policy_conditions(policy: FallbackPolicyInfo | None) -> list[str]:
     return list(policy.trigger_conditions) if policy is not None else list(FALLBACK_CONDITION_ORDER)
 
 
-def _model_alias_info(row: sqlite3.Row) -> ModelAliasInfo:
+def _model_alias_info(
+    row: sqlite3.Row,
+    fallback_candidate_rows: list[sqlite3.Row] | None = None,
+) -> ModelAliasInfo:
     """在 模型别名路由 内部复用 model alias info 辅助逻辑，集中处理边界值和错误映射。
     
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
@@ -1381,7 +1609,7 @@ def _model_alias_info(row: sqlite3.Row) -> ModelAliasInfo:
             version=int(row["fallback_policy_version"]),
             priority=int(row["fallback_policy_priority"]),
             trigger_conditions=_normalize_fallback_conditions(json.loads(str(row["fallback_condition_expr"]))),
-            max_attempts=int(json.loads(str(row["fallback_action"])).get("max_attempts", 1)),
+            max_attempts=_fallback_max_attempts(json.loads(str(row["fallback_action"]))),
             created_at=_parse_db_time(row["fallback_policy_created_at"]),
             updated_at=_parse_db_time(row["fallback_policy_updated_at"]),
         )
@@ -1396,23 +1624,58 @@ def _model_alias_info(row: sqlite3.Row) -> ModelAliasInfo:
             provider_code=str(row["default_provider_code"]),
             provider_name=str(row["default_provider_name"]),
             provider_status=str(row["default_provider_status"]),
+            provider_model_id=row["default_provider_model_id"],
+            input_price_per_1k=float(row["default_input_price_per_1k"])
+            if row["default_input_price_per_1k"] is not None else None,
+            output_price_per_1k=float(row["default_output_price_per_1k"])
+            if row["default_output_price_per_1k"] is not None else None,
+            cache_price_per_1k=float(row["default_cache_price_per_1k"])
+            if row["default_cache_price_per_1k"] is not None else None,
+            currency=row["default_currency"],
         )
     ]
-    # 只有真实配置备用模型时才展开第二候选，不能用空占位伪造可用 Provider。
-    if row["fallback_model_id"] is not None:
+    # 优先返回迁移表中的完整有序集合；旧库仍从单字段生成一个候选。
+    fallback_rows = fallback_candidate_rows or []
+    if not fallback_rows and row["fallback_model_id"] is not None:
+        fallback_rows = [
+            {
+                "model_id": row["fallback_model_id"],
+                "configured_priority": 1,
+                "internal_model_id": row["fallback_internal_model_id"],
+                "provider_model_id": row["fallback_provider_model_id"],
+                "display_name": row["fallback_display_name"],
+                "input_price_per_1k": row["fallback_input_price_per_1k"],
+                "output_price_per_1k": row["fallback_output_price_per_1k"],
+                "cache_price_per_1k": row["fallback_cache_price_per_1k"],
+                "currency": row["fallback_currency"],
+                "model_status": row["fallback_model_status"],
+                "provider_code": row["fallback_provider_code"],
+                "provider_name": row["fallback_provider_name"],
+                "provider_status": row["fallback_provider_status"],
+            }
+        ]
+    for fallback_row in fallback_rows:
         # fallback 只有完整同租户 Model/Provider JOIN 成功时才进入安全配置摘要；迁移 owner
         # trigger 会阻止新坏图，历史坏图则由查询失败关闭而不是伪造 Provider 信息。
         candidates.append(
             RoutingPolicyCandidateInfo(
                 candidate_role="fallback",
-                configured_priority=1,
-                model_id=str(row["fallback_model_id"]),
-                internal_model_id=str(row["fallback_internal_model_id"]),
-                display_name=row["fallback_display_name"],
-                model_status=str(row["fallback_model_status"]),
-                provider_code=str(row["fallback_provider_code"]),
-                provider_name=str(row["fallback_provider_name"]),
-                provider_status=str(row["fallback_provider_status"]),
+                configured_priority=int(fallback_row["configured_priority"]),
+                model_id=str(fallback_row["model_id"]),
+                internal_model_id=str(fallback_row["internal_model_id"]),
+                display_name=fallback_row["display_name"],
+                model_status=str(fallback_row["model_status"]),
+                provider_code=str(fallback_row["provider_code"]),
+                provider_name=str(fallback_row["provider_name"]),
+                provider_status=str(fallback_row["provider_status"]),
+                provider_model_id=fallback_row["provider_model_id"],
+                input_price_per_1k=float(fallback_row["input_price_per_1k"])
+                if fallback_row["input_price_per_1k"] is not None else None,
+                output_price_per_1k=float(fallback_row["output_price_per_1k"])
+                if fallback_row["output_price_per_1k"] is not None else None,
+                cache_price_per_1k=float(fallback_row["cache_price_per_1k"])
+                if fallback_row["cache_price_per_1k"] is not None else None,
+                currency=fallback_row["currency"],
             )
         )
     routing_policy = None
@@ -1471,6 +1734,7 @@ def _model_alias_info(row: sqlite3.Row) -> ModelAliasInfo:
         fallback_display_name=row["fallback_display_name"],
         fallback_provider_code=row["fallback_provider_code"],
         fallback_provider_name=row["fallback_provider_name"],
+        fallback_model_ids=[str(item["model_id"]) for item in fallback_rows],
         fallback_policy=policy,
         cache_affinity=cache_affinity,
         routing_policy=routing_policy,
@@ -1588,6 +1852,14 @@ def _routing_audit_summary(model_alias: ModelAliasInfo) -> dict[str, object]:
         "status": model_alias.status,
         "default_model_id": model_alias.default_model_id,
         "fallback_model_id": model_alias.fallback_model_id,
+        "fallback_model_count": len(model_alias.fallback_model_ids),
+        "fallback_model_order_sha256": hashlib.sha256(
+            json.dumps(
+                model_alias.fallback_model_ids,
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
         "routing_mode": policy.routing_mode,
         "quality_weight_bps": policy.quality_cost_config.quality_weight_bps,
         "cost_weight_bps": policy.quality_cost_config.cost_weight_bps,
@@ -1608,6 +1880,7 @@ def _ordered_routing_fields(fields: set[str]) -> list[str]:
         "status",
         "default_model_id",
         "fallback_model_id",
+        "fallback_model_ids",
         "routing_mode",
         "quality_cost_config",
     )
@@ -1625,7 +1898,7 @@ def _change_kinds(changed_fields: list[str]) -> list[str]:
     if "quality_cost_config" in changed:
         result.append("quality_cost")
     # 主备目标任一变化都属于候选图变化，Webhook 只暴露固定类别而非模型详情。
-    if changed & {"default_model_id", "fallback_model_id"}:
+    if changed & {"default_model_id", "fallback_model_id", "fallback_model_ids"}:
         result.append("candidates")
     if changed & {"alias", "environment", "environment_id", "status"}:
         result.append("alias_state")
@@ -1999,6 +2272,30 @@ def _normalize_optional_model_id(value: str | None) -> str | None:
     return model_id
 
 
+def _normalize_fallback_model_ids(
+    values: list[str] | None,
+    *,
+    legacy_value: str | None,
+    default_model_id: str,
+) -> list[str]:
+    """规范化有序备用模型列表；旧单字段只作为第一个候选兼容入口。"""
+
+    raw_values = values if values is not None else (
+        [legacy_value] if legacy_value is not None else []
+    )
+    result: list[str] = []
+    for value in raw_values:
+        candidate = _normalize_optional_model_id(value)
+        if candidate is None:
+            continue
+        if candidate == default_model_id or candidate in result:
+            raise ApiError("model_alias.model_invalid")
+        if len(result) >= MAX_FALLBACK_CANDIDATES:
+            raise ApiError("model_alias.model_invalid")
+        result.append(candidate)
+    return result
+
+
 def _normalize_description(value: str | None) -> str | None:
     """规范化 模型别名路由 的 normalize description 参数，拦截空值、非法枚举或越界数字。
     
@@ -2093,6 +2390,7 @@ def _create_fields() -> tuple[str, ...]:
         "environment",
         "default_model_id",
         "fallback_model_id",
+        "fallback_model_ids",
         "description",
         "status",
     )

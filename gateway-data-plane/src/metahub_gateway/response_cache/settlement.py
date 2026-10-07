@@ -634,6 +634,7 @@ def _freeze_reference_estimate(
     currency = "CNY"
     input_price = Decimal("0")
     output_price = Decimal("0")
+    cache_price = Decimal("0")
     schema = _UNPRICED_SCHEMA
     plan_id = None
     effective_from = observed_at
@@ -646,6 +647,7 @@ def _freeze_reference_estimate(
         currency = rate.currency
         input_price = rate.input_price_per_1k
         output_price = rate.output_price_per_1k
+        cache_price = rate.cache_price_per_1k
         schema = rate.price_schema_version
         plan_id = rate.source_id if rate.source == "price_plan" else None
         effective_from = rate.effective_from or observed_at
@@ -657,7 +659,7 @@ def _freeze_reference_estimate(
                 Decimal(candidate.owner.input_tokens) * input_price
                 + Decimal(candidate.owner.output_tokens) * output_price
             )
-            / Decimal(1000)
+            / Decimal(1_000_000)
         )
     # 命中结算必须原子写入缓存事实、用量、成本和预算状态，禁止出现部分成功。
     except (DecimalException, OverflowError):
@@ -665,6 +667,7 @@ def _freeze_reference_estimate(
         currency = "CNY"
         input_price = Decimal("0")
         output_price = Decimal("0")
+        cache_price = Decimal("0")
         schema = _UNPRICED_SCHEMA
         plan_id = None
         effective_from = observed_at
@@ -677,6 +680,7 @@ def _freeze_reference_estimate(
         currency=currency,
         input_price_per_1k=format(input_price, "f"),
         output_price_per_1k=format(output_price, "f"),
+        cache_price_per_1k=format(cache_price, "f"),
         price_schema_version=schema,
         source="response_cache_reference",
         price_plan_id=plan_id,
@@ -899,6 +903,7 @@ def _write_hit_settlement(
             currency="CNY",
             input_price_per_1k="0",
             output_price_per_1k="0",
+            cache_price_per_1k="0",
             price_schema_version=_NO_CHARGE_SCHEMA,
             source="response_cache_no_charge",
             price_plan_id=None,

@@ -535,11 +535,22 @@ async def test_catalog_create_replay_and_conflict(catalog_subjects):
     replay = _call(catalog_subjects, "create")
     assert replay.idempotent_replay and replay.instance == created.instance
     assert _facts(database) == before
+    # 浏览器后退后可能带着新的幂等键再次提交；同一组织、同一厂家仍应恢复原实例。
+    same_entry_new_key = service.create_catalog_provider(
+        _app.state.config,
+        _context,
+        _payload("catalog_third"),
+        idempotency_key="catalog-transaction-third",
+        request_id="catalog-third",
+        trace_id="catalog-third",
+    )
+    assert same_entry_new_key.idempotent_replay and same_entry_new_key.instance == created.instance
+    assert _facts(database) == before
     app, _database, _fixtures, _provider_id, context = catalog_subjects
     with pytest.raises(ApiError) as rejected:
         service.create_catalog_provider(
             app.state.config, context, _payload("changed_body"),
-            idempotency_key="catalog-transaction-other",
+            idempotency_key="catalog-transaction-create",
             request_id="catalog-conflict", trace_id="catalog-conflict",
         )
     assert rejected.value.code == "provider_catalog.idempotency_conflict"

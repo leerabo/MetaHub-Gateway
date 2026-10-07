@@ -128,6 +128,10 @@ class FinOpsLedgerEntryInfo(BaseModel):
     estimated: bool
     status: Literal["posted"]
     created_at: datetime
+    model_display_name: str | None = None
+    provider_name: str | None = None
+    project_name: str | None = None
+    application_name: str | None = None
     output_safety_dispute: FinOpsOutputSafetyDisputeInfo | None = None
     billing_dispute_hold: FinOpsBillingDisputeHoldInfo | None = None
 

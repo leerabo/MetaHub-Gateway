@@ -1,14 +1,11 @@
 import { hasPermission, PERMISSIONS } from "../../lib/permissions.js";
 
-const COMPATIBILITY_LABELS = Object.freeze({
-  native: "原生接入",
-  openai_compatible: "通用模型接口",
-  migration_only: "仅迁移参考",
-});
-
 // Translate only the catalog's stock names; preserve custom published names.
 const CATALOG_NAMES = Object.freeze({
   "Alibaba Cloud Model Studio": "阿里云百炼（通义千问）",
+  "OpenAI Platform": "OpenAI（GPT）",
+  "xAI API": "xAI（Grok）",
+  "Anthropic API": "Anthropic（Claude）",
   "Tencent Hunyuan": "腾讯混元",
   "Moonshot AI": "Kimi（Moonshot）",
   "Volcengine Ark": "火山方舟（豆包）",
@@ -19,6 +16,16 @@ const CATALOG_NAMES = Object.freeze({
   "SiliconFlow migration source": "硅基流动（迁移参考）",
 });
 
+// 自定义中转站属于组织自己的 Provider 配置，不是 SaaS 全局目录条目。
+// 将它作为目录中的一个选择项，保持“添加模型服务”只有一个入口，同时不伪造目录签名或厂家元数据。
+const CUSTOM_ENTRY = Object.freeze({
+  entry_code: "custom_openai_compatible",
+  display_name: "自定义中转站 / OpenAI 兼容",
+  service_class: "custom",
+  status: "active",
+  instantiation_mode: "custom",
+});
+
 function catalogName(entry) {
   return CATALOG_NAMES[entry.display_name] ?? entry.display_name;
 }
@@ -27,129 +34,89 @@ export function renderProviderCatalog(catalogState, authContext) {
   if (!hasPermission(authContext, PERMISSIONS.PROVIDER_CATALOG_READ)) return "";
   if (!catalogState) return '<div class="empty-state">正在加载模型厂家...</div>';
   if (catalogState.state === "error") {
-    return `<div class="empty-state error-state">${escapeHtml(catalogState.message)} request_id: ${escapeHtml(catalogState.requestId ?? "-")}</div>`;
+    return `<div class="empty-state error-state">${escapeHtml(catalogState.message ?? "模型厂家暂不可用，请稍后重试")}</div>`;
   }
   const entries = Array.isArray(catalogState.entries) ? catalogState.entries : [];
-  const filters = catalogState.filters ?? {};
+  // 迁移参考条目只服务于平台迁移工作流，不属于组织管理员的可接入服务。
+  // 过滤发生在渲染边界，保留后端目录合同和平台侧迁移数据。
+  const visibleEntries = [CUSTOM_ENTRY, ...entries.filter((entry) =>
+    entry.entry_code !== CUSTOM_ENTRY.entry_code && entry.instantiation_mode !== "migration_only")];
   const canWrite = hasPermission(authContext, PERMISSIONS.PROVIDER_WRITE);
   return `
     <section class="provider-catalog" aria-labelledby="provider-catalog-title">
       <div class="provider-catalog-heading">
         <div>
           <h3 id="provider-catalog-title">选择模型厂家</h3>
-          <p>品牌目录用于快速配置；自定义中转站请点击“返回已接入服务”后填写地址。</p>
+          <p>选择要接入的模型服务。已有品牌直接选择；没有品牌的中转站请选择“自定义”。</p>
         </div>
       </div>
       ${renderFeedback(catalogState)}
-      ${renderCreatedCheckpoint(catalogState, canWrite)}
       <label class="provider-catalog-selection"><span>模型厂家</span>
         <select data-provider-catalog-selection><option value="">请选择</option>
-          ${entries.map((entry) => `<option value="${escapeAttribute(entry.entry_code)}"${entry.entry_code === catalogState.selectedEntryCode ? " selected" : ""}>${escapeHtml(catalogName(entry))}</option>`).join("")}
+          ${visibleEntries.map((entry) => `<option value="${escapeAttribute(entry.entry_code)}"${entry.entry_code === catalogState.selectedEntryCode ? " selected" : ""}>${escapeHtml(catalogName(entry))}</option>`).join("")}
         </select></label>
-      <details class="provider-catalog-filter-options"><summary>筛选目录</summary><form class="provider-catalog-filters" data-provider-catalog-filter-form>
-        <label><span>状态</span><select name="status">${options(filters.status, [["", "全部"], ["active", "可用"], ["deprecated", "已弃用"], ["retired", "已退役"]])}</select></label>
-        <label><span>厂商</span><input name="vendorCode" value="${escapeAttribute(filters.vendorCode ?? "")}" pattern="[a-z0-9][a-z0-9_-]{1,63}" maxlength="64" placeholder="例如 deepseek" /></label>
-        <label><span>能力</span><input name="capabilityCode" value="${escapeAttribute(filters.capabilityCode ?? "")}" pattern="[a-z][a-z0-9_]{1,63}" maxlength="64" placeholder="例如 chat" /></label>
-        <label><span>区域</span><input name="regionCode" value="${escapeAttribute(filters.regionCode ?? "")}" pattern="[a-z0-9][a-z0-9-]{1,39}" maxlength="40" placeholder="例如 cn-beijing" /></label>
-        <button type="submit">筛选</button>
-      </form></details>
       <div class="provider-catalog-list">
-        ${entries.map((entry) => renderEntry(entry, catalogState, canWrite)).join("") || '<div class="empty-state">当前筛选下没有目录条目。</div>'}
+        ${visibleEntries.map((entry) => renderEntry(entry, catalogState, canWrite)).join("") || '<div class="empty-state">当前筛选下没有目录条目。</div>'}
       </div>
     </section>`;
 }
 
 function renderEntry(entry, state, canWrite) {
-  const compatibility = state.compatibilityByEntryCode?.[entry.entry_code];
+  if (entry.entry_code === CUSTOM_ENTRY.entry_code) {
+    return `<article class="provider-catalog-entry provider-catalog-custom-entry" data-provider-catalog-entry="${escapeAttribute(entry.entry_code)}"${entry.entry_code === state.selectedEntryCode ? "" : " hidden"}>
+      <header><div><strong>${escapeHtml(catalogName(entry))}</strong><span>组织自定义接入</span></div><mark class="status-mark status-active">可用</mark></header>
+      ${renderCustomProviderForm(canWrite, state.customDraft)}
+    </article>`;
+  }
   return `
     <article class="provider-catalog-entry" data-provider-catalog-entry="${escapeAttribute(entry.entry_code)}"${entry.entry_code === state.selectedEntryCode ? "" : " hidden"}>
       <header>
         <div>
           <strong>${escapeHtml(catalogName(entry))}</strong>
-          <span>${escapeHtml(serviceClassLabel(entry.service_class))}</span>
+          <span>可直接接入</span>
         </div>
         <mark class="status-mark status-${escapeAttribute(entry.status)}">${escapeHtml(({ active: "可接入", deprecated: "已弃用", retired: "已停用" })[entry.status] ?? entry.status)}</mark>
       </header>
-      <details class="provider-catalog-technical"><summary>服务详情</summary><div class="provider-catalog-meta">
-        <span><b>区域</b>${escapeHtml((entry.data_regions ?? []).join(" · "))}</span>
-        <span><b>认证</b>${escapeHtml((entry.auth_modes ?? []).join(" / "))}</span>
-        <span><b>合规</b>${escapeHtml((entry.compliance_tags ?? []).join(" · "))}</span>
-        <span><b>兼容</b>${escapeHtml(COMPATIBILITY_LABELS[entry.compatibility?.level] ?? entry.compatibility?.level ?? "-")}</span>
-      </div>
-      <div class="provider-catalog-capabilities" aria-label="公开能力">
-        ${(entry.capabilities ?? []).map((item) => `<span title="最大上下文 ${number(item.max_context_tokens)} tokens">${escapeHtml(item.code)}${item.supports_stream ? " · stream" : ""}${item.supports_tools ? " · tools" : ""}${item.supports_files ? " · files" : ""}</span>`).join("")}
-      </div>
-      ${renderCompatibility(entry, compatibility)}
-      </details>
       ${renderEntryAction(entry, state.version, canWrite)}
     </article>`;
 }
 
+function renderCustomProviderForm(canWrite, draft = {}) {
+  if (!canWrite) return '<div class="provider-catalog-next"><span>当前身份只有目录查看权限。</span></div>';
+  const name = escapeAttribute(draft?.name ?? "");
+  const baseUrl = escapeAttribute(draft?.baseUrl ?? "");
+  return `<form class="create-provider-form provider-catalog-custom-form" id="create-provider-form">
+    <label><span>服务名称</span><input name="name" maxlength="120" required value="${name}" placeholder="例如：公司中转站" /></label>
+    <label><span>服务地址</span><input name="baseUrl" type="url" required value="${baseUrl}" placeholder="https://api.example.com/v1" /></label>
+    <p class="provider-catalog-help">不兼容 OpenAI 接口时请联系管理员。</p>
+    <div class="provider-actions"><button type="submit">添加模型服务</button></div>
+  </form>`;
+}
+
 function renderEntryAction(entry, version, canWrite) {
   if (entry.instantiation_mode === "local_endpoint") {
-    return '<div class="provider-catalog-next"><a href="console.html#workspace.gateway.private-endpoints">前往本地模型</a></div>';
-  }
-  if (entry.instantiation_mode === "migration_only") {
-    return '<div class="provider-catalog-next"><span>此条目仅说明迁移兼容性，不会创建共享或默认上游。</span></div>';
+    return '<div class="provider-catalog-next"><button type="button" data-console-nav="local-models" data-console-route="workspace.gateway.private-endpoints" data-console-target="local-models">前往本地模型</button></div>';
   }
   if (!canWrite) return '<div class="provider-catalog-next"><span>当前身份拥有目录只读权限。</span></div>';
   const endpoints = Array.isArray(entry.endpoints) ? entry.endpoints : [];
   const capabilities = Array.isArray(entry.capabilities) ? entry.capabilities : [];
+  const defaultRegion = endpoints[0]?.region_code ?? "default";
   return `<form class="provider-catalog-create" data-provider-catalog-create-form autocomplete="off">
     <input type="hidden" name="entryCode" value="${escapeAttribute(entry.entry_code)}" />
     <input type="hidden" name="version" value="${escapeAttribute(version)}" />
-    ${endpoints.length === 1 ? `<input type="hidden" name="regionCode" value="${escapeAttribute(endpoints[0].region_code)}" />` : `<label><span>服务区域</span><select name="regionCode">${endpoints.map((endpoint) => `<option value="${escapeAttribute(endpoint.region_code)}">${escapeHtml(endpoint.region_code)}</option>`).join("")}</select></label>`}
-    <details class="provider-catalog-advanced"><summary>高级设置</summary>
-      <label><span>服务名称（可选修改）</span><input name="name" value="${escapeAttribute(catalogName(entry))}" minlength="2" maxlength="120" required /></label>
-      <label><span>服务标识</span><input name="providerCode" placeholder="自动生成" pattern="[a-z][a-z0-9_]{1,63}" maxlength="64" /></label>
-      <fieldset><legend>模型能力</legend>${capabilities.map((capability, index) => `<label class="provider-catalog-check"><input type="checkbox" name="capabilityCodes" value="${escapeAttribute(capability.code)}" ${index === 0 ? "checked" : ""} /><span>${escapeHtml(({ chat: "对话", embeddings: "向量", image: "图像", audio: "语音" })[capability.code] ?? capability.code)}</span></label>`).join("")}</fieldset>
-    </details>
+    <input type="hidden" name="regionCode" value="${escapeAttribute(defaultRegion)}" />
+    <input type="hidden" name="name" value="${escapeAttribute(catalogName(entry))}" />
+    ${capabilities.map((capability) => `<input type="hidden" name="capabilityCodes" value="${escapeAttribute(capability.code)}" />`).join("")}
     <input type="hidden" name="confirmed" value="on" />
     <button type="submit">添加并配置密钥</button>
   </form>`;
 }
 
-function renderCompatibility(entry, response) {
-  const profile = response?.compatibility ?? entry.compatibility ?? {};
-  return `<div class="provider-catalog-compatibility">
-    <button type="button" data-provider-catalog-compatibility data-entry-code="${escapeAttribute(entry.entry_code)}">兼容说明</button>
-    ${response ? `<div role="status"><strong>${escapeHtml(COMPATIBILITY_LABELS[profile.level] ?? profile.level)}</strong><span>${escapeHtml(profile.doc_code ?? "-")}</span><small>差异：${escapeHtml((profile.request_difference_codes ?? []).join(" · ") || "无")} · 当前实例 ${number(response.current_instances)}</small></div>` : ""}
-  </div>`;
-}
-
-function renderCreatedCheckpoint(state, canWrite) {
-  const instance = state.lastCreated?.instance;
-  const run = state.lastPreflight?.run;
-  if (!instance) return "";
-  return `<section class="provider-catalog-checkpoint" aria-label="目录创建检查点">
-    <div><strong>${escapeHtml(instance.provider_code)} 已创建</strong><span>${escapeHtml(instance.entry_code)} · ${escapeHtml(instance.region_code)} · revision ${number(instance.revision)}</span><small>下一步：配置客户自持 Provider Key</small></div>
-    ${canWrite ? `<form data-provider-catalog-preflight-form><input type="hidden" name="providerId" value="${escapeAttribute(instance.provider_id)}" /><label><span>超时（秒）</span><input name="timeoutSeconds" type="number" min="0.5" max="25" step="0.5" value="5" /></label><button type="submit">运行预检</button></form>` : ""}
-    ${run ? `<div class="provider-catalog-preflight-result"><mark class="status-mark status-${escapeAttribute(run.status)}">${escapeHtml(run.status)}</mark><span>${escapeHtml(run.outcome_code)} · ${number(run.latency_ms)} ms${run.http_status ? ` · HTTP ${number(run.http_status)}` : ""}</span><code>${escapeHtml(shortHash(run.capability_sha256))}</code></div>` : ""}
-  </section>`;
-}
-
 function renderFeedback(state) {
   if (state.actionError) {
-    return `<div class="provider-feedback-error" role="alert"><strong>${escapeHtml(state.actionError.message ?? "操作失败")}</strong><span>request_id: ${escapeHtml(state.actionError.requestId ?? "-")}</span></div>`;
+    return `<div class="provider-feedback-error" role="alert"><strong>${escapeHtml(state.actionError.message ?? "操作失败")}</strong></div>`;
   }
   return state.feedback ? `<div class="provider-feedback" role="status">${escapeHtml(state.feedback)}</div>` : "";
-}
-
-function options(current, values) {
-  return values.map(([value, label]) => `<option value="${escapeAttribute(value)}" ${value === current ? "selected" : ""}>${escapeHtml(label)}</option>`).join("");
-}
-
-function serviceClassLabel(value) {
-  return ({ official_cloud: "官方云服务", local_template: "本地模板", migration_source: "迁移来源" })[value] ?? value;
-}
-
-function shortHash(value) {
-  const text = String(value ?? "");
-  return /^[0-9a-f]{64}$/u.test(text) ? `${text.slice(0, 12)}…${text.slice(-8)}` : "-";
-}
-
-function number(value) {
-  return Number.isFinite(Number(value)) ? String(Number(value)) : "-";
 }
 
 function escapeHtml(value) {

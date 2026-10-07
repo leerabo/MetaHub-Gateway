@@ -264,10 +264,69 @@ async def test_provider_create_list_test_and_disable_flow(
             headers=headers,
             json={"timeout_seconds": 2},
         )
+        # 运行诊断不是业务引用：空 Provider 即使有健康探测日志，也应允许删除。
+        deepseek_id = deepseek.json()["provider"]["provider_id"]
+        connection = connect_database(database_url)
+        deepseek_tenant_id = connection.execute(
+            "SELECT tenant_id FROM providers WHERE provider_id=?", (deepseek_id,)
+        ).fetchone()[0]
+        connection.execute(
+            """
+            INSERT INTO provider_health_probe_logs(
+              probe_log_id, tenant_id, provider_id, provider_credential_id,
+              health_generation, attempt_sequence, trigger_type, result_status,
+              auth_result, http_status, latency_ms, error_code, result_summary,
+              request_id, trace_id, checked_at, created_at
+            ) VALUES(?, ?, ?, NULL, 0, 1, 'manual', 'success', 'unverified',
+                      200, 8, NULL, 'Endpoint reachable', ?, ?, datetime('now'), datetime('now'))
+            """,
+            ("probe_delete_guard", deepseek_tenant_id, deepseek_id,
+             "req_probe_delete_guard", "trc_probe_delete_guard"),
+        )
+        connection.commit()
+        connection.close()
         disabled = await client.patch(
             f"/providers/{local.json()['provider']['provider_id']}",
             headers=headers,
             json={"status": "disabled"},
+        )
+        deleted = await client.delete(
+            f"/providers/{deepseek.json()['provider']['provider_id']}",
+            headers=headers,
+        )
+
+        # Provider 一旦被模型引用就必须保留，以免破坏路由和历史计量事实。
+        connection = connect_database(database_url)
+        connection.execute(
+            """
+            INSERT INTO models(
+              model_id, tenant_id, provider_id, model_alias, upstream_model_name, provider_model_id,
+              display_name, capabilities, context_window, input_price_per_1k, output_price_per_1k,
+              currency, price_schema_version, status, created_at, updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))
+            """,
+            (
+                "model_provider_delete_guard",
+                connection.execute("SELECT tenant_id FROM providers WHERE provider_id=?", (local.json()["provider"]["provider_id"],)).fetchone()[0],
+                local.json()["provider"]["provider_id"],
+                "provider-delete-guard",
+                "provider-delete-guard",
+                "provider-delete-guard",
+                "Provider delete guard",
+                json.dumps({"chat": True, "stream": True}),
+                8192,
+                0,
+                0,
+                "CNY",
+                "test-v1",
+            ),
+        )
+        connection.commit()
+        connection.close()
+        in_use = await client.delete(
+            f"/providers/{local.json()['provider']['provider_id']}",
+            headers=headers,
         )
 
     assert deepseek.status_code == 201, deepseek.text
@@ -288,8 +347,16 @@ async def test_provider_create_list_test_and_disable_flow(
     assert disabled.status_code == 200
     assert disabled.json()["provider"]["status"] == "disabled"
     assert disabled.json()["provider"]["disabled_at"] is not None
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["deleted_provider_id"] == deepseek.json()["provider"]["provider_id"]
+    assert in_use.status_code == 409, in_use.text
+    assert in_use.json()["code"] == "provider.in_use"
 
     connection = connect_database(database_url)
+    assert connection.execute(
+        "SELECT 1 FROM providers WHERE provider_id=?",
+        (deepseek.json()["provider"]["provider_id"],),
+    ).fetchone() is None
     row = connection.execute(
         "SELECT health_status, last_tested_at, last_test_error FROM providers WHERE provider_code=?",
         ("auth_fail_lab",),

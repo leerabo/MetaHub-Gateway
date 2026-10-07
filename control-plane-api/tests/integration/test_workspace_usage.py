@@ -162,6 +162,48 @@ async def test_workspace_usage_consumer_filter_rotation_and_export(
 
 
 @pytest.mark.anyio
+async def test_personal_key_usage_is_attributed_to_its_member(
+    monkeypatch, tmp_path, migrated_database
+):
+    database, app = _app(monkeypatch, tmp_path, migrated_database)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://testserver"
+    ) as client:
+        await _open_organization(client, monkeypatch)
+        created = await client.post(
+            "/virtual-keys",
+            json={"name": "My Key"},
+            headers=_csrf(client, WORKSPACE_CSRF_COOKIE),
+        )
+        assert created.status_code == 201, created.text
+        key = created.json()
+        key_id = key["virtual_key"]["virtual_key_id"]
+        with connect_database(database) as connection:
+            owner = connection.execute(
+                "SELECT vk.created_by, u.display_name FROM virtual_keys vk "
+                "JOIN users u ON u.tenant_id=vk.tenant_id AND u.user_id=vk.created_by "
+                "WHERE vk.virtual_key_id=?",
+                (key_id,),
+            ).fetchone()
+        assert owner is not None
+        _usage(database, key)
+
+        summary = await client.get("/usage/summary")
+        assert summary.status_code == 200, summary.text
+        assert summary.json()["by_consumer"][0]["consumer_id"] == owner["created_by"]
+        assert summary.json()["by_consumer"][0]["consumer_name"] == owner["display_name"]
+
+        filtered = await client.get(
+            "/usage/summary", params={"consumer_id": owner["created_by"]}
+        )
+        assert filtered.status_code == 200, filtered.text
+        assert filtered.json()["totals"]["request_count"] == 1
+        records = await client.get("/usage/records")
+        assert records.status_code == 200, records.text
+        assert records.json()["usage_records"][0]["consumer_id"] == owner["created_by"]
+
+
+@pytest.mark.anyio
 async def test_workspace_async_usage_export_csrf_owner_and_expiry(
     monkeypatch, tmp_path, migrated_database
 ):

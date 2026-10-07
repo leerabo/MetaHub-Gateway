@@ -113,7 +113,7 @@ PlatformPlanCatalog owner，不复制第二套套餐和权益 JSON。新增 `pla
 - 现有 `POST /platform/plans` 保留为受控 candidate/create 命令，发布/retire 只接受固定 action、version ID 和
   revision；不能提交任意 entitlement schema、脚本、价格表达式或客户端计算金额。
 
-`platform_provider_reference_rate_releases/heads` 保存官方建议 Provider/model、币种、每千 Token 微币单位整数、
+`platform_provider_reference_rate_releases/heads` 保存官方建议 Provider/model、币种、每百万 Token 微币单位整数、
 有效区间、来源版本/hash 和 release generation。它是 Platform 只读参考，不是 Workspace ProviderCostRate，
 不进入 Gateway 热路径。Workspace 只能通过显式采用命令生成自己的新 rate version，并保留 source release ID；
 平台后续改价不改写已采用版本或历史 PriceSnapshot。

@@ -660,6 +660,33 @@ test("late protected responses cannot repopulate the page after logout", async (
   assert.doesNotMatch(root.innerHTML, /账号保护状态|owner@example.com/u);
 });
 
+test("a transient session probe failure keeps the login form usable", async () => {
+  const root = createRoot();
+  let loginCalls = 0;
+  const controller = createIdentityPageController({
+    root,
+    api: workingApi({
+      me: async () => {
+        throw new IdentityApiError({ status: 503, code: "identity.unavailable" });
+      },
+      login: async () => {
+        loginCalls += 1;
+        return accountSessionPayload();
+      },
+    }),
+  });
+
+  await controller.mount();
+  assert.match(root.innerHTML, /data-identity-login-form/u);
+  assert.doesNotMatch(root.innerHTML, /账号服务暂时不可用/u);
+
+  assert.equal(await controller.login({ email: "owner@example.com", password: "PrivatePassword" }), true);
+  assert.equal(loginCalls, 1);
+  assert.match(root.innerHTML, /账号保护状态|组织空间|创建组织/u);
+  assert.doesNotMatch(root.innerHTML, /账号服务暂时不可用/u);
+  controller.destroy();
+});
+
 test("login renders before session probe and typing invalidates late responses", async () => {
   for (const expired of [false, true]) {
     const root = createRoot();

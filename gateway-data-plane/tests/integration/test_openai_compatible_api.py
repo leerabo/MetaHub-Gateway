@@ -252,6 +252,14 @@ def fake_upstream():
                 self.end_headers()
                 self.wfile.write(b'{"error":{"message":"upstream failed"}}')
                 return
+            if body.get("model") == "upstream-quota-model":
+                self.send_response(402)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    b'{"error":{"type":"insufficient_quota","message":"quota"}}'
+                )
+                return
             if self.path == "/v1/chat/completions":
                 if body.get("stream") is True:
                     self.send_response(200)
@@ -632,6 +640,33 @@ def configure_prd036_fallback_alias(database_url: str) -> None:
           '["upstream_timeout","upstream_rate_limited","upstream_5xx"]',
           '{"type":"use_alias_fallback","max_attempts":1}', datetime('now'), datetime('now')
         )
+        """,
+        (tenant["tenant_id"],),
+    )
+    connection.commit()
+
+
+def configure_prd036_quota_fallback_alias(database_url: str) -> None:
+    """建立主模型 402 额度不足、备用模型成功的别名与策略快照。"""
+
+    configure_prd036_fallback_alias(database_url)
+    connection = connect_database(database_url)
+    tenant = connection.execute(
+        "SELECT tenant_id FROM tenants ORDER BY created_at LIMIT 1"
+    ).fetchone()
+    connection.execute(
+        """
+        UPDATE models
+        SET upstream_model_name='upstream-quota-model', provider_model_id='upstream-quota-model'
+        WHERE tenant_id=? AND model_alias='upstream-error'
+        """,
+        (tenant["tenant_id"],),
+    )
+    connection.execute(
+        """
+        UPDATE fallback_policies
+        SET condition_expr='["upstream_quota_exceeded"]'
+        WHERE tenant_id=? AND fallback_policy_id='policy_prd036'
         """,
         (tenant["tenant_id"],),
     )
@@ -1293,6 +1328,68 @@ async def test_non_stream_5xx_falls_back_once_and_records_attempt_order(
 
 
 @pytest.mark.anyio
+async def test_non_stream_quota_error_falls_back_and_records_provider_fact(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_upstream,
+) -> None:
+    """上游额度不足在白名单启用时切换备用模型，并保留脱敏错误事实。"""
+
+    upstream_url, captured = fake_upstream
+    database_url = prepare_database(monkeypatch, tmp_path, upstream_url)
+    configure_prd036_quota_fallback_alias(database_url)
+    app = build_gateway_app()
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {VIRTUAL_KEY}",
+                "X-Request-ID": "req_prd036_quota_fallback",
+            },
+            json={
+                "model": "company-fallback",
+                "messages": [{"role": "user", "content": "quota fallback"}],
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert [item["body"]["model"] for item in captured] == [
+        "upstream-quota-model",
+        "local-chat-model",
+    ]
+    connection = connect_database(database_url)
+    attempts = connection.execute(
+        """
+        SELECT attempt_sequence,status,error_category,trigger_error_code
+        FROM routing_attempts
+        WHERE request_id='req_prd036_quota_fallback'
+        ORDER BY attempt_sequence
+        """
+    ).fetchall()
+    assert [tuple(row) for row in attempts] == [
+        (1, "failed", "quota_exceeded", None),
+        (2, "succeeded", "other", "gateway.upstream_quota_exceeded"),
+    ]
+    request_log = connection.execute(
+        """
+        SELECT fallback_triggered,routing_attempt_count,resolved_model
+        FROM request_logs WHERE request_id='req_prd036_quota_fallback'
+        """
+    ).fetchone()
+    assert tuple(request_log) == (1, 2, "default-chat")
+    fact = connection.execute(
+        """
+        SELECT normalized_output_error_code,upstream_http_status,provider_error_type_class
+        FROM provider_error_facts
+        WHERE request_id='req_prd036_quota_fallback'
+        """
+    ).fetchone()
+    assert tuple(fact) == ("gateway.upstream_quota_exceeded", 402, "insufficient_quota")
+
+
+@pytest.mark.anyio
 async def test_fallback_attempt_gate_failure_keeps_primary_budget_estimate(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1696,12 +1793,12 @@ async def test_fallback_invalid_url_releases_only_local_fallback_estimate(
 
 
 @pytest.mark.anyio
-async def test_stream_5xx_never_uses_request_time_fallback(
+async def test_stream_5xx_uses_handshake_fallback_once(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     fake_upstream,
 ) -> None:
-    """PRD-036 流式边界：stream=true 即使握手返回 5xx，也不能调用备用模型。"""
+    """流式握手在首字节前遇到 5xx 时只重发一次备用模型。"""
 
     upstream_url, captured = fake_upstream
     database_url = prepare_database(monkeypatch, tmp_path, upstream_url)
@@ -1710,24 +1807,36 @@ async def test_stream_5xx_never_uses_request_time_fallback(
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
-        response = await client.post(
+        async with client.stream(
+            "POST",
             "/v1/chat/completions",
             headers={"Authorization": f"Bearer {VIRTUAL_KEY}", "X-Request-ID": "req_prd036_stream"},
             json={
                 "model": "company-fallback",
-                "messages": [{"role": "user", "content": "stream fallback must not run"}],
+                "messages": [{"role": "user", "content": "stream fallback"}],
                 "stream": True,
             },
-        )
+        ) as response:
+            body = await response.aread()
 
-    assert response.status_code == 502
-    assert response.json()["code"] == "gateway.upstream_error"
-    assert [item["body"]["model"] for item in captured] == ["upstream-error-model"]
+    assert response.status_code == 200
+    assert b"[DONE]" in body
+    assert [item["body"]["model"] for item in captured] == [
+        "upstream-error-model",
+        "local-chat-model",
+    ]
     connection = connect_database(database_url)
-    count = connection.execute(
-        "SELECT COUNT(*) AS count FROM routing_attempts WHERE request_id='req_prd036_stream'"
-    ).fetchone()
-    assert count["count"] == 0
+    attempts = connection.execute(
+        """
+        SELECT attempt_sequence,status,error_category,trigger_error_code
+        FROM routing_attempts WHERE request_id='req_prd036_stream'
+        ORDER BY attempt_sequence
+        """
+    ).fetchall()
+    assert [tuple(row) for row in attempts] == [
+        (1, "failed", "upstream_5xx", None),
+        (2, "succeeded", "other", "gateway.upstream_error"),
+    ]
 
 
 @pytest.mark.anyio

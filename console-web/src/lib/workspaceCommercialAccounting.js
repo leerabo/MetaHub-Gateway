@@ -13,6 +13,7 @@ const PATTERN = Object.freeze({
   planVersion: /^spv_[0-9a-f]{32}$/u,
   rate: /^pcr_[0-9a-f]{32}$/u,
   rateVersion: /^pcrv_[0-9a-f]{32}$/u,
+  fxRateVersion: /^wfxv_[0-9a-f]{32}$/u,
   referenceRate: /^pprr_[0-9a-f]{32}$/u,
   safeId: /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u,
   sha256: /^[0-9a-f]{64}$/u,
@@ -163,10 +164,68 @@ export async function applyWorkspaceProviderCostRateCommand({
   });
 }
 
+export async function listWorkspaceFxRates({
+  controlApiUrl, includeHistory = true, effectiveAt = null, cursor = null, limit = 50, signal,
+} = {}) {
+  const query = new URLSearchParams({ include_history: includeHistory ? "1" : "0", limit: String(limit) });
+  if (effectiveAt) query.set("effective_at", requestTimestamp(effectiveAt, "effective_at"));
+  if (cursor) query.set("cursor", requestPattern(cursor, PATTERN.cursor, "cursor"));
+  const payload = await request(controlApiUrl, `/workspace/routing-fx-rates?${query}`, { signal });
+  exact(payload, ["rates", "next_cursor", "limit", "permission_revision", "permission_fingerprint", "request_id", "trace_id"]);
+  const rates = frozenArray(payload.rates, 0, 100, "rates", fxRateInfo);
+  integer(payload.limit, 1, 100, "limit");
+  integer(payload.permission_revision, 1, Number.MAX_SAFE_INTEGER, "permission_revision");
+  nullableCursor(payload.next_cursor);
+  return Object.freeze({ rates, next_cursor: payload.next_cursor, limit: payload.limit,
+    permission_revision: payload.permission_revision,
+    permission_fingerprint: hash(payload.permission_fingerprint, "permission_fingerprint"), ...trace(payload) });
+}
+
+export async function applyWorkspaceFxRateCommand({
+  controlApiUrl, command, expectedHeadRevision, idempotencyKey, stepUpGrant, signal,
+} = {}) {
+  const body = fxRateCommand(command);
+  const payload = await request(controlApiUrl, "/workspace/routing-fx-rates",
+    writeOptions("PATCH", body, expectedHeadRevision, idempotencyKey, stepUpGrant, signal));
+  exact(payload, ["rate", "command_id", "idempotent_replay", "permission_revision", "permission_fingerprint", "request_id", "trace_id"]);
+  const rate = fxRateInfo(payload.rate);
+  boolean(payload.idempotent_replay, "idempotent_replay");
+  integer(payload.permission_revision, 1, Number.MAX_SAFE_INTEGER, "permission_revision");
+  return Object.freeze({ rate, command_id: safeString(payload.command_id, 1, 128, "command_id"),
+    idempotent_replay: payload.idempotent_replay, permission_revision: payload.permission_revision,
+    permission_fingerprint: hash(payload.permission_fingerprint, "permission_fingerprint"), ...trace(payload) });
+}
+
+function fxRateInfo(value) {
+  exact(value, ["workspace_fx_rate_version_id", "workspace_id", "tenant_id", "base_currency", "quote_currency", "usd_to_cny", "version_number", "effective_from", "status", "revision", "actions", "created_at"]);
+  pattern(value.workspace_fx_rate_version_id, PATTERN.fxRateVersion, "fx_rate_version_id");
+  safeString(value.workspace_id, 1, 128, "workspace_id");
+  safeString(value.tenant_id, 1, 128, "tenant_id");
+  choice(value.base_currency, ["USD"], "base_currency");
+  choice(value.quote_currency, ["CNY"], "quote_currency");
+  if (typeof value.usd_to_cny !== "string" || !/^[0-9]+(\.[0-9]+)?$/u.test(value.usd_to_cny) || Number(value.usd_to_cny) <= 0) invalidResponse("usd_to_cny");
+  integer(value.version_number, 1, Number.MAX_SAFE_INTEGER, "version_number");
+  timestamp(value.effective_from, "effective_from");
+  choice(value.status, ["active", "superseded"], "status");
+  integer(value.revision, 1, Number.MAX_SAFE_INTEGER, "revision");
+  actionList(value.actions, ["create_version"], "actions");
+  timestamp(value.created_at, "created_at");
+  return Object.freeze({ ...value, actions: Object.freeze([...value.actions]) });
+}
+
+function fxRateCommand(value) {
+  requestPlain(value, "command");
+  requestExact(value, ["action", "usd_to_cny", "effective_from"]);
+  requestChoice(value.action, ["create_version"], "action");
+  if (typeof value.usd_to_cny !== "string" || !/^[0-9]+(\.[0-9]{1,8})?$/u.test(value.usd_to_cny) || Number(value.usd_to_cny) <= 0 || Number(value.usd_to_cny) > 100) invalidRequest("usd_to_cny");
+  requestTimestamp(value.effective_from, "effective_from");
+  return Object.freeze({ ...value });
+}
+
 function rateQuery(filters, cursor, limit) {
   requestPlain(filters, "filters");
   const allowed = new Set([
-    "provider_id", "model_id", "currency", "status", "effective_at",
+    "provider_id", "model_id", "currency", "status", "effective_at", "include_history",
   ]);
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(filters)) {
@@ -178,7 +237,10 @@ function rateQuery(filters, cursor, limit) {
     if (key === "currency") requestChoice(value, CURRENCIES, key);
     if (key === "status") requestChoice(value, ["active", "superseded", "disabled"], key);
     if (key === "effective_at") requestTimestamp(value, key);
-    query.set(key, String(value));
+    if (key === "include_history" && value !== true && value !== false) {
+      invalidRequest("include_history");
+    }
+    query.set(key, key === "include_history" ? (value ? "1" : "0") : String(value));
   }
   if (cursor !== null && cursor !== "") {
     query.set("cursor", requestPattern(cursor, PATTERN.cursor, "cursor"));
@@ -215,7 +277,7 @@ function rateCommand(value) {
     const optionalUntil = Object.hasOwn(value, "effective_until") ? ["effective_until"] : [];
     requestExact(value, [
       "action", "provider_id", "model_id", "currency", "input_rate_micros_per_1k",
-      "output_rate_micros_per_1k", "effective_from", ...optionalUntil,
+      "output_rate_micros_per_1k", "cache_rate_micros_per_1k", "effective_from", ...optionalUntil,
     ]);
     requestPattern(value.provider_id, PATTERN.safeId, "provider_id");
     requestPattern(value.model_id, PATTERN.safeId, "model_id");
@@ -225,6 +287,9 @@ function rateCommand(value) {
     );
     requestInteger(
       value.output_rate_micros_per_1k, 0, Number.MAX_SAFE_INTEGER, "output_rate",
+    );
+    requestInteger(
+      value.cache_rate_micros_per_1k, 0, Number.MAX_SAFE_INTEGER, "cache_rate",
     );
     requestTimestamp(value.effective_from, "effective_from");
     if (Object.hasOwn(value, "effective_until")) {
@@ -363,7 +428,7 @@ function rateInfo(value) {
     "workspace_provider_cost_rate_id", "workspace_provider_cost_rate_version_id",
     "provider_id", "provider_code", "provider_name", "model_id", "model_alias",
     "currency", "version_number", "input_rate_micros_per_1k",
-    "output_rate_micros_per_1k", "effective_from", "effective_until", "source_type",
+    "output_rate_micros_per_1k", "cache_rate_micros_per_1k", "effective_from", "effective_until", "source_type",
     "source_ref", "status", "revision", "head_revision", "adoption_state",
     "content_sha256", "actions", "created_at",
   ]);
@@ -380,6 +445,7 @@ function rateInfo(value) {
   integer(value.version_number, 1, Number.MAX_SAFE_INTEGER, "version_number");
   integer(value.input_rate_micros_per_1k, 0, Number.MAX_SAFE_INTEGER, "input_rate");
   integer(value.output_rate_micros_per_1k, 0, Number.MAX_SAFE_INTEGER, "output_rate");
+  integer(value.cache_rate_micros_per_1k, 0, Number.MAX_SAFE_INTEGER, "cache_rate");
   timestamp(value.effective_from, "effective_from");
   nullableTimestamp(value.effective_until, "effective_until");
   choice(value.source_type, [

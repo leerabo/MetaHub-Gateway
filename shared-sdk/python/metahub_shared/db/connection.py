@@ -33,9 +33,14 @@ from .security import password_hash_algorithm
 # when two requests briefly contend for the single SQLite writer.
 SQLITE_BUSY_TIMEOUT_SECONDS = 30
 SQLITE_BUSY_TIMEOUT_MILLISECONDS = SQLITE_BUSY_TIMEOUT_SECONDS * 1000
-# Retain a full local scheduler/request burst without reparsing the large schema.
-# This bounds idle handles, not active concurrency; overflow still opens independently.
-_MAX_IDLE_CONNECTIONS_PER_DATABASE = 16
+# SQLite keeps a page cache per live connection. The control plane can have many
+# short-lived scheduler handles, so the default cache would retain a large native
+# heap even after each worker finishes. Bound the local cache explicitly.
+SQLITE_LOCAL_CACHE_SIZE_KIB = 1024
+# Retain a small local scheduler/request burst without keeping one large schema
+# cache per worker. This bounds idle handles, not active concurrency; overflow
+# still opens independently and is released at the request boundary.
+_MAX_IDLE_CONNECTIONS_PER_DATABASE = 4
 _MAX_IDLE_DATABASES = 4
 DatabaseBackend = Literal["sqlite", "postgresql"]
 DatabaseCommitGuard = Callable[[Any], None]
@@ -942,6 +947,8 @@ def _open_sqlite_connection(
             busy_timeout_ms = max(1, min(busy_timeout_ms, int(remaining * 1000)))
         connection.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
         connection.execute("PRAGMA foreign_keys = ON")
+        # Keep native SQLite memory bounded across request and scheduler handles.
+        connection.execute(f"PRAGMA cache_size = -{SQLITE_LOCAL_CACHE_SIZE_KIB}")
         # The local scheduler profile has many short-lived writers while health and
         # console reads must remain available. WAL lets readers keep their snapshot
         # while a writer commits, avoiding rollback-journal read starvation.

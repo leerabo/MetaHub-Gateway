@@ -542,7 +542,7 @@ test("PAGE-080 source keeps SavedFilter selection explicit and exposes stable te
   const apply = main.slice(selectionEnd, selectionEnd + 1200);
   assert.match(apply, /requestLogFiltersFromSavedFilter\(savedFilter\)/);
   assert.match(renderer, /id="request-log-filter-form"/);
-  assert.match(renderer, /data-request-log-explain=/);
+  assert.doesNotMatch(renderer, /data-request-log-explain=/);
   assert.match(renderer, /id="request-log-next"/);
 
   const prd055 = css.slice(css.indexOf("/* PRD-055 PAGE-080"));

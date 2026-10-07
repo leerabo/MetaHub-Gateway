@@ -288,7 +288,10 @@ def _lease_hmac(config: AppConfig, token: str) -> str:
 
 def _connect(config: AppConfig) -> sqlite3.Connection:
     try:
-        return connect_database(config.database_url)
+        connection = connect_database(config.database_url)
+        if getattr(connection, "backend", "sqlite") == "sqlite":
+            connection.execute("PRAGMA busy_timeout=250")
+        return connection
     except DbError:
         raise ApiError("platform.unavailable") from None
 

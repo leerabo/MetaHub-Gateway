@@ -5,10 +5,10 @@ import { renderModelCatalogPanel } from "../../src/features/models/renderModelCa
 import { renderModelAliasPanel } from "../../src/features/model-aliases/renderModelAliasPanel.js";
 import { renderVirtualKeyPanel } from "../../src/features/virtual-keys/renderVirtualKeyPanel.js";
 import { renderProviderPanel } from "../../src/features/providers/renderProviderPanel.js";
+import { renderProviderCatalog } from "../../src/features/providers/renderProviderCatalog.js";
 import { renderSdkExamples } from "../../src/features/python-sdk-examples/renderPythonSdkExamples.js";
 import { syncIdentityEntryView } from "../../src/features/identity/main.js";
 import { PERMISSIONS } from "../../src/lib/permissions.js";
-import { WORKSPACE_ROUTE_REGISTRY } from "../../src/lib/workspaceNavigation.js";
 import { bindConsoleSidebarViewport, renderConsoleEntryLoading, revealConsoleSidebarItem } from "../../src/features/console-shell/renderConsoleShell.js";
 import { createI18n } from "../../src/i18n/messages.js";
 
@@ -28,7 +28,7 @@ test("connection pages report the first real gap with a permitted recovery route
   for (const route of ["workspace.gateway.models", "workspace.gateway.aliases", "workspace.gateway.virtual-keys", "workspace.developer.sdk"]) {
     const html = renderWorkspaceConnectionStatus(progress(["ready", "completed", "completed", "completed"]), route);
     assert.match(html, /组织接入尚未完成/u);
-    assert.match(html, /href="#workspace.gateway.providers">配置模型服务/u);
+    assert.match(html, /data-workspace-task-route="workspace.gateway.providers"/u);
     assert.doesNotMatch(html, /已记录成功调用/u);
   }
   const current = renderWorkspaceConnectionStatus(progress(["completed", "ready", "completed", "ready"]), "workspace.gateway.models");
@@ -81,37 +81,36 @@ test("connection details distinguish this-computer trial URLs from employee-acce
   assert.doesNotMatch(renderSdkExamples({ pythonState: { state: "ok", gateway_base_url: "https://gateway.example/v1" } }), /当前网关地址仅供本机试用/u);
 });
 
-test("unfinished prerequisites emphasize recovery instead of offering a competing next step", () => {
+test("management pages keep prerequisite recovery without cross-page next-step links", () => {
   const incomplete = progress(["ready", "ready", "completed", "ready"]);
   const models = renderModelCatalogPanel({ state: "ok", models: [{}] }, { state: "ok", providers: [] }, auth, incomplete);
-  assert.match(models, /class="workspace-recovery-action" href="#workspace.gateway.providers"/u);
-  assert.match(models, /class="console-flow-related" href="#workspace.gateway.aliases">配置模型路由/u);
+  assert.match(models, /class="workspace-recovery-action" data-workspace-task-route="workspace.gateway.providers"/u);
+  assert.doesNotMatch(models, /console-flow-(?:next|related)|配置模型路由/u);
   assert.doesNotMatch(models, /下一步：/u);
   assert.ok(models.indexOf('id="models-title"') < models.indexOf("组织接入尚未完成"));
   const routes = renderModelAliasPanel({ state: "ok", model_aliases: [{}] }, { state: "ok", models: [] }, auth, {}, incomplete);
-  assert.match(routes, /class="console-flow-related" href="#workspace.gateway.virtual-keys">个人 KEY/u);
+  assert.doesNotMatch(routes, /console-flow-(?:next|related)|个人 KEY/u);
   assert.doesNotMatch(routes, /下一步：/u);
   const complete = renderModelCatalogPanel({ state: "ok", models: [{}] }, {}, auth, progress());
-  assert.match(complete, /下一步：配置模型路由/u);
+  assert.doesNotMatch(complete, /下一步：|console-flow-(?:next|related)/u);
 });
 
-test("organization KEY page offers the actual missing step before connection details", () => {
+test("KEY page keeps the personal action short before connection details", () => {
   const keys = { state: "ok", virtual_keys: [{ name: "Organization KEY", status: "active" }] };
   for (const statuses of [["ready", "completed", "completed", "ready"], ["completed", "ready", "completed", "ready"]]) {
     const html = renderVirtualKeyPanel(keys, auth, {}, {}, progress(statuses));
-    assert.match(html, /组织接入尚未完成/u);
-    assert.match(html, /class="workspace-recovery-action"/u);
-    assert.match(html, /class="console-flow-related" href="#workspace.developer.sdk"/u);
+    assert.match(html, /<h2 id="virtual-keys-title">我的 KEY<\/h2>/u);
+    assert.doesNotMatch(html, /不需要配置组织 KEY|组织默认环境、模型与路由会自动应用/u);
+    assert.doesNotMatch(html, /console-flow-(?:next|related)|接入信息与调用示例/u);
     assert.doesNotMatch(html, /下一步：/u);
-    assert.ok(html.indexOf("组织接入尚未完成") < html.indexOf("创建组织 KEY"));
   }
-  assert.match(renderVirtualKeyPanel(keys, auth, {}, {}, progress()), /下一步：接入信息与调用示例/u);
+  assert.doesNotMatch(renderVirtualKeyPanel(keys, auth, {}, {}, progress()), /下一步：|console-flow-(?:next|related)/u);
   for (const state of [null, { status: "error" }, { ...progress(), source_freshness: "stale" },
     { ...progress(), tasks: progress().tasks.slice(1) }]) {
     assert.doesNotMatch(renderVirtualKeyPanel(keys, auth, {}, {}, state), /下一步：/u);
   }
   const readonly = renderVirtualKeyPanel(keys, { permission_codes: [PERMISSIONS.VIRTUAL_KEY_READ] }, {}, {}, null);
-  assert.doesNotMatch(readonly, /href="#workspace.developer.sdk"|创建个人 KEY|创建组织 KEY/u);
+  assert.doesNotMatch(readonly, /href="#workspace.developer.sdk"|创建我的 KEY/u);
 });
 
 test("organization KEY list keeps active credentials actionable without employee assignment controls", () => {
@@ -159,33 +158,33 @@ test("current sidebar item is revealed without replacing nodes, moving focus or 
 });
 
 test("custom provider asks only for a name and URL before optional protocol settings", () => {
-  const html = renderProviderPanel({ state: "ok", providers: [] }, auth);
-  const form = html.slice(html.indexOf('id="create-provider-form"'), html.indexOf('</form></details>'));
+  const html = renderProviderCatalog({ state: "ok", entries: [], selectedEntryCode: "custom_openai_compatible" }, auth);
+  const form = html.slice(html.indexOf('id="create-provider-form"'), html.indexOf('</form></article>'));
   const basic = form.slice(0, form.indexOf('<details class="provider-custom-advanced"'));
   assert.match(basic, /name="name"[\s\S]*?name="baseUrl"/u);
   assert.doesNotMatch(basic, /name="providerCode"|name="providerType"|name="authType"/u);
-  assert.match(form, /name="providerCode"[^>]*placeholder="自动生成"/u);
-  assert.doesNotMatch(form, /name="providerCode"[^>]*required/u);
+  assert.doesNotMatch(form, /name="providerCode"/u);
   assert.match(form, /<button type="submit">添加模型服务/u);
 });
 
-test("managed key panels have one opening control and errors are outside collapsed content", () => {
+test("managed key panels use one dialog and keep errors inside the dialog", () => {
   const html = renderProviderPanel({ state: "ok", providers: [{ provider_id: "p1", auth_type: "bearer", name: "Service" }],
     providerKeysByProviderId: { p1: { state: "error" } } }, auth);
   assert.equal((html.match(/data-provider-key-open=/gu) ?? []).length, 1);
-  assert.match(html, /data-provider-key-controlled/u);
-  assert.match(html, /<strong>收起密钥配置/u);
-  assert.ok(html.indexOf("密钥列表暂不可用") < html.indexOf('<details class="provider-keypool"'));
+  assert.match(html, /data-provider-key-dialog/u);
+  assert.match(html, /密钥列表暂不可用/u);
+  assert.doesNotMatch(html, /收起密钥配置|高级设置|<details class="provider-keypool"/u);
 });
 
 test("route dependencies remain visible outside a collapsed form and distinguish missing from loading", () => {
   const state = { state: "ok", model_aliases: [{}] };
   const models = { state: "ok", models: [{ status: "active" }] };
   const missing = renderModelAliasPanel(state, models, auth, { state: "ok", environments: [] });
-  assert.ok(missing.indexOf("暂无可用运行环境") < missing.indexOf('<details class="model-create-disclosure">'));
+  assert.ok(missing.indexOf("暂无可用运行环境") < missing.indexOf('data-model-alias-dialog'));
   assert.match(missing, /请联系平台管理员完成运行环境配置/u);
   assert.doesNotMatch(missing, /href="#workspace.settings.deployments"/u);
   assert.match(missing, /disabled>创建路由/u);
+  assert.match(missing, /<dialog class="model-alias-dialog"/u);
   const loading = renderModelAliasPanel(state, models, auth, null);
   assert.match(loading, /正在加载路由所需配置/u);
   assert.doesNotMatch(loading, /role="status">暂无可用运行环境/u);
@@ -195,31 +194,31 @@ test("existing KEY records are not buried under an empty creation form", () => {
   const state = { state: "ok", virtual_keys: [{ virtual_key_id: "key_1", status: "active" }] };
   const environment = { state: "ok", environments: [{ environment_id: "env_1", status: "active" }] };
   const html = renderVirtualKeyPanel(state, auth, {}, environment);
-  assert.match(html, /<details class="key-create-disclosure">/u);
+  assert.match(html, /<dialog class="virtual-key-dialog"/u);
   assert.doesNotMatch(html, /consumer-create-disclosure|consumerId|发放 KEY/u);
   const firstKey = renderVirtualKeyPanel({ ...state, virtual_keys: [] }, auth, {}, environment);
-  assert.match(firstKey, /<details class="key-create-disclosure" open>/u);
+  assert.match(firstKey, /data-open-virtual-key-dialog/u);
   const afterCreate = renderVirtualKeyPanel({ ...state, keyCreateOpen: true }, auth, {}, environment);
-  assert.match(afterCreate, /<details class="key-create-disclosure" open>/u);
+  assert.match(afterCreate, /data-virtual-key-auto-open/u);
 });
 
-test("KEY dependency failure stays visible outside collapsed creation and blocks only submission", () => {
+test("KEY creation keeps the default setup invisible when environment details are unavailable", () => {
   const state = { state: "ok", virtual_keys: [{ virtual_key_id: "key_1" }] };
   const failed = renderVirtualKeyPanel(state, auth, {}, { state: "error" });
-  assert.ok(failed.indexOf("运行环境加载失败") < failed.indexOf('<details class="key-create-disclosure">'));
-  assert.match(failed, /data-resource-retry>重试/u);
-  assert.match(failed, /disabled>创建组织 KEY/u);
+  assert.match(failed, /data-open-virtual-key-dialog/u);
+  assert.doesNotMatch(failed, /运行环境加载失败|data-resource-retry|disabled>创建/u);
   assert.match(failed, /data-virtual-key-row="key_1"/u);
   const missing = renderVirtualKeyPanel(state, auth, {}, { state: "ok", environments: [] });
-  assert.match(missing, /暂无可用运行环境/u);
-  assert.doesNotMatch(missing, /运行环境加载失败/u);
+  assert.match(missing, /<button type="submit">创建 KEY<\/button>/u);
+  assert.doesNotMatch(missing, /暂无可用运行环境|运行环境加载失败/u);
 });
 
 test("compact model and KEY records retain field meanings after column headers disappear", () => {
   const models = renderModelCatalogPanel({ state: "ok", models: [{ capabilities: {} }] }, {}, auth);
-  for (const label of ["模型名称", "模型服务", "厂家模型名称", "能力", "上下文", "计价", "状态"]) {
+  for (const label of ["显示名称", "模型名称", "模型服务", "计价", "状态"]) {
     assert.ok(models.includes(`<span class="model-field-label">${label}</span>`));
   }
+  assert.doesNotMatch(models, /能力|上下文/u);
   const keys = renderVirtualKeyPanel({ state: "ok", virtual_keys: [{}] }, auth, {}, {});
   for (const label of ["KEY 名称", "密钥前缀", "归属范围", "环境", "状态", "最近使用"]) {
     assert.ok(keys.includes(`<span class="virtual-key-field-label">${label}</span>`));
@@ -250,8 +249,8 @@ test("employee task home presents one access contract without control-plane voca
   });
   assert.match(html, /我的接入/u);
   assert.match(html, /https:\/\/gateway\.example\.test/u);
-  assert.match(html, /个人 MetaHub KEY/u);
-  assert.match(html, /成员被撤权后个人 KEY 会立即失效/u);
+  assert.match(html, /个人 KEY/u);
+  assert.match(html, /成员被撤权后 KEY 会立即失效/u);
   assert.doesNotMatch(html, /预算|路由策略|策略快照/u);
 });
 
@@ -271,6 +270,8 @@ test("admin task home groups the setup into four operational work domains", () =
   assert.match(html, /模型与网关/u);
   assert.match(html, /用量与风险/u);
   assert.match(html, /治理与运维/u);
+  assert.match(html, /<details class="workspace-admin-workbench-disclosure">/u);
+  assert.match(html, /查看管理区域（4）/u);
 });
 
 test("english task home keeps the OpenRouter-style role surface in one language", () => {
@@ -300,7 +301,7 @@ test("english employee home presents the same single Gateway and KEY contract", 
   });
   assert.match(html, /My access/u);
   assert.match(html, /Shared Gateway address/u);
-  assert.match(html, /Personal MetaHub KEY/u);
+  assert.match(html, /Personal key/u);
   assert.match(html, /Copy shared Gateway address/u);
   assert.doesNotMatch(html, /我的接入|统一 Gateway 地址|个人 MetaHub KEY|员工/u);
 });
@@ -315,8 +316,8 @@ test("admin setup flow exposes an honest accessible completion progress", () => 
       { task_code: "first_gateway_call", status: "ready", action_route_code: "workspace.developer.sdk", action_enabled: true },
     ],
   });
-  assert.match(html, /role="progressbar"[^>]*aria-valuenow="33"[^>]*aria-valuetext="1 \/ 3"/u);
-  assert.match(html, /style="width:33%"/u);
+  assert.match(html, /role="progressbar"[^>]*aria-valuenow="50"[^>]*aria-valuetext="1 \/ 2"/u);
+  assert.match(html, /style="width:50%"/u);
 });
 
 test("blocked work domains do not present themselves as ready", () => {
@@ -422,7 +423,7 @@ test("start buttons describe the destination and current step without generic op
   for (const label of ["配置模型服务", "配置模型", "成员 KEY 已启用", "查看接入信息"]) {
     assert.ok(html.includes(`>${label}</button>`));
   }
-  assert.equal((html.match(/class="workspace-task-status">下一步</gu) ?? []).length, 1);
+  assert.equal((html.match(/class="workspace-task-status">当前事项/gu) ?? []).length, 1);
   assert.doesNotMatch(html, />打开<|可以处理|继续配置/u);
 });
 
@@ -469,40 +470,42 @@ test("workspace member KEY flow has no employee selector or login fields", () =>
   const memberAuth = { permission_codes: [PERMISSIONS.VIRTUAL_KEY_READ, PERMISSIONS.VIRTUAL_KEY_WRITE] };
   const html = renderVirtualKeyPanel({ state: "ok", virtual_keys: [],
   }, memberAuth, { state: "ok", projects: [], applications: [] }, { state: "ok", environments: [{ environment_id: "env_1", status: "active" }] });
-  assert.match(html, /<h2 id="virtual-keys-title">个人 KEY<\/h2>/u);
-  assert.match(html, /value="个人 KEY"/u);
+  assert.match(html, /<h2 id="virtual-keys-title">我的 KEY<\/h2>/u);
+  assert.match(html, /placeholder="例如：开发用 KEY"/u);
   assert.doesNotMatch(html, /name="consumerId"|consumer-directory|name="(?:password|email)"/u);
   assert.doesNotMatch(html, /name="(?:password|email)"/u);
 });
 
-test("each next-step link is canonical and targets the following operation", () => {
+test("management pages do not add cross-page next-step links", () => {
   const models = renderModelCatalogPanel({ state: "ok", models: [{ capabilities: {} }] }, { state: "ok", providers: [] }, auth);
   const routes = renderModelAliasPanel({ state: "ok", model_aliases: [{}] }, { state: "ok", models: [] }, auth, { state: "ok", environments: [] });
   const keys = renderVirtualKeyPanel({ state: "ok", virtual_keys: [{}] }, auth, {}, {});
-  for (const [html, expected] of [[models, "workspace.gateway.aliases"], [routes, "workspace.gateway.virtual-keys"], [keys, "workspace.developer.sdk"]]) {
-    assert.ok(html.includes(`href="#${expected}"`));
-    assert.ok(WORKSPACE_ROUTE_REGISTRY[expected]);
+  for (const html of [models, routes, keys]) {
+    assert.doesNotMatch(html, /console-flow-(?:next|related)|href="#workspace\.(?:gateway\.aliases|gateway\.virtual-keys|developer\.sdk)"/u);
   }
-  assert.match(models, /<details class="model-create-disclosure">/u);
-  assert.match(routes, /<details class="model-create-disclosure">/u);
+  assert.match(models, /<dialog class="model-create-dialog"/u);
+  assert.match(routes, /<dialog class="model-alias-dialog"/u);
+  assert.match(routes, /data-model-alias-create-open[\s\S]*data-model-alias-dialog/u);
+  assert.doesNotMatch(routes, /<details class="model-create-disclosure">/u);
 });
 
-test("only the newly added provider has its API KEY form open", () => {
+test("a newly added provider does not force an API KEY dialog open", () => {
   const html = renderProviderPanel({ state: "ok", setupProviderId: "p2", providers: ["p1", "p2"].map((provider_id) => ({
     provider_id, name: provider_id, status: "active", health_status: "unknown", auth_type: "bearer",
   })) }, auth);
-  assert.match(html, /data-provider-keypool="p2" open/u);
-  assert.doesNotMatch(html, /data-provider-keypool="p1" open/u);
+  assert.doesNotMatch(html, /data-provider-key-auto-open/u);
+  assert.match(html, /data-provider-key-open="p2"/u);
+  assert.match(html, /data-provider-edit-open="p2"/u);
 });
 
-test("provider setup highlights the required key and keeps default fields and maintenance collapsed", () => {
+test("provider setup opens the required key dialog without advanced fields", () => {
   const html = renderProviderPanel({ state: "ok", providers: [{ provider_id: "p1", name: "DeepSeek",
     status: "active", health_status: "unknown", auth_type: "bearer" }],
   providerKeysByProviderId: { p1: { state: "ok", provider_keys: [] } } }, auth);
-  assert.match(html, /class="provider-setup-action"[\s\S]*?data-provider-key-open="p1"[\s\S]*?>配置 API KEY<\/button>/u);
-  assert.match(html, /<details class="provider-maintenance"><summary>管理服务<\/summary>/u);
-  assert.match(html, /<details class="provider-key-weight"><summary>高级设置[\s\S]*?name="name"[^>]*value="主密钥"/u);
-  assert.ok(html.indexOf('name="plainValue"') < html.indexOf('class="provider-key-weight"'));
+  assert.match(html, /data-provider-key-open="p1"[\s\S]*?>配置 API KEY<\/button>/u);
+  assert.match(html, /data-provider-key-dialog/u);
+  assert.match(html, /data-provider-delete-form/u);
+  assert.doesNotMatch(html, /<details class="provider-maintenance"|<details class="provider-key-weight"|高级设置/u);
   assert.match(html, /name="plainValue" type="password"/u);
   assert.doesNotMatch(html, /还没有可管理的 Provider Key/u);
 });
@@ -511,7 +514,7 @@ test("provider key state distinguishes loading, failure and confirmed absence", 
   const provider = { provider_id: "p1", name: "DeepSeek", auth_type: "bearer", health_status: "unknown" };
   const state = { state: "ok", providers: [provider] };
   const loading = renderProviderPanel(state, auth);
-  assert.match(loading, /正在加载密钥/u);
+  assert.match(loading, /正在读取/u);
   assert.doesNotMatch(loading, /待配置密钥|0 个 Key/u);
   const failed = renderProviderPanel({ ...state, providerKeysByProviderId: { p1: { state: "error" } } }, auth);
   assert.match(failed, /密钥列表暂不可用[\s\S]*?data-resource-retry/u);
@@ -543,8 +546,8 @@ test("model and route lists show useful names without generated identifiers", ()
     provider_code: "provider_generated_code", provider_name: "DeepSeek", status: "active", context_window: 0 };
   const html = renderModelCatalogPanel({ state: "ok", models: [model], feedback: "模型已创建" }, { state: "ok", providers: [] }, auth);
   assert.doesNotMatch(html, /<em>model_generated_id|>provider_generated_code</u);
-  assert.match(html, /未设置/u);
-  assert.match(html, /输入 0 \/ 输出 0 CNY \/ 千 Token/u);
+  assert.doesNotMatch(html, />\s*(?:未设置|model_generated_id|provider_generated_code)\s*</u);
+  assert.match(html, /未配置价格/u);
   assert.match(html, /role="status">模型已创建/u);
   const aliases = renderModelAliasPanel({ state: "ok", model_aliases: [{ model_alias_id: "alias_generated_id", alias: "company-default",
     default_model_id: model.model_id, default_internal_model_id: "deepseek-chat", default_provider_code: model.provider_code, status: "active" }] },
@@ -552,7 +555,7 @@ test("model and route lists show useful names without generated identifiers", ()
   assert.doesNotMatch(aliases, /<em>alias_generated_id|>provider_generated_code<|>active<|>Fallback</u);
   assert.match(aliases, /<em>DeepSeek<\/em>/u);
   assert.match(aliases, /1 条路由/u);
-  for (const label of ["可选模型入口", "实际调用模型", "环境", "更新时间"]) {
+  for (const label of ["可选模型入口", "优先模型", "环境", "更新时间"]) {
     assert.ok(aliases.includes(`<span class="model-alias-field-label">${label}</span>`));
   }
 });
@@ -566,7 +569,9 @@ test("route dependency failure offers recovery instead of claiming configuration
 
 test("organization KEY limits stay collapsed and irrelevant project placeholders stay absent", () => {
   const html = renderVirtualKeyPanel({ state: "ok", virtual_keys: [{ virtual_key_id: "key_1", name: "组织 KEY", status: "active" }] }, auth, {}, {});
-  assert.match(html, /<details class="virtual-key-limit-editor"><summary>调整限制/u);
+  assert.match(html, /class="virtual-key-limit-open"[^>]*>调整限制/u);
+  assert.match(html, /class="virtual-key-limit-dialog"/u);
+  assert.doesNotMatch(html, /class="virtual-key-limit-editor"/u);
   assert.match(html, /不限速/u);
   assert.doesNotMatch(html, /未绑定项目|未绑定应用|>active</u);
 });
@@ -575,14 +580,14 @@ test("tool connection comes before optional programming examples and hides place
   const metadata = { state: "ok", gateway_base_url: "https://gateway.example/v1", chat_model_alias: "company-default", chat_model_configured: true };
   const html = renderSdkExamples({ pythonState: metadata });
   assert.ok(html.indexOf("网关地址") < html.indexOf('class="sdk-developer-details"'));
-  assert.match(html, /员工交付规则：一个网关地址＋一把个人 KEY/u);
+  assert.match(html, /<h3>员工接入<\/h3>/u);
   assert.match(html, /员工不用填写 MetaHub 环境变量/u);
-  assert.match(html, /个人 MetaHub KEY/u);
+  assert.match(html, /个人 KEY/u);
   assert.match(html, /统一 MetaHub 网关网址/u);
   assert.match(html, /data-copy-code-target="tool-service-address"/u);
   assert.match(html, /模型名称/u);
   assert.match(html, /id="tool-service-address">https:\/\/gateway\.example/u);
-  assert.match(html, /环境变量和配置文件只是 Codex、Claude Code 等客户端保存地址与 KEY 的方式/u);
+  assert.doesNotMatch(html, /环境变量和配置文件只是 Codex、Claude Code 等客户端保存地址与 KEY 的方式/u);
   assert.match(html, /id="tool-model-name">company-default/u);
   assert.match(html, /<details class="sdk-developer-details">/u);
   const empty = renderSdkExamples({ pythonState: { ...metadata, chat_model_configured: false } });
@@ -632,12 +637,12 @@ test("client addresses generate the right request paths including reverse proxy 
     assert.equal(connectionCode(html, "tool-claude-code-address"), claude.env.ANTHROPIC_BASE_URL);
     const handoff = connectionCode(html, "tool-connection-instructions");
     assert.ok(handoff.includes(`统一网关网址：https://gateway.example${prefix}`));
-    assert.match(handoff, /所有工具共用这个网址和同一把个人 KEY/u);
+    assert.match(handoff, /个人 KEY：粘贴你在组织空间创建的个人 KEY/u);
     assert.equal(claude.env.ANTHROPIC_MODEL, "company-default");
-    assert.equal(claude.env.ANTHROPIC_AUTH_TOKEN, "粘贴你的个人 MetaHub KEY");
+    assert.equal(claude.env.ANTHROPIC_AUTH_TOKEN, "粘贴你的个人 KEY");
     assert.match(codex, /^wire_api = "responses"$/mu);
     assert.match(codex, /^env_key = "METAHUB_API_KEY"$/mu);
-    assert.match(html, /展开工具详情后/u);
+    assert.match(html, /支持自定义模型接口的工具/u);
     assert.equal(claude.env.ANTHROPIC_BASE_URL, `https://gateway.example${prefix}`);
   }
 });

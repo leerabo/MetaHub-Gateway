@@ -12,7 +12,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from decimal import InvalidOperation
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import uuid4
 
@@ -21,6 +21,7 @@ from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.routing_policy import (
+    MAX_ROUTING_CANDIDATES,
     QualityCostConfig,
     RoutingCandidateInput,
     RoutingPriceFact,
@@ -31,6 +32,7 @@ from metahub_shared.runtime.routing_policy import (
     select_routing_candidates,
 )
 from metahub_shared.runtime.webhooks import WebhookEvent, build_webhook_event
+from metahub_shared.runtime.workspace_fx import resolve_workspace_fx_rate
 
 from metahub_gateway.cache_affinity.models import CacheAffinityRouteContext
 from metahub_gateway.pricing import resolve_workspace_cost_rate
@@ -40,8 +42,11 @@ logger = logging.getLogger("metahub.gateway.routing")
 # Fallback 条件是持久快照的机器合同；固定顺序同时服务去重校验和确定性审计解释。
 _FALLBACK_CONDITION_ORDER = (
     "upstream_timeout",
+    "upstream_unavailable",
     "upstream_rate_limited",
+    "upstream_quota_exceeded",
     "upstream_5xx",
+    "upstream_any_error",
 )
 
 
@@ -73,15 +78,18 @@ class GatewayRoute:
 
 @dataclass(frozen=True)
 class GatewayRoutePlan:
-    """一次请求开始时确定的有界主备路由计划。
+    """一次请求开始时冻结的有界候选计划。
 
-    `initial_route` 始终存在；只有主模型通过调用前健康过滤、策略启用且备用候选
-    当前可用时才携带 `fallback_route`。计划最多两个候选，从类型层面阻止递归链。
+    `initial_route` 是本次先调用的模型；只有它在调用后满足已启用的故障条件时，
+    才会按 ``fallback_routes`` 顺序重发。`fallback_route` 保留为首个备用候选的
+    兼容投影，真正的计划最多 32 个候选。
+    成本、可用性和质量模式仍先按冻结快照选初始候选，不能把候选选择误作故障重试。
     """
 
     initial_route: GatewayRoute
     initial_role: str
     fallback_route: GatewayRoute | None = None
+    fallback_routes: tuple[GatewayRoute, ...] = ()
     fallback_policy_id: str | None = None
     fallback_policy_version: int | None = None
     fallback_conditions: tuple[str, ...] = ()
@@ -577,10 +585,33 @@ def _resolve_persisted_alias_route_plan(
         as_of = _utcnow()
         candidate_rows: dict[str, sqlite3.Row] = {}
         candidate_inputs: list[RoutingCandidateInput] = []
-        for role, priority, configured_model_id in (
+        configured_candidates: list[tuple[str, int, object]] = [
             ("default", 0, alias_policy["default_model_id"]),
-            ("fallback", 1, alias_policy["fallback_model_id"]),
-        ):
+        ]
+        try:
+            fallback_rows = connection.execute(
+                """
+                SELECT model_id, configured_priority
+                FROM model_alias_fallback_candidates
+                WHERE tenant_id=? AND model_alias_id=?
+                ORDER BY configured_priority ASC
+                """,
+                (tenant_id, alias_policy["model_alias_id"]),
+            ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            fallback_rows = []
+        if fallback_rows:
+            configured_candidates.extend(
+                ("fallback", int(item["configured_priority"]), item["model_id"])
+                for item in fallback_rows
+            )
+        elif alias_policy["fallback_model_id"]:
+            configured_candidates.append(("fallback", 1, alias_policy["fallback_model_id"]))
+        if len(configured_candidates) > MAX_ROUTING_CANDIDATES:
+            raise ValueError("routing candidate limit exceeded")
+        for role, priority, configured_model_id in configured_candidates:
             # fallback 可空是 Alias 正式合同；空目标不产生伪 Candidate 行。
             if configured_model_id is None:
                 continue
@@ -680,10 +711,26 @@ def _resolve_persisted_alias_route_plan(
     # SQLite 锁或查询故障属于可重试快照不可用，不能猜测动态选择。
     except sqlite3.OperationalError as exc:
         connection.rollback()
+        logger.warning(
+            "route.snapshot_write_failed",
+            extra={
+                "event": "route.snapshot_write_failed",
+                "request_id": request_id,
+                "error": str(exc),
+            },
+        )
         raise ApiError("gateway.routing_snapshot_unavailable") from exc
     # 其他数据库异常同样不能泄露 SQL 或文件路径，只返回统一基础设施码。
     except sqlite3.Error as exc:
         connection.rollback()
+        logger.warning(
+            "route.snapshot_write_failed",
+            extra={
+                "event": "route.snapshot_write_failed",
+                "request_id": request_id,
+                "error": str(exc),
+            },
+        )
         raise ApiError("gateway.routing_snapshot_unavailable") from exc
     # 枚举、Decimal、时间或 owner 图错误属于持久事实损坏，重试不能自行恢复。
     except (ValueError, TypeError, InvalidOperation) as exc:
@@ -928,13 +975,21 @@ def _load_routing_prices(
     model_ids: tuple[str, ...],
     as_of: datetime,
 ) -> tuple[RoutingPriceFact, ...]:
-    """只在 cost 两候选阶段读取同一 as_of 的 Workspace ProviderCostRate。"""
+    """只在 cost 至少两条候选阶段读取同一 as_of 的 Workspace ProviderCostRate。"""
 
-    # shared 只会在恰有两条 cost eligible 候选时触发价格读取，偏离表示调用图损坏。
-    if len(model_ids) != 2:
+    # shared 只会在至少两条 cost eligible 候选时触发价格读取，单候选无需比较。
+    if len(model_ids) < 2:
         raise ValueError("routing price candidate count invalid")
     facts: list[RoutingPriceFact] = []
     as_of_text = _to_db_time(as_of)
+    try:
+        fx = resolve_workspace_fx_rate(connection, tenant_id=tenant_id, observed_at=as_of_text)
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc).lower():
+            raise
+        # Older local fixtures predate the editable rate table. Keep their routing
+        # contract usable; migrated workspaces always take the database value above.
+        fx = None
     for model_id in model_ids:
         try:
             rate = resolve_workspace_cost_rate(
@@ -956,8 +1011,20 @@ def _load_routing_prices(
                 source=rate.source,
                 input_price_per_1k=rate.input_price_per_1k,
                 output_price_per_1k=rate.output_price_per_1k,
+                cache_price_per_1k=rate.cache_price_per_1k,
                 currency=rate.currency,
                 price_schema_version=rate.price_schema_version,
+                comparison_currency="CNY" if rate.currency == "USD" else None,
+                comparison_fx_rate=(
+                    (fx.usd_to_cny if fx else Decimal("7.2"))
+                    if rate.currency == "USD"
+                    else None
+                ),
+                comparison_fx_rate_version=(
+                    (fx.version_id if fx else "legacy-deployment-v1")
+                    if rate.currency == "USD"
+                    else None
+                ),
             )
         )
     return tuple(facts)
@@ -998,6 +1065,7 @@ def _finalize_persisted_alias_plan(
     )
     route: GatewayRoute | None = None
     fallback_route: GatewayRoute | None = None
+    fallback_routes: tuple[GatewayRoute, ...] = ()
     fallback_policy_id: str | None = None
     fallback_policy_version: int | None = None
     fallback_conditions: tuple[str, ...] = ()
@@ -1021,7 +1089,7 @@ def _finalize_persisted_alias_plan(
         if legacy_fixed_fallback:
             initial_role = "fallback"
         (
-            fallback_route,
+            fallback_routes,
             fallback_policy_id,
             fallback_policy_version,
             fallback_conditions,
@@ -1033,6 +1101,7 @@ def _finalize_persisted_alias_plan(
             candidate_rows=candidate_rows,
             initial_route=route,
         )
+        fallback_route = fallback_routes[0] if fallback_routes else None
 
     decision_id = f"rdec_{uuid4().hex}"
     event: WebhookEvent | None = None
@@ -1149,6 +1218,7 @@ def _finalize_persisted_alias_plan(
         initial_route=route,
         initial_role=initial_role,
         fallback_route=fallback_route,
+        fallback_routes=fallback_routes,
         fallback_policy_id=fallback_policy_id,
         fallback_policy_version=fallback_policy_version,
         fallback_conditions=fallback_conditions,
@@ -1171,26 +1241,23 @@ def _load_frozen_runtime_fallback(
     selection: RoutingSelectionResult,
     candidate_rows: dict[str, sqlite3.Row],
     initial_route: GatewayRoute,
-) -> tuple[GatewayRoute | None, str | None, int | None, tuple[str, ...]]:
+) -> tuple[tuple[GatewayRoute, ...], str | None, int | None, tuple[str, ...]]:
     """只为已选 default 且同快照合格 fallback 冻结 PRD-036 计划。
 
-    ``quality_cost`` 的 cold 候选虽然可作为首次选择的稳定备用顺序，却没有足够证据承担
-    请求后自动切换；因此该模式只允许 ``ready`` 且已通过门槛的 standby 进入运行时计划。
-    旧三模式没有质量证据状态，继续保持 PRD-047 已验收的 fallback 行为。
+    运行时计划冻结所有有序 standby 候选；质量、成本和可用性模式只决定首选顺序，
+    上游握手失败后都沿同一故障条件推进到下一个候选。
     """
 
     selected = next(item for item in selection.candidate_results if item.status == "selected")
-    standby = next(
-        (item for item in selection.candidate_results if item.status == "standby"),
-        None,
-    )
-    if (
-        selected.candidate.candidate_role != "default"
-        or standby is None
-        or standby.candidate.candidate_role != "fallback"
-        or (selection.routing_mode == "quality_cost" and standby.quality_evidence_state != "ready")
-    ):
-        return None, None, None, ()
+    if selected is None:
+        return (), None, None, ()
+    standby_items = [
+        item
+        for item in selection.candidate_results
+        if item.status == "standby" and item.candidate.candidate_role == "fallback"
+    ]
+    if not standby_items:
+        return (), None, None, ()
     policy = connection.execute(
         """
         SELECT fallback_policy_id, version, condition_expr
@@ -1200,22 +1267,25 @@ def _load_frozen_runtime_fallback(
         (tenant_id, alias_policy["model_alias_id"]),
     ).fetchone()
     if policy is None:
-        return None, None, None, ()
+        return (), None, None, ()
     conditions = _parse_fallback_conditions(policy["condition_expr"])
     if not conditions:
-        return None, None, None, ()
-    fallback_row = candidate_rows[standby.candidate.model_id]
-    fallback_route = _route_from_row(
-        fallback_row,
-        requested_model=initial_route.requested_model,
-        environment=initial_route.environment,
-        environment_id=initial_route.environment_id or "",
-        model_alias_id=initial_route.model_alias_id,
-        public_model_alias=initial_route.public_model_alias,
-        routing_reason="alias.fallback_runtime",
+        return (), None, None, ()
+    fallback_routes = tuple(
+        _route_from_row(
+            candidate_rows[item.candidate.model_id],
+            requested_model=initial_route.requested_model,
+            environment=initial_route.environment,
+            environment_id=initial_route.environment_id or "",
+            model_alias_id=initial_route.model_alias_id,
+            public_model_alias=initial_route.public_model_alias,
+            routing_reason="alias.fallback_runtime",
+        )
+        for item in standby_items
+        if item.candidate.model_id != initial_route.model_id
     )
     return (
-        fallback_route,
+        fallback_routes,
         str(policy["fallback_policy_id"]),
         int(policy["version"]),
         conditions,
@@ -1243,7 +1313,7 @@ def _persist_policy_routing_facts(
     cache_affinity_summary: dict[str, object] | None,
     as_of: datetime,
 ) -> None:
-    """在调用方事务内写一条 Decision 和最多两条不可变 Candidate 事实。"""
+    """在调用方事务内写一条 Decision 和完整候选集合事实。"""
 
     created_at = _to_db_time(as_of)
     summary = {
@@ -1255,6 +1325,24 @@ def _persist_policy_routing_facts(
                 "rank": item.rank,
                 "status": item.status,
                 "reason_code": item.reason_code,
+                "currency": item.currency,
+                "estimated_cost_amount": (
+                    format(item.estimated_cost_amount, ".15f")
+                    if item.estimated_cost_amount is not None
+                    else None
+                ),
+                "comparison_currency": item.comparison_currency,
+                "comparison_fx_rate": (
+                    format(item.comparison_fx_rate, ".15f")
+                    if item.comparison_fx_rate is not None
+                    else None
+                ),
+                "comparison_fx_rate_version": item.comparison_fx_rate_version,
+                "comparison_cost_amount": (
+                    format(item.comparison_cost_amount, ".15f")
+                    if item.comparison_cost_amount is not None
+                    else None
+                ),
             }
             for item in selection.candidate_results
         ]
@@ -1341,6 +1429,8 @@ def _persist_policy_routing_facts(
               rank, status, reason_code, health_state, health_fresh, keypool_state,
               price_available, price_source, price_schema_version, currency,
               estimated_cost_amount,
+              comparison_currency, comparison_fx_rate, comparison_fx_rate_version,
+              comparison_cost_amount,
               model_quality_score_id, quality_statistics_version,
               quality_feedback_version, quality_evidence_state,
               quality_sample_count, quality_success_count, quality_error_count,
@@ -1349,8 +1439,8 @@ def _persist_policy_routing_facts(
               created_at, updated_at
             )
             VALUES(
-              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
             """,
             (
@@ -1376,6 +1466,18 @@ def _persist_policy_routing_facts(
                 (
                     format(candidate.estimated_cost_amount, ".15f")
                     if candidate.estimated_cost_amount is not None
+                    else None
+                ),
+                candidate.comparison_currency,
+                (
+                    format(candidate.comparison_fx_rate, ".15f")
+                    if candidate.comparison_fx_rate is not None
+                    else None
+                ),
+                candidate.comparison_fx_rate_version,
+                (
+                    format(candidate.comparison_cost_amount, ".15f")
+                    if candidate.comparison_cost_amount is not None
                     else None
                 ),
                 candidate.model_quality_score_id,

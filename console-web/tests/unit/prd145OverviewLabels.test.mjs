@@ -24,9 +24,10 @@ function section(code, value) {
 test("overview labels describe actual record counts without machine-code titles", () => {
   const html = render(Object.keys(sources).map((code, index) => section(code, index)));
   for (const label of Object.values(sources)) assert.ok(html.includes(label), label);
-  assert.match(html, /修订 7/u);
   assert.match(html, /暂无记录/u);
   assert.match(html, /已有记录/u);
+  assert.doesNotMatch(html, /修订 7/u);
+  assert.match(html, /data-source-revision="7"/u);
   assert.doesNotMatch(html, /Revision|Role Tasks|Records|Ready|Empty|已完成任务|健康率/u);
   assert.match(html, /<strong>17<\/strong>/u);
 });

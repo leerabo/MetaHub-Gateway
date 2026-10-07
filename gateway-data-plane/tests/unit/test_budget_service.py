@@ -95,6 +95,22 @@ def test_response_cache_trusted_estimate_requires_exact_money_contract() -> None
     assert unknown_non_zero.value.code == "gateway.budget_unavailable"
 
 
+def test_trusted_estimate_rejects_cache_tokens_above_input() -> None:
+    """缓存命中 Token 是输入 Token 的子集，越界事实必须失败关闭。"""
+
+    with pytest.raises(ApiError) as invalid:
+        _validated_trusted_estimate(
+            EstimatedRequestCost(
+                input_tokens=10,
+                output_tokens=2,
+                cost_cny=Decimal("0.100000"),
+                price_available=True,
+                cache_tokens=11,
+            )
+        )
+    assert invalid.value.code == "gateway.budget_unavailable"
+
+
 def test_response_cache_reservation_replacement_is_atomic_and_owner_qualified() -> None:
     """candidate 转 miss 只删除同 tenant/request/trace 且尚未终结的旧预留。"""
 

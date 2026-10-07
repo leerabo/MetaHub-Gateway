@@ -78,8 +78,10 @@ class BatchRouteCandidateCoverage:
     provider_id: str
     input_price_per_1k: str
     output_price_per_1k: str
-    price_source: Literal["price_plan", "model_catalog"]
+    price_source: Literal["workspace_provider_cost_rate", "price_plan", "model_catalog"]
     price_version: str
+    # 旧冻结路由没有缓存价时在规范化阶段回填输入价；显式 "0" 仍表示免费命中。
+    cache_price_per_1k: str | None = None
 
     def __post_init__(self) -> None:
         """定义批处理数据边界。
@@ -88,6 +90,7 @@ class BatchRouteCandidateCoverage:
         字段规范化不替代服务端租户隔离和权限校验。
         """
         if self.role not in {"default", "fallback"} or self.price_source not in {
+            "workspace_provider_cost_rate",
             "price_plan",
             "model_catalog",
         }:
@@ -99,12 +102,18 @@ class BatchRouteCandidateCoverage:
         try:
             input_price = canonical_batch_price(self.input_price_per_1k)
             output_price = canonical_batch_price(self.output_price_per_1k)
+            cache_price = canonical_batch_price(
+                self.input_price_per_1k
+                if self.cache_price_per_1k is None
+                else self.cache_price_per_1k
+            )
         # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         except BatchContractError:
             # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ValueError("trusted_gateway_invocation_invalid") from None
         object.__setattr__(self, "input_price_per_1k", input_price)
         object.__setattr__(self, "output_price_per_1k", output_price)
+        object.__setattr__(self, "cache_price_per_1k", cache_price)
 
 
 @dataclass(frozen=True, slots=True)

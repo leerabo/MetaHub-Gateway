@@ -192,6 +192,7 @@ from .secret_reference_service import (
     synchronize_agent_secret_references,
 )
 from .service import (
+    assert_workspace_private_gateway_enabled,
     create_edge_session,
     create_workspace_registration,
     list_platform_edge_fleet,
@@ -2304,7 +2305,10 @@ def _prepare_workspace(request: Request, *, write: bool) -> None:
         or _cookie_values(request, SUPPORT_SESSION_COOKIE)
     ):
         raise ApiError("workspace_session.credential_conflict")
-    _workspace_cookie(request)
+    session_token = _workspace_cookie(request)
+    assert_workspace_private_gateway_enabled(
+        request.app.state.config, session_token=session_token
+    )
     if write:
         _require_origin(request, "edge.request_invalid")
         _workspace_csrf(request)

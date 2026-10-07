@@ -1,5 +1,19 @@
 import { hasPermission, PERMISSIONS } from "../../lib/permissions.js";
-import { renderWorkspaceConnectionStatus, workspaceSetupStepComplete } from "../workspace-navigation/renderWorkspaceNavigation.js";
+import { renderFallbackModelPicker } from "./fallbackModelPicker.js";
+import { renderWorkspaceConnectionStatus } from "../workspace-navigation/renderWorkspaceNavigation.js";
+import {
+  ROUTING_MODES,
+  ROUTING_MODE_DESCRIPTIONS,
+  ROUTING_MODE_LABELS,
+} from "../routing-policies/renderRoutingPolicyPanel.js";
+
+const DEFAULT_QUALITY_COST_CONFIG = Object.freeze({
+  quality_weight_bps: 5000,
+  cost_weight_bps: 3000,
+  latency_weight_bps: 2000,
+  quality_floor_bps: 6000,
+  minimum_sample_count: 20,
+});
 
 // 模型别名面板的环境和状态常量只定义展示边界，写入仍依赖后端权限校验。
 const ENVIRONMENT_LABELS = {
@@ -23,7 +37,7 @@ export function renderModelAliasPanel(modelAliasesState, modelsState, authContex
     return `
       <div class="panel-heading">
         <h2 id="model-aliases-title">模型路由</h2>
-        <p class="panel-help">这里是管理员维护的统一路由入口，不是让员工改写官方模型名。员工个人 KEY 会自动使用默认路由；只有工具强制要求模型名时才填写。支持 OpenAI 兼容模式的客户端可通过 <code>/v1/models</code> 自动发现入口。</p>
+        <p class="panel-help">管理员维护统一路由；工具要求时再填写模型名。</p>
         <p>正在加载模型路由...</p>
       </div>
       <div class="empty-state" role="status">正在加载...</div>
@@ -37,7 +51,7 @@ export function renderModelAliasPanel(modelAliasesState, modelsState, authContex
         <p>模型路由暂不可用。</p>
       </div>
       <div class="empty-state error-state">
-        ${escapeHtml(modelAliasesState.message)} request_id: ${escapeHtml(modelAliasesState.requestId ?? "-")}
+        ${escapeHtml(modelAliasesState.message ?? "模型路由读取失败。")}
         <button type="button" data-resource-retry>重试</button>
       </div>
     `;
@@ -45,10 +59,40 @@ export function renderModelAliasPanel(modelAliasesState, modelsState, authContex
 
   const aliases = modelAliasesState.model_aliases ?? [];
   const canWrite = hasPermission(authContext, PERMISSIONS.ROUTING_WRITE);
-  const prerequisiteReady = !workspaceTaskHomeState || workspaceSetupStepComplete(workspaceTaskHomeState, "model_catalog_ready");
-  const activeModels = modelsState?.state === "ok"
+  const catalogModels = modelsState?.state === "ok"
     ? (modelsState.models ?? []).filter((model) => model.status === "active")
     : [];
+  // A route response can arrive with a fresher candidate snapshot than the
+  // model list. Merge the safe candidate metadata so prices and names remain
+  // visible while the two resource reads settle independently.
+  const candidateById = new Map(aliases.flatMap((alias) => alias.routing_policy?.candidates ?? [])
+    .map((candidate) => [candidate.model_id, candidate]));
+  const mergedCatalogModels = catalogModels.map((model) => {
+    const candidate = candidateById.get(model.model_id);
+    if (!candidate) return model;
+    return {
+      ...candidate,
+      ...model,
+      provider_model_id: model.provider_model_id ?? candidate.provider_model_id,
+      input_price_per_1k: model.input_price_per_1k ?? candidate.input_price_per_1k,
+      output_price_per_1k: model.output_price_per_1k ?? candidate.output_price_per_1k,
+      cache_price_per_1k: model.cache_price_per_1k ?? candidate.cache_price_per_1k,
+      currency: model.currency ?? candidate.currency,
+    };
+  });
+  // Keep a route snapshot available while the separate catalog request is
+  // still settling. The snapshot contains the readable upstream id and the
+  // persisted prices, so the UI never falls back to the database UUID.
+  const snapshotModels = [...candidateById.values()].map((candidate) => ({
+    ...candidate,
+    internal_model_id: candidate.internal_model_id ?? candidate.provider_model_id,
+    status: candidate.model_status ?? candidate.status ?? "active",
+  }));
+  const activeModels = [...new Map(
+    [...mergedCatalogModels, ...snapshotModels]
+      .filter((model) => model?.model_id && model.status === "active")
+      .map((model) => [model.model_id, model]),
+  ).values()];
   return `
     <div class="panel-heading model-aliases-heading">
       <div>
@@ -57,23 +101,39 @@ export function renderModelAliasPanel(modelAliasesState, modelsState, authContex
       <span class="model-aliases-count">${aliases.length} 条路由</span>
     </div>
     ${renderWorkspaceConnectionStatus(workspaceTaskHomeState, "workspace.gateway.aliases", i18n)}
-    ${renderActionError(modelAliasesState.actionError)}
-    ${modelAliasesState.feedback ? `<p class="model-alias-feedback" role="status">${escapeHtml(modelAliasesState.feedback)}</p>` : ""}
-    ${canWrite ? renderRouteDependencies(modelsState, environmentState, authContext) : ""}
-    ${canWrite ? `<details class="model-create-disclosure"${aliases.length ? "" : " open"}><summary>添加路由</summary>${renderCreateModelAliasForm(modelsState, environmentState, modelAliasesState.feedback)}</details>` : ""}
-    ${aliases.length && hasPermission(authContext, PERMISSIONS.VIRTUAL_KEY_READ) ? `<a class="${prerequisiteReady ? "console-flow-next" : "console-flow-related"}" href="#workspace.gateway.virtual-keys">${prerequisiteReady ? "下一步：创建个人 KEY" : "个人 KEY"}</a>` : ""}
+    <div class="console-page-toolbar model-alias-toolbar">
+      ${renderActionError(modelAliasesState.actionError)}
+      ${modelAliasesState.feedback ? `<p class="model-alias-feedback" role="status">${escapeHtml(modelAliasesState.feedback)}</p>` : ""}
+      ${canWrite ? renderRouteDependencies(modelsState, environmentState, authContext) : ""}
+      ${canWrite ? '<button type="button" class="model-alias-create-button" data-model-alias-create-open aria-haspopup="dialog">添加路由</button>' : ""}
+    </div>
     <div class="model-aliases-grid" role="table" aria-label="当前租户模型别名">
       <div class="model-alias-row model-alias-head ${canWrite ? "" : "model-alias-readonly-row"}" role="row">
         <span>统一入口名称</span>
         <span>环境</span>
-        <span>默认模型</span>
+        <span>优先模型</span>
         <span>备用模型</span>
+        <span>选择方式</span>
         <span>状态</span>
         <span>更新时间</span>
         ${canWrite ? "<span>操作</span>" : ""}
       </div>
-      ${aliases.length ? aliases.map((item) => renderModelAliasRow(item, canWrite, activeModels, modelsState?.models ?? [])).join("") : renderEmptyRow()}
+      ${aliases.length ? aliases.map((item) => renderModelAliasRow(
+        item,
+        canWrite,
+        activeModels,
+        modelsState?.models ?? [],
+        environmentState?.state === "ok" ? environmentState.environments ?? [] : [],
+      )).join("") : renderEmptyRow()}
     </div>
+    ${canWrite ? renderModelAliasDialog(
+      renderCreateModelAliasForm(modelsState, environmentState, modelAliasesState.feedback),
+      aliases.map((item) => renderModelAliasEditForm(
+        item,
+        activeModels,
+        environmentState?.state === "ok" ? environmentState.environments ?? [] : [],
+      )).join(""),
+    ) : ""}
   `;
 }
 
@@ -90,7 +150,7 @@ function renderRouteDependencies(modelsState, environmentState, authContext) {
   if (!(modelsState.models ?? []).some((item) => item.status === "active")) {
     return '<p class="empty-state" role="status">暂无已启用的模型。'
       + (hasPermission(authContext, PERMISSIONS.MODEL_READ)
-        ? '<a href="#workspace.gateway.models">配置模型</a>' : '请联系组织管理员。') + '</p>';
+        ? '<button type="button" class="primary-command" data-console-nav="models" data-console-route="workspace.gateway.models" data-console-target="workspace.gateway.models">前往模型目录</button>' : '请联系组织管理员。') + '</p>';
   }
   return "";
 }
@@ -109,26 +169,22 @@ function renderCreateModelAliasForm(modelsState, environmentState, feedback) {
   const defaultOptions = activeModels.length
     ? `${activeModels.length > 1 ? '<option value="">请选择调用模型</option>' : ""}${activeModels.map((model) => renderModelOption(model, activeModels.length === 1 ? model.model_id : "")).join("")}`
     : `<option value="">请先创建并启用模型</option>`;
-  const fallbackOptions = [
-    `<option value="">不配置备用模型</option>`,
-    ...activeModels.map((model) => renderModelOption(model, "")),
-  ].join("");
   const environments = environmentState?.state === "ok"
     ? (environmentState.environments ?? []).filter((item) => item.status === "active")
     : [];
   return `
     <form class="create-model-alias-form" id="create-model-alias-form">
-      <h3>新增模型路由</h3>
       <label>
         <span>统一入口名称</span>
         <input name="alias" maxlength="120" required pattern="[a-z0-9](?:[a-z0-9._]|-){0,119}" title="小写字母或数字开头，可包含小写字母、数字、点、下划线和短横线" aria-describedby="model-alias-name-format" placeholder="company-default" />
-        <small id="model-alias-name-format">小写字母或数字开头，可包含小写字母、数字、点、下划线和短横线；例如 company-default。员工通常不需要手填。</small>
+        <small id="model-alias-name-format">请输入小写字母、数字、点、下划线或短横线。</small>
       </label>
       <label>
         <span>调用模型</span>
         <select name="defaultModelId" required ${activeModels.length ? "" : "disabled"}>
           ${defaultOptions}
         </select>
+        <small class="model-alias-price-hint" data-model-price-hint>选择模型后显示价格</small>
       </label>
       ${environments.length === 1
         ? `<input type="hidden" name="environmentId" value="${escapeAttribute(environments[0].environment_id)}" />`
@@ -136,18 +192,11 @@ function renderCreateModelAliasForm(modelsState, environmentState, feedback) {
           <option value="">${environments.length ? "请选择运行环境" : "暂无可用运行环境"}</option>
           ${environments.map((item) => renderOption(item.environment_id, item.name, "")).join("")}
         </select></label>`}
-      <details class="model-advanced"><summary>高级设置</summary><div class="model-advanced-fields">
-      <label>
-        <span>备用模型</span>
-        <select name="fallbackModelId" ${activeModels.length ? "" : "disabled"}>
-          ${fallbackOptions}
-        </select>
-      </label>
+      ${renderFallbackModelPicker(activeModels, [], activeModels.length === 1 ? activeModels[0].model_id : "")}
       <label class="model-alias-description-field">
         <span>备注</span>
-        <input name="description" maxlength="240" placeholder="默认聊天入口、测试环境候选或迁移兼容别名" />
+        <input name="description" maxlength="240" placeholder="例如：默认聊天入口" />
       </label>
-      </div></details>
       <div class="model-alias-actions">
         <button type="submit" ${activeModels.length && environments.length ? "" : "disabled"}>创建路由</button>
         <span class="model-alias-feedback" data-model-setup-feedback role="status">${escapeHtml(feedback ?? "")}</span>
@@ -162,7 +211,7 @@ function renderCreateModelAliasForm(modelsState, environmentState, feedback) {
  *
  * 该行展示 alias、环境、默认模型和备用模型，帮助开发者解释 Gateway 最终解析路径。
  */
-function renderModelAliasRow(item, canWrite, activeModels, models) {
+function renderModelAliasRow(item, canWrite, activeModels, models, environments) {
   const nextStatus = item.status === "active" ? "disabled" : "active";
   const statusLabel = item.status === "active" ? "禁用" : "启用";
   return `
@@ -173,8 +222,9 @@ function renderModelAliasRow(item, canWrite, activeModels, models) {
         ${item.description ? `<em>${escapeHtml(item.description)}</em>` : ""}
       </span>
       <span><span class="model-alias-field-label">环境</span>${escapeHtml(item.environment_name ?? ENVIRONMENT_LABELS[item.environment] ?? item.environment)}</span>
-      <span><span class="model-alias-field-label">实际调用模型</span>${renderModelSummary(item.default_internal_model_id, models.find((model) => model.model_id === item.default_model_id)?.provider_name)}</span>
+      <span><span class="model-alias-field-label">优先模型</span>${renderModelSummary(resolveModelLabel(item, item.default_model_id, models), resolveModelProvider(item, item.default_model_id, models))}</span>
       <span><span class="model-alias-field-label">备用模型</span>${renderFallbackSummary(item, models)}</span>
+      <span class="model-alias-routing-summary"><span class="model-alias-field-label">选择方式</span>${renderRoutingSummary(item)}</span>
       <span><span class="model-alias-field-label">状态</span><mark class="status-mark status-${escapeAttribute(item.status)}">${escapeHtml(item.status === "active" ? "已启用" : item.status === "disabled" ? "已停用" : "状态未知")}</mark></span>
       <time datetime="${escapeAttribute(item.updated_at)}"><span class="model-alias-field-label">更新时间</span>${escapeHtml(formatDateTime(item.updated_at))}</time>
       ${
@@ -189,12 +239,115 @@ function renderModelAliasRow(item, canWrite, activeModels, models) {
                 <input type="hidden" name="status" value="${escapeAttribute(nextStatus)}" />
                 <button type="submit">${statusLabel}</button>
               </form>
-              ${renderFallbackPolicyForm(item, activeModels)}
+              <button type="button" data-model-alias-edit-open="${escapeAttribute(item.model_alias_id)}" aria-haspopup="dialog">编辑</button>
             </div>
           `
           : ""
       }
     </div>
+  `;
+}
+
+function renderModelAliasEditForm(item, activeModels, environments) {
+  const environmentOptions = environments.map((environment) => renderOption(
+    environment.environment_id,
+    environment.name ?? ENVIRONMENT_LABELS[environment.code] ?? environment.code ?? environment.environment_id,
+    item.environment_id ?? "",
+  )).join("");
+  const defaultOptions = activeModels.map((model) => renderModelOption(model, item.default_model_id)).join("");
+  const selectedModel = activeModels.find((model) => model.model_id === item.default_model_id);
+  const selectedCandidate = item.routing_policy?.candidates?.find(
+    (candidate) => candidate.model_id === item.default_model_id,
+  );
+  const selectedPrice = formatModelPrice(selectedModel ?? selectedCandidate);
+  const selectedFallbackIds = item.fallback_model_ids ?? (item.fallback_model_id ? [item.fallback_model_id] : []);
+  const routingPolicy = item.routing_policy ?? {};
+  const routingMode = routingPolicy.routing_mode ?? item.effective_routing_mode ?? "fixed";
+  const qualityConfig = normalizeQualityCostConfig(routingPolicy.quality_cost_config);
+  const fallbackPolicy = item.fallback_policy ?? {};
+  const fallbackEnabled = fallbackPolicy.status === "enabled";
+  return `
+    <form class="model-alias-edit-form" data-model-alias-edit-form data-model-alias-id="${escapeAttribute(item.model_alias_id)}" hidden>
+      <label><span>统一入口名称</span><input name="alias" value="${escapeAttribute(item.alias ?? "")}" maxlength="120" required pattern="[a-z0-9](?:[a-z0-9._]|-){0,119}" /></label>
+      <label><span>调用模型</span><select name="defaultModelId" required>${defaultOptions}</select><small class="model-alias-price-hint" data-model-price-hint>${escapeHtml(selectedPrice)}</small></label>
+      ${environmentOptions
+        ? `<label><span>运行环境</span><select name="environmentId" required>${environmentOptions}</select></label>`
+        : `<input type="hidden" name="environmentId" value="${escapeAttribute(item.environment_id ?? "")}" />`}
+      <label><span>路由状态</span><select name="aliasStatus"><option value="active" ${item.status === "active" ? "selected" : ""}>已启用</option><option value="disabled" ${item.status === "disabled" ? "selected" : ""}>已停用</option></select></label>
+      <fieldset class="model-alias-routing-mode">
+        <legend>选择方式</legend>
+        <p class="model-alias-policy-version">当前配置版本：${escapeHtml(routingPolicy.version == null ? "未保存" : `v${routingPolicy.version}`)}</p>
+        <div class="routing-mode-segments">
+          ${ROUTING_MODES.map((mode) => `
+            <label title="${escapeAttribute(ROUTING_MODE_DESCRIPTIONS[mode])}" data-routing-mode="${escapeAttribute(mode)}">
+              <input type="radio" name="routingMode" value="${escapeAttribute(mode)}" ${routingMode === mode ? "checked" : ""} />
+              <span>${escapeHtml(ROUTING_MODE_LABELS[mode])}</span>
+            </label>
+          `).join("")}
+        </div>
+        <p class="model-alias-mode-summary" data-routing-mode-summary>${escapeHtml(ROUTING_MODE_DESCRIPTIONS[routingMode] ?? ROUTING_MODE_DESCRIPTIONS.fixed)}</p>
+      </fieldset>
+      ${renderFallbackModelPicker(activeModels, selectedFallbackIds, item.default_model_id, routingMode)}
+      ${renderAliasQualityCostEditor(qualityConfig, routingMode)}
+      <fieldset class="model-alias-fallback-settings">
+        <legend>故障切换</legend>
+        <p class="model-alias-fallback-hint">当前模型失败后按顺序尝试下一模型，直到成功或全部失败。</p>
+        <label class="fallback-policy-toggle">
+          <input type="checkbox" name="fallbackEnabled" ${fallbackEnabled ? "checked" : ""} />
+          <span>发生错误时使用备用模型</span>
+        </label>
+        <input type="hidden" name="triggerCondition" value="upstream_any_error" />
+      </fieldset>
+      <label class="model-alias-description-field"><span>备注</span><input name="description" maxlength="240" value="${escapeAttribute(item.description ?? "")}" /></label>
+      <input type="hidden" name="expectedRoutingPolicyVersion" value="${escapeAttribute(item.routing_policy?.version ?? "")}" />
+      <div class="model-alias-edit-actions">
+        <button type="submit">保存修改</button>
+      </div>
+      <span data-model-alias-edit-feedback role="status"></span>
+    </form>
+  `;
+}
+
+function renderAliasQualityCostEditor(config, mode) {
+  return `
+    <fieldset class="model-alias-quality-cost" data-alias-quality-config ${mode === "quality_cost" ? "" : "hidden"}>
+      <legend>质量、成本与延迟</legend>
+      <input type="hidden" name="qualityWeightPercent" value="${escapeAttribute(formatBpsInput(config.quality_weight_bps))}" />
+      <input type="hidden" name="costWeightPercent" value="${escapeAttribute(formatBpsInput(config.cost_weight_bps))}" />
+      <input type="hidden" name="latencyWeightPercent" value="${escapeAttribute(formatBpsInput(config.latency_weight_bps))}" />
+      <input type="hidden" name="qualityFloorPercent" value="${escapeAttribute(formatBpsInput(config.quality_floor_bps))}" />
+      <input type="hidden" name="minimumSampleCount" value="${escapeAttribute(String(config.minimum_sample_count))}" />
+      <p class="model-alias-quality-cost-note">系统会综合质量、成本和响应速度自动排序，无需手动调整权重。</p>
+    </fieldset>
+  `;
+}
+
+function normalizeQualityCostConfig(config) {
+  const source = config && typeof config === "object" ? config : DEFAULT_QUALITY_COST_CONFIG;
+  return Object.fromEntries(Object.keys(DEFAULT_QUALITY_COST_CONFIG).map((key) => [
+    key,
+    Number.isSafeInteger(source[key]) ? source[key] : DEFAULT_QUALITY_COST_CONFIG[key],
+  ]));
+}
+
+function formatBpsInput(value) {
+  const whole = Math.floor(Number(value) / 100);
+  const fraction = String(Number(value) % 100).padStart(2, "0").replace(/0+$/, "");
+  return `${whole}${fraction ? `.${fraction}` : ""}`;
+}
+
+function renderModelAliasDialog(createForm, editForms) {
+  return `
+    <dialog class="model-alias-dialog" data-model-alias-dialog aria-labelledby="model-alias-dialog-title">
+      <div class="model-alias-dialog-content">
+        <div class="model-alias-dialog-heading">
+          <div><span class="model-alias-dialog-kicker">模型路由</span><h3 id="model-alias-dialog-title" data-model-alias-dialog-title>添加路由</h3></div>
+          <button type="button" class="icon-button" data-model-alias-dialog-close aria-label="关闭">×</button>
+        </div>
+        <div data-model-alias-dialog-view="create">${createForm}</div>
+        <div data-model-alias-dialog-view="edit">${editForms}</div>
+      </div>
+    </dialog>
   `;
 }
 
@@ -204,85 +357,37 @@ function renderModelAliasRow(item, canWrite, activeModels, models) {
  * 调用前健康过滤直接选备用模型时不会显示“已触发”，这里只呈现静态配置。
  */
 function renderFallbackSummary(item, models) {
-  const model = renderModelSummary(item.fallback_internal_model_id, models.find((candidate) => candidate.model_id === item.fallback_model_id)?.provider_name);
+  const fallbackIds = item.fallback_model_ids ?? (item.fallback_model_id ? [item.fallback_model_id] : []);
+  const model = fallbackIds.length
+    ? `
+      <details class="model-alias-fallback-details">
+        <summary>备用模型 ${fallbackIds.length} 个</summary>
+        <ol>
+          ${fallbackIds.map((modelId) => {
+            return `<li>${renderModelSummary(resolveModelLabel(item, modelId, models), resolveModelProvider(item, modelId, models))}</li>`;
+          }).join("")}
+        </ol>
+      </details>
+    `
+    : '<em>未配置备用模型</em>';
   const policy = item.fallback_policy;
   if (!policy) {
-    return item.fallback_internal_model_id ? `${model}<em class="fallback-policy-state">自动切换未启用</em>` : '<em>未配置备用模型</em>';
+    return fallbackIds.length ? `${model}<em class="fallback-policy-state">自动切换未启用</em>` : model;
   }
   const status = policy.status === "enabled" ? "已启用" : "已停用";
   return `
     ${model}
     <em class="fallback-policy-state status-${escapeAttribute(policy.status)}">
-      ${status} · v${escapeHtml(policy.version)} · ${escapeHtml(policy.trigger_conditions.map(fallbackConditionLabel).join(" / "))}
+      ${status} · 失败后继续尝试
     </em>
   `;
 }
 
-/**
- * 为管理员渲染单行 Fallback 配置折叠区；developer 只看到上方只读摘要。
- */
-function renderFallbackPolicyForm(item, activeModels) {
-  const policy = item.fallback_policy;
-  const enabled = policy?.status === "enabled";
-  const conditions = new Set(policy?.trigger_conditions ?? [
-    "upstream_timeout",
-    "upstream_rate_limited",
-    "upstream_5xx",
-  ]);
-  const candidates = activeModels.filter((model) => model.model_id !== item.default_model_id);
-  const options = [
-    `<option value="">不配置备用模型</option>`,
-    ...candidates.map((model) => renderModelOption(model, item.fallback_model_id ?? "")),
-  ].join("");
-  return `
-    <details class="fallback-policy-editor">
-      <summary title="配置非流式请求失败后的备用模型">故障切换</summary>
-      <form
-        data-fallback-policy-form
-        data-model-alias-id="${escapeAttribute(item.model_alias_id)}"
-        data-routing-policy-version="${escapeAttribute(item.routing_policy?.version ?? "")}"
-      >
-        <label class="fallback-policy-toggle">
-          <input type="checkbox" name="enabled" ${enabled ? "checked" : ""} />
-          <span>启用</span>
-        </label>
-        <label>
-          <span>备用模型</span>
-          <select name="fallbackModelId">${options}</select>
-        </label>
-        <fieldset>
-          <legend>触发条件</legend>
-          ${renderConditionCheckbox("upstream_timeout", "超时", conditions)}
-          ${renderConditionCheckbox("upstream_rate_limited", "限流", conditions)}
-          ${renderConditionCheckbox("upstream_5xx", "5xx", conditions)}
-        </fieldset>
-        <label class="fallback-policy-toggle">
-          <input type="checkbox" name="clearFallbackModel" />
-          <span>清除备用模型</span>
-        </label>
-        <button type="submit">保存切换策略</button>
-      </form>
-    </details>
-  `;
-}
-
-/** 渲染单个触发条件复选框，条件值只来自后端支持的固定枚举。 */
-function renderConditionCheckbox(value, label, selected) {
-  return `
-    <label>
-      <input type="checkbox" name="triggerCondition" value="${escapeAttribute(value)}" ${selected.has(value) ? "checked" : ""} />
-      <span>${escapeHtml(label)}</span>
-    </label>
-  `;
-}
-
-/** 把策略条件枚举转换成紧凑中文标签。 */
-function fallbackConditionLabel(value) {
-  return {
-    upstream_timeout: "超时",
-    upstream_rate_limited: "限流",
-    upstream_5xx: "5xx",
-  }[value] ?? value;
+function renderRoutingSummary(item) {
+  const policy = item.routing_policy ?? {};
+  const mode = policy.routing_mode ?? item.effective_routing_mode ?? "fixed";
+  const version = policy.version == null ? "未保存" : `v${policy.version}`;
+  return `<strong>${escapeHtml(ROUTING_MODE_LABELS[mode] ?? mode)}</strong><em>${escapeHtml(version)}</em>`;
 }
 
 /**
@@ -303,9 +408,35 @@ function renderModelSummary(internalModelId, providerName) {
 }
 
 /**
+ * Resolve a user-facing model name without ever leaking the database UUID.
+ * The model catalog is normally present; the routing policy candidate summary
+ * keeps the same readable fallback when a background refresh has not arrived.
+ */
+function resolveModelLabel(item, modelId, models) {
+  const model = models.find((candidate) => candidate.model_id === modelId);
+  const candidate = item?.routing_policy?.candidates?.find((entry) => entry.model_id === modelId);
+  return firstNonEmpty(
+    model?.display_name,
+    model?.provider_model_id,
+    readableModelId(model?.internal_model_id),
+    candidate?.display_name,
+    candidate?.provider_model_id,
+    readableModelId(candidate?.internal_model_id),
+    modelId === item?.default_model_id ? item?.default_internal_model_id : item?.fallback_internal_model_id,
+  )
+    ?? "未命名模型";
+}
+
+function resolveModelProvider(item, modelId, models) {
+  const model = models.find((candidate) => candidate.model_id === modelId);
+  const candidate = item?.routing_policy?.candidates?.find((entry) => entry.model_id === modelId);
+  return model?.provider_name ?? candidate?.provider_name ?? (modelId === item?.default_model_id ? item?.default_provider_name : item?.fallback_provider_name);
+}
+
+/**
  * 渲染模型别名操作错误。
  *
- * 统一显示 request_id，便于在控制面日志中追踪失败原因。
+ * 普通用户只需要知道操作未完成；请求关联号保留在客户端错误对象和服务端日志中。
  */
 function renderActionError(error) {
   if (!error) {
@@ -313,7 +444,7 @@ function renderActionError(error) {
   }
   return `
     <div class="model-alias-action-error" role="alert">
-      ${escapeHtml(error.message ?? "模型别名操作失败")} request_id: ${escapeHtml(error.requestId ?? "-")}
+      ${escapeHtml(error.message ?? "模型别名操作失败")}
     </div>
   `;
 }
@@ -338,9 +469,29 @@ function renderEmptyRow() {
  */
 function renderModelOption(model, selectedValue) {
   const selected = model.model_id === selectedValue ? " selected" : "";
-  const label = [model.internal_model_id, model.provider_name].filter(Boolean).join(" / ");
+  const label = [firstNonEmpty(model.display_name, model.provider_model_id, readableModelId(model.internal_model_id)), model.provider_name].filter(Boolean).join(" / ");
+  const price = formatModelPrice(model);
   // 路由和模型判断决定实际上游调用，必须保持可解释和可追踪。
-  return `<option value="${escapeAttribute(model.model_id)}"${selected}>${escapeHtml(label)}</option>`;
+  return `<option value="${escapeAttribute(model.model_id)}"${selected} data-price="${escapeAttribute(price)}">${escapeHtml(label)}</option>`;
+}
+
+function firstNonEmpty(...values) {
+  return values.find((value) => typeof value === "string" && value.trim())?.trim();
+}
+
+function readableModelId(value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  return /^[0-9a-f]{8}-[0-9a-f-]{27,}$/iu.test(text) ? "" : text;
+}
+
+function formatModelPrice(model) {
+  const input = Number(model?.input_price_per_1k ?? model?.input_price_per_million);
+  const output = Number(model?.output_price_per_1k ?? model?.output_price_per_million);
+  const cache = Number(model?.cache_price_per_1k ?? model?.cache_price_per_million ?? model?.input_price_per_1k ?? model?.input_price_per_million);
+  if (![input, output, cache].every(Number.isFinite)) return "价格未配置";
+  const currency = String(model?.currency || "CNY");
+  const format = (value) => value.toFixed(6).replace(/0+$/, "").replace(/\.$/, "") || "0";
+  return `输入 ${format(input)} / 输出 ${format(output)} / 缓存命中 ${format(cache)} ${currency} / 百万 Token`;
 }
 
 /**

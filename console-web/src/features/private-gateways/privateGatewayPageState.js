@@ -36,6 +36,7 @@ const ERROR_MESSAGES = Object.freeze({
   "workspace_session.expired": "Workspace 会话已过期，请重新选择空间",
   "workspace_session.revoked": "Workspace 会话已撤销，请重新选择空间",
   "workspace_session.permission_denied": "当前成员没有私有 Gateway 权限",
+  "edge.private_gateway_disabled": "当前组织尚未开通私有 Gateway",
   "workspace_session.credential_conflict": "检测到冲突的登录凭据，请重新进入 Workspace",
   "edge.permission_denied": "当前成员没有私有 Gateway 权限",
   "edge.authentication_failed": "私有 Gateway 认证状态已失效",

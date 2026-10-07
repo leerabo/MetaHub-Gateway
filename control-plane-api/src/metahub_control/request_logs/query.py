@@ -11,13 +11,14 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
 import math
 import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -30,6 +31,8 @@ from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 from .models import RequestLogListResponse
 from .service import _connect, _request_log_info
 
+logger = logging.getLogger("metahub.control.request_logs.query")
+
 if TYPE_CHECKING:
     from metahub_control.machine_identity.service import MachineAuthContext
 
@@ -41,6 +44,10 @@ MAX_FILTER_JSON_BYTES = 3072
 MAX_FILTER_FIELD_COUNT = 28
 MAX_OFFSET = 10_000
 MAX_LIMIT = 100
+# Scheduler writes and a user query can briefly contend for SQLite's single
+# writer slot. A short bounded retry keeps the read endpoint usable without
+# weakening the fail-closed audit contract.
+QUERY_EVENT_WRITE_ATTEMPTS = 3
 SORT_FIELDS = frozenset({"created_at", "latency_ms", "total_tokens", "estimated_cost_amount"})
 SORT_DIRECTIONS = frozenset({"asc", "desc"})
 TERMINAL_STAGES = frozenset(
@@ -710,12 +717,14 @@ def _write_query_event(
         ),
         separators=(",", ":"),
     )
-    try:
-        transaction = ResourceWriteTransaction(connection, config, context, "request_log.read")
-        transaction.begin()
-        context = transaction.context
-        workspace = context.session.session_id.startswith("wss_")
-        connection.execute(
+    workspace: bool | None = None
+    for attempt in range(1, QUERY_EVENT_WRITE_ATTEMPTS + 1):
+        try:
+            transaction = ResourceWriteTransaction(connection, config, context, "request_log.read")
+            transaction.begin()
+            context = transaction.context
+            workspace = context.session.session_id.startswith("wss_")
+            connection.execute(
             """
             INSERT INTO request_log_query_events(
               query_event_id, event_id, tenant_id, actor_user_id, actor_session_id,
@@ -753,17 +762,41 @@ def _write_query_event(
                 timestamp,
                 context.session.session_id if workspace else None,
             ),
-        )
-        transaction.commit()
-        return query_event_id
-    except ApiError:
-        _rollback(connection)
-        raise
-    # 审计事实写入失败时回滚整个短事务，列表结果不得在无追踪状态下返回。
-    except sqlite3.Error as exc:
-        _rollback(connection)
-        # 触发器或锁异常只转换为固定审计错误，禁止泄露数据库内部信息。
-        raise ApiError("request_log.query_audit_unavailable") from exc
+            )
+            transaction.commit()
+            return query_event_id
+        except ApiError:
+            _rollback(connection)
+            raise
+        # 审计事实写入失败时回滚整个短事务，列表结果不得在无追踪状态下返回。
+        except sqlite3.Error as exc:
+            _rollback(connection)
+            sqlite_code = getattr(exc, "sqlite_errorcode", None)
+            primary_code = (
+                (int(sqlite_code) & 0xFF) if isinstance(sqlite_code, int) else None
+            )
+            if (
+                primary_code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+                and attempt < QUERY_EVENT_WRITE_ATTEMPTS
+            ):
+                # Do not spin indefinitely or expose the lock detail to the browser.
+                sleep(0.025 * attempt)
+                continue
+            # 客户端只收到固定错误码；服务端保留可行动的 SQLite 分类，便于区分
+            # 锁竞争、会话归属约束和其它数据库约束，不记录 SQL、筛选值或凭据。
+            logger.warning(
+                "request log query audit write failed",
+                extra={
+                    "event": "request_log.query_audit_write_failed",
+                    "sqlite_errorcode": sqlite_code,
+                    "sqlite_errorname": getattr(exc, "sqlite_errorname", None),
+                    "exception_type": type(exc).__name__,
+                    "workspace_session": workspace,
+                    "write_attempt": attempt,
+                },
+            )
+            # 触发器或锁异常只转换为固定审计错误，禁止泄露数据库内部信息。
+            raise ApiError("request_log.query_audit_unavailable") from exc
 
 
 def _page_integer(
@@ -943,16 +976,28 @@ def _rollback(connection: sqlite3.Connection) -> None:
 # FinOps 503 覆盖公开错误码时，阶段筛选会漏掉已提交的 blocked/unavailable 事实。
 _OUTPUT_SAFETY_JOIN = """
 LEFT JOIN output_safety_scans oss
-  ON oss.tenant_id=rl.tenant_id AND oss.request_id=rl.request_id
+  ON oss.output_safety_scan_id = (
+    SELECT candidate.output_safety_scan_id
+    FROM output_safety_scans candidate
+    WHERE candidate.tenant_id=rl.tenant_id
+      AND candidate.request_id=rl.request_id
+      AND (
+        (rl.stream_session_id IS NOT NULL AND candidate.stream_session_id=rl.stream_session_id)
+        OR (rl.stream_session_id IS NULL AND candidate.stream_session_id IS NULL)
+      )
+    ORDER BY candidate.started_at DESC, candidate.output_safety_scan_id DESC
+    LIMIT 1
+  )
 """
 
 # 列表 SQL 仅投影安全摘要，并在每个展示关联上重复 tenant 条件防止横向串租户。
 _SELECT_COLUMNS = f"""
   rl.request_id, rl.tenant_id, rl.trace_id, rl.virtual_key_id, vk.key_prefix AS virtual_key_prefix,
+  vk.name AS virtual_key_name, wc.display_name AS consumer_name, key_owner.display_name AS key_owner_name,
   rl.environment_id, rl.environment_code AS environment, e.name AS environment_name,
   rl.project_id, p.name AS project_name, rl.application_id, a.name AS application_name,
   rl.provider_id, rl.model_id, rl.endpoint, rl.request_model, rl.resolved_model,
-  rl.provider_code, rl.status, rl.error_code, ({TERMINAL_STAGE_SQL}) AS terminal_stage,
+  rl.provider_code, provider.name AS provider_name, rl.status, rl.error_code, ({TERMINAL_STAGE_SQL}) AS terminal_stage,
   rl.stream_session_id, rl.stream_status,
   rl.snapshot_version, rl.policy_snapshot_status, rl.policy_decision, rl.policy_reason_code,
   rl.policy_id, rl.policy_action_type, rl.policy_target_model_id,
@@ -984,8 +1029,23 @@ _SELECT_COLUMNS = f"""
 
 _SELECT_JOINS = """
 LEFT JOIN output_safety_scans oss
-  ON oss.tenant_id=rl.tenant_id AND oss.request_id=rl.request_id
+  ON oss.output_safety_scan_id = (
+    SELECT candidate.output_safety_scan_id
+    FROM output_safety_scans candidate
+    WHERE candidate.tenant_id=rl.tenant_id
+      AND candidate.request_id=rl.request_id
+      AND (
+        (rl.stream_session_id IS NOT NULL AND candidate.stream_session_id=rl.stream_session_id)
+        OR (rl.stream_session_id IS NULL AND candidate.stream_session_id IS NULL)
+      )
+    ORDER BY candidate.started_at DESC, candidate.output_safety_scan_id DESC
+    LIMIT 1
+  )
 LEFT JOIN virtual_keys vk ON vk.virtual_key_id=rl.virtual_key_id AND vk.tenant_id=rl.tenant_id
+LEFT JOIN virtual_key_consumers vkc ON vkc.virtual_key_id=rl.virtual_key_id AND vkc.tenant_id=rl.tenant_id
+LEFT JOIN workspace_consumers wc ON wc.consumer_id=vkc.consumer_id AND wc.tenant_id=rl.tenant_id
+LEFT JOIN users key_owner ON key_owner.user_id=vk.created_by AND key_owner.tenant_id=rl.tenant_id
+LEFT JOIN providers provider ON provider.provider_id=rl.provider_id AND provider.tenant_id=rl.tenant_id
 LEFT JOIN environments e ON e.environment_id=rl.environment_id AND e.tenant_id=rl.tenant_id
 LEFT JOIN projects p ON p.project_id=rl.project_id AND p.tenant_id=rl.tenant_id
 LEFT JOIN applications a ON a.application_id=rl.application_id AND a.tenant_id=rl.tenant_id

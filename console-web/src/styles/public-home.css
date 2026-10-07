@@ -89,3 +89,227 @@ button:focus-visible, a:focus-visible { outline: 2px solid #07816a; outline-offs
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* Public surface v2: a restrained product front door that shares the console's
+   ink / mint palette without looking like a marketing template. */
+:root {
+  --home-ink: #17332c;
+  --home-ink-soft: #315149;
+  --home-mint: #087f6b;
+  --home-paper: #f4f7f3;
+  --home-line: #d8e2dc;
+}
+
+body:has(.home-header) {
+  background: var(--home-paper);
+  color: var(--home-ink);
+}
+
+.home-header,
+.home-footer {
+  max-width: 1440px;
+  padding-inline: 64px;
+}
+
+.home-header {
+  height: 82px;
+  border-bottom-color: var(--home-line);
+}
+
+.home-wordmark {
+  gap: 11px;
+  color: var(--home-ink);
+  font-size: 22px;
+  font-weight: 780;
+  letter-spacing: -.02em;
+}
+
+.home-mark {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--home-ink);
+  color: #b9e5d1;
+  font-size: 17px;
+}
+
+.home-header nav {
+  gap: 26px;
+  color: var(--home-ink-soft);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.home-header nav a:hover,
+.home-text-link:hover,
+.home-nav-login:hover { color: var(--home-mint); }
+
+.home-nav-login {
+  min-height: 38px;
+  padding: 0 13px;
+  border: 1px solid var(--home-line);
+  border-radius: 6px;
+  color: var(--home-ink);
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.home-hero {
+  min-height: 620px;
+  height: auto;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 0 64px 68px;
+  border-bottom: 1px solid var(--home-line);
+}
+
+.home-hero-copy {
+  width: min(520px, 46%);
+  padding: 126px 0 0;
+  text-align: left;
+}
+
+.home-eyebrow {
+  color: var(--home-mint);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.home-hero h1 {
+  margin: 14px 0 18px;
+  color: var(--home-ink);
+  font-size: clamp(52px, 6vw, 82px);
+  font-weight: 780;
+  letter-spacing: -.055em;
+  line-height: .98;
+}
+
+.home-hero-description {
+  max-width: 430px;
+  margin-bottom: 30px;
+  color: var(--home-ink-soft);
+  font-size: 18px;
+  line-height: 1.7;
+}
+
+.home-hero-actions {
+  justify-content: flex-start;
+  gap: 18px;
+}
+
+.home-button {
+  min-height: 44px;
+  border-color: var(--home-ink);
+  border-radius: 6px;
+  background: var(--home-ink);
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.home-button:hover {
+  border-color: var(--home-mint);
+  background: var(--home-mint);
+  transform: translateY(-1px);
+}
+
+.home-text-link {
+  min-height: 42px;
+  color: var(--home-ink-soft);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.home-scene {
+  inset: 90px 64px 76px 52%;
+  min-height: 360px;
+  border-left: 1px solid var(--home-line);
+}
+
+.home-hero-bottom {
+  inset-inline: 64px;
+  height: 48px;
+  color: #698078;
+  font-size: 12px;
+}
+
+.home-capabilities {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 0 64px 72px;
+  background: #fff;
+}
+
+.home-capability-intro {
+  height: 74px;
+  margin-bottom: 26px;
+  color: var(--home-mint);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.home-section-heading {
+  margin-bottom: 34px;
+}
+
+.home-section-heading h2 {
+  color: var(--home-ink);
+  font-size: 32px;
+  font-weight: 780;
+  letter-spacing: -.03em;
+}
+
+.home-section-heading > p {
+  color: #698078;
+  font-size: 14px;
+}
+
+.home-capability-grid {
+  column-gap: 40px;
+}
+
+.home-capability-grid article {
+  min-height: 168px;
+  padding: 24px 0 20px;
+  border-top-color: var(--home-line);
+}
+
+.home-capability-grid article > [data-icon] { color: var(--home-mint); }
+.home-capability-grid article:nth-child(3n) > [data-icon] { color: #4d7caf; }
+.home-capability-grid h3 { margin: 17px 0 8px; color: var(--home-ink); font-size: 16px; font-weight: 780; }
+.home-capability-grid p { color: #63736d; font-size: 14px; line-height: 1.7; }
+
+.home-footer {
+  min-height: 86px;
+  color: #698078;
+}
+
+.home-footer .home-wordmark { font-size: 18px; }
+
+@media (max-width: 900px) {
+  .home-header, .home-footer, .home-hero, .home-capabilities { padding-inline: 28px; }
+  .home-hero-copy { width: 52%; padding-top: 94px; }
+  .home-scene { inset-inline: 28px 28px; left: 55%; }
+  .home-hero-bottom { inset-inline: 28px; }
+}
+
+@media (max-width: 600px) {
+  .home-header, .home-footer { padding-inline: 20px; }
+  .home-header { height: 68px; }
+  .home-hero { min-height: 620px; padding: 0 20px 62px; }
+  .home-hero-copy { width: 100%; padding-top: 68px; text-align: left; }
+  .home-hero h1 { max-width: 320px; font-size: 54px; }
+  .home-hero-description { max-width: 310px; font-size: 16px; }
+  .home-hero-actions { flex-wrap: wrap; }
+  .home-scene { inset: 330px 20px 70px; border-left: 0; }
+  .home-hero-bottom { inset-inline: 20px; }
+  .home-capabilities { padding: 0 20px 42px; }
+  .home-capability-intro { height: 58px; margin-bottom: 18px; }
+  .home-section-heading h2 { font-size: 27px; }
+  .home-capability-grid { column-gap: 20px; }
+  .home-capability-grid article { min-height: 148px; }
+}

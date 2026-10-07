@@ -182,7 +182,11 @@ function renderConsoleContentPreservingSidebar(container, shellHtml, activeItemI
   if (!nextTopbar || !nextShell || !nextMain || nextShell.dataset.activeNavigation !== activeItemId) {
     return false;
   }
-  if (!currentTopbar.isEqualNode(nextTopbar)) currentTopbar.replaceWith(nextTopbar);
+  // The topbar contains global actions such as Log out. Keep its DOM identity
+  // across an in-flight page hydration so a pointer-down cannot be cancelled
+  // by replacing the element before pointer-up. Identity and branding changes
+  // are handled by the full session refresh path, outside this preservation
+  // branch.
   currentMain.replaceWith(nextMain);
   return true;
 }
@@ -322,6 +326,7 @@ function renderActiveContent(activeItemId, options, statuses) {
         options.workspaceConsoleExperienceState,
         options.authContext,
         options.consoleShellState,
+        options.i18n,
       );
     case "approvals":
       // PAGE-108/109 只投影后端 approval.read 导航 owner；行与动作仍分别叠加目标域实时权限。
@@ -329,6 +334,7 @@ function renderActiveContent(activeItemId, options, statuses) {
         options.workspaceConsoleExperienceState,
         options.authContext,
         options.consoleShellState,
+        options.i18n,
       );
     case "model-aliases":
       // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
@@ -498,7 +504,6 @@ function renderActiveContent(activeItemId, options, statuses) {
         options.authContext,
         options.requestFeedbackState,
         options.i18n,
-        options.requestExplanationState,
       );
     case "request-explanations":
       // PAGE-079 只渲染后端单次 GET 返回的严格白名单；权限、租户归属和访问审计均由后端强制执行。
@@ -571,12 +576,16 @@ function renderActiveContent(activeItemId, options, statuses) {
         options.workspaceConsoleExperienceState,
         "system-status",
         options.authContext,
+        options.consoleShellState,
+        options.i18n,
       );
     case "config-summary":
       return renderWorkspaceConsoleExperienceSection(
         options.workspaceConsoleExperienceState,
         "deployment-summary",
         options.authContext,
+        options.consoleShellState,
+        options.i18n,
       );
     case "overview":
     default:
@@ -590,9 +599,32 @@ function renderActiveContent(activeItemId, options, statuses) {
  */
 function renderOverviewContent(options) {
   if (!hasPermission(options.authContext, PERMISSIONS.WORKSPACE_CONSOLE_OVERVIEW_READ)) return "";
+  const taskHome = options.workspaceTaskHomeState;
+  const taskRole = taskHome?.role_code ?? options.consoleShellState?.navigation?.role_code;
+  const setupTasks = Array.isArray(taskHome?.tasks)
+    ? taskHome.tasks.filter((task) => ["provider_connected", "model_catalog_ready"].includes(task?.task_code))
+    : [];
+  const setupComplete = setupTasks.length > 0
+    && setupTasks.every((task) => task?.status === "completed");
+  const firstUseGuidance = taskHome && ["owner", "admin"].includes(taskRole) && !setupComplete
+    ? `
+      <section class="panel workspace-first-use-panel" aria-labelledby="workspace-first-use-title">
+        <header class="workspace-first-use-heading">
+          <div><p>组织配置</p><h2 id="workspace-first-use-title">配置模型接入</h2></div>
+        </header>
+        ${renderWorkspaceTaskHome(taskHome, options.i18n, {
+          navigation: options.consoleShellState?.navigation,
+          workspaceContext: options.consoleShellState?.workspaceContext,
+          authContext: options.authContext,
+          embedded: true,
+        })}
+      </section>
+    `
+    : "";
   return `
+    ${firstUseGuidance}
     <section class="panel workspace-console-experience-panel" aria-labelledby="workspace-console-overview-title">
-      ${renderWorkspaceConsoleExperience(options.workspaceConsoleExperienceState, "overview")}
+       ${renderWorkspaceConsoleExperience(options.workspaceConsoleExperienceState, "overview", options.consoleShellState?.navigation?.role_code, options.i18n)}
     </section>
   `;
 }
@@ -993,9 +1025,9 @@ function renderWorkspaceQuotaSection(state, authContext, consoleShellState, i18n
 }
 
 /** PAGE-107 失权时不保留空壳 DOM；前端可见性不能替代 POST 的实时 base/source 权限复核。 */
-function renderAdminAssistantSection(state, authContext, consoleShellState) {
+function renderAdminAssistantSection(state, authContext, consoleShellState, i18n) {
   if (!hasPermission(authContext, PERMISSIONS.WORKSPACE_CONSOLE_ASSISTANT_QUERY)) return "";
-  const html = renderWorkspaceConsoleExperience(state, "admin-assistant");
+  const html = renderWorkspaceConsoleExperience(state, "admin-assistant", consoleShellState?.navigation?.role_code, i18n);
   return html
     ? `
       <section class="panel admin-assistant-panel workspace-console-experience-panel" aria-labelledby="admin-assistant-title">
@@ -1006,9 +1038,9 @@ function renderAdminAssistantSection(state, authContext, consoleShellState) {
 }
 
 /** PAGE-108/109 失权时不保留空壳 DOM；任务 ID 只是选择器，不是授权凭据。 */
-function renderApprovalsSection(state, authContext, consoleShellState) {
+function renderApprovalsSection(state, authContext, consoleShellState, i18n) {
   if (!hasPermission(authContext, PERMISSIONS.WORKSPACE_CONSOLE_APPROVAL_READ)) return "";
-  const html = renderWorkspaceConsoleExperience(state, "approvals");
+  const html = renderWorkspaceConsoleExperience(state, "approvals", consoleShellState?.navigation?.role_code, i18n);
   return html
     ? `
       <section class="panel approvals-panel workspace-console-experience-panel" aria-labelledby="approvals-title">
@@ -1018,7 +1050,7 @@ function renderApprovalsSection(state, authContext, consoleShellState) {
     : "";
 }
 
-function renderWorkspaceConsoleExperienceSection(state, view, authContext) {
+function renderWorkspaceConsoleExperienceSection(state, view, authContext, consoleShellState, i18n) {
   const allowed = view === "system-status"
     ? hasPermission(authContext, PERMISSIONS.WORKSPACE_CONSOLE_OVERVIEW_READ)
     : hasPermission(authContext, PERMISSIONS.WORKSPACE_DEPLOYMENT_DIAGNOSTIC_READ)
@@ -1026,7 +1058,7 @@ function renderWorkspaceConsoleExperienceSection(state, view, authContext) {
   if (!allowed) return "";
   return `
     <section class="panel workspace-console-experience-panel">
-      ${renderWorkspaceConsoleExperience(state, view)}
+       ${renderWorkspaceConsoleExperience(state, view, consoleShellState?.navigation?.role_code, i18n)}
     </section>
   `;
 }
@@ -1084,15 +1116,12 @@ function renderPromptTemplatesContent(options) {
  * 渲染调用日志区域。
  * 前端会按角色隐藏该区域，但后端 /request-logs 仍会做管理员/开发者权限校验。
  */
-function renderRequestLogsSection(requestLogsState, authContext, feedbackState, i18n, explanationState) {
+function renderRequestLogsSection(requestLogsState, authContext, feedbackState, i18n) {
   const html = renderRequestLogPanel(requestLogsState, authContext, feedbackState, i18n);
   return html
     ? `
       <section class="panel request-logs-panel" aria-labelledby="request-logs-title">
         ${html}
-        <div class="request-explanations-panel">
-          ${explanationState?.requestId ? renderRequestExplanationPanel(explanationState, authContext, i18n) : ""}
-        </div>
       </section>
     `
     : "";

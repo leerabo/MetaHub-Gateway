@@ -4,6 +4,7 @@ import test from "node:test";
 
 import { renderDeveloperStart } from "../../src/features/developer-start/renderDeveloperStart.js";
 import { renderModelCatalogPanel } from "../../src/features/models/renderModelCatalogPanel.js";
+import { readModelEditValues } from "../../src/features/models/modelEditForm.js";
 import { AuthApiError } from "../../src/lib/auth.js";
 import { createModel, listModels, updateModel } from "../../src/lib/models.js";
 import { PERMISSIONS, withPermissionSnapshot } from "./permissionTestContext.mjs";
@@ -23,6 +24,7 @@ const modelsPayload = {
       context_window: 64000,
       input_price_per_1k: 0.001,
       output_price_per_1k: 0.002,
+      cache_price_per_1k: 0.0005,
       currency: "CNY",
       price_schema_version: "manual-202607",
       status: "active",
@@ -84,6 +86,7 @@ test("models client lists creates and updates with bearer token", async () => {
     contextWindow: 64000,
     inputPricePer1k: 0.001,
     outputPricePer1k: 0.002,
+    cachePricePer1k: 0.0005,
     currency: "CNY",
     priceSchemaVersion: "manual-202607",
     description: "prod candidate",
@@ -102,6 +105,7 @@ test("models client lists creates and updates with bearer token", async () => {
   assert.equal(calls[1].options.method, "POST");
   assert.equal(JSON.parse(calls[1].options.body).tenant_id, undefined);
   assert.equal(JSON.parse(calls[1].options.body).provider_model_id, "deepseek-chat-upstream");
+  assert.equal(JSON.parse(calls[1].options.body).cache_price_per_1k, 0.0005);
   assert.deepEqual(JSON.parse(calls[2].options.body), { status: "disabled" });
 });
 
@@ -156,6 +160,95 @@ test("renderModelCatalogPanel shows admin controls and escapes unsafe values", (
   assert.doesNotMatch(html, /<DeepSeek>/);
   assert.match(html, /&lt;DeepSeek&gt;/);
   assert.match(html, /model\/&lt;bad&gt;/);
+  assert.match(html, /服务：DeepSeek Official/);
+  assert.match(html, /模型标识：model\/&lt;bad&gt;/);
+  assert.match(html, /data-model-edit-form/);
+  assert.match(html, /model-alias-dialog-heading model-edit-dialog-heading/);
+  assert.match(html, /model-alias-dialog-kicker">模型目录/);
+  assert.match(html, /model-edit-actions model-alias-edit-actions/);
+  assert.match(html, /缓存命中价格 \/ 百万 Token/);
+  assert.match(html, /data-model-pricing-configured/);
+  assert.doesNotMatch(html, /<span>价格说明<\/span>/u);
+});
+
+test("model catalog keeps entered prices visible for legacy records without a price version", () => {
+  const html = renderModelCatalogPanel(
+    {
+      state: "ok",
+      models: [{
+        ...modelsPayload.models[0],
+        input_price_per_1k: 0.001,
+        output_price_per_1k: 0.002,
+        cache_price_per_1k: 0.0005,
+        price_schema_version: null,
+      }],
+    },
+    providersState,
+    withPermissionSnapshot(
+      { user: { role: "admin" } },
+      [PERMISSIONS.MODEL_READ, PERMISSIONS.MODEL_WRITE],
+    ),
+  );
+
+  assert.match(html, /输入 0\.001 \/ 输出 0\.002 \/ 缓存命中 0\.0005 CNY \/ 百万 Token/);
+  assert.doesNotMatch(html, /未配置价格/);
+});
+
+test("model edit dialog backfills legacy prices without a price version", () => {
+  const html = renderModelCatalogPanel(
+    {
+      state: "ok",
+      models: [{
+        ...modelsPayload.models[0],
+        input_price_per_1k: 1.25,
+        output_price_per_1k: 2.5,
+        cache_price_per_1k: 0.75,
+        price_schema_version: null,
+      }],
+    },
+    providersState,
+    withPermissionSnapshot(
+      { user: { role: "admin" } },
+      [PERMISSIONS.MODEL_READ, PERMISSIONS.MODEL_WRITE],
+    ),
+  );
+
+  assert.match(html, /name="pricingEnabled" checked/);
+  assert.match(html, /name="inputPricePerMillion"[^>]*value="1\.25"/);
+  assert.match(html, /name="outputPricePerMillion"[^>]*value="2\.5"/);
+  assert.match(html, /name="cachePricePerMillion"[^>]*value="0\.75"/);
+  assert.doesNotMatch(html, /name="inputPricePerMillion"[^>]*value=""/);
+});
+
+test("model edit values keep unknown prices absent and validate configured prices", () => {
+  const nameOnly = new FormData();
+  nameOnly.set("displayName", "模型别名");
+  nameOnly.set("providerModelId", "upstream-model");
+  nameOnly.set("description", "");
+  assert.deepEqual(readModelEditValues(nameOnly), {
+    displayName: "模型别名",
+    providerModelId: "upstream-model",
+    description: null,
+  });
+
+  const priced = new FormData();
+  priced.set("displayName", "模型别名");
+  priced.set("providerModelId", "upstream-model");
+  priced.set("pricingEnabled", "on");
+  priced.set("inputPricePerMillion", "0");
+  priced.set("outputPricePerMillion", "2");
+  priced.set("cachePricePerMillion", "0.5");
+  priced.set("priceMultiplier", "1.5");
+  priced.set("currency", "CNY");
+  const values = readModelEditValues(priced, new Date("2026-10-01T00:00:00.000Z"));
+  assert.equal(values.inputPricePer1k, 0);
+  assert.equal(values.outputPricePer1k, 3);
+  assert.equal(values.cachePricePer1k, 0.75);
+  assert.equal(values.priceSchemaVersion, "manual-2026-10-01T00:00:00.000Z");
+  assert.throws(() => {
+    priced.set("outputPricePerMillion", "");
+    readModelEditValues(priced);
+  }, /有效的输入、输出和缓存命中价格/);
 });
 
 test("renderModelCatalogPanel is read-only for developer and hidden for viewer", () => {

@@ -115,6 +115,7 @@ class ModelExport(BaseModel):
     context_window: int
     input_price_per_1k: float
     output_price_per_1k: float
+    cache_price_per_1k: float
     currency: str
     price_schema_version: str | None
     description: str | None

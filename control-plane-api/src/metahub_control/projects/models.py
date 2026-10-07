@@ -84,6 +84,35 @@ class ApplicationResponse(BaseModel):
     trace_id: str
 
 
+class ApplicationMemberInfo(BaseModel):
+    """组织成员候选及其在当前应用中的选择状态。"""
+
+    membership_id: str
+    display_name: str
+    role: str
+    status: str
+    selected: bool = False
+
+
+class ApplicationMembersResponse(BaseModel):
+    """应用成员分页响应，selected_membership_ids 保持完整选择状态。"""
+
+    application_id: str
+    members: list[ApplicationMemberInfo]
+    selected_membership_ids: list[str]
+    limit: int
+    offset: int
+    total: int
+    request_id: str
+    trace_id: str
+
+
+class UpdateApplicationMembersRequest(BaseModel):
+    """提交当前应用的完整成员选择集合。"""
+
+    membership_ids: list[str]
+
+
 class CreateProjectRequest(BaseModel):
     """创建项目请求体。
 

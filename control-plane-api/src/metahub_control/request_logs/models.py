@@ -93,6 +93,9 @@ class RequestLogInfo(BaseModel):
     tenant_id: str
     virtual_key_id: str | None
     virtual_key_prefix: str | None
+    virtual_key_name: str | None = None
+    consumer_name: str | None = None
+    key_owner_name: str | None = None
     environment_id: str | None
     environment: str | None
     environment_name: str | None
@@ -105,6 +108,7 @@ class RequestLogInfo(BaseModel):
     resolved_model: str | None
     provider_id: str | None
     provider_code: str | None
+    provider_name: str | None = None
     # 快照/策略字段只承载安全排障摘要；DSL、AST、Prompt 与上下文实际值不进入 DTO。
     snapshot_version: int | None = None
     policy_snapshot_status: str = "disabled"
@@ -186,6 +190,7 @@ class RequestLogRoutingDecision(BaseModel):
     selected_internal_model_id: str | None
     provider_id: str | None
     provider_code: str | None
+    provider_name: str | None = None
     error_code: str | None
     routing_policy_id: str | None = None
     routing_policy_version: int | None = None
@@ -234,6 +239,10 @@ class RequestLogRoutingCandidate(BaseModel):
     price_schema_version: str | None
     currency: str | None
     estimated_cost_amount: str | None
+    comparison_currency: str | None = None
+    comparison_fx_rate: str | None = None
+    comparison_fx_rate_version: str | None = None
+    comparison_cost_amount: str | None = None
     model_quality_score_id: str | None = None
     quality_statistics_version: int | None = None
     quality_feedback_version: int | None = None
@@ -325,6 +334,7 @@ class RequestLogRoutingAttempt(BaseModel):
     resolved_model: str
     provider_id: str
     provider_code: str
+    provider_name: str | None = None
     status: str
     error_code: str | None
     error_category: str | None
@@ -399,6 +409,12 @@ class RequestLogStreamSession(BaseModel):
     # 0046 把握手失败的可信 HTTP/重试语义冻结到 owner；旧会话使用迁移默认值。
     upstream_http_status: int | None = None
     retryable: bool = False
+    # 流会话自己保存实际候选模型和服务；主 RequestLog 在失败时可能尚未落最终路由。
+    model_id: str | None = None
+    resolved_model: str | None = None
+    provider_id: str | None = None
+    provider_code: str | None = None
+    provider_name: str | None = None
     provider_error_fact: RequestLogProviderErrorFact | None = None
 
 

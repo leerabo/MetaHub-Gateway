@@ -28,6 +28,7 @@ class ProviderReferenceRateInfo(CommercialAccountingModel):
     currency: Currency
     input_rate_micros_per_1k: int = Field(ge=0)
     output_rate_micros_per_1k: int = Field(ge=0)
+    cache_rate_micros_per_1k: int = Field(ge=0)
     effective_from: datetime
     effective_until: datetime | None = None
     source_version: str
@@ -307,6 +308,7 @@ class ProviderCostRateInfo(CommercialAccountingModel):
     version_number: int = Field(ge=1)
     input_rate_micros_per_1k: int = Field(ge=0)
     output_rate_micros_per_1k: int = Field(ge=0)
+    cache_rate_micros_per_1k: int = Field(ge=0)
     effective_from: datetime
     effective_until: datetime | None = None
     source_type: Literal[
@@ -339,6 +341,7 @@ class ProviderCostRateCommandRequest(CommercialAccountingModel):
     currency: Currency | None = None
     input_rate_micros_per_1k: StrictInt | None = Field(default=None, ge=0)
     output_rate_micros_per_1k: StrictInt | None = Field(default=None, ge=0)
+    cache_rate_micros_per_1k: StrictInt | None = Field(default=None, ge=0)
     effective_from: datetime | None = None
     effective_until: datetime | None = None
     provider_reference_rate_release_id: str | None = None
@@ -354,6 +357,7 @@ class ProviderCostRateCommandRequest(CommercialAccountingModel):
             "currency",
             "input_rate_micros_per_1k",
             "output_rate_micros_per_1k",
+            "cache_rate_micros_per_1k",
             "effective_from",
             *interval,
         } and all(
@@ -364,6 +368,7 @@ class ProviderCostRateCommandRequest(CommercialAccountingModel):
                 self.currency,
                 self.input_rate_micros_per_1k,
                 self.output_rate_micros_per_1k,
+                self.cache_rate_micros_per_1k,
                 self.effective_from,
             )
         ):
@@ -408,12 +413,54 @@ class ProviderCostRateCommandResponse(CommercialAccountingModel):
     trace_id: str
 
 
+class WorkspaceFxRateInfo(CommercialAccountingModel):
+    workspace_fx_rate_version_id: str
+    workspace_id: str
+    tenant_id: str
+    base_currency: Literal["USD"]
+    quote_currency: Literal["CNY"]
+    usd_to_cny: str
+    version_number: int = Field(ge=1)
+    effective_from: datetime
+    status: Literal["active", "superseded"]
+    revision: int = Field(ge=1)
+    actions: tuple[str, ...]
+    created_at: datetime
+
+
+class WorkspaceFxRateListResponse(CommercialAccountingModel):
+    rates: tuple[WorkspaceFxRateInfo, ...]
+    next_cursor: str | None = None
+    limit: int = Field(ge=1, le=100)
+    permission_revision: int = Field(ge=1)
+    permission_fingerprint: str
+    request_id: str
+    trace_id: str
+
+
+class WorkspaceFxRateCommandRequest(CommercialAccountingModel):
+    action: Literal["create_version"]
+    usd_to_cny: str = Field(min_length=1, max_length=24, pattern=r"^[0-9]+(\.[0-9]+)?$")
+    effective_from: datetime
+
+
+class WorkspaceFxRateCommandResponse(CommercialAccountingModel):
+    rate: WorkspaceFxRateInfo
+    command_id: str
+    idempotent_replay: bool = False
+    permission_revision: int = Field(ge=1)
+    permission_fingerprint: str
+    request_id: str
+    trace_id: str
+
+
 class ProviderReferenceRateCommandRequest(CommercialAccountingModel):
     action: Literal["create_candidate", "release", "retire"]
     model_id: str | None = None
     currency: Currency | None = None
     input_rate_micros_per_1k: StrictInt | None = Field(default=None, ge=0)
     output_rate_micros_per_1k: StrictInt | None = Field(default=None, ge=0)
+    cache_rate_micros_per_1k: StrictInt | None = Field(default=None, ge=0)
     effective_from: datetime | None = None
     effective_until: datetime | None = None
     source_version: str | None = None
@@ -429,6 +476,7 @@ class ProviderReferenceRateCommandRequest(CommercialAccountingModel):
             "currency",
             "input_rate_micros_per_1k",
             "output_rate_micros_per_1k",
+            "cache_rate_micros_per_1k",
             "effective_from",
             "source_version",
             *interval,
@@ -439,6 +487,7 @@ class ProviderReferenceRateCommandRequest(CommercialAccountingModel):
                 self.currency,
                 self.input_rate_micros_per_1k,
                 self.output_rate_micros_per_1k,
+                self.cache_rate_micros_per_1k,
                 self.effective_from,
                 self.source_version,
             )

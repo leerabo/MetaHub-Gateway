@@ -111,6 +111,17 @@ async def test_local_registration_captcha_is_required_single_use_and_unverified(
     app.state.config = app.state.config.model_copy(update={
         "environment": "dev", "identity_challenge_delivery_mode": "disabled",
     })
+    # Development defaults keep CAPTCHA off for local trials. This test exercises
+    # the opt-in policy path explicitly instead of relying on the seed default.
+    connection = connect_database(database)
+    try:
+        connection.execute(
+            "UPDATE registration_policy SET human_verification=1,revision=revision+1 "
+            "WHERE environment='dev'"
+        )
+        connection.commit()
+    finally:
+        connection.close()
     monkeypatch.setattr(registration_policy.secrets, "choice", lambda choices: choices[0])
     headers = {"Origin": "http://localhost:5173", "Sec-Fetch-Site": "same-site"}
     body = {

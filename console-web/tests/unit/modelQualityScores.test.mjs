@@ -346,6 +346,9 @@ test("PAGE-069 renders admin editor developer readonly viewer empty and escapes 
   const developerHtml = renderModelQualityScoresPanel(state, developerContext);
   assert.match(adminHtml, /data-model-quality-form/);
   assert.match(adminHtml, /manualQualityPercent/);
+  assert.match(adminHtml, /for="model-quality-model-id"/);
+  assert.match(adminHtml, /id="model-quality-model-id"/);
+  assert.match(adminHtml, /aria-label="人工评分（%）：model_1"/);
   assert.match(adminHtml, /&lt;script&gt;model&lt;\/script&gt;/);
   assert.match(adminHtml, /value="&lt;unsafe&gt;"/);
   assert.match(adminHtml, /逐请求反馈/);

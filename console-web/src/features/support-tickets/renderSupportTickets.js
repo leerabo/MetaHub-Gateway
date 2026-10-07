@@ -23,12 +23,13 @@ export function renderSupportTickets(state, authContext, consoleShellState) {
     ?? view.items?.[0] ?? null;
   return `<div class="support-tickets" data-support-ticket-root>
     <header class="support-ticket-heading">
-      <div><p>客户支持</p><h2 id="support-tickets-title">客户支持</h2><span>工单、SLA 与安全诊断证据</span></div>
+      <div><p>平台支持</p><h2 id="support-tickets-title">平台支持</h2><span>向 MetaHub 提交问题并查看处理进度</span></div>
       <div class="support-ticket-heading-meta"><strong>${view.items?.length ?? 0}</strong><span>当前工单</span></div>
     </header>
     ${feedback(view.feedback)}
+    ${owner.canCreate ? createForm(view.busy?.mutation) : ""}
     ${filters(view)}
-    <div class="support-ticket-layout">
+    <div class="support-ticket-layout${selected ? "" : " is-empty"}">
       <aside class="support-ticket-list" aria-label="工单列表">
         ${renderTicketList(view.items ?? [], selected?.ticket_id, view.busy?.list)}
       </aside>
@@ -36,7 +37,6 @@ export function renderSupportTickets(state, authContext, consoleShellState) {
         ${selected ? renderTicketDetail(selected, owner, view.busy?.mutation) : emptyDetail(owner)}
       </section>
     </div>
-    ${owner.canCreate ? createForm(view.busy?.mutation) : ""}
   </div>`;
 }
 
@@ -52,7 +52,6 @@ function filters(view) {
     </select></label>
     <button type="submit"${view.busy?.list ? " disabled" : ""}>筛选</button>
     <button type="button" data-support-ticket-refresh${view.busy?.list ? " disabled" : ""} aria-label="刷新工单">刷新</button>
-    <code>request_id: ${escapeHtml(view.requestId ?? "-")}</code>
   </form>`;
 }
 
@@ -62,7 +61,7 @@ function renderTicketList(items, selectedId, busy) {
   return items.map((ticket) => `<button type="button" class="support-ticket-list-item${ticket.ticket_id === selectedId ? " is-active" : ""}" data-support-ticket-select="${escapeAttribute(ticket.ticket_id)}" aria-pressed="${ticket.ticket_id === selectedId}">
     <span class="support-ticket-list-top"><strong>${escapeHtml(ticket.subject)}</strong><b data-severity="${escapeAttribute(ticket.severity)}">${escapeHtml(ticket.severity.toUpperCase())}</b></span>
     <span>${escapeHtml(CATEGORY_LABELS[ticket.category] ?? ticket.category)} · ${escapeHtml(STATUS_LABELS[ticket.status] ?? ticket.status)}</span>
-    <small>${formatTime(ticket.updated_at)} · Rev ${ticket.revision}</small>
+    <small>${formatTime(ticket.updated_at)}</small>
   </button>`).join("");
 }
 
@@ -70,7 +69,7 @@ function renderTicketDetail(ticket, owner, busy) {
   const participant = ticket.reported_by_me || owner.canManage;
   return `<article data-support-ticket-detail>
     <header class="support-ticket-detail-heading">
-      <div><span>${escapeHtml(SEVERITY_LABELS[ticket.severity] ?? ticket.severity)} · ${escapeHtml(CATEGORY_LABELS[ticket.category] ?? ticket.category)}</span><h3>${escapeHtml(ticket.subject)}</h3><code>${escapeHtml(ticket.ticket_id)}</code></div>
+      <div><span>${escapeHtml(SEVERITY_LABELS[ticket.severity] ?? ticket.severity)} · ${escapeHtml(CATEGORY_LABELS[ticket.category] ?? ticket.category)}</span><h3>${escapeHtml(ticket.subject)}</h3></div>
       <span class="support-ticket-status" data-status="${escapeAttribute(ticket.status)}">${escapeHtml(STATUS_LABELS[ticket.status] ?? ticket.status)}</span>
     </header>
     ${slaBand(ticket)}
@@ -97,7 +96,7 @@ function slaBand(ticket) {
     <div><dt>SLA 状态</dt><dd>${escapeHtml(slaState(sla.state))}</dd></div>
     <div><dt>风险阈值</dt><dd>${formatTime(sla.risk_at)}</dd></div>
     <div><dt>解决时限</dt><dd>${formatTime(sla.resolution_deadline_at)}</dd></div>
-    <div><dt>升级代次</dt><dd>${sla.escalation_generation} / ${sla.generation}</dd></div>
+    <div><dt>升级次数</dt><dd>${sla.escalation_generation ?? 0}</dd></div>
   </dl>`;
 }
 
@@ -109,7 +108,7 @@ function message(item) {
 function attachment(item) {
   return `<div class="support-ticket-attachment" data-status="${escapeAttribute(item.status)}">
     <div><strong>${escapeHtml(ATTACHMENT_STATUS[item.status] ?? item.status)}</strong><span>${escapeHtml(intentLabel(item.intent_code))}</span></div>
-    <small>${escapeHtml(item.media_type)} · ${formatBytes(item.size_bytes)} · Rev ${item.revision}</small>
+    <small>${escapeHtml(item.media_type)} · ${formatBytes(item.size_bytes)}</small>
     ${item.scan_outcome ? `<span>扫描结果：${escapeHtml(scanOutcome(item.scan_outcome))}</span>` : ""}
   </div>`;
 }
@@ -152,7 +151,7 @@ function lifecycleActions(ticket, busy) {
   const statusAction = ticket.status === "resolved" ? "open"
     : ticket.status === "closed" ? null : "resolved";
   return `<section class="support-ticket-section support-ticket-lifecycle">
-    <div class="support-ticket-section-heading"><h4>工单状态</h4><span>CAS Rev ${ticket.revision}</span></div>
+    <div class="support-ticket-section-heading"><h4>工单状态</h4></div>
     ${statusAction ? `<form data-support-ticket-status-form>
       <input name="ticket_id" type="hidden" value="${escapeAttribute(ticket.ticket_id)}" />
       <input name="revision" type="hidden" value="${ticket.revision}" />
@@ -173,8 +172,8 @@ function surveyForm(ticket, busy) {
   </form>`;
 }
 
-function createForm(busy) {
-  return `<details class="support-ticket-create"><summary><span>创建工单</span><small>固定分类与优先级</small></summary><div class="support-ticket-create-body">
+function createForm(busy, open = false) {
+  return `<details class="support-ticket-create"${open ? " open" : ""}><summary><span>创建工单</span><small>固定分类与优先级</small></summary><div class="support-ticket-create-body">
     <form data-support-ticket-create-form autocomplete="off">
       <label><span>分类</span><select name="category">${Object.entries(CATEGORY_LABELS).map(([value, label]) => option(value, label)).join("")}</select></label>
       <label><span>优先级</span><select name="severity">${Object.entries(SEVERITY_LABELS).map(([value, label]) => option(value, label, "p3")).join("")}</select></label>
@@ -188,7 +187,7 @@ function createForm(busy) {
 }
 
 function emptyDetail(owner) {
-  return `<div class="support-ticket-empty support-ticket-empty-detail"><strong>没有可查看的工单</strong><span>${owner.canCreate ? "可在下方创建新工单" : "当前权限为只读"}</span></div>`;
+  return `<div class="support-ticket-empty support-ticket-empty-detail"><strong>没有可查看的工单</strong><span>${owner.canCreate ? "点击上方创建工单" : "当前权限为只读"}</span></div>`;
 }
 function feedback(value) {
   if (!value) return "";
@@ -198,7 +197,7 @@ function feedback(value) {
     "support.attachment_quarantined": "附件已进入隔离扫描",
     "support.ticket_escalated": "升级请求已提交",
   };
-  return `<div class="support-ticket-feedback is-${value.kind}" role="${value.kind === "error" ? "alert" : "status"}"><strong>${escapeHtml(labels[value.code] ?? value.code)}</strong><code>request_id: ${escapeHtml(value.requestId ?? "-")}</code></div>`;
+  return `<div class="support-ticket-feedback is-${value.kind}" role="${value.kind === "error" ? "alert" : "status"}"><strong>${escapeHtml(labels[value.code] ?? (value.kind === "error" ? "操作未完成，请稍后重试" : "操作已完成"))}</strong></div>`;
 }
 function option(value, label, selected) { return `<option value="${escapeAttribute(value)}"${value === selected ? " selected" : ""}>${escapeHtml(label)}</option>`; }
 function slaState(value) { return ({ running: "计时中", paused_customer: "等待客户", paused_policy: "策略暂停", stopped: "已停止" })[value] ?? value; }

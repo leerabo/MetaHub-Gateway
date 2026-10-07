@@ -51,7 +51,8 @@ test("model services default to a list and closed custom configuration", () => {
     permission_codes: [PERMISSIONS.PROVIDER_READ, PERMISSIONS.PROVIDER_WRITE, PERMISSIONS.PROVIDER_CATALOG_READ],
   });
   assert.match(html, /添加模型服务/u);
-  assert.match(html, /<details class="provider-custom-setup">/u);
+  assert.match(html, /data-provider-catalog-open[^>]*>添加模型服务/u);
+  assert.doesNotMatch(html, /provider-custom-setup/u);
   assert.doesNotMatch(html, /data-provider-catalog-create-form/u);
 });
 
@@ -60,7 +61,7 @@ test("catalog hides all configurations until a manufacturer is selected", () => 
     display_name: entry_code, status: "active", instantiation_mode: "official_cloud" }));
   const auth = { permission_codes: [PERMISSIONS.PROVIDER_CATALOG_READ, PERMISSIONS.PROVIDER_WRITE] };
   const html = renderProviderCatalog({ entries }, auth);
-  assert.equal((html.match(/data-provider-catalog-entry="[^"]+" hidden/gu) ?? []).length, 2);
+  assert.equal((html.match(/data-provider-catalog-entry="[^"]+" hidden/gu) ?? []).length, 3);
   const selected = renderProviderCatalog({ entries, selectedEntryCode: "moonshot" }, auth);
   assert.match(selected, /data-provider-catalog-entry="moonshot">/u);
   assert.match(selected, /data-provider-catalog-entry="deepseek" hidden/u);

@@ -20,7 +20,7 @@
 管理员可以为一个租户、一个 Environment 内的 ModelAlias 选择以下模式：
 
 1. `fixed`：完整保持现有 default -> fallback 的调用前健康过滤与稳定顺序。
-2. `cost_first`：先剔除当前不可调用候选，再在同一请求、同一价格时点、同一币种下按本请求估算成本从低到高排序。
+2. `cost_first`：先剔除当前不可调用候选，再在同一请求、同一价格时点按统一比较币种的本请求估算成本从低到高排序；原币种金额仍作为计费事实保留。
 3. `availability_first`：先剔除当前不可调用候选，再优先选择具有新鲜 healthy 证据的 Provider；unknown 或 stale 证据作为次级候选。
 
 每次真实 Alias 路由必须冻结并追踪：RoutingPolicy ID/版本/模式、候选资格与排序、最终 Model/Provider、稳定原因码和 Webhook event ID；只有实际进入成本比较时才增加价格 `as_of` 与输入/输出 token 估算。手工 SQL 或旧测试夹具缺少策略行时只允许走 nullable、`implicit fixed` 的 legacy 兼容路径，且不发送 `route.policy_selected`；正常 0036 运行库必须有持久策略。调用日志详情必须能解释“为什么选中”和“为什么剔除”，但不能展示 Provider Key、环境变量名、Endpoint、Prompt、Response 或上游错误正文。
@@ -52,7 +52,7 @@ Excel 用户故事中的“不同项目选择省钱或稳定”不等于在本�
 
 - 不做质量评分、用户反馈闭环、质量-成本路由、A/B、灰度、缓存感知或自动学习权重。
 - 不新增 Project/User/Department override，不新增任意数量候选的管理 API。
-- 不引入汇率或外币折算；外币归一必须等待带版本的汇率数据对象。
+- 成本比较使用带版本的冻结汇率事实归一到 CNY；这只影响排序，不改写 USD/CNY 原币计费金额。未知币种或缺少汇率事实时才回退固定顺序。
 - 不把 OpenRouter、硅基流动作为默认模型厂家；它们仍只是对标与迁移兼容对象。
 - 不实现 PRD-057 负责的持久崩溃恢复、dead-letter 或分布式 Webhook 队列。复用现有有界异步运行时队列；事件入队失败可追踪但不得阻塞模型热路径。
 - 不在本条重排 Policy、路由、DLP、限流、预算和 Provider 调用的既有流水线。
@@ -86,7 +86,7 @@ Gateway 对 Alias 路由只捕获一次 UTC `as_of`，在一个短事务内先�
 
 shared 算法拆为无副作用的两阶段：第一阶段只做候选资格与健康/Key 排序需求判断；只有返回 `needs_cost_comparison=true` 时，Gateway 才调用有界 token 估算器、读取两条价格并执行第二阶段成本排序。未被当前分支使用的 candidate 字段固定为 `not_evaluated/NULL`，decision 的 `price_as_of/estimated_*_tokens/token_estimate_truncated` 也为 NULL。事务内不解密 Key、不访问网络、不等待 Webhook，也不写 `last_used_at`。
 
-排序完成后，在同一短事务中写一条 `routing_decisions` 与最多两条 `routing_candidates`，再提交后返回路由。动态模式的决策事实写入失败时返回 `gateway.routing_decision_unavailable`，不得发生不可解释的动态调用；`fixed` 保留既有 best-effort 决策记录兼容语义。SQLite 本地部署使用短 `BEGIN IMMEDIATE` 保证读写事实一致，事务上限固定为两候选；未来 PostgreSQL 实现保持同一合同但不依赖 SQLite 锁行为。
+排序完成后，在同一短事务中写一条 `routing_decisions` 与完整候选集合，再提交后返回路由。历史 PRD-047 文本曾以两候选为上限；当前实现由 0173/0181 扩展为 1 个默认模型和最多 31 个备用模型，共 32 条候选，SQLite 本地部署仍使用短 `BEGIN IMMEDIATE` 保证读写事实一致。动态模式的决策事实写入失败时返回 `gateway.routing_decision_unavailable`，不得发生不可解释的动态调用；`fixed` 保留既有 best-effort 决策记录兼容语义。
 
 当前 mode 实际必需的读取或锁竞争导致无法形成最小快照时统一为可重试 `gateway.routing_snapshot_unavailable`；当前分支实际读取到的价格 Decimal/币种、健康时间/枚举、Policy 版本/模式或租户关系损坏时统一为不可重试 `gateway.routing_snapshot_invalid`（Policy 行自身损坏可进一步使用更具体的 `gateway.routing_policy_invalid`）。不读取的依赖不得影响该模式：价格表损坏不能阻断 fixed/availability，KeyPool 故障不能阻断 fixed；cost 只有需要两候选比较时才受价格故障影响。只有“已进入价格比较且价格字段合法，但没有已生效计划且目录无版本”才是正常 `price_missing`；解析失败绝不能伪装成缺价后 fixed 放行。上述错误都必须由外层写失败 request log 并保留 request/trace ID，禁止裸 500。
 
@@ -193,7 +193,7 @@ Excel 对象模板中的 `priority/condition_expr/action` 不机械落库：本�
 | `health_fresh` | INTEGER CHECK 0/1 | 是否位于同一 `as_of` 新鲜窗口。 |
 | `keypool_state` | TEXT CHECK | `available/unavailable/unknown/not_evaluated`。不含 Key ID、前缀或数量细节。 |
 | `price_available` | INTEGER CHECK 0/1 | 是否存在可比较的显式价格。 |
-| `price_source` | TEXT CHECK | `price_plan/model_catalog/missing/not_evaluated`。 |
+| `price_source` | TEXT CHECK | `workspace_provider_cost_rate/price_plan/model_catalog/missing/not_evaluated`。 |
 | `price_schema_version` | TEXT NULL | 安全版本标识；无明确定价时为空。 |
 | `currency` | TEXT NULL CHECK | `CNY/USD` 或空。 |
 | `estimated_cost_amount` | TEXT NULL | 与排序完全相同的 15 位小数 Decimal 字符串；只用于解释，不替代 Usage 实际成本。 |
@@ -202,9 +202,9 @@ Excel 对象模板中的 `priority/condition_expr/action` 不机械落库：本�
 
 约束：
 
-- `UNIQUE(tenant_id, routing_decision_id, candidate_role)`；CHECK 强制 `default <-> configured_priority=0`、`fallback <-> configured_priority=1`；partial unique rank 保证同一决策只有一个 rank 1/2。
+- 当前候选事实使用 `(tenant_id, routing_decision_id, model_id)` 唯一键；CHECK 强制 default 使用 priority 0、fallback 使用 priority 1..31；partial unique rank 保证同一决策的 rank 1..32 不重复。历史版本的 candidate_role 唯一键和 rank 1/2 约束由 0173/0181 扩展迁移替换。
 - CHECK 固定 `selected -> rank=1`、`standby -> rank=2`、`rejected -> rank IS NULL`；失败 decision 只能关联 rejected，selected candidate 的 model/provider 必须等于 decision 最终选择。
-- 价格字段成组一致：`not_evaluated/missing` 时版本、币种、成本均为空；`price_available=1` 时 source 只能为 price_plan/model_catalog 且版本、币种、15 位成本均非空。health/key/status/reason 均为稳定白名单。
+- 价格字段成组一致：`not_evaluated/missing` 时版本、币种、成本均为空；`price_available=1` 时 source 可为 workspace_provider_cost_rate、price_plan 或 model_catalog，且版本、币种、15 位成本均非空。health/key/status/reason 均为稳定白名单。
 - 复合 FK 对 decision/policy/Alias/Model/Provider 做 tenant 绑定；insert trigger 进一步验证 candidate.policy/alias 与 decision 完全相同、Model 实际 provider 与 candidate provider 一致，并按 role 核对插入时 Alias 的 default/fallback_model_id；fallback 为 NULL 时禁止 fallback 行。该核对发生在同一冻结事务，后续 Alias 合法升级不回写不可变历史。
 - UPDATE/DELETE trigger 禁止修改历史候选。请求日志按 `(tenant_id, routing_decision_id, rank, configured_priority)` 查询。
 
@@ -299,11 +299,12 @@ Down migration 同样在单一显式事务内按依赖顺序执行：
 
 ```text
 estimated_cost =
-  (estimated_input_tokens * input_price_per_1k
-   + estimated_output_tokens * output_price_per_1k) / 1000
+  ((estimated_input_tokens - estimated_cache_tokens) * input_price_per_1k
+   + estimated_cache_tokens * cache_price_per_1k
+   + estimated_output_tokens * output_price_per_1k) / 1000000
 ```
 
-现有价格服务允许单价最多 12 位小数，除以 1000 后最多需要 15 位小数。计算必须在独立 `decimal.localcontext(prec=50)` 中完成并拒绝非有限值，避免默认 28 位上下文在最大 token/单价附近提前舍入。本条固定 `COST_QUANT=Decimal("0.000000000000001")` 与 `ROUND_HALF_UP`：先按公式计算，再量化为 15 位小数；排序、平局判定、`routing_candidates.estimated_cost_amount`、API 与 UI 全部使用这一个量化值。严禁按更细的内存值选中后只保存 6 位解释，也不使用 float。差值小于半个 `COST_QUANT` 时按量化结果视为同价并走稳定 tie-break。
+现有价格服务允许每百万 Token 单价最多 12 位小数，除以 1000000 后最多需要 18 位小数；路由比较统一量化到 15 位小数。计算必须在独立 `decimal.localcontext(prec=50)` 中完成并拒绝非有限值，避免默认 28 位上下文在最大 token/单价附近提前舍入。本条固定 `COST_QUANT=Decimal("0.000000000000001")` 与 `ROUND_HALF_UP`：先按公式计算，再量化为 15 位小数；排序、平局判定、`routing_candidates.estimated_cost_amount`、API 与 UI 全部使用这一个量化值。严禁按更细的内存值选中后只保存 6 位解释，也不使用 float。差值小于半个 `COST_QUANT` 时按量化结果视为同价并走稳定 tie-break。
 
 ### 6.2 通用资格过滤
 
@@ -331,9 +332,9 @@ estimated_cost =
 1. 第一阶段先执行通用资格与动态 KeyPool 过滤，不读取价格、不计算 token。
 2. 无合格候选：写失败决策和全部候选原因，返回 `gateway.no_route_available`。
 3. 仅一条合格候选：直接选中，原因 `routing.single_eligible_candidate`，不要求价格。
-4. 恰有两条合格候选时才进入第二阶段：计算一次有界 token 估算并读取两条价格；两者均有价格且币种相同则按本请求估算成本升序，再按 `configured_priority`、`model_id` 排序。
+4. 至少两条合格候选时才进入第二阶段：计算一次有界 token 估算并读取价格；两者均有价格且具备同一比较币种/版本汇率事实则按归一化成本升序，再按 `configured_priority`、`model_id` 排序。
 5. 任一合格候选缺价：不得把兼容默认 0 当免费；整体回退 fixed 稳定顺序，原因 `routing.cost_fixed_fallback.price_missing`。
-6. 两条合格候选币种不同：当前没有带版本汇率，禁止比较数值；整体回退 fixed 稳定顺序，原因 `routing.cost_fixed_fallback.currency_incomparable`。
+6. 合格候选缺少可用汇率：禁止直接比较不同币种的数字，整体回退 fixed 稳定顺序，原因 `routing.cost_fixed_fallback.currency_incomparable`。
 7. 同价按 default、fallback、`model_id` 稳定打破平局，原因 `routing.cost_tie_stable_priority`。
 
 有效价格使用同一 `as_of`：取 `effective_from <= as_of` 中最新 PricePlan；否则只有模型目录 `price_schema_version` 非空且两个价格均为合法非负 Decimal 时才可回退目录价。未来计划不生效。显式 PricePlan 零价或带版本目录零价是真实免费；无版本的历史默认零价是缺价。
@@ -494,7 +495,7 @@ Alias 创建写 `routing_policy.created`，模式或 Alias 路由字段变更写
 - 数据库用复合唯一键、FK 与 trigger 防止跨租户 Alias/Policy/Decision/Candidate/Model/Provider 关系；只依赖单列外键不够。
 - KeyPool 排序快照不解密、不更新使用时间；明文 Key、Token、Secret、Prompt、Response 不得进入日志、事件、audit、候选或异常。进程级 Provider Key 不能表达租户所有权，因此生产完全禁用；非生产也只允许 active 默认租户中 code 和数据库/冻结 Route Endpoint 均匹配运维基准的 active Provider 使用。
 - Provider 审计不得保存可逆 Endpoint；只允许保存规范化 URL 的 SHA-256 变化摘要，必须删除 userinfo、path、query 和 fragment 的任何明文。path 可能承载客户 Token，不能因 query 已移除就视为安全。
-- 目录/PricePlan 单价统一要求有限、非负、每千 Token 不超过 `1000000000` 且小数位不超过 12；损坏财务事实不得在 Budget 聚合中静默归零。CNY 预算没有版本化汇率时，USD 只能进入 Usage 原币账本，不能以 0 CNY 通过 Guard。
+- 目录/PricePlan 单价统一要求有限、非负、每百万 Token 不超过 `1000000000` 且小数位不超过 12；损坏财务事实不得在 Budget 聚合中静默归零。CNY 预算没有版本化汇率时，USD 只能进入 Usage 原币账本，不能以 0 CNY 通过 Guard。数据库/API 字段名仍保留 `_per_1k` 以兼容历史客户端。
 - 结构化日志只记录稳定 ID、模式、版本、reason 和计数。禁止 `logger.exception` 输出可能含 URL/SQL/上游正文的 traceback；异常只记固定 code 和异常类型白名单。
 - Webhook payload 使用递归敏感键扫描、精确字段集合、稳定 event ID、HMAC 与租户内订阅过滤。
 - 所有新模块、类、数据结构、常量、字段、函数、事务边界、权限/租户判断、异常转换、回退与安全过滤必须有解释业务原因的中文注释，并通过 `scripts/ci/check-comments.py`。

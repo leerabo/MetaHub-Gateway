@@ -38,7 +38,7 @@ export function renderApprovals(state, authContext, consoleShellState) {
       <header class="approval-toolbar">
         <div>
           <h2 id="approvals-title">${view.mobileFocus ? "移动审批卡片" : "审批中心"}</h2>
-          <p>${view.mobileFocus ? "当前任务" : "当前租户的预算与高风险操作"}</p>
+          <p>${view.mobileFocus ? "当前任务" : "预算和高风险操作的待审批事项"}</p>
         </div>
         <div class="approval-toolbar-actions">
           ${view.mobileFocus ? `<button type="button" class="icon-command" data-approval-back title="返回审批中心" aria-label="返回审批中心">←</button>` : ""}
@@ -111,7 +111,7 @@ function renderList(state) {
 function renderListItem(item, selectedId) {
   return `
     <button type="button" class="approval-list-item${item.approval_id === selectedId ? " is-selected" : ""}" data-approval-select="${escapeAttribute(item.approval_id)}">
-      <span><strong>${escapeHtml(TARGET_LABELS[item.target_type] ?? "审批任务")}</strong><code>${escapeHtml(item.approval_id)}</code></span>
+      <span><strong>${escapeHtml(TARGET_LABELS[item.target_type] ?? "审批任务")}</strong></span>
       <span class="approval-badges"><b class="tone-${escapeAttribute(item.status)}">${escapeHtml(STATUS_LABELS[item.status])}</b><b>${item.risk_level === "high" ? "高风险" : "标准"}</b></span>
       <span>${escapeHtml(ACTION_LABELS[item.target_action] ?? item.target_action)}</span>
       <span data-approval-countdown data-expires-at="${escapeAttribute(item.expires_at)}" data-status="${escapeAttribute(item.status)}">${escapeHtml(countdownText(item.expires_at, item.status))}</span>
@@ -126,7 +126,7 @@ function renderDetail(state, authContext) {
   if (!state.selectedApprovalId) {
     return `<section class="approval-detail"><div class="approval-empty">选择一项任务查看审批事实</div></section>`;
   }
-  // 错误路径必须保留统一错误码与 request_id，并清除敏感上下文后再进入日志或响应。
+  // 错误路径只保留可行动的普通用户提示，定位信息进入后台日志。
   if (state.detailState === "error") return renderError(state.detailError, "审批详情读取失败");
   if (state.detailState !== "ready" || !state.detail) {
     return `<section class="approval-detail"><div class="approval-empty">正在读取审批详情</div></section>`;
@@ -140,7 +140,6 @@ function renderDetail(state, authContext) {
         <div>
           <p class="eyebrow">${escapeHtml(TARGET_LABELS[approval.target_type])}</p>
           <h3 id="approval-detail-title">${escapeHtml(ACTION_LABELS[approval.target_action] ?? approval.target_action)}</h3>
-          <code>${escapeHtml(approval.approval_id)}</code>
         </div>
         <span class="approval-status tone-${escapeAttribute(approval.status)}">${escapeHtml(STATUS_LABELS[approval.status])}</span>
       </div>
@@ -148,13 +147,10 @@ function renderDetail(state, authContext) {
         <div><span>风险</span><strong>${approval.risk_level === "high" ? "高风险 · 需要二次验证" : "标准"}</strong></div>
         <div><span>剩余时间</span><strong data-approval-countdown data-expires-at="${escapeAttribute(approval.expires_at)}" data-status="${escapeAttribute(approval.status)}">${escapeHtml(countdownText(approval.expires_at, approval.status))}</strong></div>
         <div><span>结果回写</span><strong>${escapeHtml(WRITEBACK_LABELS[approval.writeback_status])}</strong></div>
-        <div><span>状态版本</span><strong>v${escapeHtml(String(approval.state_revision))}</strong></div>
       </div>
       ${renderActions(canApprove, canReject, state.actionState, approval.approval_id)}
       <dl class="approval-target-summary">
         <div><dt>目标类型</dt><dd>${escapeHtml(TARGET_LABELS[target.target_type])}</dd></div>
-        <div><dt>目标 ID</dt><dd><code>${escapeHtml(target.target_id)}</code></dd></div>
-        <div><dt>目标版本</dt><dd><code>${escapeHtml(target.target_version)}</code></dd></div>
         <div><dt>创建时间</dt><dd><time datetime="${escapeAttribute(approval.created_at)}">${escapeHtml(formatTime(approval.created_at))}</time></dd></div>
       </dl>
       ${approval.resolution_reason ? `<p class="approval-resolution">${escapeHtml(REASON_LABELS[approval.resolution_reason])}</p>` : ""}
@@ -192,7 +188,7 @@ function renderTimeline(decisions) {
           <li>
             <strong>${item.decision === "approve" ? "已批准" : item.decision === "timeout" ? "超时自动拒绝" : "已拒绝"}</strong>
             <span>${escapeHtml(REASON_LABELS[item.reason_code] ?? item.reason_code)} · ${escapeHtml(formatTime(item.created_at))}</span>
-            <small>${escapeHtml(item.actor_type === "system" ? "系统调度器" : item.actor_id)} · v${item.revision_before}→v${item.revision_after}</small>
+            <small>${escapeHtml(item.actor_type === "system" ? "系统自动处理" : "审批人已处理")}</small>
           </li>
         `).join("")}
       </ol>
@@ -223,7 +219,7 @@ function renderActionDialog(state) {
           <h3 id="approval-dialog-title">确认${approve ? "批准" : "拒绝"}</h3>
           <button type="button" class="icon-command" data-approval-dialog-close aria-label="关闭"${disabled}>×</button>
         </div>
-        <p>任务 <code>${escapeHtml(approval.approval_id)}</code> 将提交不可撤销的审批决策。</p>
+        <p>这项审批决定提交后不可撤销，请确认后继续。</p>
         <label>原因
           <select name="reason_code" data-approval-reason${disabled}>
             ${reasons.map(([value, label]) => `<option value="${value}"${state.actionReason === value ? " selected" : ""}>${label}</option>`).join("")}
@@ -249,11 +245,9 @@ function renderActionDialog(state) {
  */
 function renderActionFeedback(state) {
   if (state.actionState === "submitting") return "正在复核权限并提交审批";
-  // 请求链路标识必须与持久化来源事实一致；不一致视为数据污染并以固定错误终止处理。
-  if (state.actionState === "success") return `审批已提交 · request_id: ${escapeHtml(state.actionRequestId || "-")}`;
-  // 错误路径必须保留统一错误码与 request_id，并清除敏感上下文后再进入日志或响应。
+  if (state.actionState === "success") return "审批已提交";
   if (state.actionError && !state.actionOpen) {
-    return `${escapeHtml(state.actionError.message)} · request_id: ${escapeHtml(state.actionError.requestId)}`;
+    return escapeHtml(state.actionError.message ?? "审批未完成，请稍后重试");
   }
   return "";
 }
@@ -265,7 +259,7 @@ function renderError(error, fallback) {
   return `
     <div class="approval-error" role="alert">
       <strong>${escapeHtml(error?.message ?? fallback)}</strong>
-      <span><code>${escapeHtml(error?.code ?? "approval.unavailable")}</code> · request_id: <code>${escapeHtml(error?.requestId ?? "-")}</code></span>
+      <span>请稍后重试；如果问题持续，请联系管理员。</span>
     </div>
   `;
 }

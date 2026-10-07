@@ -230,11 +230,18 @@ def _build_explanation(
     status = "complete" if not missing and not truncated else "partial"
     source_created_at_text = _validated_source_time_text(anchor["created_at"])
     source_updated_at_text = _validated_source_time_text(anchor["source_updated_at"])
+    # 流式会话建立失败时旧版本日志可能未回写计数；已持久化的尝试序列是更可靠的事实。
+    persisted_attempt_count = len(snapshot.attempts.rows)
+    routing_attempt_count = max(
+        _non_negative_int(anchor["routing_attempt_count"]),
+        persisted_attempt_count,
+    )
     summary = RequestExplanationSummary(
         source_status=_required_source_status(anchor["status"]),
         error_code=_safe_code(anchor["error_code"]),
         request_model=_safe_identifier(anchor["request_model"]),
         resolved_model=_safe_identifier(anchor["resolved_model"]),
+        provider_name=_safe_label(anchor["provider_name"]),
         provider_code=_safe_identifier(anchor["provider_code"]),
         environment_id=_safe_identifier(anchor["environment_id"]),
         environment_name=_safe_label(anchor["environment_name"]),
@@ -250,6 +257,7 @@ def _build_explanation(
         estimated_cost_amount=_decimal(anchor["estimated_cost_amount_text"]),
         currency=_safe_code(anchor["currency"]) or "CNY",
         fallback_triggered=_bool(anchor["fallback_triggered"]),
+        routing_attempt_count=routing_attempt_count,
         created_at=_parse_time(source_created_at_text),
         updated_at=_parse_time(source_updated_at_text),
     )
@@ -773,7 +781,10 @@ def _logs_section(snapshot: ExplanationSnapshot) -> RequestExplanationSection:
                 "stream_status": _safe_code(anchor["stream_status"]),
                 "latency_ms": _optional_non_negative_int(anchor["latency_ms"]),
                 "fallback_triggered": _bool(anchor["fallback_triggered"]),
-                "routing_attempt_count": _non_negative_int(anchor["routing_attempt_count"]),
+                "routing_attempt_count": max(
+                    _non_negative_int(anchor["routing_attempt_count"]),
+                    len(snapshot.attempts.rows),
+                ),
                 "final_routing_attempt_id": _safe_identifier(
                     anchor["final_routing_attempt_id"]
                 ),
@@ -1006,9 +1017,11 @@ def _routing_attempt_fact(row: sqlite3.Row) -> RequestExplanationFact:
             "trigger_type": _safe_code(row["trigger_type"]),
             "trigger_error_code": _safe_code(row["trigger_error_code"]),
             "model_id": _safe_identifier(row["model_id"]),
+            "model_name": _safe_label(row["model_name"]),
             "internal_model_id": _safe_identifier(row["internal_model_id"]),
             "provider_id": _safe_identifier(row["provider_id"]),
             "provider_code": _safe_code(row["provider_code"]),
+            "provider_name": _safe_label(row["provider_name"]),
             "status": _safe_code(row["status"]),
             "error_code": _safe_code(row["error_code"]),
             "error_category": _safe_code(row["error_category"]),

@@ -716,6 +716,69 @@ async def test_stream_handshake_distinguishes_normalized_upstream_and_local_fail
 
 
 @pytest.mark.anyio
+async def test_stream_session_create_failure_preserves_current_attempt_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """创建流审计会话失败时，失败日志仍指向当前候选且不复用旧会话 ID。"""
+
+    state = _install_state_spies(monkeypatch)
+    captured_attempts = []
+
+    route = SimpleNamespace(
+        tenant_id="tenant-stream-test",
+        model_id="model-current",
+        model_alias="current-model",
+        provider_id="provider-current",
+        provider_code="current-provider",
+        provider_type="openai_compatible",
+    )
+    plan = SimpleNamespace(
+        initial_role="primary",
+        fallback_route=None,
+        fallback_routes=(),
+        fallback_conditions=(),
+    )
+    attempt = SimpleNamespace(routing_attempt_id="rta-current")
+    monkeypatch.setattr(api_module, "create_routing_attempt", lambda *args, **kwargs: attempt)
+    monkeypatch.setattr(
+        api_module,
+        "safe_complete_routing_attempt",
+        lambda *args, **kwargs: captured_attempts.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        api_module,
+        "create_stream_session",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            api_module.ApiError("gateway.stream_session_unavailable")
+        ),
+    )
+
+    with pytest.raises(api_module.ApiError) as failure:
+        await api_module._stream_response(
+            _config(),
+            _context("req-stream-session-create-failure"),
+            _FailingAdapter(api_module.ApiError("should not reach adapter")),
+            _provider_request(),
+            time.perf_counter(),
+            None,
+            client_request=_ClientRequest(),
+            route=route,
+            route_plan=plan,
+        )
+
+    context = failure.value.request_log_context
+    assert context.provider_id == "provider-current"
+    assert context.model_id == "model-current"
+    assert context.resolved_model == "current-model"
+    assert context.routing_attempt_count == 1
+    assert context.routing_attempt_id == "rta-current"
+    assert context.stream_session_id is None
+    assert context.stream_status is None
+    assert captured_attempts
+    assert state["finishes"] == []
+
+
+@pytest.mark.anyio
 async def test_stream_handshake_budget_distinguishes_transport_and_invalid_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

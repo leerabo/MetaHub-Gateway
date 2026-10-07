@@ -179,14 +179,10 @@ function renderDesktopMatrix(permissions, roles, state, draftCodes, i18n) {
 /** 移动端只渲染当前角色的纵向权限列表，避免六角色列产生横向滚动。 */
 function renderMobilePermissions(permissions, selectedRole, state, draftCodes, i18n) {
   if (!selectedRole) return `<div class="empty-state">${translate(i18n, "rbac.no_role", "当前没有可用角色。")}</div>`;
+  const grouped = groupPermissions(permissions);
   return `
     <div class="role-permission-mobile" role="list" aria-label="${escapeAttribute(translate(i18n, "rbac.role_permissions", "{role} 权限", { role: roleLabel(selectedRole, i18n) }))}">
-      ${permissions.map((permission) => `
-        <div class="role-permission-mobile-item" role="listitem">
-          ${renderPermissionSummary(permission, "", i18n)}
-          ${renderPermissionCell(permission, selectedRole, state, draftCodes, "mobile", i18n)}
-        </div>
-      `).join("")}
+      ${grouped.map(([category, items], index) => renderMobilePermissionGroup(category, items, selectedRole, state, draftCodes, i18n, index === 0 || state.categoryFilter !== "all")).join("")}
     </div>
   `;
 }
@@ -194,20 +190,74 @@ function renderMobilePermissions(permissions, selectedRole, state, draftCodes, i
 /** 桌面默认只展示当前角色，避免首屏同时渲染六列可编辑控件。 */
 function renderFocusedRolePermissions(permissions, selectedRole, state, draftCodes, i18n) {
   if (!selectedRole) return `<div class="empty-state">${translate(i18n, "rbac.no_role", "当前没有可用角色。")}</div>`;
-  return permissions.map((permission) => `
-    <div class="role-permission-focus-item">
-      ${renderPermissionSummary(permission, "", i18n)}
-      ${renderPermissionCell(permission, selectedRole, state, draftCodes, "focus", i18n)}
-    </div>
-  `).join("") || `<div class="empty-state">${translate(i18n, "rbac.no_permissions", "当前分组没有权限项。")}</div>`;
+  const grouped = groupPermissions(permissions);
+  return grouped.map(([category, items], index) => renderFocusedPermissionGroup(
+    category,
+    items,
+    selectedRole,
+    state,
+    draftCodes,
+    i18n,
+    index === 0 || state.categoryFilter !== "all",
+  )).join("") || `<div class="empty-state">${translate(i18n, "rbac.no_permissions", "当前分组没有权限项。")}</div>`;
 }
 
-/** 渲染权限名称、稳定 code、描述和风险等级。 */
+/** 将权限按后端 category 分组，首屏只展开第一组，其余组通过标题按需打开。 */
+function groupPermissions(permissions) {
+  const groups = new Map();
+  for (const permission of permissions) {
+    const category = permission.category ?? "system";
+    if (!groups.has(category)) groups.set(category, []);
+    groups.get(category).push(permission);
+  }
+  return [...groups.entries()];
+}
+
+function categoryLabel(category, i18n) {
+  return translate(i18n, CATEGORY_I18N_KEYS[category], CATEGORY_LABELS[category] ?? category);
+}
+
+function renderPermissionGroupHeading(category, items, i18n) {
+  return `<summary><span>${escapeHtml(categoryLabel(category, i18n))}</span><small>${items.length} 项权限</small></summary>`;
+}
+
+function renderFocusedPermissionGroup(category, items, selectedRole, state, draftCodes, i18n, open) {
+  return `
+    <details class="role-permission-group"${open ? " open" : ""}>
+      ${renderPermissionGroupHeading(category, items, i18n)}
+      <div class="role-permission-group-items">
+        ${items.map((permission) => `
+          <div class="role-permission-focus-item">
+            ${renderPermissionSummary(permission, "", i18n)}
+            ${renderPermissionCell(permission, selectedRole, state, draftCodes, "focus", i18n)}
+          </div>
+        `).join("")}
+      </div>
+    </details>
+  `;
+}
+
+function renderMobilePermissionGroup(category, items, selectedRole, state, draftCodes, i18n, open) {
+  return `
+    <details class="role-permission-group"${open ? " open" : ""}>
+      ${renderPermissionGroupHeading(category, items, i18n)}
+      <div class="role-permission-group-items">
+        ${items.map((permission) => `
+          <div class="role-permission-mobile-item" role="listitem">
+            ${renderPermissionSummary(permission, "", i18n)}
+            ${renderPermissionCell(permission, selectedRole, state, draftCodes, "mobile", i18n)}
+          </div>
+        `).join("")}
+      </div>
+    </details>
+  `;
+}
+
+/** 渲染权限名称、描述和风险等级；稳定编码只留在数据属性中供交互和测试使用。 */
 function renderPermissionSummary(permission, role = "", i18n) {
   return `
     <span class="role-permission-summary"${role ? ` role="${role}"` : ""}>
       <strong>${escapeHtml(permissionLabel(permission, i18n))}</strong>
-      <code>${escapeHtml(permission.code)}</code>
       <small>${escapeHtml(permissionDescription(permission, i18n))}</small>
       <mark class="permission-risk permission-risk-${escapeAttribute(permission.risk_level)}">
         ${escapeHtml(translate(i18n, `rbac.risk.${permission.risk_level}`, riskLabel(permission.risk_level, i18n)))}
@@ -267,13 +317,12 @@ function renderSaveBar(selectedRole, state, i18n) {
   `;
 }
 
-/** 渲染统一错误码和 request_id，不回显 SQL、响应正文或矩阵内容。 */
+/** Render the actionable failure without leaking transport and correlation metadata. */
 function renderError(error, fallback, i18n) {
   return `
     <div class="empty-state error-state role-permission-error" role="alert">
-      <strong>${escapeHtml(error?.code ?? translate(i18n, "rbac.unavailable_code", "rbac.unavailable"))}</strong>
-      <span>${escapeHtml(error?.message ?? fallback)}</span>
-      <code>request_id: ${escapeHtml(error?.requestId ?? "-")}</code>
+      <strong>${escapeHtml(fallback)}</strong>
+      <span>${escapeHtml(error?.message ?? translate(i18n, "common.retry_later", "请稍后重试"))}</span>
     </div>
   `;
 }

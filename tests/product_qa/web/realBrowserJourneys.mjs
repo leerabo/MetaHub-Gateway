@@ -74,13 +74,17 @@ async function collapseSidebar(page) {
 async function assertCurrentNavigationGroupExpanded(page) {
   const activeNavigation = await page.locator(".console-shell").getAttribute("data-active-navigation");
   const expandedCount = await page.locator("[data-sidebar-group-toggle][aria-expanded='true']").count();
-  // The task home is the first-use landing surface, deliberately excluded from
-  // the four operational sidebar domains. It has no visible group to expand.
-  if (activeNavigation === "quickstart") {
-    assert.equal(expandedCount, 0, "task_home_should_not_create_a_fifth_sidebar_group");
-    // The first-use task home is intentionally hidden from the management
-    // sidebar; the shell state is the authoritative active surface.
-    assert.equal(await page.locator(".console-shell").getAttribute("data-active-navigation"), "quickstart");
+  const activeButton = activeNavigation
+    ? page.locator(`[data-console-nav='${activeNavigation}']`).first()
+    : null;
+  const activeGroup = activeButton
+    ? await activeButton.evaluate((element) => element.closest("[data-sidebar-group]")?.getAttribute("data-sidebar-group") ?? null)
+    : null;
+  // Home/task surfaces are deliberately excluded from the four operational
+  // sidebar domains. They have no visible group to expand, while every
+  // management route must keep exactly its own group open.
+  if (!activeGroup) {
+    assert.equal(expandedCount, 0, "home_surface_should_not_create_a_management_group");
     return;
   } else {
     assert.equal(expandedCount, 1, "only_the_current_navigation_group_should_be_expanded");
@@ -153,38 +157,18 @@ async function openNavigation(page, navigationId, responsePaths) {
   if (await navigation.getAttribute("aria-current") === "page") {
     return { groupKey, elapsedMs: 0 };
   }
-  const responses = Promise.all(responsePaths.map(async (expectedPath) => {
-    try {
-      await page.waitForResponse((response) => {
-        let responsePath = "";
-        try { responsePath = new URL(response.url()).pathname; } catch { return false; }
-        return response.request().method() === "GET"
-          && responsePath === expectedPath
-          && response.status() >= 200
-          && response.status() < 300;
-      }, { timeout: NAVIGATION_RESPONSE_OBSERVER_TIMEOUT_MS });
-    } catch (error) {
-      const diagnostic = await page.evaluate((id) => {
-        const button = document.querySelector(`[data-console-nav='${id}']`);
-        const shell = document.querySelector(".console-shell");
-        return {
-          button: button ? {
-            disabled: button.disabled,
-            ariaCurrent: button.getAttribute("aria-current"),
-            route: button.getAttribute("data-console-route"),
-            visible: button.getAttribute("data-sidebar-visible"),
-            html: button.outerHTML.slice(0, 600),
-          } : null,
-          activeNavigation: shell?.getAttribute("data-active-navigation") ?? null,
-          activeRoute: shell?.getAttribute("data-active-route") ?? null,
-        };
-      }, navigationId);
-      throw new Error(
-        `navigation_response_wait_failed:${navigationId}:${expectedPath}:${JSON.stringify(diagnostic)}`,
-        { cause: error },
-      );
-    }
-  }));
+  // responsePaths are alternatives for routes that hydrate through different
+  // API shapes. A navigation only needs one successful data response; requiring
+  // every candidate makes a valid route fail when another candidate was used by
+  // the previous page or is optional for the current permission set.
+  const responses = Promise.any(responsePaths.map((expectedPath) => page.waitForResponse((response) => {
+    let responsePath = "";
+    try { responsePath = new URL(response.url()).pathname; } catch { return false; }
+    return response.request().method() === "GET"
+      && responsePath === expectedPath
+      && response.status() >= 200
+      && response.status() < 300;
+  }, { timeout: NAVIGATION_RESPONSE_OBSERVER_TIMEOUT_MS })));
   const started = performance.now();
   await humanClick(page, navigation);
   try {
@@ -198,8 +182,23 @@ async function openNavigation(page, navigationId, responsePaths) {
       ).waitFor({ state: "attached", timeout: NAVIGATION_DATA_BUDGET_MS }),
     ]);
   } catch (error) {
+    const diagnostic = await page.evaluate((id) => {
+      const button = document.querySelector(`[data-console-nav='${id}']`);
+      const shell = document.querySelector(".console-shell");
+      return {
+        button: button ? {
+          disabled: button.disabled,
+          ariaCurrent: button.getAttribute("aria-current"),
+          route: button.getAttribute("data-console-route"),
+          visible: button.getAttribute("data-sidebar-visible"),
+          html: button.outerHTML.slice(0, 600),
+        } : null,
+        activeNavigation: shell?.getAttribute("data-active-navigation") ?? null,
+        activeRoute: shell?.getAttribute("data-active-route") ?? null,
+      };
+    }, navigationId);
     throw new Error(
-      `navigation_data_wait_failed:${navigationId}:${responsePaths.join(",")}`,
+      `navigation_data_wait_failed:${navigationId}:${responsePaths.join(",")}:${JSON.stringify(diagnostic)}`,
       { cause: error },
     );
   }
@@ -447,7 +446,10 @@ async function logout(page) {
 }
 
 async function logoutDuringHydration(page) {
-  await openNavigation(page, "projects", ["/projects"]);
+  await openNavigation(page, "sdk-examples", [
+    "/developer/sdk-examples/python",
+    "/developer/sdk-examples/javascript",
+  ]);
   let release;
   let captured;
   let captureTimeout;
@@ -529,7 +531,8 @@ async function verifyServiceRecovery(runtime) {
   await page.locator("#usage-title").waitFor({ state: "visible", timeout: 20_000 });
   await page.waitForTimeout(350);
   const errorText = await page.locator("body").innerText();
-  assert.match(errorText, /request_id/i, "service_error_request_id_missing");
+  assert.match(errorText, /service temporarily unavailable/i, "service_error_message_missing");
+  assert.doesNotMatch(errorText, /request_id|qa_fault_request|qa_fault_trace/iu, "service_error_internal_metadata_leaked");
   await page.unroute("**/usage/summary", routeHandler);
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.locator("#console-sidebar").waitFor({ state: "visible", timeout: 20_000 });
@@ -662,15 +665,18 @@ try {
     password: process.env.METAHUB_QA_DEVELOPER_PASSWORD,
     async execute(page) {
       await assertCurrentNavigationGroupExpanded(page);
-      const projects = await openNavigation(page, "projects", ["/projects"]);
+      const sdkExamples = await openNavigation(page, "sdk-examples", [
+        "/developer/sdk-examples/python",
+        "/developer/sdk-examples/javascript",
+      ]);
       const virtualKeys = await openNavigation(
         page,
         "virtual-keys",
-        ["/virtual-keys", "/projects", "/environments"],
+        ["/virtual-keys"],
       );
       return {
         navigation_latency_ms: {
-          projects: projects.elapsedMs,
+          sdk_examples: sdkExamples.elapsedMs,
           virtual_keys: virtualKeys.elapsedMs,
         },
       };

@@ -41,6 +41,9 @@ from .models import (
     PlatformSubscriptionListResponse,
     ProviderCostRateCommandRequest,
     ProviderCostRateCommandResponse,
+    WorkspaceFxRateCommandRequest,
+    WorkspaceFxRateCommandResponse,
+    WorkspaceFxRateListResponse,
     ProviderReferenceRateCommandRequest,
     ProviderReferenceRateCommandResponse,
     WorkspaceProviderCostRateListResponse,
@@ -60,6 +63,8 @@ from .service import (
     list_platform_plans,
     list_platform_subscriptions,
     list_workspace_provider_cost_rates,
+    list_workspace_fx_rates,
+    command_workspace_fx_rate,
 )
 
 router = APIRouter(tags=["commercial-accounting"])
@@ -308,6 +313,47 @@ async def patch_workspace_provider_cost_rates(
     return result
 
 
+@router.get("/workspace/routing-fx-rates", response_model=WorkspaceFxRateListResponse)
+async def get_workspace_routing_fx_rates(
+    request: Request,
+    response: Response,
+    _context: Annotated[WorkspaceSessionContext, Depends(require_workspace_commercial)],
+) -> WorkspaceFxRateListResponse:
+    result = list_workspace_fx_rates(
+        request.app.state.config,
+        session_token=_workspace_token(request),
+        query=_unique_query(request, platform=False),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _private(response, result.permission_fingerprint)
+    return result
+
+
+@router.patch("/workspace/routing-fx-rates", response_model=WorkspaceFxRateCommandResponse)
+async def patch_workspace_routing_fx_rates(
+    request: Request,
+    response: Response,
+    _context: Annotated[WorkspaceSessionContext, Depends(require_workspace_commercial)],
+) -> WorkspaceFxRateCommandResponse:
+    _reject_query(request, platform=False)
+    command = await _model(request, WorkspaceFxRateCommandRequest, "model_price.query_invalid")
+    result = command_workspace_fx_rate(
+        request.app.state.config,
+        session_token=_workspace_token(request),
+        csrf_token=_workspace_csrf(request),
+        step_up_grant=_step_up(request),
+        idempotency_key=_idempotency_key(request, platform=False),
+        expected_head_revision=_if_match(request, platform=False),
+        command=command,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = f'"{result.rate.revision}"'
+    _private(response, result.permission_fingerprint)
+    return result
+
+
 @router.post(
     "/platform/provider-reference-rates/{provider_id}/commands",
     response_model=ProviderReferenceRateCommandResponse,
@@ -365,6 +411,12 @@ def _workspace_permission(request: Request) -> str:
     if path == "/workspace/billing-disputes" and request.method == "POST":
         return "workspace.commercial.dispute.submit"
     if path == "/workspace/provider-cost-rates":
+        return (
+            "workspace.provider_cost.manage"
+            if request.method == "PATCH"
+            else "workspace.provider_cost.read"
+        )
+    if path == "/workspace/routing-fx-rates":
         return (
             "workspace.provider_cost.manage"
             if request.method == "PATCH"

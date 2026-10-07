@@ -8,10 +8,24 @@ from .base import (
     ProviderRequest,
     ProviderStreamResponse,
 )
-from .factory import adapter_for_route
-from .generic_http import GenericHttpConfigAdapter
 from .keypool import SelectedProviderKey, mark_provider_key_error, select_provider_key
-from .openai_compatible import OpenAICompatibleAdapter
+
+
+def __getattr__(name: str):
+    """Load adapters only when requested, keeping base types independent of routing."""
+
+    from importlib import import_module
+
+    modules = {
+        "adapter_for_route": ".factory",
+        "GenericHttpConfigAdapter": ".generic_http",
+        "OpenAICompatibleAdapter": ".openai_compatible",
+    }
+    if name not in modules:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(modules[name], __name__), name)
+    globals()[name] = value
+    return value
 
 __all__ = [
     "GenericHttpConfigAdapter",

@@ -69,7 +69,6 @@ export function renderCostAnomalies(state, authContext) {
       <div class="cost-anomaly-error" role="alert">
         <strong>${escapeHtml(state.code ?? "cost_anomaly.unavailable")}</strong>
         <span>${escapeHtml(state.message ?? "成本异常读取失败")}</span>
-        <code>request_id: ${escapeHtml(state.requestId ?? "-")}</code>
       </div>
     `;
   }
@@ -191,8 +190,8 @@ function renderFilters(filters = {}) {
       <label><span>状态</span><select name="status">${renderOptions(STATUS_LABELS, filters.status)}</select></label>
       <label><span>规则</span><select name="ruleType">${renderOptions(RULE_LABELS, filters.ruleType)}</select></label>
       <label><span>级别</span><select name="severity">${renderOptions(SEVERITY_LABELS, filters.severity)}</select></label>
-      <label><span>环境 ID</span><input name="environmentId" value="${escapeAttribute(filters.environmentId ?? "")}" placeholder="全部环境" /></label>
-      <label><span>KEY ID</span><input name="virtualKeyId" value="${escapeAttribute(filters.virtualKeyId ?? "")}" placeholder="全部 KEY" /></label>
+      <label><span>环境</span><input name="environmentId" value="${escapeAttribute(filters.environmentId ?? "")}" placeholder="全部环境" /></label>
+      <label><span>KEY</span><input name="virtualKeyId" value="${escapeAttribute(filters.virtualKeyId ?? "")}" placeholder="全部 KEY" /></label>
       <label><span>开始时间</span><input type="datetime-local" name="fromTime" value="${escapeAttribute(toDateTimeLocal(filters.fromTime))}" /></label>
       <label><span>结束时间</span><input type="datetime-local" name="toTime" value="${escapeAttribute(toDateTimeLocal(filters.toTime))}" /></label>
       <div class="cost-anomaly-filter-actions">
@@ -259,11 +258,10 @@ function renderDetail(anomaly, canWrite) {
       </div>
       ${renderInputQuality(anomaly)}
       <dl class="cost-anomaly-detail-list">
-        ${renderPair("异常 ID", anomaly.cost_anomaly_id)}
-        ${renderPair("环境", `${safeText(anomaly.environment_name)} / ${safeText(anomaly.environment_id)}`)}
+        ${renderPair("环境", safeText(anomaly.environment_name))}
         ${renderPair("作用范围", displayScope(anomaly))}
-        ${renderPair("MetaHub KEY", displayVirtualKey(anomaly))}
-        ${renderPair("项目 / 应用", `${safeText(anomaly.project_id_snapshot)} / ${safeText(anomaly.application_id_snapshot)}`)}
+        ${renderPair("个人 KEY", displayVirtualKey(anomaly))}
+        ${renderPair("项目 / 应用", `${safeText(anomaly.project_name)} / ${safeText(anomaly.application_name)}`)}
         ${renderPair("检测窗口", `${formatDateTime(anomaly.window_start)} - ${formatDateTime(anomaly.window_end)}`)}
         ${renderPair("基线窗口", `${formatDateTime(anomaly.baseline_start)} - ${formatDateTime(anomaly.baseline_end)}`)}
         ${renderPair("当前成本", `${formatCostMicros(anomaly.current_cost_micros)} CNY`)}
@@ -274,12 +272,9 @@ function renderDetail(anomaly, canWrite) {
         ${renderPair("来源分录", `${safeCount(anomaly.source_entry_count)} 条 / ${safeCount(anomaly.baseline_bucket_count)} 个基线桶`)}
         ${renderPair("影响 Key 数", safeCount(anomaly.affected_virtual_key_count))}
         ${renderPair("建议动作", safeRecommendedAction(anomaly.recommended_action))}
-        ${renderPair("检测版本", anomaly.detection_version)}
         ${renderPair("事件状态", EVENT_LABELS[knownToken(anomaly.event_dispatch_status, EVENT_LABELS, "pending")])}
         ${renderPair("检测时间", formatDateTime(anomaly.detected_at))}
         ${renderPair("处置截止", formatDateTime(anomaly.mitigation_eligible_until))}
-        ${renderRequestPair(anomaly.representative_request_id)}
-        ${renderPair("代表 trace_id", anomaly.representative_trace_id)}
       </dl>
       ${renderMitigation(anomaly.temporary_rate_limit_override)}
       ${canWrite ? renderActionCommands(anomaly) : ""}
@@ -320,7 +315,6 @@ function renderMitigation(override) {
         ${renderPair("并发", safeNullableLimit(override.concurrency_limit))}
         ${renderPair("开始", formatDateTime(override.starts_at))}
         ${renderPair("到期", formatDateTime(override.expires_at))}
-        ${renderPair("覆盖 ID", override.temporary_rate_limit_override_id)}
       </dl>
     </section>
   `;
@@ -381,8 +375,7 @@ function renderHistoryItem(action) {
     <li>
       <div><strong>${escapeHtml(ACTION_LABELS[actionType])}</strong><time>${escapeHtml(formatDateTime(action?.created_at))}</time></div>
       <p>${escapeHtml(STATUS_LABELS[before])} → ${escapeHtml(STATUS_LABELS[after])}${escapeHtml(reason)}</p>
-      <span>操作者 ${escapeHtml(action?.actor_user_id ?? "-")}</span>
-      <code>request_id: ${escapeHtml(action?.operation_request_id ?? "-")}</code>
+      <span>操作者 ${escapeHtml(action?.actor_display_name ?? "组织管理员")}</span>
     </li>
   `;
 }
@@ -438,9 +431,8 @@ function renderActionFields(action, dialog) {
 function renderDialogError(error) {
   return `
     <div class="cost-anomaly-dialog-error" role="alert">
-      <strong>${escapeHtml(error.code ?? "cost_anomaly.unavailable")}</strong>
-      <span>${escapeHtml(error.message ?? "成本异常动作提交失败")}</span>
-      <code>request_id: ${escapeHtml(error.requestId ?? "-")}</code>
+      <strong>成本异常动作未完成</strong>
+      <span>${escapeHtml(error.message ?? "请稍后重试")}</span>
     </div>
   `;
 }
@@ -461,7 +453,7 @@ function renderFeedback(feedback) {
   if (!feedback) {
     return "";
   }
-  return `<div class="cost-anomaly-feedback" role="status">${escapeHtml(feedback.message ?? "治理动作已提交")}${feedback.idempotentReplay ? "（幂等恢复）" : ""} · request_id: ${escapeHtml(feedback.requestId ?? "-")}</div>`;
+  return `<div class="cost-anomaly-feedback" role="status">${escapeHtml(feedback.message ?? "治理动作已提交")}</div>`;
 }
 
 /** 渲染列表级安全错误，如 DOM 注入 ID 或旧选择失效。 */
@@ -469,16 +461,7 @@ function renderActionError(error) {
   if (!error) {
     return "";
   }
-  // 错误视图只读取统一 code/message/request_id，并对三者逐一转义。
-  return `<div class="cost-anomaly-action-error" role="alert">${escapeHtml(error.code ?? "cost_anomaly.unavailable")} · ${escapeHtml(error.message ?? "成本异常操作失败")} · request_id: ${escapeHtml(error.requestId ?? "-")}</div>`;
-}
-
-/** 渲染 request_id 跳转命令；目标页后端会再次按当前 Session tenant 校验。 */
-function renderRequestPair(requestId) {
-  if (!requestId) {
-    return "";
-  }
-  return `<div><dt>代表 request_id</dt><dd><button type="button" class="cost-anomaly-request-link" data-cost-anomaly-request-id="${escapeAttribute(requestId)}">${escapeHtml(requestId)}</button></dd></div>`;
+  return `<div class="cost-anomaly-action-error" role="alert">${escapeHtml(error.message ?? "成本异常操作失败，请稍后重试")}</div>`;
 }
 
 /** 渲染非空详情键值对；空值不创建 DOM，避免把未授权字段误解为已授权空值。 */
@@ -506,19 +489,14 @@ function knownToken(value, labels, fallback) {
 /** 组合可展示作用域，名称和 ID 均会在最终 HTML 写入时统一转义。 */
 function displayScope(anomaly) {
   const label = safeText(anomaly?.scope_label);
-  const id = safeText(anomaly?.scope_id);
-  return label === "-" ? id : `${label} / ${id}`;
+  return label;
 }
 
 /** 组合 Key 名称、前缀和不透明 ID；不接受或展示 Virtual Key 明文。 */
 function displayVirtualKey(anomaly) {
-  const id = safeText(anomaly?.virtual_key_id ?? anomaly?.top_virtual_key_id);
-  if (id === "-") {
-    return "-";
-  }
   const name = safeText(anomaly?.virtual_key_name);
   const prefix = safeText(anomaly?.virtual_key_prefix);
-  return [name, prefix, id].filter((part) => part !== "-").join(" / ");
+  return [name, prefix].filter((part) => part !== "-").join(" / ") || "-";
 }
 
 /** 建议动作只接受固定公开命令，未知服务端文本不会原样进入页面。 */

@@ -35,7 +35,7 @@ export function renderRoleDashboardPanel(state, authContext, consoleShellState =
     : [];
   const cards = Array.isArray(state.cards) ? state.cards : [];
   return `
-    <section class="role-dashboard-panel" data-role-dashboard-root data-role-dashboard-view="${escapeAttribute(selectedView)}" data-role-dashboard-revision="${escapeAttribute(state.config?.config_revision ?? "")}" aria-labelledby="role-dashboard-title">
+    <section class="role-dashboard-panel" data-role-dashboard-root data-role-dashboard-view="${escapeAttribute(selectedView)}" aria-labelledby="role-dashboard-title">
       <header class="role-dashboard-heading">
         <div>
           <h2 id="role-dashboard-title">角色首页</h2>
@@ -74,7 +74,7 @@ function renderError(state) {
         <div><h2 id="role-dashboard-title">角色首页</h2><p>当前指标暂不可用。</p></div>
       </header>
       <div class="role-dashboard-error empty-state error-state" role="alert">
-        ${escapeHtml(state.message ?? "角色首页读取失败")} · request_id: ${escapeHtml(state.requestId ?? "-")}
+        ${escapeHtml(state.message ?? "角色首页读取失败，请稍后重试")}
       </div>
     </section>
   `;
@@ -83,13 +83,13 @@ function renderError(state) {
 /** 503 只会由状态机在同 owner、同 selected view 下生成 partial，这里明确标识陈旧快照。 */
 function renderPartialWarning(state) {
   if (state.state !== "partial") return "";
-  return `<div class="role-dashboard-warning" role="status">实时刷新暂不可用，以下为当前视图最近一次安全快照 · request_id: ${escapeHtml(state.error?.requestId ?? "-")}</div>`;
+  return `<div class="role-dashboard-warning" role="status">实时刷新暂不可用，以下为当前视图最近一次安全快照。</div>`;
 }
 
 /** 遥测失败不阻断阅读，只展示安全 message 和 request_id，不触发自动重试。 */
 function renderEventWarning(warning) {
   if (!warning) return "";
-  return `<div class="role-dashboard-event-warning" data-role-dashboard-event-warning role="status">访问记录暂不可用：${escapeHtml(warning.message ?? "事件写入失败")} · request_id: ${escapeHtml(warning.requestId ?? "-")}</div>`;
+  return `<div class="role-dashboard-event-warning" data-role-dashboard-event-warning role="status">访问记录暂不可用：${escapeHtml(warning.message ?? "事件写入失败，请稍后重试")}</div>`;
 }
 
 /** 五视图分段控制只遍历后端 available_views，前端不根据角色补回未授权选项。 */
@@ -130,7 +130,7 @@ function renderCard(card, consoleShellState) {
       </header>
       <strong class="role-dashboard-primary">${escapeHtml(formatValue(card?.primary_value, card?.primary_unit))}</strong>
       ${renderFacts(card?.facts)}
-      ${navigationTarget ? `<a class="role-dashboard-card-link" href="#${encodeURIComponent(navigationTarget)}" title="打开详情" aria-label="打开${escapeAttribute(card?.label ?? "指标")}详情">打开详情 <span aria-hidden="true">→</span></a>` : ""}
+      ${navigationTarget ? `<button type="button" class="role-dashboard-card-link" data-console-nav="${escapeAttribute(navigationTarget)}" data-console-target="${escapeAttribute(navigationTarget)}" title="打开详情" aria-label="打开${escapeAttribute(card?.label ?? "指标")}详情">打开详情 <span aria-hidden="true">→</span></button>` : ""}
     </article>
   `;
 }

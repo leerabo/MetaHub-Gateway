@@ -24,12 +24,19 @@ export function createWorkspaceNavigationController({ api, createIdempotencyKey 
     const current = () => !sessionController.signal.aborted && sequence === workspaceSessionSequence;
     let ticket = null;
     try {
-      const identity = await api.identitySession({ signal: sessionController.signal });
+      // Global identity and current Workspace session use the same Cookie scope
+      // and do not depend on each other's response. Read them together so the
+      // shell startup latency is the slower request, rather than their sum.
+      const [identityResult, sessionResult] = await Promise.allSettled([
+        api.identitySession({ signal: sessionController.signal }),
+        api.workspaceSession({ signal: sessionController.signal }),
+      ]);
       if (!current()) throw conflictError();
+      if (identityResult.status === "rejected") throw identityResult.reason;
+      const identity = identityResult.value;
       let session;
-      try {
-        session = await api.workspaceSession({ signal: sessionController.signal });
-      } catch (error) {
+      if (sessionResult.status === "rejected") {
+        const error = sessionResult.reason;
         // A freshly authenticated account may not have a Workspace cookie yet.
         // Resolve the only obvious choice here so a normal login does not land on
         // a dead-end retry screen.
@@ -51,6 +58,8 @@ export function createWorkspaceNavigationController({ api, createIdempotencyKey 
         });
         if (!current()) throw conflictError();
         session = await api.workspaceSession({ signal: sessionController.signal });
+      } else {
+        session = sessionResult.value;
       }
       if (!current()) throw conflictError();
       const nextOwner = workspaceNavigationOwner(identity, session);

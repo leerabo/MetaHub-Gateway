@@ -561,6 +561,7 @@ def _canonical_route_plan() -> str:
                 "provider_id": "provider_prd074",
                 "input_price_per_1k": "0.000000000000",
                 "output_price_per_1k": "0.000000000000",
+                "cache_price_per_1k": "0.000000000000",
                 "currency": "CNY",
                 "price_source": "price_plan",
                 "price_version": "price_v1",
@@ -671,7 +672,7 @@ def test_batch_usage_spool_v6_is_exact_and_excludes_sensitive_content() -> None:
 
     payload = _serialize_usage_spool_record(context, intent)
     serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-    assert payload["schema_version"] == 6
+    assert payload["schema_version"] == 8
     assert payload["context"]["batch_allocation_settlement_cny"] == "0.000000"
     assert "endpoint" not in payload["context"]
     assert secret_prompt not in serialized
@@ -691,7 +692,7 @@ def test_batch_usage_spool_v6_is_exact_and_excludes_sensitive_content() -> None:
         replace(context, quota_reservation_outstanding_cny="0.001000"),
         intent,
     )
-    assert quota_payload["schema_version"] == 7
+    assert quota_payload["schema_version"] == 8
     quota_restored, _quota_intent = _deserialize_usage_spool_record(quota_payload)
     assert quota_restored.quota_reservation_outstanding_cny == "0.001000"
 

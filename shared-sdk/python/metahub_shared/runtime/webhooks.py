@@ -41,6 +41,7 @@ from .local_model_events import (
     validate_local_model_called_payload,
 )
 from .provider_error_map import TENANT_PROVIDER_ERROR_OUTPUT_CODES
+from .routing_policy import MAX_ROUTING_CANDIDATES
 from .security_events import (
     SECURITY_EVENT_TYPE,
     validate_security_event_envelope,
@@ -4370,7 +4371,7 @@ def _validate_route_request_selected_payload(payload: dict[str, Any]) -> None:
     candidate_count = payload["candidate_count"]
     eligible_count = payload["eligible_candidate_count"]
     # 候选计数严格受 Alias 主备上限约束，bool 不能借 Python 整数继承通过校验。
-    if type(candidate_count) is not int or not 1 <= candidate_count <= 2:
+    if type(candidate_count) is not int or not 1 <= candidate_count <= MAX_ROUTING_CANDIDATES:
         raise ValueError("webhook.payload_invalid")
     # 合格数必须是候选总数内的正整数，selected 事件不允许没有可执行候选。
     if type(eligible_count) is not int or not 1 <= eligible_count <= candidate_count:

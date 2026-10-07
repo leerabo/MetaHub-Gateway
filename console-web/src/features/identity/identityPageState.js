@@ -2821,9 +2821,11 @@ export function createIdentityPageController({
       return loadSessions(ticket, feedback, null);
     } catch (error) {
       if (!isCurrent(ticket) || isAbort(error)) return false;
-      if (isExpired(error)) {
+      if (isExpired(error) || (preserveLogin && isTransientIdentityAvailability(error))) {
         if (preserveLogin && root.querySelector?.("[data-identity-login-form]")) {
-          // An anonymous session check must not discard an in-progress login.
+          // /identity/me is only a session restore probe. A transient probe failure
+          // must leave the actionable login form available; the login request is
+          // authoritative and may still succeed while the probe is unavailable.
           beginRequest();
           scrubProtectedState();
         } else {
@@ -4974,6 +4976,13 @@ function safePageError(error) {
 
 function isExpired(error) {
   return error instanceof IdentityApiError && error.status === 401;
+}
+
+function isTransientIdentityAvailability(error) {
+  if (!(error instanceof IdentityApiError)) return false;
+  return error.status === 0
+    || (Number.isInteger(error.status) && error.status >= 500 && error.status <= 599)
+    || new Set(["identity.network_unavailable", "identity.unavailable"]).has(error.code);
 }
 
 function isWorkspaceSessionMissing(error) {

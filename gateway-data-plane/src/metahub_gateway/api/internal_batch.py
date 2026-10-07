@@ -750,6 +750,7 @@ def _validated_route_plan(
             "provider_id",
             "input_price_per_1k",
             "output_price_per_1k",
+            "cache_price_per_1k",
             "currency",
             "price_source",
             "price_version",
@@ -768,6 +769,7 @@ def _validated_route_plan(
                 provider_id=candidate["provider_id"],
                 input_price_per_1k=candidate["input_price_per_1k"],
                 output_price_per_1k=candidate["output_price_per_1k"],
+                cache_price_per_1k=candidate["cache_price_per_1k"],
                 price_source=candidate["price_source"],
                 price_version=candidate["price_version"],
             )
@@ -778,6 +780,7 @@ def _validated_route_plan(
         if (
             item.input_price_per_1k != candidate["input_price_per_1k"]
             or item.output_price_per_1k != candidate["output_price_per_1k"]
+            or item.cache_price_per_1k != candidate["cache_price_per_1k"]
         ):
             # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.execution_invalid")

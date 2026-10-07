@@ -340,6 +340,8 @@ function initialState() {
     rateCursor: null,
     rateHistory: Object.freeze([]),
     rates: null,
+    fxRates: null,
+    models: null,
     feedback: "",
     error: null,
     intents: Object.freeze({ dispute: null, rate: null }),
@@ -372,7 +374,7 @@ function derivePhase(value) {
   return "idle";
 }
 
-function hasData(value) { return Boolean(value.subscription || value.rates); }
+function hasData(value) { return Boolean(value.subscription || value.rates || value.fxRates); }
 function hasFacts(value) {
   return Boolean(
     hasData(value) || value.error || value.feedback || value.loading.length

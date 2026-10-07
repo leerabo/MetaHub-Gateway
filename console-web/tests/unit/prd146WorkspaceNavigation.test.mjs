@@ -230,13 +230,32 @@ test("PRD-146 canonical registry restores five sources and excludes six retired 
   });
 });
 
-test("platform internal deployment route is never a Workspace sidebar or direct-link target", () => {
+test("platform internal routes are never Workspace sidebar or direct-link targets", () => {
   assert.equal(WORKSPACE_ROUTE_REGISTRY["workspace.settings.deployments"].placement, "platform_internal");
+  assert.equal(WORKSPACE_ROUTE_REGISTRY["workspace.settings.data-management"].placement, "platform_internal");
   const navigation = normalizeWorkspaceNavigation(navigationPayload());
-  assert.deepEqual(
-    resolveWorkspaceNavigationRoute(navigation, "workspace.settings.deployments"),
-    { routeCode: "workspace.home.overview", rejected: true },
+  for (const routeCode of [
+    "workspace.settings.deployments",
+    "workspace.settings.data-management",
+    "workspace.home.assistant",
+  ]) {
+    assert.deepEqual(
+      resolveWorkspaceNavigationRoute(navigation, routeCode),
+      { routeCode: "workspace.home.overview", rejected: true },
+    );
+  }
+  const projected = projectWorkspaceNavigationForConsole(
+    navigation,
+    "workspace.home.overview",
+    null,
+    { permission_codes: ["tenant_data.read", "tenant.settings.read"] },
+    "owner",
   );
+  assert.equal(
+    projected.navigation_items.some((item) => ["environments", "tenant-data-lifecycle"].includes(item.id)),
+    false,
+  );
+  assert.equal(projected.navigation_items.some((item) => item.id === "admin-assistant"), false);
 });
 
 test("PRD-146 store supersedes lane tickets and changes route without losing navigation", () => {
@@ -768,52 +787,68 @@ test("PRD-146 renderers expose eight groups, one accordion, tasks, advanced dial
   assert.doesNotMatch(dialog, /<dialog[^>]* open/u);
 });
 
-test("role-aware default sidebar defers unrelated controls without changing route authority", () => {
+test("role-aware sidebar renders every authorized item without deferred controls", () => {
   const navigation = normalizeWorkspaceNavigation(navigationPayload());
   const profiles = {
-    admin: ["workspace", "gateway", "finance", "governance"],
-    developer: ["gateway", "observability", "developer-center"],
-    finance_admin: ["finance", "observability"],
-    viewer: ["home"],
+    admin: ["home", "workspace", "gateway", "finance", "governance", "system"],
+    developer: ["gateway", "finance", "developer-center"],
+    finance_admin: ["finance", "system"],
+    viewer: ["home", "gateway", "finance"],
+  };
+  const activeRoutes = {
+    admin: "workspace.home.overview",
+    developer: "workspace.developer.sdk",
+    finance_admin: "workspace.finance.subscription",
+    viewer: "workspace.home.getting-started",
+  };
+  const activeIds = {
+    admin: "overview",
+    developer: "sdk-examples",
+    finance_admin: "workspace-subscription",
+    viewer: "quickstart",
   };
   for (const [role, expectedGroups] of Object.entries(profiles)) {
     const projected = projectWorkspaceNavigationForConsole(
       navigation,
-      "workspace.home.overview",
+      activeRoutes[role],
       null,
-      null,
+      { permission_codes: ["virtual_key.read"] },
       role,
     );
     const visibleGroups = [...new Set(projected.navigation_items
       .filter((item) => item.sidebar_visible)
       .map((item) => item.group_code))];
     assert.deepEqual(visibleGroups, expectedGroups, role);
-    assert.ok(projected.navigation_items.some((item) => item.id === "providers"), role);
-    assert.ok(projected.navigation_items.some((item) => item.sidebar_visible === false), role);
+    if (role === "developer") {
+      assert.ok(projected.navigation_items.some((item) => item.id === "sdk-examples"), role);
+      assert.ok(projected.navigation_items.some((item) => item.id === "usage"), role);
+      assert.doesNotMatch(JSON.stringify(projected.navigation_items), /providers|local-models|private-gateways|models|model-aliases|routing-policies/u, role);
+    } else if (role !== "viewer") {
+      assert.ok(projected.navigation_items.some((item) => item.id === "providers"), role);
+    }
+    if (!["developer", "viewer"].includes(role)) {
+      assert.ok(projected.navigation_items.some((item) => item.sidebar_visible === false), role);
+    }
     const shell = renderConsoleShell({
       consoleShellState: {
         navigation: projected,
         preferences: { preference: navigation.preference },
-        activeNavigationItemId: "overview",
-        activeRouteCode: "workspace.home.overview",
+        activeNavigationItemId: activeIds[role],
+        activeRouteCode: activeRoutes[role],
         sidebarExpandedGroupKey: "home",
       },
       contentHtml: "",
       i18n: { t: (_key, _params, fallback) => fallback },
     });
-    if (role === "viewer") {
-      assert.doesNotMatch(shell, /sidebar-deferred-controls/u, role);
-      assert.doesNotMatch(shell, /data-console-nav="providers"/u, role);
-      assert.match(shell, /data-console-nav="quickstart"/u, role);
-    } else {
-      assert.match(shell, /sidebar-deferred-controls/u, role);
-      assert.match(shell, /data-console-nav="providers"/u, role);
-      assert.match(shell, /data-sidebar-default="false"/u, role);
+    assert.doesNotMatch(shell, /sidebar-deferred-controls|sidebar-group-more|更多控制/u, role);
+    for (const item of projected.navigation_items.filter((entry) => entry.sidebar_visible !== false)) {
+      assert.match(shell, new RegExp(`data-console-nav="${item.id}"`, "u"), `${role}:${item.id}`);
     }
+    assert.doesNotMatch(shell, /data-sidebar-default="false"/u, role);
     assert.match(shell, /data-sidebar-default="true"/u, role);
     if (role === "admin") {
-      assert.equal((shell.match(/data-sidebar-group="/gu) ?? []).length, 4);
-      assert.doesNotMatch(shell, /data-sidebar-group="home"/u);
+      assert.equal((shell.match(/data-sidebar-group="/gu) ?? []).length, 6);
+      assert.match(shell, /data-sidebar-group="home"/u);
     }
   }
 });
@@ -832,8 +867,54 @@ test("employee lands on task home while first-use administrator lands on organiz
     "workspace.home.overview",
   );
   assert.equal(
-    resolveWorkspaceNavigationRoute(navigation, "workspace.gateway.providers", { roleCode: "viewer" }).routeCode,
+    resolveWorkspaceNavigationRoute(navigation, "workspace.home.getting-started", { roleCode: "viewer" }).routeCode,
+    "workspace.home.getting-started",
+  );
+  assert.equal(
+    resolveWorkspaceNavigationRoute(navigation, "workspace.gateway.providers", { roleCode: "viewer" }).rejected,
+    true,
+  );
+});
+
+test("organization login without a hash always lands on the organization home", () => {
+  const navigation = normalizeWorkspaceNavigation({
+    ...navigationPayload(),
+    preference: {
+      ...navigationPayload().preference,
+      revision: 9,
+      last_primary_route_code: "workspace.gateway.models",
+    },
+  });
+  assert.equal(
+    resolveWorkspaceNavigationRoute(navigation, "", { roleCode: "admin" }).routeCode,
+    "workspace.home.overview",
+  );
+  assert.equal(
+    resolveWorkspaceNavigationRoute(navigation, "workspace.gateway.providers", { roleCode: "admin" }).routeCode,
     "workspace.gateway.providers",
+  );
+});
+
+test("completed setup hash never becomes the developer or organization home", () => {
+  const navigation = normalizeWorkspaceNavigation({
+    ...navigationPayload(),
+    developer_route_codes: [
+      "workspace.developer.sdk",
+      "workspace.developer.api",
+    ],
+    preference: { ...navigationPayload().preference, revision: 4, last_primary_route_code: "workspace.home.getting-started" },
+  });
+  assert.equal(
+    resolveWorkspaceNavigationRoute(navigation, "workspace.home.getting-started", { roleCode: "admin" }).routeCode,
+    "workspace.home.overview",
+  );
+  assert.equal(
+    resolveWorkspaceNavigationRoute(navigation, "workspace.home.getting-started", { roleCode: "developer" }).routeCode,
+    "workspace.developer.sdk",
+  );
+  assert.equal(
+    resolveWorkspaceNavigationRoute(navigation, "workspace.gateway.providers", { roleCode: "developer" }).rejected,
+    true,
   );
 });
 
@@ -944,12 +1025,21 @@ function navigationPayload() {
         item("workspace.home.getting-started", "task_home", 20),
       ]),
       group("workspace", [item("workspace.settings.profile", "primary", 30)]),
-      group("gateway", [item("workspace.gateway.providers", "primary", 40)]),
-      group("finance", [item("workspace.finance.subscription", "primary", 50)]),
-      group("governance", [item("workspace.governance.policies", "primary", 60)]),
+      group("gateway", [
+        item("workspace.gateway.providers", "primary", 40),
+        item("workspace.gateway.virtual-keys", "primary", 41),
+      ]),
+      group("finance", [
+        item("workspace.finance.subscription", "primary", 50),
+        item("workspace.finance.usage", "primary", 51),
+      ]),
+      group("governance", [
+        item("workspace.governance.policies", "primary", 60),
+        item("workspace.observability.requests", "primary", 61),
+      ]),
       group("applications", [item("workspace.applications.chat", "primary", 70)]),
-      group("observability", [item("workspace.observability.requests", "primary", 80)]),
       group("developer-center", []),
+      group("system", [item("workspace.observability.feedback", "primary", 80)]),
     ],
     item_set_digest: "d".repeat(64),
     membership_revision: 9,

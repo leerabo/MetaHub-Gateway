@@ -114,6 +114,7 @@ class RouteCandidate:
     provider_id: str
     input_price_per_1k: Decimal
     output_price_per_1k: Decimal
+    cache_price_per_1k: Decimal
     price_source: str
     price_version: str
 
@@ -1282,6 +1283,7 @@ def _resolve_binding_and_route(
                 "provider_id": candidate.provider_id,
                 "input_price_per_1k": _price_text(candidate.input_price_per_1k),
                 "output_price_per_1k": _price_text(candidate.output_price_per_1k),
+                "cache_price_per_1k": _price_text(candidate.cache_price_per_1k),
                 "currency": "CNY",
                 "price_source": candidate.price_source,
                 "price_version": candidate.price_version,
@@ -1352,6 +1354,7 @@ def _priced_candidate(
     try:
         normalized_input = _price(rate.input_price_per_1k)
         normalized_output = _price(rate.output_price_per_1k)
+        normalized_cache = _price(rate.cache_price_per_1k)
     # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ValueError:
         # 成败请求均须结算用量和成本；异常时保留事实，不得静默丢账。
@@ -1362,6 +1365,7 @@ def _priced_candidate(
         provider_id=str(row["provider_id"]),
         input_price_per_1k=normalized_input,
         output_price_per_1k=normalized_output,
+        cache_price_per_1k=normalized_cache,
         price_source=rate.source,
         price_version=rate.price_schema_version,
     )
@@ -1848,6 +1852,7 @@ def _route_plan_from_json(value: object) -> _FrozenRoutePlan:
             "provider_id",
             "input_price_per_1k",
             "output_price_per_1k",
+            "cache_price_per_1k",
             "currency",
             "price_source",
             "price_version",
@@ -1873,6 +1878,7 @@ def _route_plan_from_json(value: object) -> _FrozenRoutePlan:
                     provider_id=str(item["provider_id"]),
                     input_price_per_1k=_price(item["input_price_per_1k"]),
                     output_price_per_1k=_price(item["output_price_per_1k"]),
+                    cache_price_per_1k=_price(item["cache_price_per_1k"]),
                     price_source=str(item["price_source"]),
                     price_version=str(item["price_version"]),
                 )
@@ -1892,6 +1898,7 @@ def _attempt_cost(
     *,
     input_tokens: int,
     output_tokens: int,
+    cache_tokens: int = 0,
 ) -> Decimal:
     """实现批任务业务步骤。
 
@@ -1904,6 +1911,9 @@ def _attempt_cost(
         or input_tokens < 0
         or type(output_tokens) is not int
         or output_tokens < 0
+        or type(cache_tokens) is not int
+        or cache_tokens < 0
+        or cache_tokens > input_tokens
     ):
         # 成败请求均须结算用量和成本；异常时保留事实，不得静默丢账。
         raise ApiError("batch.cost_estimate_unavailable")
@@ -1912,10 +1922,11 @@ def _attempt_cost(
         total = sum(
             (
                 (
-                    Decimal(input_tokens) * candidate.input_price_per_1k
+                    Decimal(input_tokens - cache_tokens) * candidate.input_price_per_1k
+                    + Decimal(cache_tokens) * candidate.cache_price_per_1k
                     + Decimal(output_tokens) * candidate.output_price_per_1k
                 )
-                / Decimal(1000)
+                / Decimal(1_000_000)
                 for candidate in candidates
             ),
             Decimal("0"),

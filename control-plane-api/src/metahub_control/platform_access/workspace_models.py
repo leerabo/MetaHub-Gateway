@@ -65,6 +65,8 @@ class PlatformWorkspaceSummary(PlatformResponseModel):
     owner_contact_status: Literal["available", "unavailable"] | None = None
     last_notification_status: Literal["pending", "sent", "failed"] | None = None
     updated_at: datetime
+    private_gateway_enabled: bool = False
+    private_gateway_revision: int = Field(ge=1)
 
 
 class PlatformWorkspaceListResponse(PlatformResponseModel):
@@ -103,6 +105,16 @@ class PlatformWorkspaceHealthResponse(PlatformResponseModel):
 class PlatformWorkspaceMutationResponse(PlatformResponseModel):
     action_intent_id: str
     workspace: PlatformWorkspaceSummary
+    request_id: str
+    trace_id: str
+
+
+class PlatformWorkspacePrivateGatewayResponse(PlatformResponseModel):
+    workspace_id: str
+    tenant_id: str
+    enabled: bool
+    revision: int = Field(ge=1)
+    updated_at: datetime
     request_id: str
     trace_id: str
 

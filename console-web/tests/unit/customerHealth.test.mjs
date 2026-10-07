@@ -444,13 +444,13 @@ test("renderer shows safe aggregates and action links only after the second navi
   assert.match(html, /Customer health/);
   assert.match(html, /At risk/);
   assert.match(html, /10/);
-  assert.match(html, /href="#request-logs"/);
+  assert.match(html, /data-console-nav="request-logs"/);
   assert.match(html, /Connect a support ticket source/);
   assert.doesNotMatch(html, /tenant_health_a|fixture-session-token|provider.?key|prompt|response|health@example/i);
 
   const withoutTarget = shell(auth, { items: [items[0]] });
   const plain = renderCustomerHealth({ state: "ready", data, error: null }, auth, withoutTarget, createI18n("en-US"));
-  assert.doesNotMatch(plain, /href="#request-logs"/);
+  assert.doesNotMatch(plain, /data-console-nav="request-logs"/);
   assert.match(plain, /Review failed requests/);
 
   const container = { innerHTML: "" };

@@ -183,7 +183,7 @@ function renderPolicyEditor(state, owner) {
         </label>
         <label class="response-cache-toggle">
           <input type="checkbox" name="charge_cache_hits"${editor.charge_cache_hits ? " checked" : ""}${disabled ? " disabled" : ""}>
-          <span>缓存命中计费</span>
+          <span>缓存命中计费（每百万 Token）</span>
         </label>
         <div class="response-cache-editor-live span-2${state.editorError ? " is-error" : ""}" role="status" aria-live="polite">
           ${renderEditorStatus(state)}

@@ -109,6 +109,26 @@ export function getPlatformWorkspaceHealth({ controlApiUrl, workspaceId, signal 
   );
 }
 
+export function setPlatformWorkspacePrivateGateway({
+  controlApiUrl,
+  workspaceId,
+  revision,
+  enabled,
+  signal,
+} = {}) {
+  return request(
+    controlApiUrl,
+    `/platform/workspaces/${encodeURIComponent(opaque(workspaceId, "wsp"))}/private-gateway`,
+    {
+      method: "POST",
+      body: { enabled: Boolean(enabled), confirmed: true },
+      csrf: PLATFORM_CSRF_COOKIE,
+      headers: { "If-Match": `"${positiveInteger(revision)}"` },
+      signal,
+    },
+  );
+}
+
 export function listPlatformWorkspaceEvents({
   controlApiUrl,
   workspaceId,

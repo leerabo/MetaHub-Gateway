@@ -16,7 +16,7 @@ from uuid import uuid4
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
 from metahub_shared.db.schema import table_columns
-from metahub_shared.db.security import hash_secret, secret_prefix
+from metahub_shared.db.security import decrypt_provider_key, encrypt_provider_key, hash_secret, secret_prefix
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
@@ -37,6 +37,7 @@ from .models import (
     CreateVirtualKeyRequest,
     CreateVirtualKeyResponse,
     RateLimitRuleInfo,
+    RevealVirtualKeyResponse,
     UpdateVirtualKeyLimitsRequest,
     UpdateVirtualKeyRequest,
     VirtualKeyInfo,
@@ -143,7 +144,7 @@ def disable_virtual_keys_created_by(
             """
             UPDATE virtual_keys
             SET status='disabled', credential_revision=credential_revision+1,
-                disabled_at=?, disabled_by=?, updated_at=?
+                disabled_at=?, disabled_by=?, disabled_reason='member_removed', updated_at=?
             WHERE tenant_id=? AND virtual_key_id=? AND status='active'
             """,
             (now, actor.user_id, now, tenant_id, virtual_key_id),
@@ -209,6 +210,117 @@ def disable_virtual_keys_created_by(
     return disabled
 
 
+def sync_project_key_lifecycle(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    project_id: str,
+    project_status: str,
+    actor_user_id: str,
+    now: str,
+) -> None:
+    """Apply project lifecycle to its bound keys without rewriting billing history."""
+
+    if project_status in {"disabled", "archived"}:
+        connection.execute(
+            """
+            UPDATE virtual_keys
+            SET status='disabled', credential_revision=credential_revision+1,
+                disabled_at=?, disabled_by=?, disabled_reason='project_inactive', updated_at=?
+            WHERE tenant_id=? AND project_id=? AND status='active'
+            """,
+            (now, actor_user_id, now, tenant_id, project_id),
+        )
+    elif project_status == "active":
+        connection.execute(
+            """
+            UPDATE virtual_keys
+            SET status='active', credential_revision=credential_revision+1,
+                disabled_at=NULL, disabled_by=NULL, disabled_reason='manual', updated_at=?
+            WHERE tenant_id=? AND project_id=? AND status='disabled'
+              AND disabled_reason='project_inactive'
+              AND application_id IS NOT NULL
+              AND EXISTS (
+                SELECT 1 FROM applications a
+                WHERE a.tenant_id=virtual_keys.tenant_id
+                  AND a.application_id=virtual_keys.application_id
+                  AND a.status='active'
+              )
+            """,
+            (now, tenant_id, project_id),
+        )
+
+
+def sync_application_key_lifecycle(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    application_id: str,
+    application_status: str,
+    actor_user_id: str,
+    now: str,
+) -> None:
+    """Keep assigned personal keys unusable while their application is inactive."""
+
+    if application_status in {"disabled", "archived"}:
+        connection.execute(
+            """
+            UPDATE virtual_keys
+            SET status='disabled', credential_revision=credential_revision+1,
+                disabled_at=?, disabled_by=?, disabled_reason='project_inactive', updated_at=?
+            WHERE tenant_id=? AND application_id=? AND status='active' AND deleted_at IS NULL
+            """,
+            (now, actor_user_id, now, tenant_id, application_id),
+        )
+    elif application_status == "active":
+        connection.execute(
+            """
+            UPDATE virtual_keys
+            SET status='active', credential_revision=credential_revision+1,
+                disabled_at=NULL, disabled_by=NULL, disabled_reason='manual', updated_at=?
+            WHERE tenant_id=? AND application_id=? AND status='disabled'
+              AND disabled_reason='project_inactive' AND deleted_at IS NULL
+              AND EXISTS (
+                SELECT 1 FROM projects p
+                JOIN applications a ON a.tenant_id=p.tenant_id AND a.project_id=p.project_id
+                WHERE a.tenant_id=virtual_keys.tenant_id
+                  AND a.application_id=virtual_keys.application_id
+                  AND p.status='active'
+              )
+            """,
+            (now, tenant_id, application_id),
+        )
+
+
+def record_virtual_key_binding_change(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    virtual_key_id: str,
+    project_id: str | None,
+    application_id: str | None,
+    effective_at: str,
+) -> None:
+    """Close the old interval and open the new one for an administrative rebind."""
+
+    _close_virtual_key_binding_history(
+        connection,
+        tenant_id=tenant_id,
+        virtual_key_id=virtual_key_id,
+        effective_to=effective_at,
+    )
+    if project_id is not None:
+        _open_virtual_key_binding_history(
+            connection,
+            tenant_id=tenant_id,
+            virtual_key_id=virtual_key_id,
+            project_id=project_id,
+            application_id=application_id,
+            effective_from=effective_at,
+            reason="reassigned",
+        )
+
+
 def list_virtual_keys(
     config: AppConfig,
     context: AuthContext,
@@ -228,15 +340,19 @@ def list_virtual_keys(
 
     # Disabled keys remain in immutable billing/audit history but stay out of
     # the normal organization directory after a member is removed.
-    normalized_status = _normalize_optional_status(status) or "active"
+    requested_status = _normalize_optional_status(status)
+    normalized_status = requested_status
     normalized_environment = _normalize_optional_environment(environment)
     params: list[str] = [context.user.tenant_id]
     filters: list[str] = []
+    if not requested_status:
+        filters.append("vk.deleted_at IS NULL")
     if personal_only:
         if not user_id:
             raise ApiError("workspace_session.permission_denied")
         filters.append("vk.created_by=?")
         params.append(user_id)
+        filters.append("vk.deleted_at IS NULL")
     if normalized_status:
         filters.append("vk.status=?")
         params.append(normalized_status)
@@ -264,10 +380,12 @@ def list_virtual_keys(
           vk.virtual_key_id, vk.tenant_id, vk.name, vk.key_prefix, vk.environment,
           e.environment_id AS environment_id, e.name AS environment_name, e.status AS environment_status, vk.description,
           vk.project_id, p.name AS project_name, vk.application_id, a.name AS application_name,
-          vk.status, vk.last_used_at, vk.created_at, vk.updated_at, vk.disabled_at,
+          vk.created_by AS owner_user_id, creator.display_name AS owner_display_name,
+          vk.status, vk.disabled_reason, vk.last_used_at, vk.created_at, vk.updated_at, vk.disabled_at,
           kc.consumer_id, consumer.status AS consumer_status, vk.credential_revision,
           rlr.rate_limit_rule_id, rlr.rpm_limit, rlr.tpm_limit, rlr.concurrency_limit,
-          rlr.status AS rate_limit_status, rlr.updated_at AS rate_limit_updated_at
+          rlr.status AS rate_limit_status, rlr.updated_at AS rate_limit_updated_at,
+          CASE WHEN vk.encrypted_key IS NOT NULL THEN 1 ELSE 0 END AS has_recoverable_secret
         FROM virtual_keys vk
         LEFT JOIN virtual_key_consumers kc
           ON kc.tenant_id=vk.tenant_id AND kc.virtual_key_id=vk.virtual_key_id
@@ -277,6 +395,7 @@ def list_virtual_keys(
           ON rlr.tenant_id = vk.tenant_id AND rlr.virtual_key_id = vk.virtual_key_id
         LEFT JOIN projects p ON p.tenant_id = vk.tenant_id AND p.project_id = vk.project_id
         LEFT JOIN applications a ON a.tenant_id = vk.tenant_id AND a.application_id = vk.application_id
+        LEFT JOIN users creator ON creator.tenant_id = vk.tenant_id AND creator.user_id = vk.created_by
         JOIN environments e
           ON e.tenant_id=vk.tenant_id
          AND (e.environment_id=vk.environment_id OR (vk.environment_id IS NULL AND e.code=vk.environment))
@@ -292,6 +411,51 @@ def list_virtual_keys(
         )
     finally:
         connection.close()
+
+
+def reveal_virtual_key(
+    config: AppConfig,
+    context: AuthContext,
+    virtual_key_id: str,
+    *,
+    request_id: str,
+    trace_id: str,
+    personal_only: bool = False,
+) -> RevealVirtualKeyResponse:
+    """Return a saved key only for an explicit, authorized copy action."""
+
+    with ResourceWriteTransaction(
+        _connect(config), config, context, "virtual_key.read", read_only=True
+    ) as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        _require_personal_key_owner(connection, context, virtual_key_id, personal_only)
+        row = connection.execute(
+            """
+            SELECT encrypted_key, status, disabled_reason, project_id, application_id, deleted_at
+            FROM virtual_keys
+            WHERE tenant_id=? AND virtual_key_id=?
+            """,
+            (context.user.tenant_id, virtual_key_id),
+        ).fetchone()
+        if row is None:
+            raise ApiError("virtual_key.not_found")
+        if row["deleted_at"] is not None or row["disabled_reason"] == "member_removed" or not row["encrypted_key"]:
+            raise ApiError("virtual_key.reveal_unavailable")
+        try:
+            plain_value = decrypt_provider_key(
+                str(row["encrypted_key"]),
+                encryption_secret=config.provider_key_encryption_secret,
+            )
+        except (TypeError, ValueError):
+            raise ApiError("virtual_key.reveal_unavailable") from None
+        key = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
+        return RevealVirtualKeyResponse(
+            virtual_key=key,
+            plain_value=plain_value,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
 
 
 def create_virtual_key(
@@ -311,9 +475,23 @@ def create_virtual_key(
 
     name = _normalize_name(payload.name)
     description = _normalize_description(payload.description)
+    if personal_only and (payload.project_id is not None or payload.application_id is not None):
+        # 项目和应用归属由组织管理员治理；成员创建自己的 KEY 时不应自行选择成本归属。
+        raise ApiError("auth.permission_denied")
     with ResourceWriteTransaction(_connect(config), config, context, "virtual_key.write") as transaction:
         connection = transaction.connection
         context = transaction.context
+        existing_personal_key = connection.execute(
+            """
+            SELECT 1
+            FROM virtual_keys
+            WHERE tenant_id=? AND created_by=? AND deleted_at IS NULL
+            LIMIT 1
+            """,
+            (context.user.tenant_id, context.user.user_id),
+        ).fetchone()
+        if existing_personal_key is not None:
+            raise ApiError("virtual_key.personal_limit_reached")
         for _attempt in range(5):
             # A collision rolls back the transaction, including its authorization snapshot.
             if _attempt:
@@ -330,6 +508,13 @@ def create_virtual_key(
             project_id, application_id = _resolve_project_binding(
                 connection, context.user.tenant_id, payload.project_id, payload.application_id
             )
+            personal_project_status = None
+            if personal_only:
+                # If an administrator assigned the member before the member
+                # created a key, inherit that current application automatically.
+                project_id, application_id, personal_project_status = _resolve_personal_application_binding(
+                    connection, context.user.tenant_id, context.user.user_id
+                )
             if personal_only and payload.consumer_id is not None:
                 # Members may create their own key, but cannot issue one for
                 # another employee. Reuse the standard 403 contract so the
@@ -340,15 +525,25 @@ def create_virtual_key(
             now = _to_db_time(_utcnow())
             plain_value = _generate_virtual_key(environment_binding.code)
             virtual_key_id = str(uuid4())
+            # A personal key is usable only after the member has an active
+            # application in an active project. An unassigned key reserves
+            # the single-key slot but cannot authenticate at the gateway.
+            key_status = "active" if project_id is not None and application_id is not None else "disabled"
+            disabled_reason = "manual"
+            if project_id is None or application_id is None:
+                disabled_reason = "manual"
+            elif personal_project_status and personal_project_status != "active":
+                key_status = "disabled"
+                disabled_reason = "project_inactive"
             try:
                 connection.execute(
                     """
                     INSERT INTO virtual_keys(
-                      virtual_key_id, tenant_id, name, key_prefix, key_hash, status,
-                      environment, environment_id, description, project_id, application_id,
+                      virtual_key_id, tenant_id, name, key_prefix, key_hash, status, disabled_reason,
+                      encrypted_key, environment, environment_id, description, project_id, application_id,
                       created_by, created_at, updated_at
                     )
-                    VALUES(?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         virtual_key_id,
@@ -356,6 +551,11 @@ def create_virtual_key(
                         name,
                         secret_prefix(plain_value),
                         hash_secret(plain_value),
+                        key_status,
+                        disabled_reason,
+                        encrypt_provider_key(
+                            plain_value, encryption_secret=config.provider_key_encryption_secret
+                        ),
                         environment_binding.code,
                         environment_binding.environment_id,
                         description,
@@ -366,6 +566,16 @@ def create_virtual_key(
                         now,
                     ),
                 )
+                if project_id is not None:
+                    _open_virtual_key_binding_history(
+                        connection,
+                        tenant_id=context.user.tenant_id,
+                        virtual_key_id=virtual_key_id,
+                        project_id=project_id,
+                        application_id=application_id,
+                        effective_from=now,
+                        reason="assigned",
+                    )
                 # 先用同一连接回读脱敏 DTO，再把业务行和审计行作为一个事务提交；明文只保留在响应变量中。
                 if payload.consumer_id is not None:
                     connection.execute(
@@ -426,12 +636,14 @@ def rotate_virtual_key(
             require_active_consumer(connection, context, before.consumer_id)
         plain_value = _generate_virtual_key(before.environment)
         changed = connection.execute(
-            """UPDATE virtual_keys SET key_hash=?,key_prefix=?,updated_at=?,
+            """UPDATE virtual_keys SET key_hash=?,key_prefix=?,encrypted_key=?,updated_at=?,
                credential_revision=credential_revision+1
                WHERE tenant_id=? AND virtual_key_id=?
                  AND credential_revision=? AND status='active'""",
             (
-                hash_secret(plain_value), secret_prefix(plain_value), _to_db_time(_utcnow()),
+                hash_secret(plain_value), secret_prefix(plain_value),
+                encrypt_provider_key(plain_value, encryption_secret=config.provider_key_encryption_secret),
+                _to_db_time(_utcnow()),
                 context.user.tenant_id, virtual_key_id, payload.expected_revision,
             ),
         )
@@ -473,8 +685,13 @@ def update_virtual_key(
     if payload.description is not None:
         updates["description"] = _normalize_description(payload.description)
     if payload.status is not None:
+        if personal_only:
+            # 成员只能使用自己的 KEY，不能自行启停；项目生命周期由组织管理员控制。
+            raise ApiError("auth.permission_denied")
         updates["status"] = _normalize_status(payload.status)
     binding_fields = _provided_fields(payload, {"project_id", "application_id"})
+    if personal_only and binding_fields:
+        raise ApiError("auth.permission_denied")
     environment_fields = _provided_fields(payload, {"environment_id", "environment"})
     if not updates and not binding_fields and not environment_fields:
         # 关键异常统一映射为业务错误码，避免底层实现细节穿透到 API 响应。
@@ -512,16 +729,42 @@ def update_virtual_key(
             )
             updates["project_id"] = target_project_id
             updates["application_id"] = target_application_id
+            binding_changed = (
+                target_project_id != before.project_id
+                or target_application_id != before.application_id
+            )
+        else:
+            binding_changed = False
+        if (
+            binding_changed
+            and "status" not in updates
+            and before.status == "disabled"
+            and target_project_id is not None
+            and target_application_id is not None
+            and (
+                before.disabled_reason == "project_inactive"
+                or (before.disabled_reason == "manual" and before.disabled_at is None)
+            )
+        ):
+            # First assignment activates a pending key; an explicitly disabled key stays disabled.
+            updates["status"] = "active"
+        if updates.get("status") == "active":
+            _ensure_virtual_key_project_active(
+                connection,
+                context.user.tenant_id,
+                target_project_id if binding_fields else before.project_id,
+            )
         now = _to_db_time(_utcnow())
         set_clauses = [f"{column}=?" for column in updates]
         values = list(updates.values())
         disabled_event = before.status != "disabled" and updates.get("status") == "disabled"
         reactivated = before.status == "disabled" and updates.get("status") == "active"
         if disabled_event:
-            set_clauses.extend(["disabled_at=?", "disabled_by=?"])
+            set_clauses.extend(["disabled_at=?", "disabled_by=?", "disabled_reason=?"])
             values.extend([now, context.user.user_id])
+            values.append("manual")
         elif reactivated:
-            set_clauses.extend(["disabled_at=NULL", "disabled_by=NULL"])
+            set_clauses.extend(["disabled_at=NULL", "disabled_by=NULL", "disabled_reason='manual'"])
         set_clauses.append("updated_at=?")
         values.append(now)
         values.extend([context.user.tenant_id, virtual_key_id])
@@ -534,6 +777,23 @@ def update_virtual_key(
                 """,
                 values,
             )
+            if binding_changed:
+                _close_virtual_key_binding_history(
+                    connection,
+                    tenant_id=context.user.tenant_id,
+                    virtual_key_id=virtual_key_id,
+                    effective_to=now,
+                )
+                if target_project_id is not None:
+                    _open_virtual_key_binding_history(
+                        connection,
+                        tenant_id=context.user.tenant_id,
+                        virtual_key_id=virtual_key_id,
+                        project_id=target_project_id,
+                        application_id=target_application_id,
+                        effective_from=now,
+                        reason="reassigned" if before.project_id is not None else "assigned",
+                    )
             key = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
             audit_record = record_audit_log(
                 connection,
@@ -576,6 +836,8 @@ def update_virtual_key_limits(
     登录态 tenant_id 确认目标 Key 存在，避免跨租户修改。
     """
 
+    if personal_only:
+        raise ApiError("auth.permission_denied")
     provided = _provided_fields(payload, {"rpm_limit", "tpm_limit", "concurrency_limit", "status"})
     if not provided:
         # 空 Patch 无法表达“修改”还是“误提交”，必须拒绝，避免控制台误判限流已更新。
@@ -691,16 +953,30 @@ def disable_virtual_key(
         context = transaction.context
         _require_personal_key_owner(connection, context, virtual_key_id, personal_only)
         before = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
-        if before.status != "disabled":
+        # Soft deletion preserves billing history while releasing the owner's key slot.
+        already_deleted = connection.execute(
+            "SELECT deleted_at FROM virtual_keys WHERE tenant_id=? AND virtual_key_id=?",
+            (context.user.tenant_id, virtual_key_id),
+        ).fetchone()["deleted_at"] is not None
+        if not already_deleted:
             now = _to_db_time(_utcnow())
             try:
                 connection.execute(
                     """
                     UPDATE virtual_keys
-                    SET status='disabled', disabled_at=?, disabled_by=?, updated_at=?
+                    SET status='disabled', disabled_at=?, disabled_by=?, disabled_reason='manual',
+                        encrypted_key=NULL, deleted_at=?,
+                        updated_at=?
                     WHERE tenant_id=? AND virtual_key_id=?
                     """,
-                    (now, context.user.user_id, now, context.user.tenant_id, virtual_key_id),
+                    (
+                        now,
+                        context.user.user_id,
+                        now,
+                        now,
+                        context.user.tenant_id,
+                        virtual_key_id,
+                    ),
                 )
                 key = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
                 audit_record = record_audit_log(
@@ -818,10 +1094,12 @@ def _load_virtual_key(connection: sqlite3.Connection, tenant_id: str, virtual_ke
           vk.virtual_key_id, vk.tenant_id, vk.name, vk.key_prefix, vk.environment,
           e.environment_id AS environment_id, e.name AS environment_name, e.status AS environment_status, vk.description,
           vk.project_id, p.name AS project_name, vk.application_id, a.name AS application_name,
-          vk.status, vk.last_used_at, vk.created_at, vk.updated_at, vk.disabled_at,
+          vk.created_by AS owner_user_id, creator.display_name AS owner_display_name,
+          vk.status, vk.disabled_reason, vk.last_used_at, vk.created_at, vk.updated_at, vk.disabled_at,
           kc.consumer_id, consumer.status AS consumer_status, vk.credential_revision,
           rlr.rate_limit_rule_id, rlr.rpm_limit, rlr.tpm_limit, rlr.concurrency_limit,
-          rlr.status AS rate_limit_status, rlr.updated_at AS rate_limit_updated_at
+          rlr.status AS rate_limit_status, rlr.updated_at AS rate_limit_updated_at,
+          CASE WHEN vk.encrypted_key IS NOT NULL THEN 1 ELSE 0 END AS has_recoverable_secret
         FROM virtual_keys vk
         LEFT JOIN virtual_key_consumers kc
           ON kc.tenant_id=vk.tenant_id AND kc.virtual_key_id=vk.virtual_key_id
@@ -831,6 +1109,7 @@ def _load_virtual_key(connection: sqlite3.Connection, tenant_id: str, virtual_ke
           ON rlr.tenant_id = vk.tenant_id AND rlr.virtual_key_id = vk.virtual_key_id
         LEFT JOIN projects p ON p.tenant_id = vk.tenant_id AND p.project_id = vk.project_id
         LEFT JOIN applications a ON a.tenant_id = vk.tenant_id AND a.application_id = vk.application_id
+        LEFT JOIN users creator ON creator.tenant_id = vk.tenant_id AND creator.user_id = vk.created_by
         JOIN environments e
           ON e.tenant_id=vk.tenant_id
          AND (e.environment_id=vk.environment_id OR (vk.environment_id IS NULL AND e.code=vk.environment))
@@ -861,6 +1140,8 @@ def _virtual_key_info(row: sqlite3.Row) -> VirtualKeyInfo:
         environment_name=row["environment_name"],
         environment_status=row["environment_status"],
         description=row["description"],
+        owner_display_name=row["owner_display_name"],
+        owner_user_id=row["owner_user_id"],
         project_id=row["project_id"],
         project_name=row["project_name"],
         application_id=row["application_id"],
@@ -869,10 +1150,12 @@ def _virtual_key_info(row: sqlite3.Row) -> VirtualKeyInfo:
         consumer_status=row["consumer_status"],
         credential_revision=row["credential_revision"],
         status=row["status"],
+        disabled_reason=row["disabled_reason"] or "manual",
         last_used_at=_parse_optional_db_time(row["last_used_at"]),
         created_at=_parse_db_time(row["created_at"]),
         updated_at=_parse_db_time(row["updated_at"]),
         disabled_at=_parse_optional_db_time(row["disabled_at"]),
+        has_recoverable_secret=bool(row["has_recoverable_secret"]),
         rate_limit_rule=_rate_limit_rule_info(row),
     )
 
@@ -987,6 +1270,107 @@ def _resolve_project_binding(
             raise ApiError("virtual_key.project_binding_invalid")
         return project_id, None
     return None, None
+
+
+def _resolve_personal_application_binding(
+    connection: sqlite3.Connection,
+    tenant_id: str,
+    user_id: str,
+) -> tuple[str | None, str | None, str | None]:
+    """Find the member's latest active application assignment for a new key."""
+
+    row = connection.execute(
+        """
+        SELECT a.project_id, a.application_id, p.status AS project_status,
+               a.status AS application_status
+        FROM application_memberships am
+        JOIN workspace_memberships wm
+          ON wm.tenant_id=am.tenant_id
+         AND wm.workspace_membership_id=am.workspace_membership_id
+        JOIN applications a
+          ON a.tenant_id=am.tenant_id AND a.application_id=am.application_id
+        JOIN projects p
+          ON p.tenant_id=a.tenant_id AND p.project_id=a.project_id
+        WHERE am.tenant_id=? AND am.status='active'
+          AND wm.status='active' AND wm.legacy_user_id=?
+        ORDER BY am.updated_at DESC, am.application_membership_id DESC
+        LIMIT 1
+        """,
+        (tenant_id, user_id),
+    ).fetchone()
+    if row is None:
+        return None, None, None
+    status = "active" if row["project_status"] == "active" and row["application_status"] == "active" else "inactive"
+    return row["project_id"], row["application_id"], status
+
+
+def _ensure_virtual_key_project_active(
+    connection: sqlite3.Connection,
+    tenant_id: str,
+    project_id: str | None,
+) -> None:
+    """Prevent reactivating a key while its project is disabled or archived."""
+
+    if not project_id:
+        return
+    row = connection.execute(
+        "SELECT status FROM projects WHERE tenant_id=? AND project_id=?",
+        (tenant_id, project_id),
+    ).fetchone()
+    if row is None or row["status"] != "active":
+        raise ApiError("virtual_key.project_binding_invalid")
+
+
+def _close_virtual_key_binding_history(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    virtual_key_id: str,
+    effective_to: str,
+) -> None:
+    """Close the current binding interval before assigning the next project."""
+
+    connection.execute(
+        """
+        UPDATE virtual_key_binding_history
+        SET effective_to=?
+        WHERE tenant_id=? AND virtual_key_id=? AND effective_to IS NULL
+        """,
+        (effective_to, tenant_id, virtual_key_id),
+    )
+
+
+def _open_virtual_key_binding_history(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    virtual_key_id: str,
+    project_id: str,
+    application_id: str | None,
+    effective_from: str,
+    reason: str,
+) -> None:
+    """Record a current key-to-project interval without storing any secret."""
+
+    binding_id = f"vkbind_{uuid4().hex}"
+    connection.execute(
+        """
+        INSERT INTO virtual_key_binding_history(
+          virtual_key_binding_id, tenant_id, virtual_key_id, project_id, application_id,
+          effective_from, effective_to, change_reason, created_at
+        ) VALUES(?, ?, ?, ?, ?, ?, NULL, ?, ?)
+        """,
+        (
+            binding_id,
+            tenant_id,
+            virtual_key_id,
+            project_id,
+            application_id,
+            effective_from,
+            reason,
+            effective_from,
+        ),
+    )
 
 def _normalize_name(value: str | None) -> str:
     """规范化 Virtual Key 管理 的 normalize name 参数，拦截空值、非法枚举或越界数字。

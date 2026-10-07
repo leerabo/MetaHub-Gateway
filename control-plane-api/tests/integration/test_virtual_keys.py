@@ -184,12 +184,12 @@ async def login(client: AsyncClient, email: str, password: str) -> str:
 
 
 @pytest.mark.anyio
-async def test_virtual_key_create_call_disable_flow(
+async def test_virtual_key_create_pending_delete_flow(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     fake_upstream,
 ) -> None:
-    """主流程/安全：Key 明文只展示一次，可调用 Gateway，禁用后不能再鉴权。"""
+    """未分配的 KEY 可复制和列出，但分配前不能调用；删除后保持失效。"""
 
     database_url = prepare_database(monkeypatch, tmp_path, fake_upstream)
     control_app = build_control_app()
@@ -214,18 +214,26 @@ async def test_virtual_key_create_call_disable_flow(
                 "description": "integration",
             },
         )
+        reveal = await control.post(
+            f"/virtual-keys/{create.json()['virtual_key']['virtual_key_id']}/reveal",
+            headers={"Authorization": f"Bearer {admin_token}", "X-Request-ID": "req_prd010_reveal"},
+        )
         list_after_create = await control.get(
             "/virtual-keys",
             headers={"Authorization": f"Bearer {admin_token}", "X-Request-ID": "req_prd010_list"},
         )
 
     assert create.status_code == 201
+    assert reveal.status_code == 200, reveal.text
     created_payload = create.json()
     plain_value = created_payload["plain_value"]
+    assert reveal.json()["plain_value"] == plain_value
     virtual_key = created_payload["virtual_key"]
     assert plain_value.startswith("mhv_test_")
     assert virtual_key["key_prefix"] == plain_value[:12]
     assert virtual_key["environment"] == "test"
+    assert virtual_key["status"] == "disabled"
+    assert any(item["virtual_key_id"] == virtual_key["virtual_key_id"] for item in list_after_create.json()["virtual_keys"])
     assert "plain_value" not in json.dumps(list_after_create.json()["virtual_keys"], ensure_ascii=False)
     assert "key_hash" not in list_after_create.text
     assert plain_value not in list_after_create.text
@@ -253,12 +261,47 @@ async def test_virtual_key_create_call_disable_flow(
             headers={"Authorization": f"Bearer {plain_value}", "X-Request-ID": "req_prd010_gateway"},
             json={"model": "default-chat", "messages": [{"role": "user", "content": "hi"}]},
         )
-    assert call.status_code == 200
+    assert call.status_code == 401
+    assert call.json()["code"] == "gateway.auth_invalid"
     used = connection.execute(
         "SELECT last_used_at FROM virtual_keys WHERE virtual_key_id=?",
         (virtual_key["virtual_key_id"],),
     ).fetchone()
-    assert used["last_used_at"] is not None
+    assert used["last_used_at"] is None
+
+    tenant_id = connection.execute(
+        "SELECT tenant_id FROM virtual_keys WHERE virtual_key_id=?",
+        (virtual_key["virtual_key_id"],),
+    ).fetchone()["tenant_id"]
+    connection.execute(
+        "INSERT INTO projects(project_id,tenant_id,project_code,name,status,created_at,updated_at) "
+        "VALUES('prj_key_assignment',?,'key-assignment','Assigned project','active',datetime('now'),datetime('now'))",
+        (tenant_id,),
+    )
+    connection.execute(
+        "INSERT INTO applications(application_id,tenant_id,project_id,application_code,name,status,created_at,updated_at) "
+        "VALUES('app_key_assignment',?,'prj_key_assignment','key-assignment','Assigned app','active',datetime('now'),datetime('now'))",
+        (tenant_id,),
+    )
+    connection.commit()
+
+    async with AsyncClient(transport=control_transport, base_url="http://control") as control:
+        admin_token = await login(control, "admin@metahub.local", ADMIN_PASSWORD)
+        assigned = await control.patch(
+            f"/virtual-keys/{virtual_key['virtual_key_id']}",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"project_id": "prj_key_assignment", "application_id": "app_key_assignment"},
+        )
+    assert assigned.status_code == 200, assigned.text
+    assert assigned.json()["virtual_key"]["status"] == "active"
+
+    async with AsyncClient(transport=gateway_transport, base_url="http://gateway") as gateway:
+        allowed = await gateway.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {plain_value}"},
+            json={"model": "default-chat", "messages": [{"role": "user", "content": "hi"}]},
+        )
+    assert allowed.status_code == 200, allowed.text
 
     async with AsyncClient(transport=control_transport, base_url="http://control") as control:
         admin_token = await login(control, "admin@metahub.local", ADMIN_PASSWORD)
@@ -266,8 +309,13 @@ async def test_virtual_key_create_call_disable_flow(
             f"/virtual-keys/{virtual_key['virtual_key_id']}",
             headers={"Authorization": f"Bearer {admin_token}", "X-Request-ID": "req_prd010_disable"},
         )
+        reveal_deleted = await control.post(
+            f"/virtual-keys/{virtual_key['virtual_key_id']}/reveal",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
     assert disabled.status_code == 200
     assert disabled.json()["virtual_key"]["status"] == "disabled"
+    assert reveal_deleted.status_code != 200
 
     async with AsyncClient(transport=gateway_transport, base_url="http://gateway") as gateway:
         denied = await gateway.post(
@@ -440,6 +488,24 @@ async def test_viewer_self_service_key_and_personal_usage_scope(
             headers={"Authorization": f"Bearer {admin_token}"},
             json={"name": "admin only", "environment": "dev"},
         )
+        second_admin_key = await client.post(
+            "/virtual-keys",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"name": "another admin key", "environment": "dev"},
+        )
+        deleted_admin_key = await client.delete(
+            f"/virtual-keys/{admin_key.json()['virtual_key']['virtual_key_id']}",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        repeated_admin_delete = await client.delete(
+            f"/virtual-keys/{admin_key.json()['virtual_key']['virtual_key_id']}",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        replacement_admin_key = await client.post(
+            "/virtual-keys",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"name": "replacement admin key", "environment": "dev"},
+        )
         viewer_keys = await client.get(
             "/virtual-keys", headers={"Authorization": f"Bearer {viewer_token}"}
         )
@@ -447,6 +513,29 @@ async def test_viewer_self_service_key_and_personal_usage_scope(
             "/virtual-keys",
             headers={"Authorization": f"Bearer {viewer_token}"},
             json={"name": "my key"},
+        )
+        second_viewer_key = await client.post(
+            "/virtual-keys",
+            headers={"Authorization": f"Bearer {viewer_token}"},
+            json={"name": "second key"},
+        )
+        connection = connect_database(database_url)
+        try:
+            connection.execute(
+                "UPDATE virtual_keys SET status='disabled', disabled_reason='project_inactive' WHERE virtual_key_id=?",
+                (viewer_key.json()["virtual_key"]["virtual_key_id"],),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        deleted_viewer_key = await client.delete(
+            f"/virtual-keys/{viewer_key.json()['virtual_key']['virtual_key_id']}",
+            headers={"Authorization": f"Bearer {viewer_token}"},
+        )
+        replacement_viewer_key = await client.post(
+            "/virtual-keys",
+            headers={"Authorization": f"Bearer {viewer_token}"},
+            json={"name": "replacement key"},
         )
         personal_summary = await client.get(
             "/usage/me/summary", headers={"Authorization": f"Bearer {viewer_token}"}
@@ -459,9 +548,20 @@ async def test_viewer_self_service_key_and_personal_usage_scope(
         )
 
     assert admin_key.status_code == 201, admin_key.text
+    assert second_admin_key.status_code == 409
+    assert second_admin_key.json()["code"] == "virtual_key.personal_limit_reached"
+    assert deleted_admin_key.status_code == 200
+    assert repeated_admin_delete.status_code == 200
+    assert replacement_admin_key.status_code == 201
     assert viewer_keys.status_code == 200
     assert viewer_keys.json()["virtual_keys"] == []
     assert viewer_key.status_code == 201, viewer_key.text
+    assert second_viewer_key.status_code == 409
+    assert second_viewer_key.json()["code"] == "virtual_key.personal_limit_reached"
+    assert deleted_viewer_key.status_code == 200, deleted_viewer_key.text
+    assert deleted_viewer_key.json()["virtual_key"]["status"] == "disabled"
+    assert deleted_viewer_key.json()["virtual_key"]["disabled_reason"] == "manual"
+    assert replacement_viewer_key.status_code == 201, replacement_viewer_key.text
     assert personal_summary.status_code == 200
     assert personal_summary.json()["totals"]["request_count"] == 0
     assert personal_records.status_code == 200

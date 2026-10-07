@@ -1047,8 +1047,8 @@ async def test_cost_first_selects_lower_estimated_cost_and_persists_candidates(
             "0.100000000000",
             "USD",
             "catalog-usd-v1",
-            "local-chat-model",
-            "routing.cost_fixed_fallback.currency_incomparable",
+            "fallback-upstream",
+            "routing.cost_lowest",
             ("model_catalog", "model_catalog"),
         ),
         (
@@ -1092,6 +1092,11 @@ async def test_cost_first_gateway_handles_missing_mixed_and_explicit_zero_prices
     upstream_url, captured = fake_upstream
     database_url = prepare_database(monkeypatch, tmp_path, upstream_url)
     connection = connect_database(database_url)
+    # This vector targets legacy model-catalog pricing. Disable the seeded PRD-144
+    # workspace rate so it cannot shadow the prices set below.
+    connection.execute(
+        "UPDATE workspace_provider_cost_rate_heads SET adoption_state='disabled'"
+    )
     connection.execute(
         """
         UPDATE models
@@ -1109,6 +1114,64 @@ async def test_cost_first_gateway_handles_missing_mixed_and_explicit_zero_prices
         WHERE model_alias='fallback-chat'
         """,
         (fallback_price, fallback_price, fallback_currency, fallback_version),
+    )
+    # The fallback model is inserted directly by this legacy routing fixture,
+    # after the commercial-accounting migration has already backfilled the
+    # seeded models. Give it the same retired legacy resource so the resolver
+    # can deliberately read the catalog price without weakening the production
+    # rule that a model with no workspace cost resource is unpriced.
+    owner = connection.execute(
+        """
+        SELECT binding.workspace_id, membership.workspace_membership_id,
+               model.tenant_id, model.provider_id
+        FROM models model
+        JOIN workspace_tenant_bindings binding
+          ON binding.tenant_id=model.tenant_id AND binding.status='active'
+        JOIN workspace_memberships membership
+          ON membership.workspace_id=binding.workspace_id
+         AND membership.tenant_id=binding.tenant_id
+         AND membership.role_code='owner' AND membership.status='active'
+        WHERE model.model_alias='fallback-chat'
+        LIMIT 1
+        """
+    ).fetchone()
+    assert owner is not None
+    fallback_rate_id = "pcr_" + "7" * 32
+    fallback_version_id = "pcrv_" + "7" * 32
+    connection.execute(
+        """
+        INSERT INTO workspace_provider_cost_rates(
+          workspace_provider_cost_rate_id,workspace_id,tenant_id,provider_id,
+          model_id,currency,created_at)
+        SELECT ?,?,?,?,model_id,?,datetime('now')
+        FROM models WHERE model_alias='fallback-chat'
+        """,
+        (fallback_rate_id, owner["workspace_id"], owner["tenant_id"],
+         owner["provider_id"], fallback_currency),
+    )
+    connection.execute(
+        """
+        INSERT INTO workspace_provider_cost_rate_versions(
+          workspace_provider_cost_rate_version_id,workspace_provider_cost_rate_id,
+          version_number,input_rate_micros_per_1k,output_rate_micros_per_1k,
+          cache_rate_micros_per_1k,effective_from,effective_until,source_type,
+          source_id,source_sha256,status,revision,content_sha256,
+          created_by_membership_id,created_at)
+        SELECT ?,?,1,0,0,0,'1970-01-01T00:00:00Z',NULL,'legacy_model',
+               model_id,?, 'active',1,?, ?,datetime('now')
+        FROM models WHERE model_alias='fallback-chat'
+        """,
+        (fallback_version_id, fallback_rate_id, "a" * 64, "b" * 64,
+         owner["workspace_membership_id"]),
+    )
+    connection.execute(
+        """
+        INSERT INTO workspace_provider_cost_rate_heads(
+          workspace_provider_cost_rate_id,workspace_provider_cost_rate_version_id,
+          head_revision,adoption_state,updated_at)
+        VALUES(?,?,1,'disabled',datetime('now'))
+        """,
+        (fallback_rate_id, fallback_version_id),
     )
     update_routing_mode(connection, "cost_first")
     request_id = f"req_prd047_cost_{case_name}"

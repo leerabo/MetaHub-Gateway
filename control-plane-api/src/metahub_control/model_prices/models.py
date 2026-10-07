@@ -22,6 +22,7 @@ class ModelPricePlanInfo(BaseModel):
     provider_code: str
     input_price_per_1k: str
     output_price_per_1k: str
+    cache_price_per_1k: str
     currency: str
     price_schema_version: str
     effective_from: datetime
@@ -59,6 +60,21 @@ class CreateModelPricePlanRequest(BaseModel):
     model_id: str | None = None
     input_price_per_1k: object | None = None
     output_price_per_1k: object | None = None
+    cache_price_per_1k: object | None = None
     currency: str | None = None
     effective_from: object | None = None
     price_schema_version: str | None = None
+
+
+class BatchCreateModelPricePlansRequest(BaseModel):
+    """一次性补录一个模型的多个不可变价格时间段。"""
+
+    plans: list[CreateModelPricePlanRequest]
+
+
+class BatchCreateModelPricePlansResponse(BaseModel):
+    """批量价格计划响应；所有计划在同一事务中提交。"""
+
+    price_plans: list[ModelPricePlanInfo]
+    request_id: str
+    trace_id: str

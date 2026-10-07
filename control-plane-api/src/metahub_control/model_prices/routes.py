@@ -12,8 +12,18 @@ from fastapi import APIRouter, Depends, Query, Request, status
 
 from metahub_control.auth import AuthContext, require_model_price_reader, require_model_price_writer
 
-from .models import CreateModelPricePlanRequest, ModelPricePlanListResponse, ModelPricePlanResponse
-from .service import create_model_price_plan, list_model_price_plans
+from .models import (
+    BatchCreateModelPricePlansRequest,
+    BatchCreateModelPricePlansResponse,
+    CreateModelPricePlanRequest,
+    ModelPricePlanListResponse,
+    ModelPricePlanResponse,
+)
+from .service import (
+    create_model_price_plan,
+    create_model_price_plans_batch,
+    list_model_price_plans,
+)
 
 router = APIRouter(prefix="/model-prices", tags=["model-prices"])
 
@@ -53,6 +63,27 @@ async def post_model_price(
         request.app.state.config,
         context,
         payload,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+
+
+@router.post(
+    "/batch",
+    response_model=BatchCreateModelPricePlansResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_model_prices_batch(
+    payload: BatchCreateModelPricePlansRequest,
+    request: Request,
+    context: Annotated[AuthContext, Depends(require_model_price_writer)],
+) -> BatchCreateModelPricePlansResponse:
+    """原子补录多个历史、当前或未来价格时间段。"""
+
+    return create_model_price_plans_batch(
+        request.app.state.config,
+        context,
+        payload.plans,
         request_id=_request_id(request),
         trace_id=_trace_id(request),
     )

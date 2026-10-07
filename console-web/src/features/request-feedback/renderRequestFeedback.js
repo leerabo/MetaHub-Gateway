@@ -751,8 +751,8 @@ function renderSummaryHeading(state, i18n) {
   return `
     <div class="feedback-summary-heading">
       <div>
-        <h2 id="feedback-summary-title">${escapeHtml(t(i18n, "feedback.summary.title", "反馈报表"))}</h2>
-        <p>${escapeHtml(state?.from_time && state?.to_time ? `${state.from_time} - ${state.to_time}` : scope)}</p>
+        <h2 id="feedback-summary-title">${escapeHtml(t(i18n, "feedback.summary.title", "成员调用反馈"))}</h2>
+        <p>${escapeHtml(state?.from_time && state?.to_time ? `${state.from_time} - ${state.to_time}` : `${scope} · 统计成员提交的调用反馈`)}</p>
       </div>
       <span>${escapeHtml(scope)}</span>
     </div>
@@ -763,9 +763,9 @@ function renderSummaryHeading(state, i18n) {
 function renderSummaryFilters(filters, i18n, summaryWindow = null) {
   return `
     <form class="feedback-summary-filters" id="feedback-summary-filter-form">
-      <label><span>${escapeHtml(t(i18n, "feedback.summary.model", "模型 ID"))}</span><input name="modelId" maxlength="128" value="${escapeAttribute(filters.modelId ?? "")}" /></label>
-      <label><span>${escapeHtml(t(i18n, "feedback.summary.from", "开始时间（UTC）"))}</span><input name="fromTime" maxlength="20" placeholder="${escapeAttribute(summaryWindow?.from_time || "YYYY-MM-DDTHH:mm:ssZ")}" value="${escapeAttribute(filters.fromTime ?? "")}" /></label>
-      <label><span>${escapeHtml(t(i18n, "feedback.summary.to", "结束时间（UTC）"))}</span><input name="toTime" maxlength="20" placeholder="${escapeAttribute(summaryWindow?.to_time || "YYYY-MM-DDTHH:mm:ssZ")}" value="${escapeAttribute(filters.toTime ?? "")}" /></label>
+      <label><span>${escapeHtml(t(i18n, "feedback.summary.model", "模型"))}</span><input aria-label="模型" name="modelId" maxlength="128" value="${escapeAttribute(filters.modelId ?? "")}" /></label>
+      <label><span>${escapeHtml(t(i18n, "feedback.summary.from", "开始时间（UTC）"))}</span><input aria-label="开始时间（UTC）" name="fromTime" maxlength="20" placeholder="${escapeAttribute(summaryWindow?.from_time || "YYYY-MM-DDTHH:mm:ssZ")}" value="${escapeAttribute(filters.fromTime ?? "")}" /></label>
+      <label><span>${escapeHtml(t(i18n, "feedback.summary.to", "结束时间（UTC）"))}</span><input aria-label="结束时间（UTC）" name="toTime" maxlength="20" placeholder="${escapeAttribute(summaryWindow?.to_time || "YYYY-MM-DDTHH:mm:ssZ")}" value="${escapeAttribute(filters.toTime ?? "")}" /></label>
       <div class="feedback-summary-filter-actions">
         <button type="submit">${escapeHtml(t(i18n, "feedback.summary.apply", "查询"))}</button>
         <button type="button" id="feedback-summary-refresh">${escapeHtml(t(i18n, "feedback.summary.refresh", "刷新"))}</button>

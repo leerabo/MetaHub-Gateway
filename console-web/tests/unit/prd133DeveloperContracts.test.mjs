@@ -210,6 +210,21 @@ test("Developer and Platform render public lifecycle proof without private keys 
   assert.doesNotMatch(root.innerHTML, /private[_ -]?key|\/internal\/|signature_b64|Authorization|Bearer/iu);
 });
 
+test("empty developer contract state uses one actionable empty state", () => {
+  const html = renderDeveloperContracts({
+    versions: [],
+    sdk_releases: [],
+    schemas: [],
+    changelog: { entries: [] },
+    supply_chain: {},
+  });
+
+  assert.match(html, /暂无已发布内容/u);
+  assert.match(html, /发布后/u);
+  assert.doesNotMatch(html, /developer-contracts-summary/u);
+  assert.doesNotMatch(html, /developer-contracts-band/u);
+});
+
 test("Platform release controller commits current builds and clears workspace after dynamic revoke", async (t) => {
   const originalWindow = globalThis.window;
   globalThis.window = {

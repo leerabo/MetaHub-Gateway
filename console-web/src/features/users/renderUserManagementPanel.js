@@ -35,7 +35,6 @@ export function renderUserManagementPanel(usersState, authContext, invitationSta
       <div class="empty-state">等待 /users 响应。</div>
     `;
   }
-  // 错误态是用户可见反馈入口，需要保留后端 request_id 便于排查。
   if (usersState.state === "error") {
     return `
       <div class="panel-heading">
@@ -43,7 +42,7 @@ export function renderUserManagementPanel(usersState, authContext, invitationSta
         <p>用户管理暂不可用。</p>
       </div>
       <div class="empty-state error-state">
-        ${escapeHtml(usersState.message)} request_id: ${escapeHtml(usersState.requestId ?? "-")}
+        ${escapeHtml(usersState.message ?? "请稍后重试")}
       </div>
     `;
   }
@@ -61,6 +60,7 @@ export function renderUserManagementPanel(usersState, authContext, invitationSta
         <button type="button" class="invite-user-button" id="invite-user-button">邀请成员</button>
       </div>
     </div>
+    <div class="console-page-toolbar users-toolbar"><span>按姓名或邮箱快速定位成员</span></div>
     <div class="users-grid" role="table" aria-label="当前租户用户">
       <div class="users-row users-head" role="row">
         <span>用户</span>
@@ -111,10 +111,9 @@ function renderWorkspaceMembers(state) {
     <div class="users-heading-actions"><span class="users-count">${total} 位成员</span>
       ${canInvite ? '<button type="button" class="invite-user-button" id="invite-user-button">邀请后台成员</button>' : ""}
     </div></div>
-    ${error ? `<p class="error-state" role="alert">${escapeHtml(error.message ?? "成员管理暂不可用")}
-      request_id: ${escapeHtml(error.requestId ?? "-")}</p>` : ""}
+    ${error ? `<p class="error-state" role="alert">${escapeHtml(error.message ?? "成员管理暂不可用")}</p>` : ""}
     ${state.feedback && !error ? `<p role="status">${escapeHtml(state.feedback)}</p>` : ""}
-    <form class="workspace-members-search" data-workspace-members-search-form role="search">
+    <form class="workspace-members-search console-page-toolbar" data-workspace-members-search-form role="search">
       <label><span>搜索成员</span><input name="search" value="${escapeAttribute(state.search ?? "")}" maxlength="160" placeholder="姓名或邮箱" /></label>
       <button type="submit">搜索</button><button type="button" data-workspace-members-search-clear>清除</button>
     </form>
@@ -212,7 +211,7 @@ function renderInvitationDialog(roles, invitationState) {
         </button>
       </form>
       <p class="invitation-feedback${feedback?.state === "error" ? " error-state" : ""}" role="status">
-        ${feedback ? `${escapeHtml(feedback.message)} · request_id: ${escapeHtml(feedback.requestId)}` : ""}
+        ${feedback ? escapeHtml(feedback.message) : ""}
       </p>
       <div class="invitation-created-result"${resultHidden}>
         <dl>

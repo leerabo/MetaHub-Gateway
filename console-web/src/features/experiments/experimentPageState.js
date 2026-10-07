@@ -44,7 +44,7 @@ const ERROR_MESSAGES = Object.freeze({
   "experiment.scope_conflict": "当前作用域已有正在采样的实验",
   "experiment.statistics_unavailable": "实验统计暂不可用",
   "experiment.create_options_unavailable": "创建选项暂不可用",
-  "experiment.create_options_empty": "当前没有完整的可用 Project、Environment、Alias 和两个 Chat 模型",
+  "experiment.create_options_empty": "当前没有完整的可用项目、环境、模型别名和两个对话模型",
   "experiment.response_invalid": "实验响应合同不完整",
   "experiment.unavailable": "模型评测暂不可用",
 });

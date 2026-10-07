@@ -590,7 +590,7 @@ PRD-028 建立了单机 Docker Compose 部署边界：
 - `shared-sdk/python/metahub_shared/runtime/errors.py`、`error_diagnosis.py`、`webhooks.py`：ModelAlias/Gateway 路由统一错误与诊断，`route.policy_selected` 的 `configuration_changed`、`request_selected` 两种精确安全载荷和稳定 `rpe_` 信封约束。
 - `control-plane-api/src/metahub_control/model_aliases/models.py`、`routes.py`、`service.py`：GET RoutingPolicy/配置候选摘要，认证后 8 KiB 严格 JSON reader，admin-only routing-mode PATCH，锁内 CAS/no-op、tenant+actor+request_id 恢复、审计/配置事件同事务和提交后 Webhook。
 - `control-plane-api/src/metahub_control/policies/dry_run_service.py`：按 Dry-Run canonical input 读取安全 Health/KeyPool/价格快照并复用 shared 排序器；不解密 Key、不调用 Provider。
-- `control-plane-api/src/metahub_control/request_logs/models.py`、`service.py`：调用日志详情增加冻结 Policy/version/mode、价格时点/Token 估算和最多两条强类型 RoutingCandidate；展示 JOIN 继续按 tenant 限定。
+- `control-plane-api/src/metahub_control/request_logs/models.py`、`service.py`：调用日志详情增加冻结 Policy/version/mode、价格时点/Token 估算和最多 32 条强类型 RoutingCandidate；展示 JOIN 继续按 tenant 限定。
 - `control-plane-api/src/metahub_control/auth/dependencies.py`、`audit/service.py`、`console/service.py`、`app.py`：GET 的 admin/developer reader、PATCH 的 admin 后端守卫、RoutingPolicy 审计白名单、`routing-policies` 角色导航和路由注册。
 - `gateway-data-plane/src/metahub_gateway/routing/models.py`、`providers/keypool.py`：同一短事务冻结 Alias/Policy/候选和 mode 实际需要的 Health/KeyPool/价格/Fallback，原子写 Decision/Candidate；动态模式解释事实不可写时在 Provider 前失败关闭。环境 Key 的快照与实际选择共用非生产/default tenant/code/基准 Endpoint 边界，其他租户不得借同名 Provider 复用全局 Secret。
 - `gateway-data-plane/src/metahub_gateway/api/openai_compatible.py`、`events/dispatcher.py`：初始选路成功提交后把稳定 `request_selected` 事件放入有界异步队列，不让 Webhook I/O 反压 Provider 热路径。

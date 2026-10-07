@@ -45,13 +45,13 @@ export function renderWebhookDeadLetters(state, authContext, i18n = null) {
   `, i18n);
 }
 
-/** 渲染标题、可见数量和当前请求链路；request_id 是故障排查证据而不是权限依据。 */
+/** 渲染标题和当前页的可见数量；链路标识只保留在状态层和日志中。 */
 function renderHeading(view) {
   return `
     <header class="webhook-dead-letter-heading">
       <div>
         <h2 id="webhook-dead-letters-title">Webhook 死信</h2>
-        <p>${view.deadLetterEvents.length} 条可见记录 · request_id: <code>${escapeHtml(view.requestId)}</code></p>
+        <p>共 ${view.deadLetterEvents.length} 条记录</p>
       </div>
       <button
         type="button"
@@ -64,14 +64,13 @@ function renderHeading(view) {
   `;
 }
 
-/** 渲染列表错误、动作反馈和轮询封顶状态；所有分支保留公开 request_id。 */
+/** 渲染用户可理解的列表反馈；内部错误码和链路标识不出现在普通界面。 */
 function renderFeedback(view) {
   const entries = [];
   if (view.error) {
     entries.push(`
       <div class="webhook-dead-letter-notice is-error" role="alert">
         <strong>${escapeHtml(view.error.message)}</strong>
-        <span>code: <code>${escapeHtml(view.error.code)}</code> · request_id: <code>${escapeHtml(view.error.requestId)}</code></span>
       </div>
     `);
   }
@@ -79,8 +78,6 @@ function renderFeedback(view) {
     entries.push(`
       <div class="webhook-dead-letter-notice is-${view.feedback.kind === "success" ? "success" : "error"}" role="status" aria-live="polite">
         <strong>${escapeHtml(view.feedback.message)}</strong>
-        ${view.feedback.code ? `<span>code: <code>${escapeHtml(view.feedback.code)}</code></span>` : ""}
-        <span>request_id: <code>${escapeHtml(view.feedback.requestId)}</code></span>
       </div>
     `);
   }

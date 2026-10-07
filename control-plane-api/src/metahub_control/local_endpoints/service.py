@@ -154,9 +154,9 @@ def create_local_endpoint(
             INSERT INTO models(
               model_id,tenant_id,provider_id,model_alias,upstream_model_name,
               provider_model_id,display_name,capabilities,context_window,
-              input_price_per_1k,output_price_per_1k,currency,price_schema_version,
+              input_price_per_1k,output_price_per_1k,cache_price_per_1k,currency,price_schema_version,
               description,status,created_by,disabled_at,disabled_by,created_at,updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,'active',?,NULL,NULL,?,?)
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,'active',?,NULL,NULL,?,?)
             """,
             (
                 model_id,
@@ -170,6 +170,7 @@ def create_local_endpoint(
                 initial["context_window"],
                 str(initial["input_price_per_1k"]),
                 str(initial["output_price_per_1k"]),
+                str(initial["cache_price_per_1k"]),
                 initial["currency"],
                 context.user.user_id,
                 now,
@@ -516,6 +517,12 @@ def _normalize_create(payload: CreateLocalEndpointRequest) -> dict[str, object]:
         raise ApiError("local_endpoint.catalog_invalid")
     input_price = _price(initial.input_price_per_1k)
     output_price = _price(initial.output_price_per_1k)
+    # 旧本地端点请求未携带缓存价时沿用输入价，避免缓存命中被误记为免费。
+    cache_price = _price(
+        initial.cache_price_per_1k
+        if initial.cache_price_per_1k is not None
+        else initial.input_price_per_1k
+    )
     if initial.currency != "CNY":
         raise ApiError("local_endpoint.catalog_invalid")
     return {
@@ -532,6 +539,7 @@ def _normalize_create(payload: CreateLocalEndpointRequest) -> dict[str, object]:
             "context_window": initial.context_window,
             "input_price_per_1k": input_price,
             "output_price_per_1k": output_price,
+            "cache_price_per_1k": cache_price,
             "currency": "CNY",
         },
     }
@@ -682,6 +690,7 @@ def _endpoint_info(row: sqlite3.Row) -> LocalEndpointInfo:
             context_window=int(row["context_window"]),
             input_price_per_1k=float(row["input_price_per_1k"]),
             output_price_per_1k=float(row["output_price_per_1k"]),
+            cache_price_per_1k=float(row["cache_price_per_1k"]),
             currency=row["currency"],
             status=row["model_status"],
         ),
@@ -756,7 +765,7 @@ SELECT endpoint.local_endpoint_id,endpoint.tenant_id,endpoint.provider_id,
        provider.health_status,provider.last_tested_at,
        model.model_id AS initial_model_id,model.model_alias AS internal_model_id,
        model.provider_model_id,model.display_name,model.capabilities,model.context_window,
-       model.input_price_per_1k,model.output_price_per_1k,model.currency,
+       model.input_price_per_1k,model.output_price_per_1k,model.cache_price_per_1k,model.currency,
        model.status AS model_status,
        (SELECT COUNT(*) FROM local_model_catalog_entries catalog
         WHERE catalog.tenant_id=endpoint.tenant_id

@@ -18,7 +18,6 @@ from metahub_gateway.streaming.sessions import (
 from metahub_gateway.usage.ledger import RequestLogContext
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
 from metahub_shared.runtime.config import load_app_config
-from metahub_shared.runtime.errors import ApiError
 
 
 def _sqlite_url(path: Path) -> str:
@@ -95,11 +94,11 @@ def test_stream_session_lifecycle_persists_counts_and_terminal_state(
     assert row["completed_at"] is not None
 
 
-def test_duplicate_request_is_fail_closed_before_provider_call(
+def test_retry_request_can_create_distinct_stream_session_owner(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """异常流程：同租户重复 request_id 无法创建第二个会话，统一返回审计不可用错误。"""
+    """路由重试：同租户同 request_id 使用新的 stream owner，不再被旧事实触发器拦截。"""
 
     database_url = _sqlite_url(tmp_path / "stream-duplicate.db")
     monkeypatch.setenv("METAHUB_DATABASE_URL", database_url)
@@ -107,17 +106,16 @@ def test_duplicate_request_is_fail_closed_before_provider_call(
     seed = apply_seed_data(database_url)
     config = load_app_config("gateway-data-plane")
     context = _session_context(config, seed.tenant_id, "req_stream_duplicate")
-    create_stream_session(config, context, inter_token_timeout_ms=30_000)
+    first = create_stream_session(config, context, inter_token_timeout_ms=30_000)
 
-    with pytest.raises(ApiError) as duplicate:
-        create_stream_session(config, context, inter_token_timeout_ms=30_000)
+    retry = create_stream_session(config, context, inter_token_timeout_ms=30_000)
+    assert retry.stream_session_id != first.stream_session_id
 
-    assert duplicate.value.code == "gateway.stream_session_unavailable"
     count = connect_database(database_url).execute(
         "SELECT COUNT(*) AS count FROM stream_sessions WHERE tenant_id=? AND request_id=?",
         (seed.tenant_id, context.request_id),
     ).fetchone()
-    assert count["count"] == 1
+    assert count["count"] == 2
 
 
 def test_timeout_event_contains_only_safe_trace_fields(

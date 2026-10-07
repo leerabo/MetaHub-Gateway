@@ -120,8 +120,6 @@ export function hydrateAdminAssistantText(root, state) {
   page.querySelector(".admin-assistant-result")?.setAttribute?.("aria-busy", safeState.busy ? "true" : "false");
   setText(page, "[data-admin-assistant-live]", statusText(safeState));
   setText(page, "[data-admin-assistant-error-message]", safeState.error?.message ?? "");
-  setText(page, "[data-admin-assistant-error-code]", safeState.error?.code ?? "");
-  setText(page, "[data-admin-assistant-error-request]", safeState.error?.requestId ?? "");
   setText(page, "[data-admin-assistant-summary]", response?.answer?.summary ?? "");
 
   for (const element of page.querySelectorAll("[data-admin-assistant-claim-index]")) {
@@ -142,10 +140,6 @@ export function hydrateAdminAssistantText(root, state) {
     setText(element, "[data-admin-assistant-source-label]", source?.label ?? "");
     setText(element, "[data-admin-assistant-source-detail]", source ? sourceDetails(source) : "");
   }
-  setText(page, "[data-admin-assistant-query-id]", response?.assistant_query_id ?? "");
-  setText(page, "[data-admin-assistant-audit-id]", response?.assistant_audit_id ?? "");
-  setText(page, "[data-admin-assistant-request-id]", response?.request_id ?? "");
-  setText(page, "[data-admin-assistant-trace-id]", response?.trace_id ?? "");
   return true;
 }
 
@@ -157,7 +151,6 @@ function renderResult(state, authContext, consoleShellState) {
       <div class="admin-assistant-error" role="alert">
         <strong>${state.status === "uncertain" ? "响应状态未知，请勿直接重复发送" : "查询未完成"}</strong>
         <p data-admin-assistant-error-message data-admin-assistant-sensitive></p>
-        <div><code data-admin-assistant-error-code></code><code data-admin-assistant-error-request></code></div>
       </div>
     `;
   }
@@ -203,12 +196,6 @@ function renderResult(state, authContext, consoleShellState) {
         <h4 id="admin-assistant-redactions-title">脱敏</h4>
         <ul>${response.redactions.map((code) => `<li>${escapeHtml(REDACTION_LABELS[code] ?? "受保护内容已省略")}</li>`).join("")}</ul>
       </section>
-      <dl class="admin-assistant-chain">
-        <div><dt>query_id</dt><dd><code data-admin-assistant-query-id></code></dd></div>
-        <div><dt>audit_id</dt><dd><code data-admin-assistant-audit-id></code></dd></div>
-        <div><dt>request_id</dt><dd><code data-admin-assistant-request-id></code></dd></div>
-        <div><dt>trace_id</dt><dd><code data-admin-assistant-trace-id></code></dd></div>
-      </dl>
     </div>
   `;
 }

@@ -163,6 +163,7 @@ MODEL_FIELDS = frozenset(
         "context_window",
         "input_price_per_1k",
         "output_price_per_1k",
+        "cache_price_per_1k",
         "currency",
         "price_schema_version",
         "description",
@@ -216,6 +217,7 @@ STRICT_IMPORT_FIELD_TYPES: dict[tuple[str, str], tuple[type, ...]] = {
     ("models", "context_window"): (int,),
     ("models", "input_price_per_1k"): (int, float),
     ("models", "output_price_per_1k"): (int, float),
+    ("models", "cache_price_per_1k"): (int, float),
     ("models", "currency"): (str,),
     ("models", "price_schema_version"): (str, type(None)),
     ("models", "description"): (str, type(None)),
@@ -623,6 +625,9 @@ def _normalize_model_rows(document: dict[str, Any], plan: _ImportPlan) -> None:
     seen: set[str] = set()
     for row_number, raw in enumerate(document["models"], start=1):
         try:
+            # 旧版导出没有缓存命中价；按当时输入价回填，避免迁移后把缓存请求误算为免费。
+            if isinstance(raw, dict) and "cache_price_per_1k" not in raw:
+                raw = {**raw, "cache_price_per_1k": raw.get("input_price_per_1k", 0)}
             row = _require_exact_fields(plan, "models", row_number, raw, MODEL_FIELDS)
             price_version = _normalized_field(
                 plan,
@@ -703,6 +708,14 @@ def _normalize_model_rows(document: dict[str, Any], plan: _ImportPlan) -> None:
                     "output_price_per_1k",
                     _normalize_price,
                     row.get("output_price_per_1k", 0),
+                ),
+                "cache_price_per_1k": _normalized_field(
+                    plan,
+                    "models",
+                    row_number,
+                    "cache_price_per_1k",
+                    _normalize_price,
+                    row.get("cache_price_per_1k", row.get("input_price_per_1k", 0)),
                 ),
                 "currency": _normalized_field(
                     plan,
@@ -1161,6 +1174,7 @@ def _prepare_model_actions(
             "context_window": int(existing["context_window"]),
             "input_price_per_1k": float(existing["input_price_per_1k"]),
             "output_price_per_1k": float(existing["output_price_per_1k"]),
+            "cache_price_per_1k": float(existing["cache_price_per_1k"]),
             "currency": str(existing["currency"]),
             "price_schema_version": existing["price_schema_version"],
             "description": existing["description"],
@@ -1613,7 +1627,7 @@ def _load_export_models(
         """
         SELECT m.model_alias AS internal_model_id,p.provider_code,m.provider_model_id,
                m.display_name,m.capabilities,m.context_window,m.input_price_per_1k,
-               m.output_price_per_1k,m.currency,m.price_schema_version,m.description,m.status
+               m.output_price_per_1k,m.cache_price_per_1k,m.currency,m.price_schema_version,m.description,m.status
         FROM models m
         JOIN providers p ON p.tenant_id=m.tenant_id AND p.provider_id=m.provider_id
         WHERE m.tenant_id=?
@@ -1640,6 +1654,7 @@ def _load_export_models(
             "context_window": row["context_window"],
             "input_price_per_1k": row["input_price_per_1k"],
             "output_price_per_1k": row["output_price_per_1k"],
+            "cache_price_per_1k": row["cache_price_per_1k"],
             "currency": row["currency"],
             "price_schema_version": row["price_schema_version"],
             "description": row["description"],
@@ -2029,10 +2044,10 @@ def _insert_model(
         INSERT INTO models(
           model_id, tenant_id, provider_id, model_alias, upstream_model_name,
           provider_model_id, display_name, capabilities, context_window,
-          input_price_per_1k, output_price_per_1k, currency, price_schema_version,
+          input_price_per_1k, output_price_per_1k, cache_price_per_1k, currency, price_schema_version,
           description, status, created_by, disabled_at, disabled_by, created_at, updated_at
         )
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             row.object_id,
@@ -2046,6 +2061,7 @@ def _insert_model(
             row.values["context_window"],
             row.values["input_price_per_1k"],
             row.values["output_price_per_1k"],
+            row.values["cache_price_per_1k"],
             row.values["currency"],
             row.values["price_schema_version"],
             row.values["description"],

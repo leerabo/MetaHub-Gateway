@@ -201,6 +201,77 @@ async def test_model_alias_create_list_update_flow(
 
 
 @pytest.mark.anyio
+async def test_multiple_fallbacks_create_and_reorder_keep_audit_atomic(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    database_url, tenant_id, default_model_id, fallback_model_id = prepare_database(
+        monkeypatch, tmp_path,
+    )
+    second_fallback_id = "model_prd015_second_fallback"
+    with connect_database(database_url) as connection:
+        connection.execute(
+            """INSERT INTO models(
+              model_id,tenant_id,provider_id,model_alias,upstream_model_name,
+              provider_model_id,display_name,capabilities,status,created_at,updated_at)
+              SELECT ?,tenant_id,provider_id,'second-fallback','second-fallback',
+                     'second-fallback','Second Fallback',capabilities,'active',
+                     datetime('now'),datetime('now')
+              FROM models WHERE model_id=? AND tenant_id=?""",
+            (second_fallback_id, fallback_model_id, tenant_id),
+        )
+        connection.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=build_control_app()), base_url="http://control",
+    ) as client:
+        token = await login(client, "admin@metahub.local", ADMIN_PASSWORD)
+        headers = {"Authorization": f"Bearer {token}"}
+        created = await client.post(
+            "/model-aliases",
+            headers={**headers, "X-Request-ID": "req_alias_multi_create"},
+            json={
+                "alias": "multiple-fallbacks",
+                "environment": "dev",
+                "default_model_id": default_model_id,
+                "fallback_model_ids": [fallback_model_id, second_fallback_id],
+            },
+        )
+        assert created.status_code == 201, created.text
+        alias = created.json()["model_alias"]
+        assert alias["fallback_model_ids"] == [fallback_model_id, second_fallback_id]
+
+        updated = await client.patch(
+            f"/model-aliases/{alias['model_alias_id']}",
+            headers={**headers, "X-Request-ID": "req_alias_multi_reorder"},
+            json={
+                "fallback_model_ids": [second_fallback_id, fallback_model_id],
+                "expected_routing_policy_version": alias["routing_policy"]["version"],
+            },
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["model_alias"]["fallback_model_ids"] == [
+            second_fallback_id, fallback_model_id,
+        ]
+
+    with connect_database(database_url) as connection:
+        rows = connection.execute(
+            """SELECT action,after_summary_json FROM audit_logs
+               WHERE tenant_id=? AND object_type='routing_policy'
+               ORDER BY created_at,rowid""",
+            (tenant_id,),
+        ).fetchall()
+    summaries = [json.loads(row["after_summary_json"]) for row in rows]
+    assert [row["action"] for row in rows] == [
+        "routing_policy.created", "routing_policy.updated",
+    ]
+    assert [item["fallback_model_count"] for item in summaries] == [2, 2]
+    assert summaries[0]["fallback_model_order_sha256"] != summaries[1][
+        "fallback_model_order_sha256"
+    ]
+    assert all("fallback_model_ids" not in item for item in summaries)
+
+
+@pytest.mark.anyio
 async def test_model_alias_permissions_and_validation_errors(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -347,7 +418,7 @@ async def test_fallback_policy_patch_is_versioned_and_visible_to_developer(
     assert patched.json()["request_id"] == "req_prd036_policy"
     assert policy["status"] == "enabled"
     assert policy["trigger_conditions"] == ["upstream_timeout", "upstream_5xx"]
-    assert policy["max_attempts"] == 1
+    assert policy["max_attempts"] == 31
     assert repeated.json()["fallback_policy"]["version"] == policy["version"]
     listed_alias = next(item for item in listed.json()["model_aliases"] if item["model_alias_id"] == alias_id)
     assert listed_alias["fallback_model_id"] == fallback_model_id

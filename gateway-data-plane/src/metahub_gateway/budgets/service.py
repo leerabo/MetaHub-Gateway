@@ -92,6 +92,7 @@ def enforce_budget_guard(
     request_id: str,
     trace_id: str,
     fallback_route: GatewayRoute | None = None,
+    fallback_routes: tuple[GatewayRoute, ...] = (),
     routing_token_estimate: TokenEstimate | None = None,
     routing_price_as_of: datetime | None = None,
     batch_context: TrustedBatchContext | None = None,
@@ -171,32 +172,27 @@ def enforce_budget_guard(
                 price_as_of=price_as_of,
             )
         )
-        # 非流式 Fallback 最坏情况下主备上游都产生账单，准入金额必须覆盖两次估算总和。
+        # 最坏情况下每个候选都可能产生上游账单，准入金额必须覆盖整条冻结链。
         fallback_estimate: EstimatedRequestCost | None = None
         estimate = initial_estimate
-        if fallback_route is not None:
+        candidates = fallback_routes or ((fallback_route,) if fallback_route is not None else ())
+        if candidates:
             if trusted_initial_estimate is not None:
                 # Cache candidate 不会调用 Provider；其冻结估算不能被当作主路由价格与备用相加。
                 raise ApiError("gateway.budget_unavailable")
-            fallback_estimate = _estimate_request_cost(
-                connection,
-                fallback_route,
-                request_kind,
-                payload,
-                token_estimate=token_estimate,
-                price_as_of=price_as_of,
-            )
-            estimate = EstimatedRequestCost(
-                input_tokens=initial_estimate.input_tokens + fallback_estimate.input_tokens,
-                output_tokens=initial_estimate.output_tokens + fallback_estimate.output_tokens,
-                cost_cny=_quantize_budget_money(
-                    initial_estimate.cost_cny + fallback_estimate.cost_cny
-                ),
-                # 主备任一缺价都无法形成最坏情况预留；不能用另一条已知价格掩盖未知成本。
-                price_available=(
-                    initial_estimate.price_available and fallback_estimate.price_available
-                ),
-            )
+            fallback_estimates = [
+                _estimate_request_cost(
+                    connection,
+                    candidate,
+                    request_kind,
+                    payload,
+                    token_estimate=token_estimate,
+                    price_as_of=price_as_of,
+                )
+                for candidate in candidates
+            ]
+            fallback_estimate = _sum_estimates(fallback_estimates)
+            estimate = _sum_estimates([initial_estimate, fallback_estimate])
         budget_date, start_utc, end_utc = _budget_window()
         decisions: list[BudgetDecision] = []
         created_reservation_rule_ids: set[str] = set()
@@ -479,14 +475,22 @@ def _batch_frozen_route_cost(
     try:
         with localcontext() as decimal_context:
             decimal_context.prec = 64
+            cache_tokens = token_estimate.cache_tokens
+            if (
+                type(cache_tokens) is not int
+                or cache_tokens < 0
+                or cache_tokens > token_estimate.input_tokens
+            ):
+                raise ApiError("batch.execution_invalid")
             total = sum(
                 (
-                    Decimal(token_estimate.input_tokens)
+                    Decimal(token_estimate.input_tokens - cache_tokens)
                     * Decimal(candidate.input_price_per_1k)
+                    + Decimal(cache_tokens) * Decimal(candidate.cache_price_per_1k)
                     + Decimal(token_estimate.output_tokens)
                     * Decimal(candidate.output_price_per_1k)
                 )
-                / Decimal(1000)
+                / Decimal(1_000_000)
                 for candidate in context.route.candidates
             )
             return total.quantize(MONEY_QUANT, rounding=ROUND_CEILING)
@@ -585,7 +589,7 @@ def finalize_request_budget_reservations(
     """把请求终态后仍可能计费的 CNY 分项写回全部命中规则预留。
 
     参数金额由调用状态机按实际上游尝试计算：未调用 Provider 为 0，只有主尝试未知为主估算，
-    主备均未知为两者之和。失败时保留原始最坏总预留，不能覆盖客户端原始业务错误。
+    所有候选均未知时按整条候选链求和。失败时保留原始最坏总预留，不能覆盖客户端原始业务错误。
     """
 
     connection: sqlite3.Connection | None = None
@@ -671,6 +675,10 @@ def _validated_trusted_estimate(estimate: EstimatedRequestCost) -> EstimatedRequ
         or isinstance(estimate.output_tokens, bool)
         or not isinstance(estimate.output_tokens, int)
         or estimate.output_tokens < 0
+        or isinstance(estimate.cache_tokens, bool)
+        or not isinstance(estimate.cache_tokens, int)
+        or estimate.cache_tokens < 0
+        or estimate.cache_tokens > estimate.input_tokens
         or type(estimate.price_available) is not bool
         or not isinstance(estimate.cost_cny, Decimal)
     ):
@@ -1251,6 +1259,20 @@ def _reserve_admitted_request(
     return created
 
 
+def _sum_estimates(estimates: list[EstimatedRequestCost]) -> EstimatedRequestCost:
+    """把主路由和全部备用候选的最坏成本合并成一个冻结预算上界。"""
+
+    if not estimates:
+        raise ApiError("gateway.budget_unavailable")
+    return EstimatedRequestCost(
+        input_tokens=sum(item.input_tokens for item in estimates),
+        output_tokens=sum(item.output_tokens for item in estimates),
+        cache_tokens=sum(item.cache_tokens for item in estimates),
+        cost_cny=_quantize_budget_money(sum((item.cost_cny for item in estimates), Decimal("0"))),
+        price_available=all(item.price_available for item in estimates),
+    )
+
+
 def _estimate_request_cost(
     connection: sqlite3.Connection,
     route: GatewayRoute,
@@ -1268,6 +1290,9 @@ def _estimate_request_cost(
 
     estimate = token_estimate or estimate_request_tokens(request_kind, payload)
     input_tokens, output_tokens = estimate.input_tokens, estimate.output_tokens
+    cache_tokens = estimate.cache_tokens
+    if type(cache_tokens) is not int or cache_tokens < 0 or cache_tokens > input_tokens:
+        raise ApiError("gateway.budget_unavailable")
     try:
         rate = resolve_workspace_cost_rate(
             connection,
@@ -1282,6 +1307,7 @@ def _estimate_request_cost(
         return EstimatedRequestCost(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            cache_tokens=cache_tokens,
             cost_cny=Decimal("0"),
             price_available=False,
         )
@@ -1293,6 +1319,7 @@ def _estimate_request_cost(
         return EstimatedRequestCost(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            cache_tokens=cache_tokens,
             cost_cny=Decimal("0"),
             price_available=False,
         )
@@ -1302,19 +1329,22 @@ def _estimate_request_cost(
         return EstimatedRequestCost(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            cache_tokens=cache_tokens,
             cost_cny=Decimal("0"),
             price_available=False,
         )
     input_price = _strict_budget_price(rate.input_price_per_1k)
     output_price = _strict_budget_price(rate.output_price_per_1k)
+    cache_price = _strict_budget_price(rate.cache_price_per_1k)
     try:
         # 固定高精度上下文覆盖合法价格与有界 Token 的乘加，避免依赖进程全局 Decimal 设置。
         with localcontext() as context:
             context.prec = 64
             amount = (
-                Decimal(input_tokens) * input_price
+                Decimal(input_tokens - cache_tokens) * input_price
+                + Decimal(cache_tokens) * cache_price
                 + Decimal(output_tokens) * output_price
-            ) / Decimal(1000)
+            ) / Decimal(1_000_000)
             cost_cny = amount.quantize(MONEY_QUANT)
     except DecimalException as exc:
         # 极端或损坏财务事实统一使用预算不可用，不能穿透为 infra.unhandled。
@@ -1324,6 +1354,7 @@ def _estimate_request_cost(
         output_tokens=output_tokens,
         cost_cny=cost_cny,
         price_available=True,
+        cache_tokens=cache_tokens,
     )
 
 

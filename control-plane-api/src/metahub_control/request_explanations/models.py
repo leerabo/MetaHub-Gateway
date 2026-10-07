@@ -131,6 +131,7 @@ class RequestExplanationSummary(BaseModel):
     error_code: StrictStr | None = None
     request_model: StrictStr | None = None
     resolved_model: StrictStr | None = None
+    provider_name: StrictStr | None = None
     provider_code: StrictStr | None = None
     environment_id: StrictStr | None = None
     environment_name: StrictStr | None = None
@@ -146,6 +147,7 @@ class RequestExplanationSummary(BaseModel):
     estimated_cost_amount: StrictStr | None = None
     currency: StrictStr | None
     fallback_triggered: StrictBool | None
+    routing_attempt_count: StrictInt | None = None
     created_at: datetime
     updated_at: datetime
 

@@ -1590,6 +1590,7 @@ async def _handle_gateway_request(
                         payload=payload,
                         request_kind=request_kind,
                         fallback_route=route_plan.fallback_route,
+                        fallback_routes=route_plan.fallback_routes,
                         token_estimate=route_plan.token_estimate,
                         price_as_of=route_plan.routing_as_of,
                     )
@@ -1716,6 +1717,7 @@ async def _handle_gateway_request(
                         request_id=_request_id(request),
                         trace_id=_trace_id(request),
                         fallback_route=route_plan.fallback_route,
+                        fallback_routes=route_plan.fallback_routes,
                         routing_token_estimate=route_plan.token_estimate,
                         routing_price_as_of=route_plan.routing_as_of,
                         replace_existing_reservations=True,
@@ -1746,12 +1748,10 @@ async def _handle_gateway_request(
                 request_kind=request_kind,
                 request_id=_request_id(request),
                 trace_id=_trace_id(request),
-                # 流式请求不会执行 PRD-036 Fallback，因此预算也只能预留实际初始候选。
-                fallback_route=(
-                    route_plan.fallback_route
-                    if not (request_kind == "chat" and payload.get("stream") is True)
-                    else None
-                ),
+                # 流式请求只允许在握手失败且尚未输出时推进候选链；预算门先冻结
+                # 整条链的最坏上界，成功时由终态结算释放未使用的预留。
+                fallback_route=route_plan.fallback_route,
+                fallback_routes=route_plan.fallback_routes,
                 routing_token_estimate=route_plan.token_estimate,
                 routing_price_as_of=route_plan.routing_as_of,
                 batch_context=trusted_batch,
@@ -1780,11 +1780,9 @@ async def _handle_gateway_request(
             route=route,
             payload=payload,
             request_kind=request_kind,
-            fallback_route=(
-                route_plan.fallback_route
-                if not (request_kind == "chat" and payload.get("stream") is True)
-                else None
-            ),
+            # 流式握手失败可能安全推进下一个候选，已经输出后的中断不会再次调用上游。
+            fallback_route=route_plan.fallback_route,
+            fallback_routes=route_plan.fallback_routes,
             token_estimate=route_plan.token_estimate,
             price_as_of=route_plan.routing_as_of,
             trusted_cost_cny=(
@@ -1810,7 +1808,8 @@ async def _handle_gateway_request(
             )
 
         if request_kind == "chat" and payload.get("stream") is True:
-            # PRD-036 明确只处理非流式请求；流式握手和输出阶段均沿用单候选路径。
+            # 流式只在握手尚未返回任何客户端字节时允许一次受控备用切换；输出阶段
+            # 已经开始后不再重放请求，避免重复或不完整回答。
             adapter = adapter_for_route(route)
             streaming_response = await _stream_response(
                 config,
@@ -1829,6 +1828,11 @@ async def _handle_gateway_request(
                 enable_output_safety=True,
                 budget_initial_estimated_cost_cny=(
                     budget_guard_result.initial_estimated_cost_cny
+                    if budget_guard_result is not None
+                    else Decimal("0")
+                ),
+                budget_fallback_estimated_cost_cny=(
+                    budget_guard_result.fallback_estimated_cost_cny
                     if budget_guard_result is not None
                     else Decimal("0")
                 ),
@@ -2107,10 +2111,10 @@ async def _non_stream_response_with_fallback(
     experiment_guard: ExperimentExecutionGuard | None = None,
     response_cache_fill_lease: ResponseCacheFillLease | None = None,
 ) -> JSONResponse:
-    """执行最多主、备各一次的非流式上游状态机。
+    """执行最多 32 个候选的非流式上游状态机。
 
     每次调用都先写 routing_attempts.started，再选择 Provider Key 和发送网络请求；
-    只有 Adapter 明确给出的超时、429、5xx 且命中策略时才创建第二次尝试。
+    只有 Adapter 明确给出的超时、429、5xx 等策略白名单故障才创建后续尝试。
     """
 
     # 实验臂必须精确路由，任何带 fallback 的计划都表示 owner 图已漂移。
@@ -2270,7 +2274,7 @@ async def _non_stream_response_with_fallback(
         # 备用闸门和备用调用都沿用统一 ApiError；这里补齐首次上游已发生后的预算与审计上下文。
         except ApiError as fallback_exc:
             if getattr(fallback_exc, "request_log_context", None) is None:
-                # 第二次 attempt 闸门可能在备用函数建立上下文前失败；主调用已经发生，
+                # 后续 attempt 闸门可能在备用函数建立上下文前失败；主调用已经发生，
                 # 必须保留主估算而不能让外层按 base_context 的 0 覆盖额结算。
                 fallback_exc.request_log_context = _context_with_budget_outstanding(
                     _context_for_attempt(
@@ -2366,8 +2370,9 @@ async def _execute_fallback_attempt(
     request_started: float,
     budget_guard_result: BudgetGuardResult | None,
     output_safety_scan: PreparedOutputSafetyScan | None = None,
+    attempt_sequence: int = 2,
 ) -> JSONResponse:
-    """在主尝试满足白名单后执行唯一一次备用模型调用。"""
+    """执行当前备用候选；握手失败时继续推进冻结链，最多 32 次。"""
 
     fallback = plan.fallback_route
     if fallback is None:
@@ -2379,7 +2384,7 @@ async def _execute_fallback_attempt(
         fallback,
         request_id=base_context.request_id,
         trace_id=base_context.trace_id,
-        attempt_sequence=2,
+        attempt_sequence=attempt_sequence,
         attempt_role="fallback",
         trigger_error_code=trigger_error.code,
         estimated_cost_cny=(
@@ -2402,7 +2407,7 @@ async def _execute_fallback_attempt(
             config,
             request,
             affinity=plan.cache_affinity_context,
-            attempt_sequence=2,
+            attempt_sequence=attempt_sequence,
             routing_attempt_id=attempt.routing_attempt_id,
             stream_session_id=None,
         )
@@ -2432,7 +2437,7 @@ async def _execute_fallback_attempt(
                 fallback,
                 attempt,
                 fallback_triggered=True,
-                attempt_count=2,
+                attempt_count=attempt_sequence,
             ),
             (
                 budget_guard_result.initial_estimated_cost_cny
@@ -2448,7 +2453,7 @@ async def _execute_fallback_attempt(
         )
         _attach_cancellation_context(caught, cancellation_context)
         raise
-    # 备用模型失败是请求最终失败，必须保存第二次 attempt 摘要供外层 request_log 关联。
+    # 当前备用模型失败后，只有受控上游故障且仍有候选时才继续；客户端尚未收到正文。
     except Exception as caught:
         exc = _normalized_provider_exception(caught)
         attempt_error = _attempt_error(exc)
@@ -2471,13 +2476,36 @@ async def _execute_fallback_attempt(
             _selection_for_outcome(provider_request, exc),
             succeeded=False,
         )
+        remaining = plan.fallback_routes[1:] if plan.fallback_routes else ()
+        if remaining and _should_fallback(plan, exc):
+            next_route = remaining[0]
+            next_plan = replace(
+                plan,
+                initial_route=fallback,
+                initial_role="fallback",
+                fallback_route=next_route,
+                fallback_routes=remaining,
+            )
+            return await _execute_fallback_attempt(
+                config,
+                base_context,
+                next_plan,
+                _attempt_error(exc),
+                endpoint=endpoint,
+                payload=payload,
+                request=request,
+                request_started=request_started,
+                budget_guard_result=budget_guard_result,
+                output_safety_scan=output_safety_scan,
+                attempt_sequence=attempt_sequence + 1,
+            )
         terminal_context = _context_with_budget_outstanding(
             _context_for_attempt(
                 base_context,
                 fallback,
                 attempt,
                 fallback_triggered=True,
-                attempt_count=2,
+                attempt_count=attempt_sequence,
             ),
             (
                 budget_guard_result.initial_estimated_cost_cny
@@ -2517,7 +2545,7 @@ async def _execute_fallback_attempt(
         fallback,
         attempt,
         fallback_triggered=True,
-        attempt_count=2,
+        attempt_count=attempt_sequence,
     )
     final_context = _context_with_budget_outstanding(
         final_context,
@@ -3091,17 +3119,51 @@ def _raise_normalized_provider_exception(
 
 
 def _should_fallback(plan: GatewayRoutePlan, exc: ApiError) -> bool:
-    """只按 Adapter 受控错误分类和策略白名单判断是否切换备用模型。"""
+    """判断当前错误是否应继续遍历已冻结的备用候选。"""
 
-    # 没有可执行备用路由或错误并非受控上游错误时禁止切换，避免本地故障触发重试风暴。
-    if plan.fallback_route is None or not isinstance(exc, UpstreamApiError):
+    # 流式会话无法建立时当前候选尚未收到请求，换用下一个候选不会重复计费，且符合
+    # “当前候选故障后继续尝试”的路由语义。
+    if not (plan.fallback_routes or plan.fallback_route):
         return False
+    if exc.code == "gateway.stream_session_unavailable":
+        return True
+    # 其他本地故障不能盲目重试；只有 Adapter 已归一化且已到达上游的错误进入候选链。
+    if not isinstance(exc, UpstreamApiError):
+        return False
+    # Fallback 已启用且仍有候选时，任何已发送到上游并被归一化的 Provider 错误都必须
+    # 继续遍历候选。旧策略快照可能只保存了部分细分条件，不能因此在第 N 个候选提前
+    # 结束；本地 URL/协议错误没有到达上游，仍由下面的 transport_kind 保护。
+    if (
+        plan.fallback_conditions
+        and exc.normalized_error.code.startswith("gateway.upstream_")
+        and exc.normalized_error.transport_kind != "local_configuration"
+    ):
+        return True
     condition_by_category = {
         "timeout": "upstream_timeout",
         "rate_limited": "upstream_rate_limited",
+        "quota_exceeded": "upstream_quota_exceeded",
         "upstream_5xx": "upstream_5xx",
     }
-    condition = condition_by_category.get(exc.normalized_error.error_category)
+    # 额度错误在错误归一化层有意保持为通用类别，避免把账号问题算进模型质量；
+    # Fallback 仍必须按稳定平台错误码识别，否则“额度不足后切换备用模型”永远不会生效。
+    condition_by_code = {
+        "gateway.upstream_quota_exceeded": "upstream_quota_exceeded",
+        "gateway.upstream_rate_limited": "upstream_rate_limited",
+        "gateway.upstream_timeout": "upstream_timeout",
+    }
+    condition = condition_by_code.get(exc.normalized_error.code) or condition_by_category.get(
+        exc.normalized_error.error_category
+    )
+    # 只有已归一化的网络传输故障允许切换；InvalidURL 等本地配置错误不能借
+    # “上游不可用”条件掩盖配置问题。
+    if (
+        condition is None
+        and exc.normalized_error.code == "gateway.upstream_unavailable"
+        and exc.normalized_error.transport_kind == "network"
+    ):
+        condition = "upstream_unavailable"
+    # 仅作为旧计划快照的防御性分支；正常启用策略已在上面的总规则返回。
     return condition is not None and condition in plan.fallback_conditions
 
 
@@ -3548,16 +3610,22 @@ def _filter_fallback_capability(
 ) -> GatewayRoutePlan:
     """在调用前移除不支持当前接口能力的备用候选，不影响可用主模型。"""
 
-    fallback = plan.fallback_route
-    # 无备用候选或能力已满足时保留原计划，只有能力不匹配才禁用请求期 Fallback。
-    if fallback is None or _route_supports_request(request_kind, payload, fallback):
+    candidates = plan.fallback_routes or ((plan.fallback_route,) if plan.fallback_route else ())
+    # 无备用候选或能力已满足时保留原计划；把不支持本请求的候选从冻结执行链中移除。
+    supported = tuple(
+        candidate
+        for candidate in candidates
+        if _route_supports_request(request_kind, payload, candidate)
+    )
+    if supported == candidates:
         return plan
     return replace(
         plan,
-        fallback_route=None,
-        fallback_policy_id=None,
-        fallback_policy_version=None,
-        fallback_conditions=(),
+        fallback_route=supported[0] if supported else None,
+        fallback_routes=supported,
+        fallback_policy_id=plan.fallback_policy_id if supported else None,
+        fallback_policy_version=plan.fallback_policy_version if supported else None,
+        fallback_conditions=plan.fallback_conditions if supported else (),
     )
 
 
@@ -3597,7 +3665,12 @@ async def _stream_response(
     route_plan: GatewayRoutePlan | None = None,
     enable_output_safety: bool = False,
     budget_initial_estimated_cost_cny: Decimal = Decimal("0"),
+    budget_fallback_estimated_cost_cny: Decimal = Decimal("0"),
     experiment_guard: ExperimentExecutionGuard | None = None,
+    attempt_sequence: int = 1,
+    attempt_role: str | None = None,
+    fallback_triggered: bool = False,
+    trigger_error: NormalizedProviderError | None = None,
 ) -> StreamingResponse:
     """执行可审计的 SSE 透传、块间看门狗和客户端断开清理。
 
@@ -3610,7 +3683,33 @@ async def _stream_response(
     local_route_requested = (route is not None and route.provider_type == "local_endpoint") or (
         provider_request is not None and provider_request.provider_type == "local_endpoint"
     )
-    if local_route_requested:
+    if route is not None and route_plan is not None:
+        resolved_attempt_role = attempt_role or (
+            "fallback" if attempt_sequence > 1 else route_plan.initial_role
+        )
+        local_attempt = create_routing_attempt(
+            config,
+            route_plan,
+            route,
+            request_id=context.request_id,
+            trace_id=context.trace_id,
+            attempt_sequence=attempt_sequence,
+            attempt_role=resolved_attempt_role,
+            trigger_error_code=(trigger_error.code if trigger_error is not None else None),
+            estimated_cost_cny=budget_initial_estimated_cost_cny,
+        )
+        context = _context_for_attempt(
+            context,
+            route,
+            local_attempt,
+            fallback_triggered=fallback_triggered,
+            attempt_count=attempt_sequence,
+        )
+        if attempt_sequence > 1 and trigger_error is not None:
+            event = log_fallback_triggered(route_plan, local_attempt, trigger_error)
+            if client_request is not None:
+                enqueue_runtime_event(client_request.app.state, event)
+    if local_route_requested and local_attempt is None:
         if route is None or route_plan is None:
             raise ApiError("gateway.routing_attempt_unavailable")
         local_attempt = create_routing_attempt(
@@ -3675,18 +3774,98 @@ async def _stream_response(
         local_attempt_finalized = True
 
     timeout_seconds = float(config.stream_inter_token_timeout_seconds)
+    # 每个候选模型都有独立的 StreamSession。备用候选创建失败时不能继续携带上一个
+    # 候选的会话 ID，否则 RequestLog 会把失败归到错误模型或触发成对字段校验失败。
+    stream_session_create_failure_context = replace(
+        context,
+        stream_session_id=None,
+        stream_status=None,
+        # create_stream_session 失败也要保留当前候选的尝试数和最终尝试编号；
+        # 不能让 request_logs 回退到初始上下文的 0。
+        routing_attempt_count=max(context.routing_attempt_count or 0, attempt_sequence),
+        final_routing_attempt_id=(
+            local_attempt.routing_attempt_id if local_attempt is not None else context.final_routing_attempt_id
+        ),
+    )
     try:
         session = create_stream_session(
             config,
             context,
             inter_token_timeout_ms=int(timeout_seconds * 1000),
         )
-    except (Exception, asyncio.CancelledError):
+    except asyncio.CancelledError as exc:
         finish_local_attempt(
             succeeded=False,
             error=_local_interruption_attempt_error("gateway.stream_session_unavailable"),
         )
+        _attach_cancellation_context(
+            exc,
+            _context_with_budget_outstanding(
+                stream_session_create_failure_context,
+                budget_initial_estimated_cost_cny,
+            ),
+            error_code=LOCAL_STREAM_PROCESSING_ERROR_CODE,
+        )
         raise
+    except ApiError as caught:
+        finish_local_attempt(
+            succeeded=False,
+            error=_local_interruption_attempt_error("gateway.stream_session_unavailable"),
+        )
+        error = caught
+        if (
+            route_plan is not None
+            and (route_plan.fallback_routes or route_plan.fallback_route)
+            and _should_fallback(route_plan, error)
+        ):
+            fallback_route = route_plan.fallback_route
+            if fallback_route is not None:
+                remaining_routes = route_plan.fallback_routes[1:] if route_plan.fallback_routes else ()
+                fallback_plan = replace(
+                    route_plan,
+                    initial_route=fallback_route,
+                    initial_role="fallback",
+                    fallback_route=remaining_routes[0] if remaining_routes else None,
+                    fallback_routes=remaining_routes,
+                )
+                return await _stream_response(
+                    config,
+                    stream_session_create_failure_context,
+                    adapter_for_route(fallback_route),
+                    None,
+                    started,
+                    rate_limit_lease,
+                    gateway_admission=gateway_admission,
+                    client_request=client_request,
+                    route=fallback_route,
+                    endpoint=endpoint,
+                    payload=payload,
+                    cache_affinity_context=cache_affinity_context,
+                    route_plan=fallback_plan,
+                    enable_output_safety=enable_output_safety,
+                    budget_initial_estimated_cost_cny=budget_fallback_estimated_cost_cny,
+                    budget_fallback_estimated_cost_cny=Decimal("0"),
+                    attempt_sequence=attempt_sequence + 1,
+                    attempt_role="fallback",
+                    fallback_triggered=True,
+                    trigger_error=_attempt_error(error),
+                )
+        error.request_log_context = _context_with_budget_outstanding(
+            stream_session_create_failure_context,
+            budget_initial_estimated_cost_cny,
+        )
+        raise
+    except Exception as caught:
+        finish_local_attempt(
+            succeeded=False,
+            error=_local_interruption_attempt_error("gateway.stream_session_unavailable"),
+        )
+        error = ApiError("gateway.stream_session_unavailable")
+        error.request_log_context = _context_with_budget_outstanding(
+            stream_session_create_failure_context,
+            budget_initial_estimated_cost_cny,
+        )
+        raise error from caught
     if experiment_guard is not None:
         experiment_guard.bind_stream(session.stream_session_id)
     session_context = replace(context, stream_session_id=session.stream_session_id)
@@ -3728,7 +3907,7 @@ async def _stream_response(
                 config,
                 client_request,
                 affinity=cache_affinity_context,
-                attempt_sequence=1,
+                attempt_sequence=attempt_sequence,
                 routing_attempt_id=(
                     local_attempt.routing_attempt_id if local_attempt is not None else None
                 ),
@@ -3795,6 +3974,87 @@ async def _stream_response(
         raise
     # Adapter 已归一化的握手错误必须先结束会话，再交给统一 JSON 异常处理器。
     except ApiError as exc:
+        # 握手尚未返回任何客户端字节时可以安全切换到下一个候选。先把当前会话、当前
+        # attempt 和 Provider 错误事实落成终态，再创建新的 StreamSession；这样不会
+        # 复用带有主模型 owner 的输出安全扫描，也不会留下未闭合的主调用记录。
+        if (
+            experiment_guard is None
+            and route_plan is not None
+            and (route_plan.fallback_routes or route_plan.fallback_route)
+            and _should_fallback(route_plan, exc)
+        ):
+            session_error_code, quality_eligible = _stream_session_handshake_facts(exc)
+            provider_error = exc.normalized_error if isinstance(exc, UpstreamApiError) else None
+            fact_kwargs = (
+                {"error": provider_error}
+                if provider_error is not None and provider_error.evidence is not None
+                else {}
+            )
+            output_terminal = _stream_not_applicable_terminal(output_safety_scan)
+            finalized = safe_finish_stream_session(
+                config,
+                session,
+                status="upstream_failed",
+                error_code=session_error_code,
+                quality_observation_eligible=quality_eligible,
+                **fact_kwargs,
+                **_stream_output_safety_finish_kwargs(output_safety_scan, output_terminal),
+            )
+            if not finalized:
+                # StreamSession 终态无法确认时 fail closed，禁止在无完整审计事实时再发备用请求。
+                exc.request_log_context = _context_after_stream_output_safety(
+                    session_context,
+                    output_safety_scan,
+                    output_terminal,
+                    finalized=False,
+                )
+                raise
+            safe_finalize_cache_affinity_selection(
+                config,
+                selection_handle or _selection_for_outcome(None, exc),
+                succeeded=False,
+            )
+            finish_local_attempt(succeeded=False, error=_attempt_error(exc))
+            fallback_route = route_plan.fallback_route
+            if fallback_route is None:
+                exc.request_log_context = _context_after_stream_output_safety(
+                    session_context,
+                    output_safety_scan,
+                    output_terminal,
+                    finalized=True,
+                )
+                raise
+            remaining_routes = route_plan.fallback_routes[1:] if route_plan.fallback_routes else ()
+            fallback_plan = replace(
+                route_plan,
+                initial_route=fallback_route,
+                initial_role="fallback",
+                fallback_route=remaining_routes[0] if remaining_routes else None,
+                fallback_routes=remaining_routes,
+            )
+            return await _stream_response(
+                config,
+                session_context,
+                adapter_for_route(fallback_route),
+                None,
+                started,
+                rate_limit_lease,
+                gateway_admission=gateway_admission,
+                client_request=client_request,
+                route=fallback_route,
+                endpoint=endpoint,
+                payload=payload,
+                cache_affinity_context=cache_affinity_context,
+                route_plan=fallback_plan,
+                enable_output_safety=enable_output_safety,
+                budget_initial_estimated_cost_cny=budget_fallback_estimated_cost_cny,
+                budget_fallback_estimated_cost_cny=Decimal("0"),
+                attempt_sequence=attempt_sequence + 1,
+                attempt_role="fallback",
+                fallback_triggered=True,
+                trigger_error=_attempt_error(exc),
+            )
+
         # 握手前统一错误仍由 FastAPI JSON handler 返回；先提交会话终态再交给外层写 request_logs。
         session_error_code, quality_eligible = _stream_session_handshake_facts(exc)
         provider_error = exc.normalized_error if isinstance(exc, UpstreamApiError) else None

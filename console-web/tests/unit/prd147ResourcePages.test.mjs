@@ -237,7 +237,7 @@ test("a delayed snapshot 401 cannot log out the next Workspace session", async (
   assert.equal(h.effects.includes("clear-auth"), false);
 });
 
-test("custom provider generates a valid stable code and opens only the returned service setup", async () => {
+test("custom provider generates a valid stable code and returns to the service list", async () => {
   const h = harness("providers", "#create-provider-form");
   h.element.values.providerCode = "";
   h.functions.bindActualResourceHandlers();
@@ -256,7 +256,7 @@ test("custom provider generates a valid stable code and opens only the returned 
   };
   await h.element.fire("submit");
   assert.equal(h.scope.providerCustomCreateCode, null);
-  assert.equal(h.scope.providerSetupId, "created_service");
+  assert.equal(h.scope.providerSetupId, null);
   assert.match(h.scope.providerFeedback, /配置厂家 API KEY/u);
   h.functions.clearBasicResourceFeedback();
   assert.equal(h.scope.providerSetupId, null);
@@ -307,7 +307,7 @@ test("saving a provider credential clears the input immediately and collapses se
   h.pending.resolve(payload);
   await submitted;
   assert.equal(h.scope.providerSetupId, "");
-  assert.match(h.scope.providerFeedback, /下一步：测试连接/u);
+  assert.equal(h.scope.providerFeedback, "密钥已保存。");
 });
 
 test("connection progress reports dependency failure without suppressing identity or owner conflicts", async () => {
@@ -351,7 +351,6 @@ const forms = [
   ["users", "[data-workspace-member-form]", "updateWorkspaceMember"],
   ["model-aliases", "#create-model-alias-form", "createModelAlias"],
   ["model-aliases", "[data-model-alias-status-form]", "updateModelAlias"],
-  ["model-aliases", "[data-fallback-policy-form]", "updateFallbackPolicy"],
   ["provider-health", "[data-provider-probe]", "probeProvider", "click"],
   ["environments", "#create-environment-form", "createEnvironment"],
   ["environments", "[data-environment-status-form]", "updateEnvironment"],
@@ -625,7 +624,7 @@ for (const [navigation, loader] of loaders) {
       assert.equal(call.input.authentication, "workspace");
       assert.equal(Object.hasOwn(call.input, "token"), false);
     }
-    if (navigation === "models") assert.deepEqual(h.calls.map((call) => call.client), ["listModels", "listProviders", "listProviderKeys"]);
+    if (navigation === "models") assert.deepEqual(h.calls.map((call) => call.client), ["listModels", "listProviders"]);
     if (navigation === "virtual-keys") assert.deepEqual(h.calls.map((call) => call.client), ["listVirtualKeys", "listProjects", "listApplications", "listEnvironments"]);
     if (navigation === "files") assert.deepEqual(h.calls.map((call) => call.client), ["listFiles"]);
   });

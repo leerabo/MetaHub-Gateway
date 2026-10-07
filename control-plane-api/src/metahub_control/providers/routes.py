@@ -24,8 +24,10 @@ from .models import (
     CreateProviderKeyRequest,
     CreateProviderRequest,
     ProviderKeyListResponse,
+    ProviderKeyDeleteResponse,
     ProviderKeyResponse,
     ProviderListResponse,
+    ProviderDeleteResponse,
     ProviderResponse,
     ProviderTestResponse,
     TestProviderRequest,
@@ -35,6 +37,8 @@ from .models import (
 from .service import (
     create_provider,
     create_provider_key,
+    delete_provider_key,
+    delete_provider,
     list_provider_keys,
     list_providers,
     test_provider_connection,
@@ -113,6 +117,27 @@ async def patch_provider(
         context,
         provider_id,
         payload,
+        audit_request_meta=build_audit_request_meta(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+
+
+@router.delete("/{provider_id}", response_model=ProviderDeleteResponse)
+async def delete_provider_route(
+    provider_id: str,
+    request: Request,
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("provider.write")),
+    ],
+) -> ProviderDeleteResponse:
+    """删除没有任何模型、调用或历史事实引用的 Provider。"""
+
+    return delete_provider(
+        request.app.state.config,
+        context,
+        provider_id,
         audit_request_meta=build_audit_request_meta(request),
         request_id=_request_id(request),
         trace_id=_trace_id(request),
@@ -225,6 +250,27 @@ async def patch_provider_key(
         context,
         provider_key_id,
         payload,
+        audit_request_meta=build_audit_request_meta(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+
+
+@provider_keys_router.delete("/{provider_key_id}", response_model=ProviderKeyDeleteResponse)
+async def delete_provider_key_route(
+    provider_key_id: str,
+    request: Request,
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("provider.write")),
+    ],
+) -> ProviderKeyDeleteResponse:
+    """删除当前租户中未被运行绑定引用的 Provider Key。"""
+
+    return delete_provider_key(
+        request.app.state.config,
+        context,
+        provider_key_id,
         audit_request_meta=build_audit_request_meta(request),
         request_id=_request_id(request),
         trace_id=_trace_id(request),

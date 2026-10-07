@@ -152,7 +152,9 @@ if (root) {
     .catch(() => setIdentityPublicBranding(null, globalThis.document));
   const controller = createIdentityPageController({
     root,
-    onWorkspaceCreated: () => window.location.assign("console.html"),
+    // A newly created organization must land on the one actionable setup flow;
+    // the overview is useful after setup but is not a sufficient first screen.
+    onWorkspaceCreated: () => window.location.assign("console.html#workspace.home.getting-started"),
     onWorkspaceReady: () => window.location.replace("console.html"),
     onLoggedOut: () => window.location.replace("./"),
     onPublicViewChange: (view) => syncIdentityEntryView(window, view),

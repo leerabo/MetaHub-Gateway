@@ -64,6 +64,7 @@ from .workspace_models import (
     PlatformWorkspaceHealthResponse,
     PlatformWorkspaceListResponse,
     PlatformWorkspaceMutationResponse,
+    PlatformWorkspacePrivateGatewayResponse,
     WorkspaceOperationalEventListResponse,
 )
 from .workspace_service import (
@@ -77,6 +78,7 @@ from .workspace_service import (
     remove_workspace_risk_tag,
     restore_workspace,
     suspend_workspace,
+    set_workspace_private_gateway,
 )
 
 router = APIRouter(tags=["platform"])
@@ -328,6 +330,35 @@ async def platform_workspace_detail(
         trace_id=_trace_id(request),
     )
     response.headers["ETag"] = _etag(result.workspace.operational_revision)
+    _private(response)
+    return result
+
+
+@router.post(
+    "/platform/workspaces/{workspace_id}/private-gateway",
+    response_model=PlatformWorkspacePrivateGatewayResponse,
+)
+async def set_platform_workspace_private_gateway(
+    workspace_id: str, request: Request, response: Response
+) -> PlatformWorkspacePrivateGatewayResponse:
+    """SaaS administrator switch for one organization's Private Gateway."""
+    credentials = await _authorize_workspace_write(request, "lifecycle")
+    expected_revision = _if_match(request)
+    payload = await _strict_json(request, required_fields=("enabled", "confirmed"))
+    if type(payload["enabled"]) is not bool or payload["confirmed"] is not True:
+        raise ApiError("platform.request_invalid")
+    result = await _run(
+        set_workspace_private_gateway,
+        _config(request),
+        session_token=credentials[0],
+        csrf_token=credentials[1],
+        workspace_id=workspace_id,
+        expected_revision=expected_revision,
+        enabled=payload["enabled"],
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = _etag(result.revision)
     _private(response)
     return result
 

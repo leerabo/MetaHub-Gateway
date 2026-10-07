@@ -194,6 +194,24 @@ def create_workspace(
             """,
             (_id("wtb"), workspace_id, tenant_id, stamp),
         )
+        if table_exists(connection, "workspace_fx_rate_versions"):
+            connection.execute(
+                """
+                INSERT INTO workspace_fx_rate_versions(
+                  workspace_fx_rate_version_id,workspace_id,tenant_id,version_number,
+                  usd_to_cny,effective_from,created_by_membership_id,created_at)
+                VALUES(?,?,?,1,'7.2','1970-01-01T00:00:00Z',NULL,?)
+                """,
+                (_id("wfxv"), workspace_id, tenant_id, stamp),
+            )
+        connection.execute(
+            """
+            INSERT INTO workspace_private_gateway_capabilities(
+              workspace_id,tenant_id,enabled,revision,updated_by_operator_id,created_at,updated_at)
+            VALUES(?,?,0,1,NULL,?,?)
+            """,
+            (workspace_id, tenant_id, stamp, stamp),
+        )
         _initialize_operational_state(connection, workspace_id, tenant_id, stamp)
         if local_admission is not None:
             connection.execute(

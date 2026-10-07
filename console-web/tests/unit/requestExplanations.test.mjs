@@ -15,7 +15,9 @@ import {
   normalizeRequestExplanationId,
   requestExplanationIdentitySnapshot,
 } from "../../src/features/request-explanations/requestExplanationPageState.js";
-import { renderRequestExplanationPanel } from "../../src/features/request-explanations/renderRequestExplanation.js";
+import {
+  renderRequestExplanationPanel,
+} from "../../src/features/request-explanations/renderRequestExplanation.js";
 import { PERMISSIONS, withPermissionSnapshot } from "./permissionTestContext.mjs";
 
 // 决策阶段顺序与后端 STAGE_ORDER 完全一致，测试禁止客户端自行重排。
@@ -482,7 +484,7 @@ test("explanation localizes evidence labels and controls without translating ten
   assert.equal(renderRequestExplanationPanel(state, authContext({ permissionCodes: [] }), createI18n("en-US")), "");
 });
 
-test("main wires no-prefetch RBAC, cleanup, inline detail and generic page-view skip", async () => {
+test("main wires no-prefetch RBAC, cleanup and generic page-view skip", async () => {
   const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
   assert.match(source, /pagehide[\s\S]*clearRequestExplanationSessionState\(\)/);
   assert.match(source, /function renderLogin[\s\S]*clearRequestExplanationSessionState\(\)/);
@@ -490,7 +492,7 @@ test("main wires no-prefetch RBAC, cleanup, inline detail and generic page-view 
   assert.match(source, /const session = sameWorkspaceConsoleSession\(authSession, nextSession\) \? authSession : nextSession;\s*const sessionChanged = authSession !== session;\s*if \(sessionChanged\) \{\s*clearConsoleSessionState\(\{ clearNavigation: false \}\)/);
   assert.match(source, /function clearConsoleSessionState[\s\S]*clearRequestExplanationSessionState\(\)/);
   assert.match(source, /!\["request-logs", "request-explanations"\]\.includes\(consoleShellState\?\.activeNavigationItemId\)/);
-  assert.match(source, /runRequestExplanationRead\(button\.dataset\.requestLogExplain, "request_logs", binding/);
+  assert.doesNotMatch(source, /data-request-log-explain|openRequestExplanationDialog/);
   assert.doesNotMatch(source, /requestExplanationHandoff\.stage\(/);
   const sideEffects = source.slice(source.indexOf("function scheduleConsoleNavigationSideEffects("),
     source.indexOf("async function toggleConsoleSidebarGroup("));

@@ -150,10 +150,7 @@ function bindCreate(workspace, handlers) {
         pendingIdempotencyKey = "";
         form.reset();
       } else if (snapshot?.createError) {
-        setLive(
-          form,
-          `${snapshot.createError.message} · request_id: ${snapshot.createError.requestId}`,
-        );
+        setLive(form, snapshot.createError.message);
       }
     } catch {
       if (current()) setLive(form, "实验创建暂不可用");

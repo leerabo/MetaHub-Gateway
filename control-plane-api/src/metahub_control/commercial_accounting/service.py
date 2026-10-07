@@ -10,6 +10,7 @@ import re
 import sqlite3
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
 from metahub_shared.db.connection import connect_database
@@ -47,6 +48,10 @@ from .models import (
     ProviderReferenceRateCommandRequest,
     ProviderReferenceRateCommandResponse,
     ProviderReferenceRateInfo,
+    WorkspaceFxRateCommandRequest,
+    WorkspaceFxRateCommandResponse,
+    WorkspaceFxRateInfo,
+    WorkspaceFxRateListResponse,
     SubscriptionProjectionInfo,
     WorkspaceProviderCostRateListResponse,
     WorkspaceSubscriptionResponse,
@@ -823,11 +828,12 @@ def list_workspace_provider_cost_rates(
         _require_workspace(context, "workspace.provider_cost.read")
         clauses = ["rate.workspace_id=?", "rate.tenant_id=?"]
         parameters: list[object] = [context.workspace_id, context.tenant_id]
+        include_history = bool(parsed.get("include_history"))
         for key, column in (
             ("provider_id", "rate.provider_id"),
             ("model_id", "rate.model_id"),
             ("currency", "rate.currency"),
-            ("status", "head.adoption_state"),
+            ("status", "version.status" if include_history else "head.adoption_state"),
         ):
             value = parsed.get(key)
             if value is not None:
@@ -842,26 +848,56 @@ def list_workspace_provider_cost_rates(
                 )
             )
             parameters.extend((effective_at, effective_at))
+        if include_history:
+                # 历史补录可能保留开放区间；后续版本起点会隐式截断它。
+                clauses.append(
+                    "NOT EXISTS(SELECT 1 FROM workspace_provider_cost_rate_versions later "
+                    "WHERE later.workspace_provider_cost_rate_id=version.workspace_provider_cost_rate_id "
+                    "AND later.status IN('active','superseded') "
+                    "AND later.effective_from<=? AND later.effective_from>version.effective_from)"
+                )
+                parameters.append(effective_at)
         if parsed.get("cursor_values") is not None:
-            clauses.append("rate.workspace_provider_cost_rate_id>?")
-            parameters.extend(parsed["cursor_values"])
+            cursor_values = parsed["cursor_values"]
+            if include_history:
+                clauses.append(
+                    "(rate.workspace_provider_cost_rate_id>? OR "
+                    "(rate.workspace_provider_cost_rate_id=? AND version.effective_from<?) OR "
+                    "(rate.workspace_provider_cost_rate_id=? AND version.effective_from=? "
+                    "AND version.workspace_provider_cost_rate_version_id<?))"
+                )
+                parameters.extend((*cursor_values, *cursor_values))
+            else:
+                clauses.append("rate.workspace_provider_cost_rate_id>?")
+                parameters.extend(cursor_values)
         limit = int(parsed["limit"])
         rows = connection.execute(
             f"""
             SELECT rate.*,version.*,head.head_revision,head.adoption_state,
+              CASE WHEN version.workspace_provider_cost_rate_version_id=
+                head.workspace_provider_cost_rate_version_id THEN 1 ELSE 0 END is_head_version,
+              COALESCE(version.effective_until,(
+                SELECT MIN(later.effective_from)
+                FROM workspace_provider_cost_rate_versions later
+                WHERE later.workspace_provider_cost_rate_id=version.workspace_provider_cost_rate_id
+                  AND later.effective_from>version.effective_from
+                  AND later.status IN('active','superseded')
+              )) display_effective_until,
               provider.provider_code,provider.name provider_name,model.model_alias
             FROM workspace_provider_cost_rates rate
             JOIN workspace_provider_cost_rate_heads head
               USING(workspace_provider_cost_rate_id)
             JOIN workspace_provider_cost_rate_versions version
-              ON version.workspace_provider_cost_rate_version_id=
-                 head.workspace_provider_cost_rate_version_id
+              ON version.workspace_provider_cost_rate_id=rate.workspace_provider_cost_rate_id
+             AND ({"1=1" if include_history else "version.workspace_provider_cost_rate_version_id=head.workspace_provider_cost_rate_version_id"})
             JOIN providers provider
               ON provider.tenant_id=rate.tenant_id AND provider.provider_id=rate.provider_id
             JOIN models model
               ON model.tenant_id=rate.tenant_id AND model.model_id=rate.model_id
             WHERE {' AND '.join(clauses)}
+              {"" if include_history else "AND version.workspace_provider_cost_rate_version_id=head.workspace_provider_cost_rate_version_id"}
             ORDER BY rate.workspace_provider_cost_rate_id
+              {", version.effective_from DESC, version.workspace_provider_cost_rate_version_id DESC" if include_history else ""}
             LIMIT ?
             """,
             (*parameters, limit + 1),
@@ -871,7 +907,15 @@ def list_workspace_provider_cost_rates(
             _encode_cursor(
                 config,
                 "workspace-provider-cost",
-                [str(page[-1]["workspace_provider_cost_rate_id"])],
+                (
+                    [
+                        str(page[-1]["workspace_provider_cost_rate_id"]),
+                        str(page[-1]["effective_from"]),
+                        str(page[-1]["workspace_provider_cost_rate_version_id"]),
+                    ]
+                    if include_history
+                    else [str(page[-1]["workspace_provider_cost_rate_id"])]
+                ),
             )
             if len(rows) > limit and page
             else None
@@ -890,6 +934,200 @@ def list_workspace_provider_cost_rates(
     except ApiError:
         _rollback(connection)
         raise
+    except (sqlite3.Error, KeyError, TypeError, ValueError):
+        _rollback(connection)
+        raise ApiError("workspace_session.unavailable") from None
+    finally:
+        connection.close()
+
+
+def list_workspace_fx_rates(
+    config: AppConfig,
+    *,
+    session_token: str,
+    query: Mapping[str, str],
+    request_id: str,
+    trace_id: str,
+) -> WorkspaceFxRateListResponse:
+    parsed = _fx_rate_query(config, query)
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN")
+        context = authenticate_workspace_session_in_transaction(
+            connection, config, session_token=session_token, touch=True
+        )
+        _require_workspace(context, "workspace.provider_cost.read")
+        at = str(parsed.get("effective_at") or _db_time(_now()))
+        include_history = bool(parsed.get("include_history"))
+        clauses = [
+            "workspace_id=?", "tenant_id=?", "unixepoch(effective_from)<=unixepoch(?)",
+        ]
+        params: list[object] = [context.workspace_id, context.tenant_id, at]
+        if not include_history:
+            clauses.append(
+                "NOT EXISTS(SELECT 1 FROM workspace_fx_rate_versions later "
+                "WHERE later.workspace_id=workspace_fx_rate_versions.workspace_id "
+                "AND later.tenant_id=workspace_fx_rate_versions.tenant_id "
+                "AND unixepoch(later.effective_from)<=unixepoch(?) "
+                "AND unixepoch(later.effective_from)>unixepoch(workspace_fx_rate_versions.effective_from))"
+            )
+            params.append(at)
+        if parsed.get("cursor_values"):
+            clauses.append("(effective_from<? OR (effective_from=? AND version_number<?))")
+            params.extend(parsed["cursor_values"][:2])
+        limit = int(parsed["limit"])
+        rows = connection.execute(
+            f"""SELECT workspace_fx_rate_versions.*,
+              CASE WHEN version_number=(SELECT current.version_number
+                FROM workspace_fx_rate_versions current
+                WHERE current.workspace_id=workspace_fx_rate_versions.workspace_id
+                  AND current.tenant_id=workspace_fx_rate_versions.tenant_id
+                  AND unixepoch(current.effective_from)<=unixepoch(?)
+                ORDER BY current.effective_from DESC,current.version_number DESC
+                LIMIT 1)
+                THEN 'active' ELSE 'superseded' END derived_status
+              FROM workspace_fx_rate_versions WHERE {' AND '.join(clauses)}
+            ORDER BY effective_from DESC,version_number DESC LIMIT ?""",
+            (at, *params, limit + 1),
+        ).fetchall()
+        page = rows[:limit]
+        next_cursor = (
+            _encode_cursor(config, "workspace-fx-rate", [
+                str(page[-1]["effective_from"]), int(page[-1]["version_number"]),
+            ]) if len(rows) > limit and page else None
+        )
+        result = WorkspaceFxRateListResponse(
+            rates=tuple(_fx_rate_info(row, context, include_history=include_history) for row in page),
+            next_cursor=next_cursor,
+            limit=limit,
+            permission_revision=context.permission_revision,
+            permission_fingerprint=context.authorization_fingerprint,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+        connection.commit()
+        return result
+    except ApiError:
+        _rollback(connection)
+        raise
+    except (sqlite3.Error, KeyError, TypeError, ValueError):
+        _rollback(connection)
+        raise ApiError("workspace_session.unavailable") from None
+    finally:
+        connection.close()
+
+
+def command_workspace_fx_rate(
+    config: AppConfig,
+    *,
+    session_token: str,
+    csrf_token: str,
+    step_up_grant: str,
+    idempotency_key: str,
+    expected_head_revision: int,
+    command: WorkspaceFxRateCommandRequest,
+    request_id: str,
+    trace_id: str,
+) -> WorkspaceFxRateCommandResponse:
+    request_sha = _sha({"command": command.model_dump(mode="json"), "expected_head_revision": expected_head_revision})
+    action = "routing_fx_rate.create_version"
+    connection = _connect(config)
+    try:
+        try:
+            parsed_rate = Decimal(command.usd_to_cny)
+        except (InvalidOperation, ValueError):
+            raise ApiError("model_price.query_invalid") from None
+        if not parsed_rate.is_finite() or not Decimal("0") < parsed_rate <= Decimal("100"):
+            raise ApiError("model_price.query_invalid")
+        connection.execute("BEGIN IMMEDIATE")
+        context = authenticate_workspace_session_in_transaction(
+            connection, config, session_token=session_token, csrf_token=csrf_token, touch=False
+        )
+        _require_workspace(context, "workspace.provider_cost.manage")
+        owner_sha = _sha({"workspace_id": context.workspace_id, "tenant_id": context.tenant_id, "object": "routing_fx_rate"})
+        replay = _replay_command(
+            connection, config, actor_domain="workspace", actor_id=context.membership_id,
+            action=action, owner_sha=owner_sha, idempotency_key=idempotency_key,
+            request_sha=request_sha, error="model_price.idempotency_conflict",
+        )
+        if replay is not None:
+            row = _fx_rate_row_by_id(connection, context, str(replay["result_id"]))
+            if row is None:
+                raise ApiError("model_price.version_conflict")
+            result = WorkspaceFxRateCommandResponse(
+                rate=_fx_rate_info(row, context, include_history=True),
+                command_id=str(replay["commercial_accounting_command_id"]),
+                idempotent_replay=True,
+                permission_revision=context.permission_revision,
+                permission_fingerprint=context.authorization_fingerprint,
+                request_id=request_id, trace_id=trace_id,
+            )
+            connection.commit()
+            return result
+        latest = connection.execute(
+            "SELECT * FROM workspace_fx_rate_versions WHERE workspace_id=? AND tenant_id=? "
+            "ORDER BY version_number DESC LIMIT 1", (context.workspace_id, context.tenant_id)
+        ).fetchone()
+        current_revision = int(latest["version_number"]) if latest else 0
+        if current_revision != expected_head_revision:
+            raise ApiError("model_price.version_conflict")
+        effective_from = _db_time(command.effective_from)
+        if connection.execute(
+            "SELECT 1 FROM workspace_fx_rate_versions WHERE workspace_id=? AND tenant_id=? AND effective_from=?",
+            (context.workspace_id, context.tenant_id, effective_from),
+        ).fetchone() is not None:
+            raise ApiError("model_price.effective_conflict")
+        consume_step_up_grant_in_transaction(
+            connection, config, context=context, grant=step_up_grant,
+            action_code=action, resource_type="workspace_fx_rate",
+            resource_id=f"{context.workspace_id}:USD:CNY", now=_now(),
+        )
+        stamp = _db_time(_now())
+        version_number = current_revision + 1
+        version_id = f"wfxv_{uuid4().hex}"
+        connection.execute(
+            "INSERT INTO workspace_fx_rate_versions(workspace_fx_rate_version_id,workspace_id,tenant_id,"
+            "version_number,usd_to_cny,effective_from,created_by_membership_id,created_at) VALUES(?,?,?,?,?,?,?,?)",
+            (version_id, context.workspace_id, context.tenant_id, version_number, command.usd_to_cny,
+             effective_from, context.membership_id, stamp),
+        )
+        result_sha = _sha({"version_id": version_id, "usd_to_cny": command.usd_to_cny, "effective_from": effective_from})
+        command_id = _insert_command(
+            connection, config, actor_domain="workspace", actor_id=context.membership_id,
+            action=action, object_kind="workspace_fx_rate", object_id=version_id,
+            owner_sha=owner_sha, idempotency_key=idempotency_key, request_sha=request_sha,
+            expected_revision=expected_head_revision, permission_revision=context.permission_revision,
+            result_id=version_id, result_sha=result_sha, now=_now(),
+        )
+        _write_event(
+            connection, event_type="routing_fx_rate.changed", object_kind="workspace_fx_rate",
+            object_id=version_id, owner_sha=owner_sha, revision=version_number,
+            payload={"workspace_id": context.workspace_id, "tenant_id": context.tenant_id,
+                     "usd_to_cny": command.usd_to_cny, "effective_from": effective_from}, now=_now(),
+        )
+        _audit(
+            connection, actor_domain="workspace", actor_id=context.membership_id,
+            action="commercial.routing_fx_rate.create_version", object_type="workspace_fx_rate",
+            object_id=version_id, before_sha=None, after_sha=result_sha,
+            request_id=request_id, trace_id=trace_id, now=_now(),
+        )
+        row = _fx_rate_row_by_id(connection, context, version_id)
+        if row is None:
+            raise ApiError("workspace_session.unavailable")
+        result = WorkspaceFxRateCommandResponse(
+            rate=_fx_rate_info(row, context, include_history=True), command_id=command_id,
+            permission_revision=context.permission_revision,
+            permission_fingerprint=context.authorization_fingerprint,
+            request_id=request_id, trace_id=trace_id,
+        )
+        connection.commit()
+        return result
+    except ApiError:
+        _rollback(connection)
+        raise
+    except sqlite3.IntegrityError:
+        _rollback(connection)
+        raise ApiError("model_price.effective_conflict") from None
     except (sqlite3.Error, KeyError, TypeError, ValueError):
         _rollback(connection)
         raise ApiError("workspace_session.unavailable") from None
@@ -1790,6 +2028,7 @@ def command_workspace_provider_cost_rate(
         if command.action == "create_version":
             input_rate = int(command.input_rate_micros_per_1k)
             output_rate = int(command.output_rate_micros_per_1k)
+            cache_rate = int(command.cache_rate_micros_per_1k)
             effective_from = _db_time(command.effective_from)
             effective_until = (
                 _db_time(command.effective_until)
@@ -1818,6 +2057,7 @@ def command_workspace_provider_cost_rate(
                 raise ApiError("model_price.model_not_found")
             input_rate = int(reference["input_rate_micros_per_1k"])
             output_rate = int(reference["output_rate_micros_per_1k"])
+            cache_rate = int(reference["cache_rate_micros_per_1k"])
             effective_from = str(reference["effective_from"])
             effective_until = reference["effective_until"]
             source_type = "platform_reference"
@@ -1829,6 +2069,7 @@ def command_workspace_provider_cost_rate(
                 raise ApiError("model_price.model_not_found")
             input_rate = int(current["input_rate_micros_per_1k"])
             output_rate = int(current["output_rate_micros_per_1k"])
+            cache_rate = int(current["cache_rate_micros_per_1k"])
             effective_from = stamp
             effective_until = None
             source_type = "manual"
@@ -1843,17 +2084,35 @@ def command_workspace_provider_cost_rate(
             (rate_id, effective_from),
         ).fetchone() is not None:
             raise ApiError("model_price.effective_conflict")
-        if status == "active" and connection.execute(
-            """
-            SELECT 1 FROM workspace_provider_cost_rate_versions
-            WHERE workspace_provider_cost_rate_id=? AND status='active'
-              AND effective_from<coalesce(?,'9999-12-31T23:59:59Z')
-              AND(effective_until IS NULL OR effective_until>?)
-            LIMIT 1
-            """,
-            (rate_id, effective_until, effective_from),
-        ).fetchone() is not None:
-            raise ApiError("model_price.effective_conflict")
+        if status == "active":
+            if effective_until is None:
+                # 开放的新版本会按后续版本起点隐式结束；只有已经存在的
+                # 明确有限区间覆盖该起点时才构成冲突。
+                overlap = connection.execute(
+                    """
+                    SELECT 1 FROM workspace_provider_cost_rate_versions
+                    WHERE workspace_provider_cost_rate_id=?
+                      AND status IN('active','superseded')
+                      AND effective_from<=?
+                      AND effective_until>?
+                    LIMIT 1
+                    """,
+                    (rate_id, effective_from, effective_from),
+                ).fetchone()
+            else:
+                overlap = connection.execute(
+                    """
+                    SELECT 1 FROM workspace_provider_cost_rate_versions
+                    WHERE workspace_provider_cost_rate_id=?
+                      AND status IN('active','superseded')
+                      AND effective_from<?
+                      AND(effective_until IS NULL OR effective_until>?)
+                    LIMIT 1
+                    """,
+                    (rate_id, effective_until, effective_from),
+                ).fetchone()
+            if overlap is not None:
+                raise ApiError("model_price.effective_conflict")
         version_id = f"pcrv_{uuid4().hex}"
         source_sha = _sha(
             {
@@ -1868,6 +2127,7 @@ def command_workspace_provider_cost_rate(
                 "effective_from": effective_from,
                 "effective_until": effective_until,
                 "input_rate_micros_per_1k": input_rate,
+                "cache_rate_micros_per_1k": cache_rate,
                 "model_id": model_id,
                 "output_rate_micros_per_1k": output_rate,
                 "provider_id": provider_id,
@@ -1879,9 +2139,10 @@ def command_workspace_provider_cost_rate(
             INSERT INTO workspace_provider_cost_rate_versions(
               workspace_provider_cost_rate_version_id,workspace_provider_cost_rate_id,
               version_number,input_rate_micros_per_1k,output_rate_micros_per_1k,
+              cache_rate_micros_per_1k,
               effective_from,effective_until,source_type,source_id,source_sha256,status,
               revision,content_sha256,created_by_membership_id,created_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,1,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?)
             """,
             (
                 version_id,
@@ -1889,6 +2150,7 @@ def command_workspace_provider_cost_rate(
                 version_number,
                 input_rate,
                 output_rate,
+                cache_rate,
                 effective_from,
                 effective_until,
                 source_type,
@@ -2140,6 +2402,7 @@ def command_platform_provider_reference_rate(
                     "effective_from": effective_from,
                     "effective_until": effective_until,
                     "input_rate_micros_per_1k": command.input_rate_micros_per_1k,
+                    "cache_rate_micros_per_1k": command.cache_rate_micros_per_1k,
                     "model_id": model_id,
                     "output_rate_micros_per_1k": command.output_rate_micros_per_1k,
                     "provider_id": provider_id,
@@ -2150,11 +2413,12 @@ def command_platform_provider_reference_rate(
                 """
                 INSERT INTO platform_provider_reference_rate_releases(
                   provider_reference_rate_release_id,provider_id,model_id,currency,
-                  input_rate_micros_per_1k,output_rate_micros_per_1k,effective_from,
+                  input_rate_micros_per_1k,output_rate_micros_per_1k,
+                  cache_rate_micros_per_1k,effective_from,
                   effective_until,source_version,content_sha256,status,revision,
                   release_generation,candidate_by_operator_id,governance_approval_id,
                   released_by_operator_id,created_at,updated_at,released_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,'candidate',1,0,?,NULL,NULL,?,?,NULL)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,'candidate',1,0,?,NULL,NULL,?,?,NULL)
                 """,
                 (
                     release_id,
@@ -2163,6 +2427,7 @@ def command_platform_provider_reference_rate(
                     currency,
                     command.input_rate_micros_per_1k,
                     command.output_rate_micros_per_1k,
+                    command.cache_rate_micros_per_1k,
                     effective_from,
                     effective_until,
                     command.source_version,
@@ -2399,6 +2664,7 @@ def _reference_rate_info(
         currency=row["currency"],
         input_rate_micros_per_1k=int(row["input_rate_micros_per_1k"]),
         output_rate_micros_per_1k=int(row["output_rate_micros_per_1k"]),
+        cache_rate_micros_per_1k=int(row["cache_rate_micros_per_1k"]),
         effective_from=_parse_time(row["effective_from"]),
         effective_until=_optional_time(row["effective_until"]),
         source_version=row["source_version"],
@@ -2572,7 +2838,16 @@ def _dispute_info(
 def _provider_cost_info(
     row: sqlite3.Row, context: WorkspaceSessionContext
 ) -> ProviderCostRateInfo:
-    status = "disabled" if row["adoption_state"] == "disabled" else "active"
+    row_keys = set(row.keys())
+    is_head_version = int(row["is_head_version"] if "is_head_version" in row_keys else 1) == 1
+    raw_status = str(row["status"])
+    status = "superseded" if raw_status == "active" and not is_head_version else raw_status
+    actions = (
+        ("create_version", "adopt_reference", "disable")
+        if "workspace.provider_cost.manage" in context.permission_codes
+        and is_head_version
+        else ()
+    )
     return ProviderCostRateInfo(
         workspace_provider_cost_rate_id=row["workspace_provider_cost_rate_id"],
         workspace_provider_cost_rate_version_id=row[
@@ -2587,8 +2862,13 @@ def _provider_cost_info(
         version_number=int(row["version_number"]),
         input_rate_micros_per_1k=int(row["input_rate_micros_per_1k"]),
         output_rate_micros_per_1k=int(row["output_rate_micros_per_1k"]),
+        cache_rate_micros_per_1k=int(row["cache_rate_micros_per_1k"]),
         effective_from=_parse_time(row["effective_from"]),
-        effective_until=_optional_time(row["effective_until"]),
+        effective_until=_optional_time(
+            row["display_effective_until"]
+            if "display_effective_until" in row_keys
+            else row["effective_until"]
+        ),
         source_type=row["source_type"],
         source_ref=_safe_source_ref(row["source_type"], row["source_id"]),
         status=status,
@@ -2596,11 +2876,46 @@ def _provider_cost_info(
         head_revision=int(row["head_revision"]),
         adoption_state=row["adoption_state"],
         content_sha256=row["content_sha256"],
-        actions=("create_version", "adopt_reference", "disable")
-        if "workspace.provider_cost.manage" in context.permission_codes
-        else (),
+        actions=actions,
         created_at=_parse_time(row["created_at"]),
     )
+
+
+def _fx_rate_info(
+    row: sqlite3.Row, context: WorkspaceSessionContext, *, include_history: bool = True
+) -> WorkspaceFxRateInfo:
+    actions = ("create_version",) if "workspace.provider_cost.manage" in context.permission_codes else ()
+    return WorkspaceFxRateInfo(
+        workspace_fx_rate_version_id=str(row["workspace_fx_rate_version_id"]),
+        workspace_id=str(row["workspace_id"]),
+        tenant_id=str(row["tenant_id"]),
+        base_currency="USD",
+        quote_currency="CNY",
+        usd_to_cny=str(row["usd_to_cny"]),
+        version_number=int(row["version_number"]),
+        effective_from=_parse_time(row["effective_from"]),
+        status=str(row["derived_status"] if "derived_status" in row.keys() else "active"),
+        revision=int(row["version_number"]),
+        actions=actions,
+        created_at=_parse_time(row["created_at"]),
+    )
+
+
+def _fx_rate_row_by_id(
+    connection: sqlite3.Connection, context: WorkspaceSessionContext, version_id: str
+) -> sqlite3.Row | None:
+    return connection.execute(
+        """SELECT version.*,CASE WHEN version_number=(SELECT current.version_number
+          FROM workspace_fx_rate_versions current
+          WHERE current.workspace_id=version.workspace_id
+            AND current.tenant_id=version.tenant_id
+            AND unixepoch(current.effective_from)<=unixepoch(?)
+          ORDER BY current.effective_from DESC,current.version_number DESC
+          LIMIT 1) THEN 'active' ELSE 'superseded' END derived_status
+        FROM workspace_fx_rate_versions version
+        WHERE version.workspace_id=? AND version.tenant_id=? AND version.workspace_fx_rate_version_id=?""",
+        (_db_time(_now()), context.workspace_id, context.tenant_id, version_id),
+    ).fetchone()
 
 
 def _resolve_dispute_source(
@@ -3148,6 +3463,7 @@ def _rate_query(config: AppConfig, query: Mapping[str, str]) -> dict[str, object
         "currency",
         "status",
         "effective_at",
+        "include_history",
         "cursor",
         "limit",
     }
@@ -3162,13 +3478,34 @@ def _rate_query(config: AppConfig, query: Mapping[str, str]) -> dict[str, object
         parsed["status"] = _enum(query["status"], _RATE_STATUSES, "model_price.query_invalid")
     if "effective_at" in query:
         parsed["effective_at"] = _timestamp(query["effective_at"], "model_price.query_invalid")
+    if "include_history" in query:
+        if query["include_history"] not in {"0", "1"}:
+            raise ApiError("model_price.query_invalid")
+        parsed["include_history"] = query["include_history"] == "1"
     if "cursor" in query:
         parsed["cursor_values"] = _decode_cursor(
             config,
             "workspace-provider-cost",
             query["cursor"],
-            1,
+            3 if parsed.get("include_history") else 1,
             "model_price.query_invalid",
+        )
+    return parsed
+
+
+def _fx_rate_query(config: AppConfig, query: Mapping[str, str]) -> dict[str, object]:
+    allowed = {"effective_at", "include_history", "cursor", "limit"}
+    _exact_query(query, allowed, "model_price.query_invalid")
+    parsed: dict[str, object] = {"limit": _limit(query.get("limit"), "model_price.query_invalid")}
+    if "effective_at" in query:
+        parsed["effective_at"] = _timestamp(query["effective_at"], "model_price.query_invalid")
+    if "include_history" in query:
+        if query["include_history"] not in {"0", "1"}:
+            raise ApiError("model_price.query_invalid")
+        parsed["include_history"] = query["include_history"] == "1"
+    if "cursor" in query:
+        parsed["cursor_values"] = _decode_cursor(
+            config, "workspace-fx-rate", query["cursor"], 2, "model_price.query_invalid"
         )
     return parsed
 

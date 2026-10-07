@@ -619,6 +619,8 @@ async def test_navigation_catalog_task_truth_and_placement(
     assert incompatible_query.status_code == 422
     assert incompatible_query.json()["code"] == "workspace_session.request_invalid"
     primary_routes = {item["route_code"] for group in body["groups"] for item in group["items"]}
+    assert "workspace.settings.data-management" not in primary_routes
+    assert "workspace.settings.deployments" not in primary_routes
     all_routes = (
         primary_routes
         | set(body["detail_route_codes"])
@@ -667,7 +669,7 @@ async def test_navigation_catalog_task_truth_and_placement(
                  WHERE workspace_id=? AND tenant_id=?)""",
                 (runtime["workspace"].workspace_id, runtime["workspace"].tenant_id),
             ).fetchone()[0]
-            == 59
+            == 58
         )
         assert (
             connection.execute(
@@ -678,6 +680,57 @@ async def test_navigation_catalog_task_truth_and_placement(
         )
     assert len(CONTRACT_SPECS) == 68
     assert len(LEGACY_SOURCE_IDS_0137) == 63
+
+
+@pytest.mark.anyio
+async def test_role_navigation_projection_hides_organization_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+    preference_runtime,
+) -> None:
+    """Role intent remains enforced when a legacy permission set is broad."""
+
+    for role_code in ("developer", "viewer"):
+        role_runtime = {
+            **preference_runtime,
+            "workspace": replace(
+                preference_runtime["workspace"],
+                membership_role=role_code,
+            ),
+        }
+        app = _api_app(monkeypatch, role_runtime)
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://control",
+        ) as client:
+            navigation = await client.get(
+                "/workspace/navigation", headers=_workspace_headers(role_runtime),
+            )
+            task_home = await client.get(
+                "/workspace/getting-started", headers=_workspace_headers(role_runtime),
+            )
+        assert navigation.status_code == 200, navigation.text
+        assert task_home.status_code == 200, task_home.text
+        body = navigation.json()
+        routes = {
+            item["route_code"]
+            for group in body["groups"]
+            for item in group["items"]
+        } | set(body["detail_route_codes"]) | set(body["developer_route_codes"])
+        forbidden = {
+            "workspace.gateway.providers",
+            "workspace.gateway.private-endpoints",
+            "workspace.gateway.private-deployments",
+            "workspace.gateway.models",
+            "workspace.gateway.aliases",
+            "workspace.gateway.routing-policies",
+        }
+        assert routes.isdisjoint(forbidden), role_code
+        assert role_code == task_home.json()["role_code"]
+        task_routes = {
+            task["action_route_code"]
+            for task in task_home.json()["tasks"]
+            if task["action_route_code"] is not None
+        }
+        assert task_routes.isdisjoint(forbidden), role_code
 
 
 @pytest.mark.anyio

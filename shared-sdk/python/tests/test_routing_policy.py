@@ -6,9 +6,9 @@ from decimal import Decimal
 
 import pytest
 from metahub_shared.runtime.routing_policy import (
-    COST_QUANT,
     MAX_INPUT_TOKENS,
     MAX_OUTPUT_TOKENS,
+    MAX_ROUTING_CANDIDATES,
     QUALITY_COST_FORMULA_VERSION,
     REASON_AVAILABILITY_HEALTHY,
     REASON_COST_CURRENCY_INCOMPARABLE,
@@ -72,17 +72,26 @@ def _price(
     input_price: str,
     output_price: str,
     *,
+    source: str = "price_plan",
     currency: str = "CNY",
+    cache_price: str = "0",
+    comparison_fx_rate: str | None = None,
 ) -> RoutingPriceFact:
     """构造带版本的显式 PricePlan Decimal 事实，禁止测试经过 float。"""
 
     return RoutingPriceFact(
         model_id=model_id,
-        source="price_plan",
+        source=source,  # type: ignore[arg-type]
         input_price_per_1k=Decimal(input_price),
         output_price_per_1k=Decimal(output_price),
         currency=currency,
         price_schema_version=f"price-{model_id}",
+        cache_price_per_1k=Decimal(cache_price),
+        comparison_currency="CNY" if comparison_fx_rate is not None else None,
+        comparison_fx_rate=(
+            Decimal(comparison_fx_rate) if comparison_fx_rate is not None else None
+        ),
+        comparison_fx_rate_version=("routing-fx-v1" if comparison_fx_rate is not None else None),
     )
 
 
@@ -212,6 +221,27 @@ def test_cost_first_uses_one_estimate_and_request_output_can_flip_selection() ->
     assert callbacks == {"token": 1, "price": 1}
 
 
+def test_cost_first_prices_cached_input_with_cache_rate() -> None:
+    """成本路由必须把缓存命中 Token 从普通输入价中扣除并按缓存价计费。"""
+
+    phase = evaluate_routing_candidates_phase_one(
+        "cost_first", (_candidate("default"), _candidate("fallback"))
+    )
+    result = complete_cost_routing(
+        phase,
+        (
+            _price("model_default", "10", "0", cache_price="1"),
+            _price("model_fallback", "10", "0", cache_price="5"),
+        ),
+        TokenEstimate(input_tokens=100, output_tokens=0, truncated=False, cache_tokens=80),
+    )
+
+    by_model = {item.candidate.model_id: item for item in result.candidate_results}
+    assert by_model["model_default"].estimated_cost_amount == Decimal("0.000280000000000")
+    assert by_model["model_fallback"].estimated_cost_amount == Decimal("0.000600000000000")
+    assert result.selected_model_id == "model_default"
+
+
 def test_cost_missing_price_keeps_available_cost_but_falls_back_to_fixed() -> None:
     """一缺一有：整体按 fixed 选路，有价候选仍满足价格字段与成本成组约束。"""
 
@@ -231,7 +261,7 @@ def test_cost_missing_price_keeps_available_cost_but_falls_back_to_fixed() -> No
     assert result.selection_reason == REASON_COST_PRICE_MISSING
     by_model = {item.candidate.model_id: item for item in result.candidate_results}
     assert by_model["model_default"].price_available is True
-    assert by_model["model_default"].estimated_cost_amount == Decimal("0.021000000000000")
+    assert by_model["model_default"].estimated_cost_amount == Decimal("0.000021000000000")
     assert by_model["model_fallback"].price_available is False
     assert by_model["model_fallback"].price_source == "missing"
     assert by_model["model_fallback"].price_schema_version is None
@@ -259,14 +289,75 @@ def test_cost_mixed_currency_is_not_compared_and_quantized_tie_is_stable() -> No
     tie = complete_cost_routing(
         phase,
         (
-            _price("model_default", "0.000000000001", "0"),
-            _price("model_fallback", "0.000000000001", "0"),
+            _price("model_default", "0.000001", "0"),
+            _price("model_fallback", "0.000001", "0"),
         ),
         TokenEstimate(1, 0, False),
     )
     assert tie.selected_model_id == "model_default"
     assert tie.selection_reason == REASON_COST_TIE
-    assert tie.candidate_results[0].estimated_cost_amount == COST_QUANT
+    assert tie.candidate_results[0].estimated_cost_amount == Decimal("0.000000000001")
+
+
+def test_cost_mixed_currency_uses_frozen_fx_rate_without_changing_billing_currency() -> None:
+    """USD/CNY uses the supplied comparison rate while audit amounts retain source currency."""
+
+    phase = evaluate_routing_candidates_phase_one(
+        "cost_first", (_candidate("default"), _candidate("fallback"))
+    )
+    result = complete_cost_routing(
+        phase,
+        (
+            _price("model_default", "2", "10", currency="USD", comparison_fx_rate="7.2"),
+            _price("model_fallback", "6.5", "27", currency="CNY", comparison_fx_rate="1"),
+        ),
+        TokenEstimate(1_000_000, 0, False),
+    )
+
+    assert result.selected_model_id == "model_fallback"
+    assert result.selection_reason == REASON_COST_LOWEST
+    by_model = {item.candidate.model_id: item for item in result.candidate_results}
+    assert by_model["model_default"].currency == "USD"
+    assert by_model["model_default"].estimated_cost_amount == Decimal("2.000000000000000")
+    assert by_model["model_default"].comparison_currency == "CNY"
+    assert by_model["model_default"].comparison_fx_rate == Decimal("7.2")
+    assert by_model["model_default"].comparison_cost_amount == Decimal("14.400000000000000")
+    assert by_model["model_fallback"].estimated_cost_amount == Decimal("6.500000000000000")
+    assert by_model["model_fallback"].comparison_cost_amount == Decimal("6.500000000000000")
+
+
+def test_cost_workspace_provider_rate_is_a_comparable_price_source() -> None:
+    """组织成本核算页的价格必须参与成本排序并写出可复现成本。"""
+
+    phase = evaluate_routing_candidates_phase_one(
+        "cost_first", (_candidate("default"), _candidate("fallback"))
+    )
+    result = complete_cost_routing(
+        phase,
+        (
+            _price(
+                "model_default",
+                "9",
+                "9",
+                source="workspace_provider_cost_rate",
+            ),
+            _price(
+                "model_fallback",
+                "0.1",
+                "0.1",
+                source="workspace_provider_cost_rate",
+                currency="USD",
+                comparison_fx_rate="7.35",
+            ),
+        ),
+        TokenEstimate(1_000_000, 0, False),
+    )
+
+    assert result.selected_model_id == "model_fallback"
+    by_model = {item.candidate.model_id: item for item in result.candidate_results}
+    assert by_model["model_default"].estimated_cost_amount == Decimal("9.000000000000000")
+    assert by_model["model_fallback"].estimated_cost_amount == Decimal("0.100000000000000")
+    assert by_model["model_fallback"].comparison_cost_amount == Decimal("0.735000000000000")
 
 
 def test_cost_single_eligible_does_not_require_price_or_token() -> None:
@@ -376,10 +467,12 @@ def test_invalid_candidate_and_price_facts_fail_closed() -> None:
     with pytest.raises(ValueError, match="candidate_count_invalid"):
         evaluate_routing_candidates_phase_one(
             "fixed",
-            (
-                _candidate("default", model_id="model_a"),
-                _candidate("fallback", model_id="model_b"),
-                _candidate("fallback", model_id="model_c"),
+            tuple(
+                [_candidate("default", model_id="model_a")]
+                + [
+                    _candidate("fallback", model_id=f"model_{index}")
+                    for index in range(MAX_ROUTING_CANDIDATES + 1)
+                ]
             ),
         )
 

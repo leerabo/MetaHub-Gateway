@@ -9,6 +9,7 @@ import { renderLoginPage } from "../../../console-web/src/features/auth/renderLo
 const UI_SOURCE = new URL("../../../console-web/src/features/console-shell/renderConsoleShell.js", import.meta.url);
 const CSS_SOURCE = new URL("../../../console-web/src/styles/main.css", import.meta.url);
 const BROWSER_RUNTIME_SOURCE = new URL("../../../scripts/quality/product_qa_browser_runtime.py", import.meta.url);
+const HUMAN_INTERACTION_SOURCE = new URL("./prd148HumanInteractionAudit.mjs", import.meta.url);
 
 function shell(preferences = {}) {
   return renderConsoleShell({
@@ -106,4 +107,11 @@ test("FLOW-01/PERF-01 isolated browser runtime disables unrelated background sch
   assert.match(source, /"METAHUB_PROVIDER_HEALTH_ENABLED": "false"/);
   assert.match(source, /"METAHUB_POLICY_SNAPSHOT_SYNC_ENABLED": "false"/);
   assert.match(source, /"METAHUB_PROVIDER_ERROR_MAP_SYNC_ENABLED": "false"/);
+});
+
+test("UI-07 interaction evidence screenshots belong to the requested page before navigation actions", async () => {
+  const source = await readFile(HUMAN_INTERACTION_SOURCE, "utf8");
+  assert.match(source, /METAHUB_QA_SCREENSHOT_TARGETS/);
+  assert.match(source, /const initialScreenshot = await page\.screenshot\(\{ fullPage: true \}\);[\s\S]*?const actions = await clickReversibleControls\(page\);/);
+  assert.match(source, /await writeFile\(screenshotPath, initialScreenshot\)/);
 });

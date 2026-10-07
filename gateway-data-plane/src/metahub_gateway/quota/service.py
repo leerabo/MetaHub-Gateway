@@ -40,6 +40,7 @@ def enforce_quota_guard(
     payload: dict[str, Any],
     request_kind: str,
     fallback_route: object | None = None,
+    fallback_routes: tuple[object, ...] = (),
     token_estimate: object | None = None,
     price_as_of: datetime | None = None,
     trusted_cost_cny: Decimal | None = None,
@@ -87,6 +88,7 @@ def enforce_quota_guard(
                 payload=payload,
                 request_kind=request_kind,
                 fallback_route=fallback_route,
+                fallback_routes=fallback_routes,
                 token_estimate=token_estimate,
                 price_as_of=price_as_of,
             )
@@ -1077,6 +1079,7 @@ def _estimate_worst_cost(
     payload: dict[str, Any],
     request_kind: str,
     fallback_route: object | None,
+    fallback_routes: tuple[object, ...] = (),
     token_estimate: object | None,
     price_as_of: datetime | None,
 ) -> Decimal:
@@ -1096,11 +1099,12 @@ def _estimate_worst_cost(
     if not initial.price_available:
         raise ApiError("gateway.quota_unavailable")
     amount = initial.cost_cny
-    # 只有存在显式回退路由时才叠加其最坏成本，维持准入上限可信。
-    if fallback_route is not None:
+    candidates = fallback_routes or ((fallback_route,) if fallback_route is not None else ())
+    # 所有显式回退候选都可能实际被调用，必须叠加整条链的最坏成本。
+    for candidate in candidates:
         fallback = _estimate_request_cost(
             connection,
-            fallback_route,
+            candidate,
             request_kind,
             payload,
             token_estimate=token_estimate,

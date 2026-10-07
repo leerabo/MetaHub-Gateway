@@ -24,6 +24,7 @@ from metahub_shared.runtime.webhooks import build_webhook_event
 
 from .models import (
     CreateModelPricePlanRequest,
+    BatchCreateModelPricePlansResponse,
     ModelPricePlanInfo,
     ModelPricePlanListResponse,
     ModelPricePlanResponse,
@@ -108,77 +109,149 @@ def create_model_price_plan(
     request_id: str,
     trace_id: str,
 ) -> ModelPricePlanResponse:
-    """创建不可变价格计划，在同一事务写审计事件并在提交后尽力分发 Webhook。"""
+    """创建一条不可变价格计划，沿用批量事务实现。"""
 
-    model_id = _normalize_model_id(payload.model_id)
-    input_price = _normalize_price(payload.input_price_per_1k)
-    output_price = _normalize_price(payload.output_price_per_1k)
-    currency = _normalize_currency(payload.currency)
-    effective_from = _normalize_effective_from(payload.effective_from)
-    price_plan_id = f"prp_{uuid4().hex}"
-    version = _normalize_version(payload.price_schema_version, effective_from, price_plan_id)
+    result = create_model_price_plans_batch(
+        config,
+        context,
+        [payload],
+        request_id=request_id,
+        trace_id=trace_id,
+    )
+    return ModelPricePlanResponse(
+        price_plan=result.price_plans[0], request_id=request_id, trace_id=trace_id
+    )
+
+
+def create_model_price_plans_batch(
+    config: AppConfig,
+    context: AuthContext,
+    payloads: list[CreateModelPricePlanRequest],
+    *,
+    request_id: str,
+    trace_id: str,
+) -> BatchCreateModelPricePlansResponse:
+    """在同一事务中补录多条价格计划，任一冲突都会整体回滚。"""
+
+    if not isinstance(payloads, list) or not 1 <= len(payloads) <= 100:
+        raise ApiError("model_price.batch_invalid")
+    normalized: list[dict[str, object]] = []
+    effective_keys: set[tuple[str, str]] = set()
+    version_keys: set[tuple[str, str]] = set()
+    for payload in payloads:
+        model_id = _normalize_model_id(payload.model_id)
+        input_price = _normalize_price(payload.input_price_per_1k)
+        output_price = _normalize_price(payload.output_price_per_1k)
+        # 旧客户端未提交缓存价时沿用输入价；显式 0 仍表示免费命中。
+        cache_price = _normalize_price(
+            payload.cache_price_per_1k
+            if payload.cache_price_per_1k is not None
+            else payload.input_price_per_1k
+        )
+        currency = _normalize_currency(payload.currency)
+        effective_from = _normalize_effective_from(payload.effective_from)
+        price_plan_id = f"prp_{uuid4().hex}"
+        version = _normalize_version(payload.price_schema_version, effective_from, price_plan_id)
+        effective_key = (model_id, effective_from)
+        version_key = (model_id, version)
+        if effective_key in effective_keys:
+            raise ApiError("model_price.effective_conflict")
+        if version_key in version_keys:
+            raise ApiError("model_price.version_conflict")
+        effective_keys.add(effective_key)
+        version_keys.add(version_key)
+        normalized.append({
+            "model_id": model_id,
+            "input_price": input_price,
+            "output_price": output_price,
+            "cache_price": cache_price,
+            "currency": currency,
+            "effective_from": effective_from,
+            "version": version,
+            "price_plan_id": price_plan_id,
+        })
+
     now = _to_db_time(_utcnow())
     connection = _connect(config)
-    model = _require_model(connection, context.user.tenant_id, model_id)
-    event_payload = {
-        "model_id": model_id,
-        "internal_model_id": model["internal_model_id"],
-        "input_price_per_1k": _decimal_text(input_price),
-        "output_price_per_1k": _decimal_text(output_price),
-        "currency": currency,
-        "price_schema_version": version,
-        "effective_from": effective_from,
-    }
+    plans: list[ModelPricePlanInfo] = []
     try:
-        connection.execute(
-            """
-            INSERT INTO model_price_plans(
-              price_plan_id, tenant_id, model_id, input_price_per_1k, output_price_per_1k,
-              currency, price_schema_version, effective_from, source, created_by, created_at
+        connection.execute("BEGIN IMMEDIATE")
+        models = {
+            item["model_id"]: _require_model(connection, context.user.tenant_id, item["model_id"])
+            for item in normalized
+        }
+        for item in normalized:
+            model_id = item["model_id"]
+            connection.execute(
+                """
+                INSERT INTO model_price_plans(
+                  price_plan_id, tenant_id, model_id, input_price_per_1k, output_price_per_1k,
+                  cache_price_per_1k, currency, price_schema_version, effective_from,
+                  source, created_by, created_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?)
+                """,
+                (
+                    item["price_plan_id"],
+                    context.user.tenant_id,
+                    model_id,
+                    _decimal_text(item["input_price"]),
+                    _decimal_text(item["output_price"]),
+                    _decimal_text(item["cache_price"]),
+                    item["currency"],
+                    item["version"],
+                    item["effective_from"],
+                    context.user.user_id,
+                    now,
+                ),
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?)
-            """,
-            (
-                price_plan_id,
-                context.user.tenant_id,
-                model_id,
-                _decimal_text(input_price),
-                _decimal_text(output_price),
-                currency,
-                version,
-                effective_from,
-                context.user.user_id,
-                now,
-            ),
-        )
-        _write_price_event(
-            connection,
-            context,
-            price_plan_id=price_plan_id,
-            model_id=model_id,
-            request_id=request_id,
-            trace_id=trace_id,
-            payload=event_payload,
-            created_at=now,
-        )
-        _sync_model_current_price(connection, context.user.tenant_id, model_id, now)
+            _write_price_event(
+                connection,
+                context,
+                price_plan_id=item["price_plan_id"],
+                model_id=model_id,
+                request_id=request_id,
+                trace_id=trace_id,
+                payload={
+                    "model_id": model_id,
+                    "internal_model_id": models[model_id]["internal_model_id"],
+                    "input_price_per_1k": _decimal_text(item["input_price"]),
+                    "output_price_per_1k": _decimal_text(item["output_price"]),
+                    "cache_price_per_1k": _decimal_text(item["cache_price"]),
+                    "currency": item["currency"],
+                    "price_schema_version": item["version"],
+                    "effective_from": item["effective_from"],
+                },
+                created_at=now,
+            )
+        for model_id in {item["model_id"] for item in normalized}:
+            _sync_model_current_price(connection, context.user.tenant_id, model_id, now)
         connection.commit()
-    # 唯一约束异常必须转换成明确冲突错误，原始 SQL 文本不能穿透 API。
+        as_of = _utcnow()
+        plans = [
+            _load_plan(connection, context.user.tenant_id, item["price_plan_id"], as_of)
+            for item in normalized
+        ]
+    except ApiError:
+        connection.rollback()
+        raise
     except sqlite3.IntegrityError as exc:
         connection.rollback()
         message = str(exc)
         if "effective_from" in message:
-            # 同一模型同一生效时刻只能有一条价格，冲突必须返回稳定 409。
             raise ApiError("model_price.effective_conflict") from exc
         if "price_schema_version" in message:
-            # 模型内价格版本必须唯一，便于 Usage 和财务报表稳定追溯。
             raise ApiError("model_price.version_conflict") from exc
-        # 其他约束错误统一收敛为安全价格错误，禁止暴露数据库结构细节。
         raise ApiError("model_price.price_invalid") from exc
-    plan = _load_plan(connection, context.user.tenant_id, price_plan_id, _utcnow())
-    _log_price_updated(context, plan, request_id, trace_id)
-    _dispatch_price_webhook(config, context, plan, request_id, trace_id)
-    return ModelPricePlanResponse(price_plan=plan, request_id=request_id, trace_id=trace_id)
+    finally:
+        connection.close()
+
+    for plan in plans:
+        _log_price_updated(context, plan, request_id, trace_id)
+        _dispatch_price_webhook(config, context, plan, request_id, trace_id)
+    return BatchCreateModelPricePlansResponse(
+        price_plans=plans, request_id=request_id, trace_id=trace_id
+    )
 
 
 def _plan_infos(rows: list[sqlite3.Row], as_of: datetime) -> list[ModelPricePlanInfo]:
@@ -242,6 +315,7 @@ def _plan_info(row: sqlite3.Row, *, effective_to: datetime | None, effective_sta
         provider_code=row["provider_code"],
         input_price_per_1k=_decimal_text(_decimal_value(row["input_price_per_1k"])),
         output_price_per_1k=_decimal_text(_decimal_value(row["output_price_per_1k"])),
+        cache_price_per_1k=_decimal_text(_decimal_value(row["cache_price_per_1k"])),
         currency=row["currency"],
         price_schema_version=row["price_schema_version"],
         effective_from=_parse_db_time(row["effective_from"]),
@@ -276,7 +350,7 @@ def _sync_model_current_price(connection: sqlite3.Connection, tenant_id: str, mo
 
     row = connection.execute(
         """
-        SELECT input_price_per_1k, output_price_per_1k, currency, price_schema_version
+        SELECT input_price_per_1k, output_price_per_1k, cache_price_per_1k, currency, price_schema_version
         FROM model_price_plans
         WHERE tenant_id=? AND model_id=? AND effective_from<=?
         ORDER BY effective_from DESC, created_at DESC
@@ -290,12 +364,13 @@ def _sync_model_current_price(connection: sqlite3.Connection, tenant_id: str, mo
     connection.execute(
         """
         UPDATE models
-        SET input_price_per_1k=?, output_price_per_1k=?, currency=?, price_schema_version=?, updated_at=?
+        SET input_price_per_1k=?, output_price_per_1k=?, cache_price_per_1k=?, currency=?, price_schema_version=?, updated_at=?
         WHERE tenant_id=? AND model_id=?
         """,
         (
             row["input_price_per_1k"],
             row["output_price_per_1k"],
+            row["cache_price_per_1k"],
             row["currency"],
             row["price_schema_version"],
             as_of,

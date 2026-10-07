@@ -8,6 +8,7 @@ import { AuthApiError } from "../../src/lib/auth.js";
 import {
   createProvider,
   createProviderKey,
+  deleteProviderKey,
   listProviderKeys,
   listProviders,
   testProviderConnection,
@@ -104,6 +105,32 @@ const providerKeysPayload = {
   request_id: "req_provider_key",
   trace_id: "trc_provider_key",
 };
+
+test("an existing unavailable key remains testable and is clearly distinct from a missing key", () => {
+  const provider = { ...providersPayload.providers[0], name: "智谱 AI", provider_code: "zhipu" };
+  const html = renderProviderPanel({
+    state: "ok",
+    providers: [provider],
+    providerKeysByProviderId: {
+      provider_1: {
+        state: "ok",
+        provider_keys: [{
+          ...providerKeysPayload.provider_keys[0],
+          status: "disabled",
+          key_prefix: "zhipu-very-long-prefix-for-display",
+        }],
+      },
+    },
+  }, withPermissionSnapshot({ user: { role: "ops_admin" } }, [
+    PERMISSIONS.PROVIDER_READ,
+    PERMISSIONS.PROVIDER_WRITE,
+  ]));
+  assert.match(html, /密钥不可用/u);
+  assert.doesNotMatch(html, /待配置密钥/u);
+  assert.match(html, /data-provider-test-form/u);
+  assert.match(html, /title="zhipu-very-long-prefix-for-display"/u);
+  assert.match(html, /zhipu-very…splay/u);
+});
 
 test("providers client lists creates updates and tests with bearer token", async () => {
   const calls = [];
@@ -221,6 +248,28 @@ test("providers client lists creates updates and tests with bearer token", async
   assert.equal(JSON.parse(calls[6].options.body).timeout_seconds, 2);
 });
 
+test("deleteProviderKey uses the provider-key delete endpoint", async () => {
+  let request;
+  globalThis.fetch = async (url, options = {}) => {
+    request = { url: String(url), options };
+    return {
+      ok: true,
+      headers: new Map([["X-Request-ID", "req_delete_key"]]),
+      async json() {
+        return { deleted_provider_key_id: "provider_key_1", request_id: "req_delete_key", trace_id: "trc_delete_key" };
+      },
+    };
+  };
+  const deleted = await deleteProviderKey({
+    controlApiUrl: "http://control.local",
+    token: "jwt-token",
+    providerKeyId: "provider_key_1",
+  });
+  assert.equal(deleted.deleted_provider_key_id, "provider_key_1");
+  assert.equal(request.options.method, "DELETE");
+  assert.match(request.url, /\/provider-keys\/provider_key_1$/u);
+});
+
 test("providers client returns structured errors", async () => {
   globalThis.fetch = async () => ({
     ok: false,
@@ -276,9 +325,10 @@ test("renderProviderPanel displays admin controls and escapes unsafe values", ()
       ...providersPayload,
       providers: [
         {
-          ...providersPayload.providers[0],
-          name: "<DeepSeek>",
-          base_url: "https://example.com/<v1>",
+        ...providersPayload.providers[0],
+        name: "<DeepSeek>",
+        base_url: "https://example.com/<v1>",
+        health_status: "healthy",
         },
       ],
       providerKeysByProviderId: {
@@ -298,16 +348,46 @@ test("renderProviderPanel displays admin controls and escapes unsafe values", ()
     ),
   );
 
-  assert.match(html, /create-provider-form/);
+  assert.doesNotMatch(html, /create-provider-form/);
+  assert.doesNotMatch(html, /provider-custom-setup/);
   assert.match(html, /data-provider-key-create-form/);
   assert.match(html, /data-provider-key-status-form/);
-  assert.match(html, /KeyPool/);
+  assert.match(html, /data-provider-key-delete-form/);
+  assert.match(html, /data-provider-key-dialog/);
+  assert.match(html, /data-provider-edit-form/);
+  assert.match(html, /删除服务/u);
+  assert.doesNotMatch(html, /收起密钥配置|高级设置/u);
   assert.match(html, /data-provider-test-form/);
   assert.match(html, /data-provider-status-form/);
   assert.doesNotMatch(html, /sk-new-provider-key/);
   assert.doesNotMatch(html, /<DeepSeek>/);
   assert.match(html, /&lt;DeepSeek&gt;/);
-  assert.match(html, /&lt;bad&gt;/);
+  assert.doesNotMatch(html, /&lt;bad&gt;/);
+});
+
+test("renderProviderPanel gives the seeded local service a customer-facing name", () => {
+  const html = renderProviderPanel({
+    state: "ok",
+    providers: [{ provider_id: "seed", provider_code: "local_openai", name: "Local OpenAI Compatible Endpoint", provider_type: "openai_compatible", base_url: "http://localhost:11434/v1", status: "active", auth_type: "none", health_status: "unknown" }],
+  }, withPermissionSnapshot({ user: { role: "admin" } }, [PERMISSIONS.PROVIDER_READ, PERMISSIONS.PROVIDER_WRITE]));
+  assert.match(html, /默认模型服务/u);
+  assert.doesNotMatch(html, /Local OpenAI Compatible Endpoint/u);
+});
+
+test("provider model setup uses the canonical workspace route", () => {
+  const html = renderProviderPanel({
+    state: "ok",
+    providers: [{
+      ...providersPayload.providers[0],
+      health_status: "healthy",
+    }],
+    providerKeysByProviderId: {
+      provider_1: { state: "ok", provider_keys: [{ status: "active", provider_key_id: "key_1" }] },
+    },
+  }, withPermissionSnapshot({ user: { role: "admin" } }, [
+    PERMISSIONS.PROVIDER_READ, PERMISSIONS.PROVIDER_WRITE, PERMISSIONS.MODEL_READ,
+  ]));
+  assert.match(html, /data-console-nav="models" data-console-route="workspace\.gateway\.models" data-console-target="workspace\.gateway\.models"/u);
 });
 
 test("renderProviderPanel hides provider management for non-admin roles", () => {
@@ -324,16 +404,40 @@ test("renderProviderPanel hides provider management for non-admin roles", () => 
   assert.equal(viewerHtml, "");
 });
 
-test("a rejected provider credential gives a readable next action with diagnostics collapsed", () => {
+test("a rejected provider credential opens an actionable result dialog", () => {
   const html = renderProviderPanel({ state: "ok", providers: [], lastTestResult: {
     providerName: "Kimi", status: "failed", httpStatus: 401, message: "<diagnostic>",
   } }, withPermissionSnapshot({}, [PERMISSIONS.PROVIDER_READ]));
+  assert.match(html, /<dialog class="provider-test-dialog provider-test-result status-failed"/u);
+  assert.match(html, /data-provider-test-auto-open/u);
   assert.match(html, /Kimi · 连接未通过/u);
-  assert.match(html, /厂家 API KEY 未通过验证/u);
-  assert.match(html, /管理 API KEY/u);
-  assert.match(html, /<details class="provider-result-details">/u);
-  assert.match(html, /&lt;diagnostic&gt;/u);
+  assert.match(html, /问题归类：大模型服务器端 · API KEY 或权限/u);
+  assert.match(html, /模型服务器拒绝了这把 API KEY/u);
+  assert.match(html, /API KEY/u);
+  assert.doesNotMatch(html, /provider-result-details/u);
+  assert.doesNotMatch(html, /&lt;diagnostic&gt;/u);
   assert.doesNotMatch(html, /连接成功/u);
+});
+
+test("a successful provider probe also renders a result dialog", () => {
+  const html = renderProviderPanel({ state: "ok", providers: [], lastTestResult: {
+    providerName: "Kimi", status: "success", httpStatus: 200, latencyMs: 38,
+  } }, withPermissionSnapshot({}, [PERMISSIONS.PROVIDER_READ]));
+  assert.match(html, /<dialog class="provider-test-dialog provider-test-result status-success"/u);
+  assert.match(html, /连接测试完成/u);
+  assert.match(html, /响应 38 ms/u);
+  assert.match(html, /data-provider-test-close/u);
+  assert.equal((html.match(/data-provider-test-close/gu) ?? []).length, 2);
+  assert.match(html, /data-provider-test-auto-open/u);
+});
+
+test("a timed-out provider probe identifies the upstream service", () => {
+  const html = renderProviderPanel({ state: "ok", providers: [], lastTestResult: {
+    providerName: "Meta", status: "failed", errorCode: "timeout", latencyMs: 5891,
+  } }, withPermissionSnapshot({}, [PERMISSIONS.PROVIDER_READ]));
+  assert.match(html, /问题归类：大模型服务器端 · 响应超时/u);
+  assert.match(html, /模型服务器在规定时间内没有响应/u);
+  assert.doesNotMatch(html, /Provider probe timed out/u);
 });
 
 test("renderDeveloperStart renders providers for admin but not developer", () => {

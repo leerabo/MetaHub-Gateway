@@ -101,20 +101,31 @@ export function renderWorkspaceTaskHome(state, i18n, options = {}) {
   }
   const tasks = Array.isArray(state.tasks) ? state.tasks : [];
   if (state.role_code === "viewer") return renderEmployeeAccessHome(state, options, i18n);
-  const primary = START_TASKS.map((code) => tasks.find((task) => task.task_code === code)).filter(Boolean);
   const isAdmin = state.role_code === "owner" || state.role_code === "admin";
   const isFinance = state.role_code === "finance_admin";
+  // A cached task projection may briefly contain the old member-key task.
+  // It is a member capability, never an owner/admin setup step.
+  const visibleTasks = isAdmin
+    ? tasks.filter((task) => task.task_code !== "project_key_ready")
+    : tasks;
+  const primary = START_TASKS.map((code) => visibleTasks.find((task) => task.task_code === code)).filter(Boolean);
+  const taskHomeClass = options?.embedded
+    ? "workspace-task-home workspace-start-flow-embedded"
+    : "workspace-task-home workspace-start-flow";
   if (primary.length || isAdmin) {
-    const secondary = tasks.filter((task) => !START_TASKS.includes(task.task_code));
+    const secondary = visibleTasks.filter((task) => !START_TASKS.includes(task.task_code));
     const next = primary.find((task) => task.status !== "completed" && task.action_enabled);
-    return '<section class="workspace-task-home workspace-start-flow" aria-labelledby="workspace-task-home-title">'
-      + (isAdmin ? renderWorkDomains(tasks, i18n, ADMIN_WORK_DOMAINS, "workspace.admin_workbench.title", "管理员工作台", "workspace.admin_workbench.scope", "四个工作域") : "")
+    const adminDomains = isAdmin
+      ? renderWorkDomains(visibleTasks, i18n, ADMIN_WORK_DOMAINS, "workspace.admin_workbench.title", "管理员工作台", "workspace.admin_workbench.scope", "四个管理区域", { collapsed: true })
+      : "";
+    return `<section class="${taskHomeClass}" aria-labelledby="workspace-task-home-title">`
       + (primary.length
         ? `<div class="workspace-navigation-heading"><h3 id="workspace-task-home-title">${escapeHtml(t(i18n, "workspace.setup_progress", "组织接入进度"))}</h3>`
           + '<span>' + primary.filter((task) => task.status === "completed").length + ' / ' + primary.length + ` ${escapeHtml(t(i18n, "workspace.completed", "已完成"))}</span></div>`
           + renderSetupProgress(primary, i18n)
           + renderNextSetupStep(primary, next, i18n)
         : `<div class="workspace-navigation-heading"><h3 id="workspace-task-home-title">${escapeHtml(t(i18n, "workspace.setup_progress", "组织接入进度"))}</h3><span>${escapeHtml(t(i18n, "workspace.pending", "待确认"))}</span></div>`)
+      + adminDomains
       + (secondary.length ? `<details class="workspace-other-tasks"><summary>${escapeHtml(t(i18n, "workspace.other_tasks", "其他管理事项"))}</summary><div class="workspace-task-list">`
         + secondary.map((task) => renderTask(task, false, i18n)).join("") + '</div></details>' : '') + '</section>';
   }
@@ -131,7 +142,7 @@ export function renderWorkspaceTaskHome(state, i18n, options = {}) {
   const roleSummary = isFinance
     ? renderWorkDomains(tasks, i18n, FINANCE_WORK_DOMAINS, "workspace.finance_workbench.title", "财务工作台", "workspace.finance_workbench.scope", "例外优先")
       + `<details class="workspace-other-tasks"><summary>${escapeHtml(t(i18n, "workspace.finance_details", "查看财务任务明细"))}</summary>${content}</details>`
-    : content;
+    : '<div class="workspace-task-list">' + visibleTasks.map((task) => renderTask(task, false, i18n)).join("") + "</div>";
   return '<section class="workspace-task-home" aria-labelledby="workspace-task-home-title">'
     + `<div class="workspace-navigation-heading"><div><p>${escapeHtml(t(i18n, "workspace.current_role", "当前职责"))}</p><h3 id="workspace-task-home-title">${escapeHtml(t(i18n, "workspace.get_started", "开始使用"))}</h3></div>`
     + '<span class="workspace-role-badge">' + escapeHtml(roleLabel(state.role_code, i18n)) + "</span></div>"
@@ -149,19 +160,16 @@ function renderSetupProgress(tasks, i18n) {
 }
 
 function renderNextSetupStep(tasks, next, i18n) {
-  const nextIndex = next ? tasks.indexOf(next) + 1 : 0;
   const nextCopy = next ? TASK_COPY[next.task_code] : null;
   const primary = next
-    ? '<div class="workspace-next-step-card"><span class="workspace-task-status">' + escapeHtml(t(i18n, "workspace.next_step", "下一步")) + '</span><strong>'
+    ? '<div class="workspace-next-step-card"><span class="workspace-task-status">当前事项</span><strong>'
       + escapeHtml(t(i18n, `workspace.task.${next.task_code}.title`, nextCopy?.[0] ?? "继续完成接入")) + '</strong><p>'
       + escapeHtml(t(i18n, `workspace.task.${next.task_code}.description`, nextCopy?.[1] ?? "打开对应页面继续处理。")) + '</p>'
       + renderTaskAction(next, true, i18n) + '</div>'
     : '<div class="workspace-next-step-card is-complete"><span class="workspace-task-status">' + escapeHtml(t(i18n, "workspace.completed", "已完成")) + '</span><strong>'
       + escapeHtml(t(i18n, "workspace.setup_complete.title", "组织接入流程已完成")) + '</strong><p>'
       + escapeHtml(t(i18n, "workspace.setup_complete.description", "现在可以复查配置；成员登录组织空间后可自行创建个人 KEY。")) + '</p></div>';
-  const detailsLabel = next
-    ? t(i18n, "workspace.setup_steps_all", `查看全部接入步骤（${nextIndex} / ${tasks.length}）`, { current: nextIndex, total: tasks.length })
-    : t(i18n, "workspace.setup_steps_view", "查看接入步骤");
+  const detailsLabel = t(i18n, "workspace.setup_steps_view", "查看配置状态");
   return primary + '<details class="workspace-start-steps"><summary>' + escapeHtml(detailsLabel) + '</summary><ol>'
     + tasks.map((task, index) => '<li' + (task === next ? ' aria-current="step"' : '') + '><span class="workspace-step-number">'
       + (index + 1) + '</span>' + renderTask(task, false, i18n) + '</li>').join("") + '</ol></details>';
@@ -177,9 +185,9 @@ function renderTaskAction(task, next = false, i18n) {
     : '<span class="workspace-task-no-action">' + escapeHtml(task.status === "completed" ? t(i18n, "workspace.done", "完成") : t(i18n, "workspace.view_status", "查看状态")) + '</span>';
 }
 
-function renderWorkDomains(tasks, i18n, domains, headingKey, headingFallback, statusKey, statusFallback) {
+function renderWorkDomains(tasks, i18n, domains, headingKey, headingFallback, statusKey, statusFallback, options = {}) {
   const byCode = new Map(tasks.map((task) => [task.task_code, task]));
-  return '<section class="workspace-admin-workbench" aria-labelledby="workspace-admin-workbench-title">'
+  const workbench = '<section class="workspace-admin-workbench" aria-labelledby="workspace-admin-workbench-title">'
     + '<div class="workspace-navigation-heading"><div><p>' + escapeHtml(t(i18n, "workspace.workbench.eyebrow", "任务摘要")) + '</p><h3 id="workspace-admin-workbench-title">' + escapeHtml(t(i18n, headingKey, headingFallback)) + '</h3></div><span>' + escapeHtml(t(i18n, statusKey, statusFallback)) + '</span></div>'
     + '<div class="workspace-admin-domain-grid">'
     + domains.map((domain) => {
@@ -217,6 +225,9 @@ function renderWorkDomains(tasks, i18n, domains, headingKey, headingFallback, st
             : `<span>${escapeHtml(statusDetail)}</span>`)
         + '</div></article>';
     }).join("") + '</div></section>';
+  if (!options.collapsed) return workbench;
+  const label = t(i18n, "workspace.admin_workbench.view", `查看管理区域（${domains.length}）`, { count: domains.length });
+  return `<details class="workspace-admin-workbench-disclosure"><summary>${escapeHtml(label)}</summary>${workbench}</details>`;
 }
 
 function renderEmployeeAccessHome(state, options, i18n) {
@@ -232,11 +243,11 @@ function renderEmployeeAccessHome(state, options, i18n) {
     ? '<button type="button" data-copy-code-target="employee-gateway-address" aria-label="' + escapeAttribute(t(i18n, "workspace.employee.copy_gateway", "复制统一网关地址")) + '" title="' + escapeAttribute(t(i18n, "workspace.employee.copy_gateway", "复制统一网关地址")) + '">' + escapeHtml(t(i18n, "workspace.employee.copy", "复制")) + '</button>'
     : '<span class="workspace-task-no-action">' + escapeHtml(t(i18n, "workspace.employee.contact_admin", "联系管理员")) + '</span>';
   return '<section class="workspace-task-home workspace-employee-home" aria-labelledby="workspace-employee-home-title">'
-    + '<div class="workspace-navigation-heading"><div><p>' + escapeHtml(t(i18n, "workspace.current_role", "当前职责")) + '</p><h3 id="workspace-employee-home-title">' + escapeHtml(t(i18n, "workspace.employee.title", "我的接入")) + '</h3><span>' + escapeHtml(t(i18n, "workspace.employee.subtitle", "使用组织已配置的 Gateway，不需要理解后台配置。")) + '</span></div><span class="workspace-role-badge">' + escapeHtml(t(i18n, "workspace.employee.role", "员工")) + '</span></div>'
+    + '<div class="workspace-navigation-heading"><div><p>' + escapeHtml(t(i18n, "workspace.current_role", "当前职责")) + '</p><h3 id="workspace-employee-home-title">' + escapeHtml(t(i18n, "workspace.employee.title", "我的接入")) + '</h3><span>' + escapeHtml(t(i18n, "workspace.employee.subtitle", "使用组织网关。")) + '</span></div><span class="workspace-role-badge">' + escapeHtml(t(i18n, "workspace.employee.role", "员工")) + '</span></div>'
     + '<div class="workspace-employee-access-grid">'
-    + '<article class="workspace-employee-access-card workspace-employee-gateway"><span>' + escapeHtml(t(i18n, "workspace.employee.gateway_label", "统一 Gateway 地址")) + '</span><strong><code id="employee-gateway-address">' + escapeHtml(gatewayText) + '</code></strong><div>' + gatewayAction + '</div><small>' + escapeHtml(t(i18n, "workspace.employee.protocol_note", "协议路径（如 /v1、/responses、/messages）仍属于同一个网关。")) + '</small></article>'
-    + '<article class="workspace-employee-access-card"><span>' + escapeHtml(t(i18n, "workspace.employee.key_label", "个人 MetaHub KEY")) + '</span><strong>' + escapeHtml(t(i18n, "workspace.employee.key_issued", "成员登录后自行创建")) + '</strong><p>' + escapeHtml(t(i18n, "workspace.employee.key_note", "每位成员在组织空间内创建和管理自己的个人 KEY。请勿填写 Provider KEY，也不需要申请第二把。")) + '</p><span class="workspace-employee-key-rule">' + escapeHtml(t(i18n, "workspace.employee.revocation_note", "成员被撤权后个人 KEY 会立即失效。")) + '</span></article>'
-    + '<article class="workspace-employee-access-card"><span>' + escapeHtml(t(i18n, "workspace.employee.clients_label", "支持的客户端")) + '</span><strong>' + escapeHtml(t(i18n, "workspace.employee.clients_value", "可自定义接口的客户端")) + '</strong><p>' + escapeHtml(t(i18n, "workspace.employee.clients_note", "使用同一个网关地址和个人 KEY。客户端强制要求模型名称时，再填写管理员给出的名称。")) + '</p><span class="workspace-employee-key-rule">' + escapeHtml(t(i18n, "workspace.employee.clients_limit", "ChatGPT 网页版等不支持自定义端点的工具不能直接接入。")) + '</span></article>'
+    + '<article class="workspace-employee-access-card workspace-employee-gateway"><span>' + escapeHtml(t(i18n, "workspace.employee.gateway_label", "统一 Gateway 地址")) + '</span><strong><code id="employee-gateway-address">' + escapeHtml(gatewayText) + '</code></strong><div>' + gatewayAction + '</div></article>'
+    + '<article class="workspace-employee-access-card"><span>' + escapeHtml(t(i18n, "workspace.employee.key_label", "个人 KEY")) + '</span><strong>' + escapeHtml(t(i18n, "workspace.employee.key_issued", "成员登录后自行创建")) + '</strong><span class="workspace-employee-key-rule">' + escapeHtml(t(i18n, "workspace.employee.revocation_note", "成员被撤权后 KEY 会立即失效。")) + '</span></article>'
+    + '<article class="workspace-employee-access-card"><span>' + escapeHtml(t(i18n, "workspace.employee.clients_label", "支持的客户端")) + '</span><strong>' + escapeHtml(t(i18n, "workspace.employee.clients_value", "可自定义接口的客户端")) + '</strong><p>' + escapeHtml(t(i18n, "workspace.employee.clients_note", "使用同一网关和个人 KEY；工具要求时填写模型名。")) + '</p><span class="workspace-employee-key-rule">' + escapeHtml(t(i18n, "workspace.employee.clients_limit", "不支持自定义端点的工具不能直接接入。")) + '</span></article>'
     + '</div>'
     + '<div class="workspace-employee-status" role="status"><strong>' + escapeHtml(t(i18n, "workspace.employee.status_label", "接入状态")) + '</strong><span>' + escapeHtml(state.source_freshness === "fresh" ? t(i18n, "workspace.employee.status_fresh", "组织接入信息已更新") : t(i18n, "workspace.employee.status_pending", "接入信息等待更新")) + '</span></div>'
     + '</section>';
@@ -276,7 +287,7 @@ export function renderWorkspaceConnectionStatus(state, currentRoute, i18n) {
   const detail = missing ? ({ provider_connected: t(i18n, "workspace.provider_pending", "模型服务待接通"), model_catalog_ready: t(i18n, "workspace.model_pending", "模型与路由待就绪"), project_key_ready: t(i18n, "workspace.key_pending", "成员可自助创建 KEY") })[missing.task_code] : "";
   const route = missing?.action_route_code;
   const action = missing?.action_enabled && route !== currentRoute && WORKSPACE_ROUTE_REGISTRY[route]
-    ? '<a class="workspace-recovery-action" href="#' + escapeAttribute(route) + '">' + escapeHtml(t(i18n, `workspace.action.${missing.task_code}`, START_ACTIONS[missing.task_code])) + '</a>' : "";
+    ? '<button type="button" class="workspace-recovery-action" data-workspace-task-route="' + escapeAttribute(route) + '">' + escapeHtml(t(i18n, `workspace.action.${missing.task_code}`, START_ACTIONS[missing.task_code])) + '</button>' : "";
   const usageDetail = !missing && firstCall?.status !== "completed"
     ? '<span>' + escapeHtml(t(i18n, "workspace.first_call_optional", "首次调用会在员工实际使用后记录，不影响管理员交付。")) + '</span>' : '';
   return '<aside class="workspace-connection-status" role="status"><div><strong>' + title + '</strong>'
@@ -291,7 +302,7 @@ export function workspaceSetupStepComplete(state, taskCode) {
 function renderTask(task, next = false, i18n) {
   const copy = TASK_COPY[task.task_code] ?? ["空间任务", "打开对应页面继续处理。"];
   return '<article class="workspace-task-row" data-task-status="' + escapeAttribute(task.status) + '">'
-    + '<div><span class="workspace-task-status">' + escapeHtml(next ? t(i18n, "workspace.next_step", "下一步") : statusLabel(task.status, i18n)) + "</span>"
+    + '<div><span class="workspace-task-status">' + escapeHtml(next ? "当前事项" : statusLabel(task.status, i18n)) + "</span>"
     + "<h4>" + escapeHtml(t(i18n, `workspace.task.${task.task_code}.title`, copy[0])) + "</h4><p>" + escapeHtml(t(i18n, `workspace.task.${task.task_code}.description`, copy[1])) + "</p></div>"
     + renderTaskAction(task, next, i18n)
     + "</article>";

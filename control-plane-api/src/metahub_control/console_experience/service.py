@@ -66,6 +66,7 @@ _WORKSPACE_SOURCE_PERMISSIONS = {
     "notifications": "console.basic.read",
     "deployment": "edge.deployment.read",
 }
+_WORKSPACE_MEMBER_SUMMARY_ROLES = frozenset(("owner", "admin"))
 _PLATFORM_CITATIONS = {
     source: (f"console.source.{source}", {
         "status": "status-incidents",
@@ -233,6 +234,25 @@ def get_workspace_overview(
             (actor.workspace_id, actor.tenant_id),
         ).fetchone()
         if version is None:
+            # A new Workspace can reach the console before the background
+            # projection worker's first pass. Build the initial zero-valued
+            # projection in this already-authenticated transaction so the
+            # overview remains usable immediately after organization creation.
+            from .scheduler import _refresh_workspace_dashboard
+
+            _refresh_workspace_dashboard(connection, actor.workspace_id, actor.tenant_id)
+            version = connection.execute(
+                """SELECT version.* FROM workspace_dashboard_projection_heads head
+                   JOIN workspace_dashboard_projection_versions version
+                     ON version.workspace_id=head.workspace_id
+                    AND version.tenant_id=head.tenant_id
+                    AND version.workspace_dashboard_projection_id=
+                        head.workspace_dashboard_projection_id
+                    AND version.generation=head.generation
+                  WHERE head.workspace_id=? AND head.tenant_id=?""",
+                (actor.workspace_id, actor.tenant_id),
+            ).fetchone()
+        if version is None:
             _write_read_audit(
                 connection,
                 config,
@@ -263,7 +283,7 @@ def get_workspace_overview(
         sections = _sections(
             rows,
             permissions=frozenset(actor.permission_codes),
-            requirements=_WORKSPACE_SOURCE_PERMISSIONS,
+            requirements=_workspace_requirements_for_actor(actor),
         )
         result = OverviewResponse(
             domain="workspace",
@@ -436,7 +456,7 @@ def query_workspace_assistant(
             question,
             rows=rows,
             permissions=frozenset(actor.permission_codes),
-            requirements=_WORKSPACE_SOURCE_PERMISSIONS,
+            requirements=_workspace_requirements_for_actor(actor),
             citations=_WORKSPACE_CITATIONS,
         )
         query_id = _id("waq_")
@@ -1064,6 +1084,18 @@ def _sections(
             )
         )
     return tuple(result)
+
+
+def _workspace_requirements_for_actor(actor: WorkspaceSessionContext) -> dict[str, str]:
+    """Keep organization roster aggregates out of employee-facing summaries."""
+
+    if actor.membership_role in _WORKSPACE_MEMBER_SUMMARY_ROLES:
+        return _WORKSPACE_SOURCE_PERMISSIONS
+    return {
+        source: permission
+        for source, permission in _WORKSPACE_SOURCE_PERMISSIONS.items()
+        if source != "role_tasks"
+    }
 
 
 def _platform_source_rows(connection: sqlite3.Connection) -> list[sqlite3.Row]:

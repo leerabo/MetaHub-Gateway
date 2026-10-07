@@ -100,7 +100,7 @@ test("provider health panel escapes data and viewer renders nothing", () => {
   assert.match(adminHtml, /data-provider-probe="provider_health_1"/);
   assert.equal(viewerHtml, "");
   assert.match(dashboardHtml, /异常 1/);
-  assert.match(dashboardHtml, /#provider-health/);
+  assert.match(dashboardHtml, /data-console-nav="provider-health"/);
 });
 
 test("provider health dashboard hides PAGE-088 link without logs permission or navigation owner", () => {
@@ -122,8 +122,8 @@ test("provider health dashboard hides PAGE-088 link without logs permission or n
     { navigation: { navigation_items: [] } },
   );
   assert.match(noLogsLink, /Provider 健康/);
-  assert.doesNotMatch(noLogsLink, /#provider-health/);
-  assert.doesNotMatch(noNavigationLink, /#provider-health/);
+  assert.doesNotMatch(noLogsLink, /data-console-nav="provider-health"/);
+  assert.doesNotMatch(noNavigationLink, /data-console-nav="provider-health"/);
 });
 
 test("provider health panel shows evidence scope for probe-only or degraded status", () => {

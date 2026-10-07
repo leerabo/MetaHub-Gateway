@@ -40,7 +40,7 @@ export function renderApiDocsPanel({ connectionState, canReadConnection = true }
     <div class="panel-heading api-docs-heading">
       <div>
         <h2 id="api-docs-title">API 文档 · 统一模型接口</h2>
-        <p>所有工具共用一个网关地址和个人 MetaHub KEY；按工具要求选择协议，模型列表可自动发现。</p>
+        <p>所有工具共用网关地址和个人 KEY。</p>
       </div>
       ${baseUrl ? `<code>${escapeHtml(baseUrl)}</code>` : ""}
     </div>
@@ -51,7 +51,7 @@ export function renderApiDocsPanel({ connectionState, canReadConnection = true }
       ${renderApiEndpoint("POST", "/v1/messages", "Anthropic Messages（Claude Code）")}
       ${renderApiEndpoint("POST", "/v1/embeddings", "Embeddings")}
     </div>
-    <p>这些路径属于同一个网关，共用个人 MetaHub KEY。具体客户端的 Agent 功能需按版本验收。</p>
+    <p>这些路径共用同一个网关和个人 KEY。</p>
     ${baseUrl && model ? `<div class="code-examples" aria-label="SDK 示例">
       <pre><code>${escapeHtml(`from openai import OpenAI
 
@@ -126,20 +126,20 @@ export function renderGatewayDebugConsole(state = {}, { gatewayUrl = "http://loc
     </div>
     <form id="gateway-debug-form" class="debug-form" aria-label="OpenAI 调试台表单" data-gateway-url="${escapeAttribute(gatewayUrl)}">
       <label>
-        <span>Virtual Key</span>
+        <span>个人 KEY</span>
         <input name="virtualKey" type="password" autocomplete="off" placeholder="mhv_..." />
       </label>
       <label>
-        <span>model</span>
+        <span>模型名称（可选）</span>
         <input name="model" type="text" value="${escapeAttribute(model)}" />
       </label>
       <label>
-        <span>user message</span>
+        <span>消息</span>
         <textarea name="message" rows="3">${escapeHtml(message)}</textarea>
       </label>
       <label class="checkbox-label">
         <input name="stream" type="checkbox" ${streamChecked} />
-        <span>stream</span>
+        <span>流式返回</span>
       </label>
       <div class="debug-actions">
         <button type="submit">${escapeHtml(submitLabel)}</button>

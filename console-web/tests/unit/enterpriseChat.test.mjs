@@ -376,7 +376,7 @@ test("enterprise Chat plaintext never enters the HTML template and hydration use
   const html = renderEnterpriseChat(snapshot, auth);
   assert.doesNotMatch(html, /promptCanary|responseCanary|next-draft-canary|<img|<svg/);
   assert.match(html, /data-enterprise-chat-message-index="0"/);
-  assert.match(html, /request_id/);
+  assert.doesNotMatch(html, /request_id|trace_id|enterprise-chat-governance/);
 
   const bodies = [{ textContent: "" }, { textContent: "" }];
   const elements = bodies.map((body, index) => ({

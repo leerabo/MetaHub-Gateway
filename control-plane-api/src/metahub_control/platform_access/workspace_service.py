@@ -38,6 +38,7 @@ from .workspace_models import (
     PlatformWorkspaceHealthResponse,
     PlatformWorkspaceListResponse,
     PlatformWorkspaceMutationResponse,
+    PlatformWorkspacePrivateGatewayResponse,
     PlatformWorkspaceSummary,
     WorkspaceHealthSummary,
     WorkspaceOperationalEventListResponse,
@@ -114,6 +115,8 @@ SELECT state.workspace_id,state.tenant_id,state.status operational_status,
     SELECT tag.tag_code FROM workspace_risk_tags tag
     WHERE tag.workspace_id=state.workspace_id AND tag.status='active'
     ORDER BY tag.tag_code) active_tag),'[]') platform_risk_tags_json
+  ,COALESCE(private_gateway.enabled,0) private_gateway_enabled
+  ,COALESCE(private_gateway.revision,1) private_gateway_revision
 FROM workspace_operational_states state
 JOIN workspaces workspace ON workspace.workspace_id=state.workspace_id
 JOIN workspace_tenant_bindings binding
@@ -133,6 +136,9 @@ LEFT JOIN platform_customer_health_snapshots health_snapshot
  AND health_snapshot.customer_account_id=health.customer_account_id
  AND health_snapshot.workspace_id=health.workspace_id
  AND health_snapshot.tenant_id=health.tenant_id
+LEFT JOIN workspace_private_gateway_capabilities private_gateway
+  ON private_gateway.workspace_id=state.workspace_id
+ AND private_gateway.tenant_id=state.tenant_id
 """
 
 
@@ -291,6 +297,83 @@ def get_platform_workspace_health(
         response = PlatformWorkspaceHealthResponse(
             workspace_id=row["workspace_id"],
             health=_health(connection, row, context, _utcnow()),
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+        connection.commit()
+        return response
+    except ApiError as exc:
+        _finish_workspace_error(connection, exc)
+        raise
+    except (sqlite3.Error, ValueError, TypeError, json.JSONDecodeError):
+        _rollback(connection)
+        raise ApiError("platform.workspace_unavailable") from None
+    finally:
+        connection.close()
+
+
+def set_workspace_private_gateway(
+    config: AppConfig,
+    *,
+    session_token: str,
+    csrf_token: str,
+    workspace_id: str,
+    expected_revision: int,
+    enabled: bool,
+    request_id: str,
+    trace_id: str,
+) -> PlatformWorkspacePrivateGatewayResponse:
+    """Enable or disable Private Gateway for one organization.
+
+    This is a Platform operation. Workspace roles never receive this write
+    boundary, and the capability is checked again by Workspace navigation and
+    Edge resource services.
+    """
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        context = _authenticate_platform(
+            connection, config, session_token, csrf_token=csrf_token, touch=True
+        )
+        _require_capability(context, "lifecycle")
+        state = _state_row(connection, workspace_id)
+        capability = connection.execute(
+            "SELECT * FROM workspace_private_gateway_capabilities "
+            "WHERE workspace_id=? AND tenant_id=?",
+            (workspace_id, state["tenant_id"]),
+        ).fetchone()
+        if capability is None:
+            raise ApiError("platform.workspace_not_found")
+        if int(capability["revision"]) != expected_revision:
+            raise ApiError("platform.workspace_revision_conflict")
+        now = _utcnow()
+        stamp = _db_time(now)
+        changed = connection.execute(
+            """UPDATE workspace_private_gateway_capabilities
+               SET enabled=?,revision=revision+1,updated_by_operator_id=?,updated_at=?
+               WHERE workspace_id=? AND tenant_id=? AND revision=?""",
+            (
+                1 if enabled else 0,
+                context.operator_id,
+                stamp,
+                workspace_id,
+                state["tenant_id"],
+                expected_revision,
+            ),
+        ).rowcount
+        if changed != 1:
+            raise ApiError("platform.workspace_revision_conflict")
+        current = connection.execute(
+            "SELECT * FROM workspace_private_gateway_capabilities "
+            "WHERE workspace_id=? AND tenant_id=?",
+            (workspace_id, state["tenant_id"]),
+        ).fetchone()
+        response = PlatformWorkspacePrivateGatewayResponse(
+            workspace_id=workspace_id,
+            tenant_id=str(state["tenant_id"]),
+            enabled=bool(current["enabled"]),
+            revision=int(current["revision"]),
+            updated_at=_parse_time(current["updated_at"]),
             request_id=request_id,
             trace_id=trace_id,
         )
@@ -1101,6 +1184,8 @@ def _summary(
             "transition_pending" if row["operational_status"] == "suspended" else "not_applicable"
         ),
         health=_health(connection, row, context, now),
+        private_gateway_enabled=bool(row["private_gateway_enabled"] or 0),
+        private_gateway_revision=int(row["private_gateway_revision"] or 1),
         platform_risk_tags=(
             tuple(json.loads(row["platform_risk_tags_json"])) if can_view_risk else None
         ),

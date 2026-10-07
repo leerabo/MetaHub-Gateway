@@ -245,8 +245,8 @@ test("dashboard panel renders empty state and hides log link for viewer", () => 
   );
 
   assert.match(emptyHtml, /今天还没有调用数据/);
-  assert.match(emptyHtml, /#providers/);
-  assert.match(emptyHtml, /#debug-console/);
+  assert.match(emptyHtml, /data-console-nav="providers"/);
+  assert.match(emptyHtml, /data-console-nav="debug-console"/);
   assert.doesNotMatch(emptyHtml, /data-request-id=/);
   assert.match(viewerErrorHtml, /<code>req_prd026_failed<\/code>/);
   assert.doesNotMatch(viewerErrorHtml, /data-request-id="req_prd026_failed"/);

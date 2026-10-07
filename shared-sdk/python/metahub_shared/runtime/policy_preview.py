@@ -171,6 +171,8 @@ class PriceFact:
     output_price_per_1k: Decimal
     currency: str
     available: bool = True
+    # 快照同时携带缓存命中单价；当前 TokenEstimate 没有独立缓存 Token，预演不虚构用量。
+    cache_price_per_1k: Decimal = Decimal("0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -397,7 +399,10 @@ def preview_budget(
         if token_estimate is not None
         else (max_output_tokens or 0)
     )
-    primary_cost, primary_available = _price_cost(primary_price, input_tokens, output_tokens)
+    cache_tokens = token_estimate.cache_tokens if token_estimate is not None else 0
+    primary_cost, primary_available = _price_cost(
+        primary_price, input_tokens, output_tokens, cache_tokens
+    )
     estimated_input = input_tokens
     estimated_output = output_tokens
     estimated_cost = primary_cost
@@ -405,7 +410,7 @@ def preview_budget(
     fallback_included = fallback_price is not None
     if fallback_price is not None:
         fallback_cost, fallback_available = _price_cost(
-            fallback_price, input_tokens, output_tokens
+            fallback_price, input_tokens, output_tokens, cache_tokens
         )
         estimated_input += input_tokens
         estimated_output += output_tokens
@@ -513,16 +518,24 @@ def _route_candidate_preview(
     )
 
 
-def _price_cost(price: PriceFact, input_tokens: int, output_tokens: int) -> tuple[Decimal, bool]:
+def _price_cost(
+    price: PriceFact,
+    input_tokens: int,
+    output_tokens: int,
+    cache_tokens: int = 0,
+) -> tuple[Decimal, bool]:
     """只计算 CNY 成本；USD 无汇率时明确标记 CNY 价格不可用。"""
 
     # M0 不做汇率换算；USD 或缺价只能显示 CNY 价格不可用，不能凭空估算。
     if not price.available or price.currency.upper() != "CNY":
         return Decimal("0").quantize(MONEY_QUANT), False
+    if type(cache_tokens) is not int or cache_tokens < 0 or cache_tokens > input_tokens:
+        return Decimal("0").quantize(MONEY_QUANT), False
     amount = (
-        Decimal(input_tokens) * price.input_price_per_1k
+        Decimal(input_tokens - cache_tokens) * price.input_price_per_1k
+        + Decimal(cache_tokens) * price.cache_price_per_1k
         + Decimal(output_tokens) * price.output_price_per_1k
-    ) / Decimal(1000)
+    ) / Decimal(1_000_000)
     return amount.quantize(MONEY_QUANT), True
 
 

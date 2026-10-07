@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { WORKSPACE_SOURCE_ROUTE_REGISTRY } from "../../../console-web/src/lib/workspaceNavigation.js";
 import { measureInteractiveLayout } from "./layoutMetrics.mjs";
 import { allowedAuditRoutes, forbiddenPagePatterns } from "./roleAuditExpectations.mjs";
@@ -28,6 +28,8 @@ const targets = (process.env.METAHUB_QA_TARGETS
   : Object.keys(WORKSPACE_SOURCE_ROUTE_REGISTRY));
 assert.ok(targets.every((target) => Object.hasOwn(WORKSPACE_SOURCE_ROUTE_REGISTRY, target)), "interaction_audit_target_invalid");
 const screenshotRoot = path.resolve(process.env.METAHUB_QA_ARTIFACT_ROOT ?? ".artifacts/product-qa", "interaction-screenshots");
+const screenshotTargets = new Set((process.env.METAHUB_QA_SCREENSHOT_TARGETS ?? "")
+  .split(",").map((target) => target.trim()).filter(Boolean));
 await mkdir(screenshotRoot, { recursive: true });
 
 function routeLocal(page) {
@@ -208,6 +210,14 @@ async function auditRoute(browser, role, storageState, target, allowed) {
         dialogs: document.querySelectorAll("dialog").length,
         unlabeled: unlabeled.length,
         inputsWithoutLabel: inputsWithoutLabel.length,
+        inputsWithoutLabelDetails: inputsWithoutLabel.slice(0, 20).map((element) => ({
+          tag: element.tagName,
+          type: element.getAttribute("type"),
+          id: element.id,
+          name: element.getAttribute("name"),
+          outer: element.outerHTML.slice(0, 240),
+          parent: element.parentElement?.outerHTML.slice(0, 420) ?? "",
+        })),
         unlabeledDetails: unlabeled.slice(0, 40).map((element) => ({
           tag: element.tagName,
           type: element.getAttribute("type"),
@@ -220,6 +230,9 @@ async function auditRoute(browser, role, storageState, target, allowed) {
         })),
       };
     });
+    // Save the requested route before generic detail/open controls can navigate
+    // elsewhere; issue screenshots must always depict the page named in evidence.
+    const initialScreenshot = await page.screenshot({ fullPage: true });
     const actions = await clickReversibleControls(page);
     // Page-visit telemetry is intentionally delayed and serialized to stay out of
     // the active page's render/write critical path. Let an already-authorized
@@ -255,10 +268,11 @@ async function auditRoute(browser, role, storageState, target, allowed) {
     const expected = allowed ? before.initialActive === target : before.initialActive !== target;
     result = { target, allowed, expected, ...before, ...after, ...geometry, actions,
       responseErrors, requestFailures, expectedRequestCancellations, consoleErrors, navigationRequests };
-    if (!expected || after.overflowPx || geometry.clipped_control_count || geometry.interactive_overlap_count || responseErrors.length || requestFailures.length || consoleErrors.length || before.unlabeled || before.inputsWithoutLabel) {
+    if (screenshotTargets.has(target) || !expected || after.overflowPx || geometry.clipped_control_count || geometry.interactive_overlap_count || responseErrors.length || requestFailures.length || consoleErrors.length || before.unlabeled || before.inputsWithoutLabel) {
       const safe = target.replace(/[^a-z0-9_-]/giu, "_");
-      result.screenshot = path.relative(process.cwd(), path.join(screenshotRoot, `${role.name}-${safe}.png`));
-      await page.screenshot({ path: path.join(screenshotRoot, `${role.name}-${safe}.png`), fullPage: true });
+      const screenshotPath = path.join(screenshotRoot, `${role.name}-${safe}.png`);
+      result.screenshot = path.relative(process.cwd(), screenshotPath);
+      await writeFile(screenshotPath, initialScreenshot);
     }
   } catch (error) {
     result = { target, allowed, failure: String(error.message), responseErrors, requestFailures,

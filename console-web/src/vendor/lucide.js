@@ -16,6 +16,14 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 */
 export const iconNodes = {
+  "grip-vertical": [
+    ["circle", { "cx": "9", "cy": "5", "r": "1" }],
+    ["circle", { "cx": "9", "cy": "12", "r": "1" }],
+    ["circle", { "cx": "9", "cy": "19", "r": "1" }],
+    ["circle", { "cx": "15", "cy": "5", "r": "1" }],
+    ["circle", { "cx": "15", "cy": "12", "r": "1" }],
+    ["circle", { "cx": "15", "cy": "19", "r": "1" }]
+  ],
   "arrow-right": [
     [
       "path",

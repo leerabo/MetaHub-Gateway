@@ -207,15 +207,21 @@ test("renderBudgetPanel shows status cards rules and admin form", () => {
   );
 
   assert.match(html, /budget-rule-form/);
+  assert.match(html, /<details class="budget-create-disclosure">/);
+  assert.match(html, /设置日预算/);
   assert.match(html, /生产 Key 日预算/);
   assert.match(html, /达到告警/);
   assert.match(html, /82%/);
   assert.match(html, /请求已阻断/);
   assert.match(html, /bb_1/);
+  assert.match(html, /data-budget-block-id="bb_1"/);
+  assert.doesNotMatch(html, /<code>bb_1<\/code>/);
   assert.match(html, /data-budget-mode-rule-id="br_1"/);
   assert.match(html, /预算已保存/);
-  assert.match(html, /Project · 账务核心/);
-  assert.match(html, /Application · 账务 API/);
+  assert.match(html, /项目 · 账务核心/);
+  assert.match(html, /应用 · 账务 API/);
+  assert.match(html, /选择调用 KEY/);
+  assert.doesNotMatch(html, /mhv_prod_\*\*\*\*/);
   assert.doesNotMatch(html, /tenant_id/);
 });
 

@@ -1423,6 +1423,14 @@ def _load_dry_run_routing_prices(
         # 偏离两候选合同表示调用图损坏，不能读取任意数量价格继续模拟。
         raise ValueError("routing price candidate count invalid")
     as_of = _to_db_time(now)
+    from metahub_shared.runtime.workspace_fx import resolve_workspace_fx_rate
+
+    try:
+        fx = resolve_workspace_fx_rate(connection, tenant_id=tenant_id, observed_at=as_of)
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc).lower():
+            raise
+        fx = None
     facts: list[RoutingPriceFact] = []
     for model_id in model_ids:
         row = connection.execute(
@@ -1431,9 +1439,11 @@ def _load_dry_run_routing_prices(
               pp.price_plan_id,
               CAST(pp.input_price_per_1k AS TEXT) AS plan_input_price,
               CAST(pp.output_price_per_1k AS TEXT) AS plan_output_price,
+              CAST(pp.cache_price_per_1k AS TEXT) AS plan_cache_price,
               pp.currency AS plan_currency, pp.price_schema_version AS plan_version,
               CAST(m.input_price_per_1k AS TEXT) AS catalog_input_price,
               CAST(m.output_price_per_1k AS TEXT) AS catalog_output_price,
+              CAST(m.cache_price_per_1k AS TEXT) AS catalog_cache_price,
               m.currency AS catalog_currency, m.price_schema_version AS catalog_version
             FROM models m
             LEFT JOIN model_price_plans pp ON pp.price_plan_id=(
@@ -1459,8 +1469,12 @@ def _load_dry_run_routing_prices(
                     source="price_plan",
                     input_price_per_1k=Decimal(str(row["plan_input_price"])),
                     output_price_per_1k=Decimal(str(row["plan_output_price"])),
+                    cache_price_per_1k=Decimal(str(row["plan_cache_price"])),
                     currency=str(row["plan_currency"]),
                     price_schema_version=str(row["plan_version"] or ""),
+                    comparison_currency="CNY" if row["plan_currency"] == "USD" else None,
+                    comparison_fx_rate=(fx.usd_to_cny if fx else Decimal("7.2")) if row["plan_currency"] == "USD" else None,
+                    comparison_fx_rate_version=(fx.version_id if fx else "legacy-deployment-v1") if row["plan_currency"] == "USD" else None,
                 )
             )
         elif row["catalog_version"]:
@@ -1470,8 +1484,12 @@ def _load_dry_run_routing_prices(
                     source="model_catalog",
                     input_price_per_1k=Decimal(str(row["catalog_input_price"])),
                     output_price_per_1k=Decimal(str(row["catalog_output_price"])),
+                    cache_price_per_1k=Decimal(str(row["catalog_cache_price"])),
                     currency=str(row["catalog_currency"]),
                     price_schema_version=str(row["catalog_version"]),
+                    comparison_currency="CNY" if row["catalog_currency"] == "USD" else None,
+                    comparison_fx_rate=(fx.usd_to_cny if fx else Decimal("7.2")) if row["catalog_currency"] == "USD" else None,
+                    comparison_fx_rate_version=(fx.version_id if fx else "legacy-deployment-v1") if row["catalog_currency"] == "USD" else None,
                 )
             )
         else:
@@ -1501,7 +1519,13 @@ def _runtime_fallback_enabled(
     # 损坏 Fallback 条件按无运行时 fallback 处理，不能扩大可触发错误范围。
     except json.JSONDecodeError:
         return False
-    allowed = {"upstream_timeout", "upstream_rate_limited", "upstream_5xx"}
+    allowed = {
+        "upstream_timeout",
+        "upstream_unavailable",
+        "upstream_rate_limited",
+        "upstream_quota_exceeded",
+        "upstream_5xx",
+    }
     return type(parsed) is list and any(type(item) is str and item in allowed for item in parsed)
 
 
@@ -1674,6 +1698,7 @@ def _load_effective_price(
         SELECT
           COALESCE(pp.input_price_per_1k, m.input_price_per_1k) AS input_price_per_1k,
           COALESCE(pp.output_price_per_1k, m.output_price_per_1k) AS output_price_per_1k,
+          COALESCE(pp.cache_price_per_1k, m.cache_price_per_1k) AS cache_price_per_1k,
           COALESCE(pp.currency, m.currency) AS currency
         FROM models m
         LEFT JOIN model_price_plans pp ON pp.price_plan_id=(
@@ -1695,6 +1720,7 @@ def _load_effective_price(
         output_price_per_1k=parse_nonnegative_decimal(row["output_price_per_1k"]),
         currency=str(row["currency"] or "CNY").upper(),
         available=True,
+        cache_price_per_1k=parse_nonnegative_decimal(row["cache_price_per_1k"]),
     )
 
 

@@ -53,6 +53,16 @@ export function bindFinOpsLedgerInteractions(handlers, root = document) {
     if (!isCurrent()) return;
     await handlers.onCloseDetail?.();
   });
+  const detailDialog = root.querySelector("#finops-detail-dialog");
+  detailDialog?.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    if (isCurrent()) void handlers.onCloseDetail?.();
+  });
+  if (detailDialog?.open && typeof detailDialog.showModal === "function") {
+    detailDialog.close();
+    detailDialog.showModal();
+    detailDialog.querySelector("#finops-close-detail")?.focus();
+  }
   root.querySelector("#finops-open-adjustment")?.addEventListener("click", async () => {
     if (!isCurrent()) return;
     await handlers.onOpenAdjustment?.(null);

@@ -117,7 +117,7 @@ function renderAction(action, consoleShellState, t) {
   const label = t(`customer_health.action.${action.code}`, action.code);
   const target = authorizedActionTarget(action.target_navigation_item_id, consoleShellState);
   return target
-    ? `<li><a href="#${encodeURIComponent(target)}">${escapeHtml(label)} <span aria-hidden="true">&#8594;</span></a></li>`
+    ? `<li><button type="button" class="health-action-command" data-console-nav="${escapeAttribute(target)}" data-console-target="${escapeAttribute(target)}">${escapeHtml(label)} <span aria-hidden="true">&#8594;</span></button></li>`
     : `<li><span>${escapeHtml(label)}</span></li>`;
 }
 

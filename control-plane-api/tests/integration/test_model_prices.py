@@ -102,6 +102,20 @@ def prepare_database(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[s
     ).fetchone()
     assert model is not None
     assert virtual_key is not None
+    # This PRD-031 fixture verifies versioned model-price plans. Disable the
+    # seeded Workspace cost head so the resolver intentionally uses those
+    # plans; production Workspace rates remain authoritative when enabled.
+    connection.execute(
+        """
+        UPDATE workspace_provider_cost_rate_heads
+        SET adoption_state='disabled',head_revision=head_revision+1
+        WHERE workspace_provider_cost_rate_id IN(
+          SELECT workspace_provider_cost_rate_id FROM workspace_provider_cost_rates
+          WHERE tenant_id=? AND model_id=?
+        )
+        """,
+        (seed.tenant_id, model["model_id"]),
+    )
     connection.commit()
     # 返回当前租户和安全资源 ID，后续测试不得携带或输出任何 Provider Key。
     return database_url, seed.tenant_id, {
@@ -236,15 +250,17 @@ async def test_effective_prices_keep_historical_usage_immutable(
         "SELECT cost_cny, price_schema_version, price_snapshot_id FROM usage_ledger WHERE request_id='req_prd031_before'",
     ).fetchone()
 
-    assert Decimal(str(before["cost_cny"])) == Decimal("1.25")
+    # Current API prices are denominated per million tokens; this request has
+    # 1,000 input tokens, so 1.25/million settles to 0.001250 CNY.
+    assert Decimal(str(before["cost_cny"])) == Decimal("0.001250")
     assert before["price_schema_version"] == "manual-old"
     assert before["effective_from"] == "2026-07-01T00:00:00Z"
-    assert Decimal(str(after["cost_cny"])) == Decimal("3.75")
+    assert Decimal(str(after["cost_cny"])) == Decimal("0.003750")
     assert after["price_schema_version"] == "manual-future"
     assert after["effective_from"] == "2026-08-01T00:00:00Z"
     assert before["price_plan_id"] != after["price_plan_id"]
     assert before["price_snapshot_id"] != after["price_snapshot_id"]
-    assert Decimal(str(before_again["cost_cny"])) == Decimal("1.25")
+    assert Decimal(str(before_again["cost_cny"])) == Decimal("0.001250")
     assert before_again["price_schema_version"] == "manual-old"
     assert before_again["price_snapshot_id"] == before["price_snapshot_id"]
 
@@ -312,3 +328,81 @@ async def test_model_price_permissions_conflicts_and_validation(
     assert developer_write.json()["code"] == "auth.permission_denied"
     assert viewer_read.status_code == 403
     assert viewer_read.json()["code"] == "auth.permission_denied"
+
+
+@pytest.mark.anyio
+async def test_model_price_batch_is_atomic_and_supports_backfilled_periods(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """历史补录一次提交；其中一条冲突时整批不留下部分价格。"""
+
+    _, _, metadata = prepare_database(monkeypatch, tmp_path)
+    app = build_control_app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://control") as client:
+        admin_token = await login(client, "admin@metahub.local", ADMIN_PASSWORD)
+        headers = {"Authorization": f"Bearer {admin_token}"}
+        batch = await client.post(
+            "/model-prices/batch",
+            headers=headers,
+            json={
+                "plans": [
+                    {
+                        "model_id": metadata["model_id"],
+                        "input_price_per_1k": "1",
+                        "output_price_per_1k": "2",
+                        "cache_price_per_1k": "0.5",
+                        "currency": "CNY",
+                        "effective_from": "2026-01-01T00:00:00Z",
+                        "price_schema_version": "backfill-202601",
+                    },
+                    {
+                        "model_id": metadata["model_id"],
+                        "input_price_per_1k": "3",
+                        "output_price_per_1k": "4",
+                        "cache_price_per_1k": "1",
+                        "currency": "CNY",
+                        "effective_from": "2026-02-01T00:00:00Z",
+                        "price_schema_version": "backfill-202602",
+                    },
+                ],
+            },
+        )
+        assert batch.status_code == 201, batch.text
+        listed = await client.get("/model-prices", headers=headers)
+        assert listed.status_code == 200, listed.text
+        assert {item["price_schema_version"] for item in listed.json()["price_plans"]} >= {
+            "backfill-202601", "backfill-202602",
+        }
+
+        conflicting_batch = await client.post(
+            "/model-prices/batch",
+            headers=headers,
+            json={
+                "plans": [
+                    {
+                        "model_id": metadata["model_id"],
+                        "input_price_per_1k": "5",
+                        "output_price_per_1k": "6",
+                        "cache_price_per_1k": "2",
+                        "currency": "CNY",
+                        "effective_from": "2026-03-01T00:00:00Z",
+                        "price_schema_version": "backfill-202603",
+                    },
+                    {
+                        "model_id": metadata["model_id"],
+                        "input_price_per_1k": "7",
+                        "output_price_per_1k": "8",
+                        "cache_price_per_1k": "3",
+                        "currency": "CNY",
+                        "effective_from": "2026-02-01T00:00:00Z",
+                        "price_schema_version": "backfill-duplicate",
+                    },
+                ],
+            },
+        )
+        assert conflicting_batch.status_code == 409
+        after_conflict = await client.get("/model-prices", headers=headers)
+        assert "backfill-202603" not in {
+            item["price_schema_version"] for item in after_conflict.json()["price_plans"]
+        }

@@ -533,6 +533,41 @@ async def test_project_application_permissions_and_binding_errors(
 
 
 @pytest.mark.anyio
+async def test_application_code_is_generated_for_user_facing_create_flow(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """应用创建不要求用户填写内部编码，旧非法值也应回退为自动编码。"""
+
+    prepare_database(monkeypatch, tmp_path)
+    control_app = build_control_app()
+    async with AsyncClient(transport=ASGITransport(app=control_app), base_url="http://control") as client:
+        admin_token = await login(client, "admin@metahub.local", ADMIN_PASSWORD)
+        project_response = await client.post(
+            "/projects",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"project_code": "auto-app", "name": "自动编码项目"},
+        )
+        project_id = project_response.json()["project"]["project_id"]
+        generated = await client.post(
+            "/applications",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"project_id": project_id, "name": "中文应用"},
+        )
+        legacy_invalid = await client.post(
+            "/applications",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"project_id": project_id, "application_code": "提示", "name": "旧页面应用"},
+        )
+
+    assert project_response.status_code == 201, project_response.text
+    assert generated.status_code == 201, generated.text
+    assert generated.json()["application"]["application_code"].startswith("app-")
+    assert legacy_invalid.status_code == 201, legacy_invalid.text
+    assert legacy_invalid.json()["application"]["application_code"].startswith("app-")
+
+
+@pytest.mark.anyio
 async def test_application_project_move_audits_each_key_and_isolates_tenant(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -749,3 +784,81 @@ async def test_application_project_move_rolls_back_when_any_key_audit_fails(
     assert {row["virtual_key_id"] for row in key_projects} == set(virtual_key_ids)
     assert all(row["project_id"] == source_id for row in key_projects)
     assert failed_audit_count == 0
+
+
+@pytest.mark.anyio
+async def test_unused_project_tree_can_be_deleted_with_empty_child_application(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """新建但从未使用的项目及其空应用可以一起删除。"""
+
+    database_url, tenant_id = prepare_database(monkeypatch, tmp_path)
+    control_app = build_control_app()
+    async with AsyncClient(transport=ASGITransport(app=control_app), base_url="http://control") as client:
+        admin_token = await login(client, "admin@metahub.local", ADMIN_PASSWORD)
+        headers = {"Authorization": f"Bearer {admin_token}"}
+        project_response = await client.post(
+            "/projects",
+            headers={**headers, "X-Request-ID": "req_prd029_unused_project"},
+            json={"name": "临时项目"},
+        )
+        assert project_response.status_code == 201, project_response.text
+        project_id = project_response.json()["project"]["project_id"]
+        application_response = await client.post(
+            "/applications",
+            headers={**headers, "X-Request-ID": "req_prd029_unused_application"},
+            json={"project_id": project_id, "name": "临时应用"},
+        )
+        assert application_response.status_code == 201, application_response.text
+        application_id = application_response.json()["application"]["application_id"]
+        deleted = await client.delete(
+            f"/projects/{project_id}",
+            headers={**headers, "X-Request-ID": "req_prd029_unused_project_delete"},
+        )
+        assert deleted.status_code == 204, deleted.text
+
+    connection = connect_database(database_url)
+    project_row = connection.execute(
+        "SELECT 1 FROM projects WHERE tenant_id=? AND project_id=?",
+        (tenant_id, project_id),
+    ).fetchone()
+    application_row = connection.execute(
+        "SELECT 1 FROM applications WHERE tenant_id=? AND application_id=?",
+        (tenant_id, application_id),
+    ).fetchone()
+    event_rows = connection.execute(
+        "SELECT COUNT(*) AS count FROM project_events WHERE tenant_id=? AND project_id=?",
+        (tenant_id, project_id),
+    ).fetchone()
+    connection.close()
+    assert project_row is None
+    assert application_row is None
+    assert event_rows["count"] == 0
+
+    # 应用本身也支持独立删除；空项目随后仍可删除。
+    async with AsyncClient(transport=ASGITransport(app=control_app), base_url="http://control") as client:
+        admin_token = await login(client, "admin@metahub.local", ADMIN_PASSWORD)
+        headers = {"Authorization": f"Bearer {admin_token}"}
+        second_project = await client.post(
+            "/projects",
+            headers=headers,
+            json={"name": "第二个临时项目"},
+        )
+        second_project_id = second_project.json()["project"]["project_id"]
+        second_application = await client.post(
+            "/applications",
+            headers=headers,
+            json={"project_id": second_project_id, "name": "第二个临时应用"},
+        )
+        second_application_id = second_application.json()["application"]["application_id"]
+        deleted_application = await client.delete(
+            f"/applications/{second_application_id}",
+            headers=headers,
+        )
+        assert deleted_application.status_code == 204, deleted_application.text
+        deleted_second_project = await client.delete(
+            f"/projects/{second_project_id}",
+            headers=headers,
+        )
+        assert deleted_second_project.status_code == 204, deleted_second_project.text

@@ -21,10 +21,9 @@ export function renderDebugConsolePanel(
   return `
     <div class="panel-heading debug-console-heading">
       <div>
-        <h2 id="gateway-debug-title">API 调试台</h2>
-        <p>选择 Virtual Key 和模型别名，发送一次非流式 Chat Completions 调试请求。</p>
+        <h2 id="gateway-debug-title">调用测试</h2>
+        <p>选择可用的 KEY 和模型，发送一次测试请求。</p>
       </div>
-      <span class="debug-console-badge">PRD-020</span>
     </div>
     ${renderDependencyWarning(activeKeys, activeAliases)}
     <form id="debug-console-form" class="debug-form debug-console-form">
@@ -35,19 +34,19 @@ export function renderDebugConsolePanel(
         </select>
       </label>
       <label>
-        <span>Virtual Key</span>
+        <span>使用 KEY</span>
         <select name="virtualKeyId" ${activeKeys.length ? "" : "disabled"}>
           ${renderVirtualKeyOptions(activeKeys, selectedVirtualKeyId)}
         </select>
       </label>
       <label>
-        <span>模型别名</span>
+        <span>模型</span>
         <select name="modelAlias" ${activeAliases.length ? "" : "disabled"}>
           ${renderModelAliasOptions(activeAliases, selectedModelAlias)}
         </select>
       </label>
       <label class="debug-console-messages">
-        <span>messages JSON</span>
+        <span>消息内容</span>
         <textarea name="messages" rows="8" spellcheck="false">${escapeHtml(messagesText)}</textarea>
       </label>
       <div class="debug-console-params">
@@ -116,9 +115,9 @@ function renderEnvironmentOptions(environments, selectedValue) {
   if (!environments.length) {
     return `<option value="">暂无 active Environment</option>`;
   }
-  return environments.map((item) => {
-    const selected = item.environment_id === selectedValue ? " selected" : "";
-    return `<option value="${escapeAttribute(item.environment_id)}"${selected}>${escapeHtml(item.name)} / ${escapeHtml(item.code)}</option>`;
+    return environments.map((item) => {
+      const selected = item.environment_id === selectedValue ? " selected" : "";
+    return `<option value="${escapeAttribute(item.environment_id)}"${selected}>${escapeHtml(item.name)}</option>`;
   }).join("");
 }
 
@@ -134,10 +133,10 @@ function renderDependencyWarning(activeKeys, activeAliases) {
   const missing = [];
   // 密钥相关分支只处理哈希、前缀或密文，禁止明文 Key 进入日志。
   if (!activeKeys.length) {
-    missing.push("active Virtual Key");
+    missing.push("可用 KEY");
   }
   if (!activeAliases.length) {
-    missing.push("active 模型别名");
+    missing.push("可用模型");
   }
   return `
     <div class="debug-console-warning" role="status">
@@ -157,7 +156,7 @@ function renderVirtualKeyOptions(keys, selectedValue) {
   }
   return keys.map((key) => {
     const selected = key.virtual_key_id === selectedValue ? " selected" : "";
-    const label = `${key.name} / ${key.environment} / ${key.key_prefix}`;
+    const label = `${key.name} / ${key.environment}`;
     // 密钥相关分支只处理哈希、前缀或密文，禁止明文 Key 进入日志。
     return `<option value="${escapeAttribute(key.virtual_key_id)}"${selected}>${escapeHtml(label)}</option>`;
   }).join("");
@@ -174,15 +173,13 @@ function renderModelAliasOptions(aliases, selectedValue) {
   }
   return aliases.map((alias) => {
     const selected = alias.alias === selectedValue ? " selected" : "";
-    const label = `${alias.alias} / ${alias.environment}`;
+    const label = `${alias.display_name ?? alias.alias} / ${alias.environment}`;
     return `<option value="${escapeAttribute(alias.alias)}"${selected}>${escapeHtml(label)}</option>`;
   }).join("");
 }
 
 /**
- * 渲染调试结果或错误。
- *
- * 成功结果展示 request_id、Trace、延迟、usage、cost 和响应预览；失败结果展示统一错误码与修复建议。
+ * 渲染测试结果或错误。
  */
 function renderDebugConsoleResult(state) {
   if (!state.result && !state.error) {
@@ -203,29 +200,15 @@ function renderDebugConsoleResult(state) {
 function renderDebugConsoleSuccess(result) {
   return `
     <div class="debug-result debug-console-result" aria-live="polite">
-      <dl class="trace-fields">
-        <div>
-          <dt>request_id</dt>
-          <dd>${escapeHtml(result.request_id ?? "-")}</dd>
-        </div>
-        <div>
-          <dt>trace_id</dt>
-          <dd>${escapeHtml(result.trace_id ?? "-")}</dd>
-        </div>
-        <div>
-          <dt>latency</dt>
-          <dd>${escapeHtml(result.latency_ms ?? 0)} ms</dd>
-        </div>
-      </dl>
+      <div class="debug-console-latency">响应时间 ${escapeHtml(result.latency_ms ?? 0)} ms</div>
       <div class="debug-console-metrics">
-        ${renderMetric("input", result.usage?.input_tokens ?? 0)}
-        ${renderMetric("output", result.usage?.output_tokens ?? 0)}
-        ${renderMetric("total", result.usage?.total_tokens ?? 0)}
-        ${renderMetric("cost", `${result.cost?.amount ?? "0"} ${result.cost?.currency ?? "CNY"}`)}
+        ${renderMetric("输入令牌", result.usage?.input_tokens ?? 0)}
+        ${renderMetric("输出令牌", result.usage?.output_tokens ?? 0)}
+        ${renderMetric("总令牌", result.usage?.total_tokens ?? 0)}
+        ${renderMetric("成本", `${result.cost?.amount ?? "0"} ${result.cost?.currency ?? "CNY"}`)}
       </div>
       <div class="debug-console-route">
-        <span>${escapeHtml(result.model_alias ?? "-")} -> ${escapeHtml(result.resolved_model ?? "-")}</span>
-        <code>${escapeHtml(result.provider_code ?? "-")}</code>
+        <span>模型：${escapeHtml(result.resolved_model ?? result.model_alias ?? "默认模型")}</span>
       </div>
       <pre><code>${escapeHtml(result.response_preview ?? "")}</code></pre>
       <button type="button" class="debug-log-link" data-debug-log-request-id="${escapeAttribute(result.request_id ?? "")}">
@@ -257,18 +240,8 @@ function renderMetric(label, value) {
 function renderDebugConsoleError(error) {
   return `
     <div class="debug-result debug-result-error" role="alert">
-      <strong>${escapeHtml(error.code ?? "debug.request_failed")}</strong>
-      <p>${escapeHtml(error.message ?? "调试请求失败")}</p>
-      <dl class="trace-fields">
-        <div>
-          <dt>request_id</dt>
-          <dd>${escapeHtml(error.requestId ?? "-")}</dd>
-        </div>
-        <div>
-          <dt>trace_id</dt>
-          <dd>${escapeHtml(error.traceId ?? "-")}</dd>
-        </div>
-      </dl>
+      <strong>测试请求未完成</strong>
+      <p>${escapeHtml(error.message ?? "请检查 KEY 和模型配置后重试")}</p>
       <p class="suggestion">${escapeHtml(error.suggestion ?? "")}</p>
       ${renderDiagnosisCard(error.diagnosis)}
     </div>
@@ -295,7 +268,6 @@ function renderDiagnosisCard(diagnosis) {
         ${renderDiagnosisPair("原因", diagnosis.reason)}
         ${renderDiagnosisPair("建议", diagnosis.suggestion)}
         ${renderDiagnosisPair("操作", diagnosis.action)}
-        ${renderDiagnosisPair("规则", diagnosis.rule_id)}
       </dl>
     </section>
   `;
@@ -333,4 +305,3 @@ function escapeHtml(value) {
 function escapeAttribute(value) {
   return escapeHtml(value).replaceAll("`", "&#096;");
 }
-

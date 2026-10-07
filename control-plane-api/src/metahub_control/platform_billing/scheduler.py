@@ -20,7 +20,9 @@ WORKER_ID = f"platform-meter-{uuid4().hex}"
 POLL_SECONDS = 2.0
 CLOSE_BATCH_SIZE = 50
 FAILURE_BACKOFF_SECONDS = 15.0
+RECONCILIATION_BACKOFF_SECONDS = 300.0
 _METER_RETRY_AFTER = 0.0
+_METER_RECONCILIATION_RETRY_AFTER = 0.0
 _CYCLE_RETRY_AFTER = 0.0
 
 
@@ -53,17 +55,22 @@ async def _scheduler_loop(app: FastAPI, stop_event: threading.Event) -> None:
 
 
 def run_platform_meter_once(config: AppConfig) -> bool:
-    global _METER_RETRY_AFTER
+    global _METER_RETRY_AFTER, _METER_RECONCILIATION_RETRY_AFTER
     now = time.monotonic()
-    if now < _METER_RETRY_AFTER:
+    if now < max(_METER_RETRY_AFTER, _METER_RECONCILIATION_RETRY_AFTER):
         return False
     try:
         worked = project_usage_once(config, worker_id=WORKER_ID)
         _METER_RETRY_AFTER = 0.0
+        _METER_RECONCILIATION_RETRY_AFTER = 0.0
         return worked
     except ApiError as exc:
-        _METER_RETRY_AFTER = time.monotonic() + FAILURE_BACKOFF_SECONDS
-        _warning("platform_billing.meter_projection_failed", exc.code)
+        if exc.code == "platform_metering.reconciliation_required":
+            _METER_RECONCILIATION_RETRY_AFTER = time.monotonic() + RECONCILIATION_BACKOFF_SECONDS
+            _warning("platform_billing.reconciliation_blocked", exc.code)
+        else:
+            _METER_RETRY_AFTER = time.monotonic() + FAILURE_BACKOFF_SECONDS
+            _warning("platform_billing.meter_projection_failed", exc.code)
         return False
     except Exception:
         _METER_RETRY_AFTER = time.monotonic() + FAILURE_BACKOFF_SECONDS

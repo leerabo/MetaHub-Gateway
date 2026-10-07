@@ -4,38 +4,6 @@ import { renderWorkspaceProviderEngineering } from "../workspace-provider-engine
 
 // Provider 面板的类型标签用于控制台展示，Provider Key 明文永远不应进入前端列表状态。
 
-const PROVIDER_LABELS = {
-  openai_compatible: "OpenAI 兼容",
-  zhipu: "智谱",
-  dashscope: "通义千问",
-  wenxin: "文心",
-  volcengine: "火山",
-  hunyuan: "混元",
-  deepseek: "DeepSeek",
-  custom: "自定义",
-  migration_compatible: "迁移兼容（聚合入口）",
-};
-
-// 认证方式标签只展示 Provider 接入类型，不暴露任何上游密钥或 Authorization 内容。
-const AUTH_LABELS = {
-  none: "无认证",
-  bearer: "API KEY（Bearer）",
-  custom_header: "自定义 Header",
-};
-
-// Provider 类型选项限定 MVP 支持范围，新增厂商必须同时补后端白名单和测试。
-const PROVIDER_OPTIONS = [
-  "openai_compatible",
-  "zhipu",
-  "dashscope",
-  "wenxin",
-  "volcengine",
-  "hunyuan",
-  "deepseek",
-  "custom",
-  "migration_compatible",
-];
-
 /**
  * 渲染 Provider 管理面板。
  *
@@ -49,22 +17,18 @@ export function renderProviderPanel(providersState, authContext) {
     return "";
   }
   const catalogState = providersState?.providerCatalog ?? null;
-  const activeTab = canReadProviders ? catalogState?.activeTab ?? "providers" : "catalog";
+  const catalogOnly = !canReadProviders && canReadCatalog;
   const tabs = canReadCatalog && canReadProviders ? `
     <div class="provider-tabs" aria-label="模型服务操作">
-      ${activeTab === "catalog"
-        ? '<button type="button" data-provider-tab="providers">返回已接入服务</button>'
-        : '<button type="button" data-provider-tab="catalog">添加模型服务</button>'}
+      <button type="button" class="provider-add-button" data-provider-catalog-open aria-haspopup="dialog">添加模型服务</button>
     </div>` : "";
-  if (activeTab === "catalog" && canReadCatalog) {
+  if (catalogOnly) {
     return `
       <div class="panel-heading providers-heading"><div><h2 id="providers-title">添加模型服务</h2></div></div>
-      ${tabs}
       ${renderProviderCatalog(catalogState, authContext)}
     `;
   }
   if (!canReadProviders) return "";
-  // Provider 分支会影响上游选择和密钥池，必须显式保留决策边界。
   // Provider 分支会影响上游选择和密钥池，必须显式保留决策边界。
   if (!providersState) {
     return `
@@ -83,16 +47,22 @@ export function renderProviderPanel(providersState, authContext) {
         <p>模型服务暂不可用。</p>
       </div>
       <div class="empty-state error-state">
-        ${escapeHtml(providersState.message)} request_id: ${escapeHtml(providersState.requestId ?? "-")}
+        ${escapeHtml(providersState.message ?? "模型服务读取失败。")}
         <button type="button" data-resource-retry>重试</button>
       </div>
     `;
   }
 
-  const providers = providersState.providers ?? [];
+  // 防止迟到响应或异常接口重复投影同一个 Provider 行。
+  const providers = [...new Map(
+    (Array.isArray(providersState.providers) ? providersState.providers : [])
+      .filter((provider) => provider?.provider_id)
+      .map((provider) => [provider.provider_id, provider]),
+  ).values()];
   const currentProviders = providers.filter((provider) => provider.status !== "disabled");
   const disabledProviders = providers.filter((provider) => provider.status === "disabled");
   const providerKeysByProviderId = providersState.providerKeysByProviderId ?? {};
+  const optimisticKeyProviderIds = new Set(providersState.optimisticKeyProviderIds ?? []);
   const providerEngineering = providersState.providerEngineering ?? null;
   const canReadEngineering = hasPermission(
     authContext,
@@ -109,16 +79,16 @@ export function renderProviderPanel(providersState, authContext) {
     canWrite,
     canReadEngineering,
     provider.provider_id === selectedEngineeringProvider?.provider_id,
-    provider.provider_id === providersState.setupProviderId,
     hasPermission(authContext, PERMISSIONS.MODEL_READ),
+    optimisticKeyProviderIds.has(provider.provider_id),
   )).join("");
   const disabledOpen = disabledProviders.some((provider) =>
     provider.provider_id === providersState.setupProviderId
     || provider.provider_id === selectedEngineeringProvider?.provider_id
     || providerKeysByProviderId[provider.provider_id]?.state === "error");
   const tableHeading = `<div class="provider-row provider-head" role="row">
-    <span>模型服务</span><span>类型</span><span>Base URL</span>
-    <span>健康</span><span>最近检查</span><span>操作</span>
+    <span>模型服务</span><span>服务地址</span><span>状态</span>
+    <span>最近检查</span><span>操作</span>
   </div>`;
   return `
     <div class="panel-heading providers-heading">
@@ -127,49 +97,12 @@ export function renderProviderPanel(providersState, authContext) {
       </div>
       <span class="providers-count">${providers.length} 个服务</span>
     </div>
-    ${tabs}
-    ${providersState.feedback ? `<p class="provider-feedback" role="status">${escapeHtml(providersState.feedback)}</p>` : ""}
-    ${renderActionError(providersState.actionError)}
+    <div class="console-page-toolbar provider-toolbar">
+      ${tabs}
+      ${providersState.feedback ? `<p class="provider-feedback" role="status">${escapeHtml(providersState.feedback)}</p>` : ""}
+      ${renderActionError(providersState.actionError)}
+    </div>
     ${renderTestResult(providersState.lastTestResult)}
-    ${canWrite ? `<details class="provider-custom-setup"><summary>自定义接入（中转站 / OpenAI 兼容地址）</summary><p class="provider-custom-help">可直接填写任意自定义中转站或兼容接口，不限于下面的品牌目录。</p><form class="create-provider-form" id="create-provider-form">
-      <h3>自定义模型服务</h3>
-      <label>
-        <span>服务名称</span>
-        <input name="name" maxlength="120" required placeholder="公司模型服务" />
-      </label>
-      <label>
-        <span>服务地址</span>
-        <input name="baseUrl" type="url" required placeholder="https://api.example.com/v1" />
-      </label>
-      <details class="provider-custom-advanced"><summary>高级设置</summary><div class="model-advanced-fields">
-      <label>
-        <span>内部标识（可选）</span>
-        <input name="providerCode" maxlength="64" pattern="[a-z][a-z0-9_]{1,63}" title="小写字母开头，2-64 位小写字母、数字或下划线" placeholder="自动生成" />
-      </label>
-      <label>
-        <span>接口协议</span>
-        <select name="providerType">
-          ${PROVIDER_OPTIONS.map((type) => renderOption(type, PROVIDER_LABELS[type], "openai_compatible")).join("")}
-        </select>
-      </label>
-      <label>
-        <span>认证方式</span>
-        <select name="authType">
-          ${renderOption("bearer", AUTH_LABELS.bearer, "bearer")}
-          ${renderOption("none", AUTH_LABELS.none, "bearer")}
-          ${renderOption("custom_header", AUTH_LABELS.custom_header, "bearer")}
-        </select>
-      </label>
-      <label class="provider-description-field">
-        <span>备注（可选）</span>
-        <input name="description" maxlength="240" placeholder="生产候选、测试环境或本地服务" />
-      </label>
-      </div></details>
-      <div class="provider-actions">
-        <button type="submit">添加模型服务</button>
-        <span class="provider-feedback" role="status">${escapeHtml(providersState.feedback ?? "")}</span>
-      </div>
-    </form></details>` : ""}
     <div class="providers-grid" role="table" aria-label="已接入模型服务">
       ${tableHeading}
       ${
@@ -186,6 +119,16 @@ export function renderProviderPanel(providersState, authContext) {
         ? renderWorkspaceProviderEngineering(providerEngineering, selectedEngineeringProvider)
         : ""}
     </div>` : ""}
+    ${canReadCatalog ? `
+      <dialog class="provider-catalog-dialog" data-provider-catalog-dialog aria-labelledby="provider-catalog-dialog-title">
+        <div class="provider-catalog-dialog-content">
+          <div class="provider-catalog-dialog-heading">
+            <div><span class="provider-test-dialog-kicker">模型服务</span><h3 id="provider-catalog-dialog-title">添加模型服务</h3></div>
+            <button type="button" class="icon-button" data-provider-catalog-close aria-label="关闭">×</button>
+          </div>
+          ${renderProviderCatalog(catalogState, authContext)}
+        </div>
+      </dialog>` : ""}
   `;
 }
 
@@ -195,58 +138,82 @@ export function renderProviderPanel(providersState, authContext) {
  * 行内只展示 Endpoint 元数据和健康状态；启用/禁用通过隐藏字段提交目标状态，后端
  * 负责二次校验。
  */
-function renderProviderRow(provider, keyState, canWrite, canReadEngineering, engineeringSelected, setupSelected, canReadModels) {
+function renderProviderRow(provider, keyState, canWrite, canReadEngineering, engineeringSelected, canReadModels, optimisticKeyReady = false) {
   const nextStatus = provider.status === "active" ? "disabled" : "active";
   const statusLabel = provider.status === "active" ? "禁用" : "启用";
-  const activeKeyCount = (keyState?.provider_keys ?? []).filter((key) => key.status === "active").length;
+  const providerKeys = keyState?.provider_keys ?? [];
+  const configuredKeyCount = providerKeys.length;
+  const activeKeyCount = providerKeys.filter((key) => key.status === "active").length;
   const missingKey = provider.auth_type !== "none" && keyState?.state === "ok"
-    && activeKeyCount === 0;
+    && configuredKeyCount === 0 && !optimisticKeyReady;
+  const hasConfiguredKey = configuredKeyCount > 0 || optimisticKeyReady;
+  const keyUnavailable = provider.auth_type !== "none" && keyState?.state === "ok"
+    && configuredKeyCount > 0 && activeKeyCount === 0 && !optimisticKeyReady;
   const canTest = provider.status === "active" && (provider.auth_type === "none"
-    || (keyState?.state === "ok" && (keyState.provider_keys ?? []).some((key) => key.status === "active")));
+    || hasConfiguredKey);
   const needsTest = canTest && provider.health_status !== "healthy";
   return `
-    <div class="provider-row" role="row">
+    <div class="provider-row" role="row" data-provider-row-id="${escapeAttribute(provider.provider_id)}">
       <span class="provider-identity">
-        <strong>${escapeHtml(provider.name)}</strong>
+        <strong>${escapeHtml(displayProviderName(provider))}</strong>
         <em>
           ${provider.status === "active" ? "已启用" : "已停用"}
         </em>
         ${provider.auth_type !== "none" && keyState?.state === "ok"
-          ? `<small>${activeKeyCount} 把可用 KEY</small>` : ""}
+          ? `<small>${configuredKeyCount} 把 API KEY${keyUnavailable ? "（当前不可用）" : ""}</small>` : ""}
       </span>
-      <span>${escapeHtml(PROVIDER_LABELS[provider.provider_type] ?? provider.provider_type)}</span>
-      <code title="${escapeAttribute(provider.base_url)}">${escapeHtml(provider.base_url)}</code>
+      <code class="provider-url" dir="ltr" title="${escapeAttribute(provider.base_url)}">${escapeHtml(displayProviderUrl(provider.base_url))}</code>
       <span>
-        <mark class="status-mark status-${escapeHtml(provider.health_status)}">
-          ${missingKey ? "待配置密钥" : escapeHtml(({ healthy: "可用", unhealthy: "异常", degraded: "需关注", unknown: "未检查" })[provider.health_status] ?? provider.health_status)}
+        <mark class="status-mark status-${escapeHtml(keyUnavailable ? "disabled" : provider.health_status)}">
+          ${missingKey ? "待配置密钥" : keyUnavailable ? "密钥不可用" : escapeHtml(({ healthy: "可用", unhealthy: "异常", degraded: "需关注", unknown: "未检查" })[provider.health_status] ?? provider.health_status)}
         </mark>
       </span>
       <span title="${escapeAttribute(provider.last_test_error || "")}">
         ${escapeHtml(formatDateTime(provider.last_tested_at))}
       </span>
       <div class="provider-row-actions">
-        ${canWrite && provider.auth_type !== "none" ? `<button type="button" class="${needsTest ? "" : "provider-setup-action"}"
+        <div class="provider-primary-actions">
+        ${canWrite ? `<button type="button" class="provider-main-action"
+          data-provider-edit-open="${escapeAttribute(provider.provider_id)}"
+          aria-haspopup="dialog">编辑</button>` : ""}
+        ${canWrite && provider.auth_type !== "none" ? `<button type="button" class="provider-main-action${missingKey ? " provider-setup-action" : ""}"
           data-provider-key-open="${escapeAttribute(provider.provider_id)}"
-          aria-controls="provider-keypool-${escapeAttribute(provider.provider_id)}"
-          aria-expanded="${setupSelected ? "true" : "false"}">${missingKey ? "配置 API KEY" : "管理 API KEY"}</button>` : ""}
-        ${canWrite && needsTest ? `<form data-provider-test-form data-provider-id="${escapeAttribute(provider.provider_id)}"><button class="provider-setup-action" type="submit">测试连接</button></form>` : ""}
-        ${canReadModels && canTest && provider.health_status === "healthy" ? '<a href="#workspace.gateway.models">配置可用模型</a>' : ""}
-        ${canWrite || canReadEngineering ? `<details class="provider-maintenance"${engineeringSelected ? " open" : ""}><summary>管理服务</summary><div class="provider-maintenance-actions">
-        ${canReadEngineering ? `<button type="button" data-workspace-provider-engineering-open="${escapeAttribute(provider.provider_id)}"
-          aria-expanded="${engineeringSelected ? "true" : "false"}">兼容与错误规则</button>` : ""}
-        ${canWrite ? `${!needsTest ? `<form data-provider-test-form data-provider-id="${escapeAttribute(provider.provider_id)}">
-          <button type="submit">测试连接</button>
+          aria-haspopup="dialog">${missingKey ? "配置 API KEY" : "管理 API KEY"}</button>` : ""}
+        ${canReadModels && canTest && provider.health_status === "healthy" ? '<button type="button" class="provider-main-action" data-console-nav="models" data-console-route="workspace.gateway.models" data-console-target="workspace.gateway.models">配置模型</button>' : ""}
+        </div>
+        ${canWrite || canReadEngineering ? `<div class="provider-maintenance-actions" aria-label="服务操作">
+        ${canWrite ? `${canTest ? `<form data-provider-test-form data-provider-id="${escapeAttribute(provider.provider_id)}">
+          <button${needsTest ? ' class="provider-setup-action"' : ' class="provider-secondary-action"'} type="submit">测试连接</button>
         </form>` : ""}
         <form data-provider-status-form data-provider-id="${escapeAttribute(provider.provider_id)}">
           <input type="hidden" name="status" value="${escapeAttribute(nextStatus)}" />
-          <button type="submit">${statusLabel}</button>
+          <button type="submit" class="provider-secondary-action">${statusLabel}</button>
         </form>` : ""}
-        </div></details>` : ""}
+        ${canWrite ? `<form data-provider-delete-form data-provider-id="${escapeAttribute(provider.provider_id)}">
+          <button type="submit" class="danger-button">删除服务</button>
+        </form>` : ""}
+        </div>` : ""}
       </div>
     </div>
     ${canWrite && provider.auth_type !== "none" && keyState?.state === "error" ? renderProviderKeyError(keyState) : ""}
-    ${renderProviderKeypool(provider, keyState, canWrite, setupSelected, canReadModels)}
+    ${renderProviderKeyDialog(provider, keyState, canWrite, canReadModels)}
+    ${renderProviderEditDialog(provider, canWrite)}
   `;
+}
+
+function displayProviderName(provider) {
+  const name = String(provider?.name ?? "").trim();
+  const code = String(provider?.provider_code ?? "").trim();
+  if (code === "local_openai" && /^local openai compatible endpoint$/iu.test(name)) {
+    return "默认模型服务";
+  }
+  return name || "未命名模型服务";
+}
+
+// Endpoint values are validated by the API. Strip accidental display whitespace
+// so a URL can never appear different from the value the user entered.
+function displayProviderUrl(value) {
+  return String(value ?? "").replace(/\s+/gu, "");
 }
 
 /**
@@ -255,36 +222,53 @@ function renderProviderRow(provider, keyState, canWrite, canReadEngineering, eng
  * 新增 Key 表单使用 password 输入框；已有 Key 只展示 key_prefix/fingerprint 等
  * 脱敏信息，不回显 Provider Key 明文。
  */
-function renderProviderKeypool(provider, keyState, canWrite, setupSelected, canReadModels) {
+function renderProviderKeyDialog(provider, keyState, canWrite, canReadModels) {
   if (provider.auth_type === "none") return "";
   const keys = keyState?.provider_keys ?? [];
   return `
-    <details class="provider-keypool"${canWrite ? " data-provider-key-controlled" : ""} id="provider-keypool-${escapeAttribute(provider.provider_id)}" data-provider-keypool="${escapeAttribute(provider.provider_id)}"${setupSelected ? " open" : ""}>
-      <summary class="provider-keypool-heading">
-        <strong>${canWrite ? "收起密钥配置" : `${escapeHtml(provider.name)} · API KEY`}</strong>
-        <span>${keyState?.state === "ok" ? `${keys.length} 个 Key` : keyState?.state === "error" ? "加载失败" : "加载中"}</span>
-      </summary>
+    <dialog class="provider-key-dialog" data-provider-key-dialog data-provider-id="${escapeAttribute(provider.provider_id)}" aria-labelledby="provider-key-dialog-title-${escapeAttribute(provider.provider_id)}">
+      <div class="provider-key-dialog-content">
+        <div class="provider-key-dialog-heading">
+          <div><h3 id="provider-key-dialog-title-${escapeAttribute(provider.provider_id)}">${escapeHtml(displayProviderName(provider))} · API KEY</h3><p>填写厂家提供的 API KEY，保存后即可测试连接。</p></div>
+          <button type="button" class="icon-button" data-provider-key-cancel aria-label="关闭">×</button>
+        </div>
       ${canWrite ? `<form
         class="provider-key-form"
         data-provider-key-create-form
         data-provider-id="${escapeAttribute(provider.provider_id)}"
       >
         <label>
-          <span>厂家 API KEY</span>
-          <input name="plainValue" type="password" required autocomplete="new-password" placeholder="sk-..." />
+          <span>API KEY</span>
+          <input name="plainValue" type="password" required autocomplete="new-password" placeholder="粘贴 API KEY" />
         </label>
-        <details class="provider-key-weight"><summary>高级设置</summary><div class="provider-key-options"><label>
-          <span>名称</span>
-          <input name="name" maxlength="80" required value="主密钥" />
-        </label><label>
-          <span>权重</span>
-          <input name="weight" type="number" min="1" max="10000" value="100" />
-        </label></div></details>
-        <button type="submit">保存密钥</button>
+        <button type="submit">保存</button>
       </form>` : ""}
-      ${keyState?.state === "error" ? (canWrite ? "" : renderProviderKeyError(keyState)) : keyState?.state === "ok" ? renderProviderKeyRows(keys, canWrite) : '<p role="status">正在加载密钥...</p>'}
-      ${canReadModels && provider.status === "active" && provider.health_status === "healthy" && keys.some((key) => key.status === "active") ? '<a class="console-flow-next" href="#workspace.gateway.models">下一步：配置可用模型</a>' : ""}
-    </details>
+      <div class="provider-key-dialog-keys">
+        <h4>已配置的 API KEY</h4>
+        ${keyState?.state === "error" ? renderProviderKeyError(keyState) : keyState?.state === "ok" ? renderProviderKeyRows(keys, canWrite) : '<p role="status">正在读取...</p>'}
+      </div>
+      </div>
+    </dialog>
+  `;
+}
+
+function renderProviderEditDialog(provider, canWrite) {
+  if (!canWrite) return "";
+  return `
+    <dialog class="provider-edit-dialog" data-provider-edit-dialog data-provider-id="${escapeAttribute(provider.provider_id)}" aria-labelledby="provider-edit-dialog-title-${escapeAttribute(provider.provider_id)}">
+      <form class="provider-edit-form" data-provider-edit-form data-provider-id="${escapeAttribute(provider.provider_id)}">
+        <div class="provider-edit-dialog-heading">
+          <div><span class="provider-test-dialog-kicker">模型服务</span><h3 id="provider-edit-dialog-title-${escapeAttribute(provider.provider_id)}">编辑服务</h3></div>
+          <button type="button" class="icon-button" data-provider-edit-close aria-label="关闭">×</button>
+        </div>
+        <label><span>服务名称</span><input name="name" required maxlength="120" value="${escapeAttribute(displayProviderName(provider))}" /></label>
+        <label><span>服务地址</span><input name="baseUrl" type="url" required value="${escapeAttribute(provider.base_url)}" /></label>
+        <div class="provider-edit-actions">
+          <button type="button" class="provider-secondary-action" data-provider-edit-close>取消</button>
+          <button type="submit" class="provider-setup-action">保存</button>
+        </div>
+      </form>
+    </dialog>
   `;
 }
 
@@ -295,11 +279,10 @@ function renderProviderKeypool(provider, keyState, canWrite, setupSelected, canR
  */
 function renderProviderKeyRows(keys, canWrite) {
   if (!keys.length) {
-    // Provider 判断会影响上游归因和密钥健康，错误路径必须保持脱敏。
-    return "";
+    return '<p class="provider-key-empty">还没有配置 API KEY。</p>';
   }
   return `
-    <div class="provider-key-grid" aria-label="Provider KeyPool">
+    <div class="provider-key-grid" aria-label="已配置的 API KEY">
       <div class="provider-key-row provider-key-head">
         <span>Key</span>
         <span>状态</span>
@@ -325,7 +308,7 @@ function renderProviderKeyRow(providerKey, canWrite) {
     <div class="provider-key-row">
       <span class="provider-key-name">
         <strong>${escapeHtml(providerKey.name)}</strong>
-        <em>${escapeHtml(providerKey.key_prefix || "-")}</em>
+        <em title="${escapeAttribute(providerKey.key_prefix || "")}">${escapeHtml(displayKeyPrefix(providerKey.key_prefix))}</em>
       </span>
       <span>
         <mark class="status-mark status-${escapeHtml(providerKey.status)}">${escapeHtml(({ active: "可用", disabled: "已停用" })[providerKey.status] ?? "不可用")}</mark>
@@ -333,29 +316,44 @@ function renderProviderKeyRow(providerKey, canWrite) {
       <span>${escapeHtml(providerKey.weight)}</span>
       <span>${escapeHtml(formatDateTime(providerKey.last_used_at))}</span>
       <span title="${escapeAttribute(providerKey.last_error_message || "")}">
-        ${escapeHtml(providerKey.last_error_code || "-")}
+        ${providerKey.last_error_code ? "连接异常" : "-"}
       </span>
-      ${canWrite ? `<form
-        class="provider-key-action"
-        data-provider-key-status-form
-        data-provider-key-id="${escapeAttribute(providerKey.provider_key_id)}"
-      >
-        <input type="hidden" name="status" value="${escapeAttribute(nextStatus)}" />
-        <button type="submit">${actionLabel}</button>
-      </form>` : ""}
+      <span class="provider-key-actions">
+        ${canWrite ? `<form
+          class="provider-key-action"
+          data-provider-key-status-form
+          data-provider-key-id="${escapeAttribute(providerKey.provider_key_id)}"
+        >
+          <input type="hidden" name="status" value="${escapeAttribute(nextStatus)}" />
+          <button type="submit">${actionLabel}</button>
+        </form>` : ""}
+        ${canWrite ? `<form
+          class="provider-key-action"
+          data-provider-key-delete-form
+          data-provider-key-id="${escapeAttribute(providerKey.provider_key_id)}"
+        >
+          <button type="submit" class="danger-button">删除</button>
+        </form>` : ""}
+      </span>
     </div>
   `;
+}
+
+function displayKeyPrefix(value) {
+  const prefix = String(value ?? "");
+  if (prefix.length <= 18) return prefix || "-";
+  return `${prefix.slice(0, 10)}…${prefix.slice(-5)}`;
 }
 
 /**
  * 渲染 KeyPool 读取失败态。
  *
- * 保留 request_id，方便从控制台直接定位控制面错误日志。
+ * 普通用户只需要知道密钥列表暂不可用；关联号保留在状态对象和服务端日志中。
  */
 function renderProviderKeyError(error) {
   return `
     <div class="provider-key-empty error-state">
-      密钥列表暂不可用 request_id: ${escapeHtml(error.requestId ?? "-")}
+      密钥列表暂不可用
       <button type="button" data-resource-retry>重试</button>
     </div>
   `;
@@ -372,7 +370,9 @@ function renderActionError(error) {
   }
   return `
     <div class="provider-action-error" role="alert">
-      ${escapeHtml(error.message ?? "Provider 操作失败")} request_id: ${escapeHtml(error.requestId ?? "-")}
+      ${error.category ? `<strong>${escapeHtml(error.category)}</strong>` : ""}
+      ${escapeHtml(error.message ?? "模型服务操作失败")}
+      ${error.detail ? `<small>${escapeHtml(error.detail)}</small>` : ""}
     </div>
   `;
 }
@@ -388,23 +388,71 @@ function renderTestResult(result) {
   }
   const successful = result.status === "passed" || result.status === "success";
   const title = successful ? "连接成功" : "连接未通过";
-  const guidance = successful ? "模型服务已接通，可以继续配置可用模型。"
-    : result.httpStatus === 401 ? "厂家 API KEY 未通过验证。请打开「管理 API KEY」检查或更换密钥。"
-      : result.httpStatus === 403 ? "厂家拒绝了访问。请检查密钥权限或服务区域。"
-        : result.httpStatus === 429 ? "厂家暂时限制了请求。请检查额度，稍后再测试连接。"
-          : "暂时无法连接模型服务。请检查服务地址和网络后重试。";
+  const diagnosis = providerProbeDiagnosis(result);
+  const guidance = successful ? "模型服务已接通。" : diagnosis.guidance;
+  const latency = Number.isFinite(result.latencyMs) ? ` · 响应 ${Math.round(result.latencyMs)} ms` : "";
   return `
-    <div class="provider-test-result status-${escapeAttribute(result.status)}" role="status">
-      <strong>${escapeHtml(result.providerName ?? "模型服务")} · ${title}</strong>
-      <span>${guidance}</span>
-      <details class="provider-result-details"><summary>查看诊断信息</summary>
-        <span>${escapeHtml(result.message ?? "")}</span>
-        <small>HTTP ${escapeHtml(result.httpStatus ?? "-")} · ${escapeHtml(result.latencyMs ?? 0)} ms</small>
-        ${Number.isSafeInteger(result.attemptCount) && result.attemptCount > 1
-          ? `<small>已尝试 ${escapeHtml(result.attemptCount)} 把 KEY，以上为最终代表性结果</small>` : ""}
-      </details>
-    </div>
+    <dialog class="provider-test-dialog provider-test-result status-${escapeAttribute(result.status)}" data-provider-test-dialog data-provider-test-auto-open aria-labelledby="provider-test-dialog-title">
+      <div class="provider-test-dialog-content">
+        <div class="provider-test-dialog-heading">
+          <div>
+            <span class="provider-test-dialog-kicker">连接测试完成</span>
+            <h3 id="provider-test-dialog-title">${escapeHtml(result.providerName ?? "模型服务")} · ${title}</h3>
+          </div>
+          <button type="button" class="icon-button" data-provider-test-close aria-label="关闭">×</button>
+        </div>
+        ${!successful ? `<p class="provider-test-diagnosis"><strong>问题归类：${escapeHtml(diagnosis.category)}</strong></p>` : ""}
+        <p>${escapeHtml(guidance)}</p>
+        ${latency ? `<small>${escapeHtml(latency)}</small>` : ""}
+        <div class="provider-test-dialog-actions">
+          <button type="button" data-provider-test-close>知道了</button>
+        </div>
+      </div>
+    </dialog>
   `;
+}
+
+/** 将探测事实翻译成用户能采取行动的三类问题，避免把内部错误码直接抛给用户。 */
+function providerProbeDiagnosis(result) {
+  const code = String(result?.errorCode ?? "");
+  const status = Number(result?.httpStatus);
+  if (code === "authentication_failed" || status === 401 || status === 403) {
+    return {
+      category: "大模型服务器端 · API KEY 或权限",
+      guidance: "模型服务器拒绝了这把 API KEY。请检查 KEY 是否正确、是否已启用，以及服务区域或权限是否匹配。",
+    };
+  }
+  if (["endpoint_invalid", "endpoint_blocked", "redirect_rejected"].includes(code)) {
+    return {
+      category: "填写或网络设置",
+      guidance: "服务地址无法按当前格式访问。请检查地址是否完整（包含 https:// 和正确的接口路径）。",
+    };
+  }
+  if (code === "timeout") {
+    return {
+      category: "大模型服务器端 · 响应超时",
+      guidance: "模型服务器在规定时间内没有响应。这里检查的是模型 API 接口，不是网页首页；请确认服务地址包含正确的 API 路径（例如 /v1），并从当前网络访问该接口。",
+    };
+  }
+  if (["connect_failed", "tls_failed", "transport_error", "upstream_5xx", "probe_http_error", "rate_limited"].includes(code)
+    || [429, 500, 502, 503, 504].includes(status)) {
+    return {
+      category: "大模型服务器端",
+      guidance: status === 429
+        ? "模型服务器暂时限制了请求，请稍后再试。"
+        : "模型服务器返回了异常响应，请检查服务状态或稍后再试。",
+    };
+  }
+  if (code === "catalog_invalid") {
+    return {
+      category: "大模型服务器端 · 返回内容异常",
+      guidance: "模型服务器返回的内容无法识别，请确认该地址提供兼容的模型接口。",
+    };
+  }
+  return {
+    category: "MetaHub 系统",
+    guidance: "MetaHub 没有拿到完整的测试结果，请稍后重试；如果持续失败，请联系管理员。",
+  };
 }
 
 /**
@@ -418,16 +466,6 @@ function renderEmptyRow() {
       <span>尚未接入模型服务。请选择厂家，配置你已有的 API KEY。</span>
     </div>
   `;
-}
-
-/**
- * 渲染 select option。
- *
- * value 和 label 都经过转义，防止配置项中的特殊字符破坏 HTML。
- */
-function renderOption(value, label, selectedValue) {
-  const selected = value === selectedValue ? " selected" : "";
-  return `<option value="${escapeAttribute(value)}"${selected}>${escapeHtml(label)}</option>`;
 }
 
 /**

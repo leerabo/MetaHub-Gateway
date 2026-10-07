@@ -80,6 +80,7 @@ CSV_COLUMNS = (
     "price_snapshot_id",
     "snapshot_input_price_per_1k",
     "snapshot_output_price_per_1k",
+    "snapshot_cache_price_per_1k",
     "snapshot_currency",
     "price_plan_id",
     "price_effective_from",
@@ -95,6 +96,7 @@ DECIMAL_COLUMNS = frozenset(
         "cost_usd",
         "snapshot_input_price_per_1k",
         "snapshot_output_price_per_1k",
+        "snapshot_cache_price_per_1k",
     }
 )
 JOB_ID_PATTERN = re.compile(r"^uex_[0-9a-f]{32}$")
@@ -974,8 +976,9 @@ def _generate_csv(
               ul.input_tokens, ul.output_tokens, ul.total_tokens, ul.cache_tokens,
               ul.cost_amount, ul.cost_cny, ul.cost_usd, ul.currency,
               ul.price_schema_version, ul.price_snapshot_id,
-              ps.input_price_per_1k AS snapshot_input_price_per_1k,
-              ps.output_price_per_1k AS snapshot_output_price_per_1k,
+               ps.input_price_per_1k AS snapshot_input_price_per_1k,
+               ps.output_price_per_1k AS snapshot_output_price_per_1k,
+               ps.cache_price_per_1k AS snapshot_cache_price_per_1k,
               ps.currency AS snapshot_currency, ps.price_plan_id, ps.effective_from AS price_effective_from,
               ul.estimated, ul.usage_source
             FROM usage_ledger ul

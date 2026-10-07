@@ -6,24 +6,60 @@ const SNAPSHOT_ID = /^ncs_[0-9a-f]{32}$/u;
 const WORKSPACE_ID = /^wsp_[0-9a-f]{32}$/u;
 
 // The authorization projection remains the source of every route. This map
-// only limits the default sidebar surface for a human role; deferred routes
-// remain in navigation_items and can be opened from "More controls" or a
-// valid deep link.
+// controls the default sidebar surface for a human role; the home group is
+// always first so the landing page is not hidden inside "More controls".
 const DEFAULT_SIDEBAR_GROUPS_BY_ROLE = Object.freeze({
-  // The task home is a landing surface, not a fifth management domain. It
-  // remains routable and is still the first-use destination, while the
-  // sidebar exposes only the four operational domains.
-  owner: new Set(["workspace", "gateway", "finance", "governance"]),
-  admin: new Set(["workspace", "gateway", "finance", "governance"]),
-  developer: new Set(["gateway", "observability", "developer-center"]),
-  security_admin: new Set(["governance", "observability"]),
-  finance_admin: new Set(["finance", "observability"]),
+  owner: new Set(["home", "workspace", "gateway", "finance", "governance", "system"]),
+  admin: new Set(["home", "workspace", "gateway", "finance", "governance", "system"]),
+  // Personal usage is part of the developer workspace; the route allowlist
+  // below still excludes every organization-level finance page.
+  developer: new Set(["gateway", "finance", "system", "developer-center"]),
+  security_admin: new Set(["governance", "system"]),
+  finance_admin: new Set(["finance", "system"]),
   legal_admin: new Set(["workspace", "governance"]),
-  auditor: new Set(["governance", "observability"]),
+  auditor: new Set(["governance", "system"]),
   // viewer is the current employee/member role. Its authorized deep links
   // remain available, but the default surface is the single access task.
   viewer: new Set(["home", "gateway", "finance"]),
 });
+
+// Developer accounts consume the organization gateway. They do not configure
+// providers, models, routes, private endpoints, or organization projects.
+const ROLE_ROUTE_ALLOWLIST = Object.freeze({
+  developer: new Set([
+    "workspace.gateway.virtual-keys",
+    "workspace.finance.usage",
+    "workspace.developer.sdk",
+    "workspace.developer.migration",
+    "workspace.developer.api",
+    "workspace.developer.mcp",
+    "identity.preferences",
+  ]),
+  viewer: new Set([
+    "workspace.home.getting-started",
+    "workspace.gateway.virtual-keys",
+    "workspace.finance.usage",
+    "identity.preferences",
+  ]),
+});
+
+// Deployment and data lifecycle are platform operations. They stay out of the
+// organization console even when a legacy permission grants a read route.
+const ORGANIZATION_HIDDEN_ROUTES = new Set([
+  "workspace.settings.deployments",
+  "workspace.settings.data-management",
+  // 迁移切换属于 SaaS 平台运维，不是组织管理员的日常配置入口。
+  "workspace.observability.migrations",
+  // 首页概览已经提供组织服务摘要，避免把同一份健康信息再做成重复页面。
+  "workspace.observability.status",
+]);
+
+// The organization console uses explicit pages for usage, providers, models and
+// members. The experimental natural-language assistant is retired from this
+// surface; keeping its registry entry preserves old API snapshots and tests.
+const RETIRED_WORKSPACE_ROUTES = new Set([
+  "workspace.home.assistant",
+]);
 
 const ROUTE_ROWS = [
   ["workspace.home.overview", "overview", "primary", "home"],
@@ -36,7 +72,10 @@ const ROUTE_ROWS = [
   ["workspace.settings.roles", "role-permissions", "primary", "workspace"],
   // 租户运行环境由平台运维和内部配置流程管理，不作为 Workspace 用户入口。
   ["workspace.settings.deployments", "environments", "platform_internal", "workspace"],
-  ["workspace.settings.data-management", "tenant-data-lifecycle", "primary", "workspace"],
+  // Tenant data lifecycle is a platform operations concern. Keep the route
+  // registered for platform tooling, but never project it into Workspace
+  // navigation or accept it as an organization deep link.
+  ["workspace.settings.data-management", "tenant-data-lifecycle", "platform_internal", "workspace"],
   ["workspace.gateway.providers", "providers", "primary", "gateway"],
   ["workspace.gateway.private-endpoints", "local-models", "primary", "gateway"],
   ["workspace.gateway.private-deployments", "private-gateways", "primary", "gateway"],
@@ -46,7 +85,7 @@ const ROUTE_ROWS = [
   ["workspace.gateway.routing-policies", "routing-policies", "detail", "gateway"],
   ["workspace.gateway.quality", "model-quality-scores", "primary", "gateway"],
   ["workspace.gateway.evaluations", "experiments", "primary", "gateway"],
-  ["workspace.gateway.projects", "projects", "primary", "gateway"],
+  ["workspace.gateway.projects", "projects", "primary", "workspace"],
   ["workspace.gateway.virtual-keys", "virtual-keys", "primary", "gateway"],
   ["workspace.finance.subscription", "workspace-subscription", "primary", "finance"],
   ["workspace.finance.usage", "usage", "primary", "finance"],
@@ -69,12 +108,12 @@ const ROUTE_ROWS = [
   ["workspace.applications.files", "files", "primary", "applications"],
   ["workspace.applications.file-security", "file-security", "detail", "applications"],
   ["workspace.applications.batch", "batch-jobs", "primary", "applications"],
-  ["workspace.observability.requests", "request-logs", "primary", "observability"],
-  ["workspace.observability.request-explanation", "request-explanations", "detail", "observability"],
-  ["workspace.observability.feedback", "feedback-summary", "primary", "observability"],
-  ["workspace.observability.migrations", "migration-operations", "primary", "observability"],
-  ["workspace.observability.support", "support-tickets", "primary", "observability"],
-  ["workspace.observability.status", "system-status", "primary", "observability"],
+  ["workspace.observability.requests", "request-logs", "primary", "governance"],
+  ["workspace.observability.request-explanation", "request-explanations", "detail", "governance"],
+  ["workspace.observability.feedback", "feedback-summary", "primary", "system"],
+  ["workspace.observability.migrations", "migration-operations", "primary", "system"],
+  ["workspace.observability.support", "support-tickets", "primary", "system"],
+  ["workspace.observability.status", "system-status", "primary", "system"],
   ["workspace.developer.sdk", "sdk-examples", "developer_center", "developer-center"],
   ["workspace.developer.migration", "migration-guide", "developer_center", "developer-center"],
   ["workspace.developer.api", "api-docs", "developer_center", "developer-center"],
@@ -154,7 +193,7 @@ export function updateWorkspaceNavigationPreference({
       && !WORKSPACE_ROUTE_REGISTRY[value]) {
       invalidRequest();
     } else if (key === "expanded_group_code" && value !== null
-      && !new Set(["home", "workspace", "gateway", "finance", "governance", "applications", "observability", "developer-center"]).has(value)) {
+      && !new Set(["home", "workspace", "gateway", "finance", "governance", "applications", "system", "developer-center"]).has(value)) {
       invalidRequest();
     }
     body[key] = value;
@@ -425,29 +464,48 @@ export function resolveWorkspaceNavigationRoute(
   const primary = navigation.groups.flatMap(
     (group) => group.items.map((item) => item.route_code)
       .filter((route) => WORKSPACE_ROUTE_REGISTRY[route]?.placement !== "platform_internal"
+        && routeAllowedForRole(route, roleCode)
         && routeAvailableForCurrentPermissions(route, grantedPermissions)),
   );
   const allowed = new Set([
     ...primary,
-    ...navigation.detail_route_codes.filter((route) => WORKSPACE_ROUTE_REGISTRY[route]?.placement !== "platform_internal"),
-    ...navigation.developer_route_codes,
-    ...navigation.account_action_codes,
+    ...navigation.detail_route_codes.filter((route) => WORKSPACE_ROUTE_REGISTRY[route]?.placement !== "platform_internal"
+      && routeAllowedForRole(route, roleCode)),
+    ...navigation.developer_route_codes.filter((route) => routeAllowedForRole(route, roleCode)),
+    ...navigation.account_action_codes.filter((route) => routeAllowedForRole(route, roleCode)),
   ]);
   for (const tool of advancedTools?.tools ?? []) {
     if (tool.action_enabled && tool.availability === "available") allowed.add(tool.route_code);
   }
   const firstUse = Number(navigation.preference.revision ?? 0) <= 1;
+  const requested = String(requestedRouteCode ?? "").trim();
+  // A completed setup page is not a durable home for organization users. A
+  // stale hash from the setup flow must not keep the account on that page.
+  const setupRouteRequested = requested === "workspace.home.getting-started";
+  const staleSetupRoute = setupRouteRequested && (
+    roleCode === "developer"
+    || ((roleCode === "owner" || roleCode === "admin") && !firstUse)
+  );
+  const organizationLogin = (roleCode === "owner" || roleCode === "admin") && !requested;
   const preferred = roleCode === "viewer"
-    || ((roleCode === "owner" || roleCode === "admin") && firstUse)
+    || roleCode === "developer"
+    || organizationLogin
+    || setupRouteRequested
     ? null
     : navigation.preference.last_primary_route_code;
+  const developerDefault = roleCode === "developer"
+    ? navigation.developer_route_codes.find((route) => routeAllowedForRole(route, roleCode)
+      && routeAvailableForCurrentPermissions(route, grantedPermissions))
+    : null;
   const fallback = (
-    preferred && primary.includes(preferred) ? preferred : null
+    preferred && (primary.includes(preferred) || allowed.has(preferred)) ? preferred : null
   ) ?? (
     (roleCode === "owner" || roleCode === "admin")
       && primary.includes("workspace.home.overview")
       ? "workspace.home.overview"
       : null
+  ) ?? (
+    developerDefault
   ) ?? (
     primary.includes("workspace.home.getting-started")
       ? "workspace.home.getting-started"
@@ -456,8 +514,12 @@ export function resolveWorkspaceNavigationRoute(
     primary.includes("workspace.home.overview") ? "workspace.home.overview" : primary[0]
   );
   if (!fallback) invalidResponse();
-  const requested = String(requestedRouteCode ?? "").trim();
-  if (requestedRejected || (requested && !allowed.has(requested))) {
+  // A newly created organization is intentionally sent to the setup task page.
+  // Owners and admins may open it while onboarding is incomplete; completion
+  // redirects fresh sessions to the overview, so this route is never the
+  // durable home after setup. Treating it as an unconditional rejection left
+  // a misleading "role cannot open this page" banner on the first login.
+  if (requestedRejected || staleSetupRoute || (requested && !allowed.has(requested))) {
     return { routeCode: fallback, rejected: true };
   }
   return { routeCode: requested || fallback, rejected: false };
@@ -476,6 +538,7 @@ export function projectWorkspaceNavigationForConsole(
   );
   for (const group of navigation.groups) {
     for (const item of group.items) {
+      if (!routeAllowedForRole(item.route_code, roleCode)) continue;
       if (!routeAvailableForCurrentPermissions(item.route_code, grantedPermissions)) continue;
       items.push(projectItem(
         item.route_code,
@@ -485,18 +548,22 @@ export function projectWorkspaceNavigationForConsole(
     }
   }
   for (const route of navigation.developer_route_codes) {
+    if (!routeAllowedForRole(route, roleCode)) continue;
     if (!routeAvailableForCurrentPermissions(route, grantedPermissions)) continue;
     items.push(projectItem(route, null, visibleInDefaultSidebar(route, roleCode)));
   }
   for (const route of navigation.detail_route_codes) {
+    if (!routeAllowedForRole(route, roleCode)) continue;
     if (!routeAvailableForCurrentPermissions(route, grantedPermissions)) continue;
     items.push(projectItem(route, null, false));
   }
   for (const route of navigation.account_action_codes) {
+    if (!routeAllowedForRole(route, roleCode)) continue;
     if (!routeAvailableForCurrentPermissions(route, grantedPermissions)) continue;
     items.push(projectItem(route, null, false));
   }
   for (const tool of advancedTools?.tools ?? []) {
+    if (!routeAllowedForRole(tool.route_code, roleCode)) continue;
     if (tool.action_enabled && tool.availability === "available") {
       items.push(projectItem(tool.route_code, tool, false));
     }
@@ -521,13 +588,18 @@ export function projectWorkspaceNavigationForConsole(
 }
 
 function routeAvailableForCurrentPermissions(routeCode, grantedPermissions) {
-  if (routeCode === "workspace.settings.data-management") {
-    return grantedPermissions.has("tenant_data.read") || grantedPermissions.has("tenant.settings.read");
-  }
+  if (WORKSPACE_ROUTE_REGISTRY[routeCode]?.placement === "platform_internal") return false;
   if (routeCode === "workspace.finance.usage") {
     return grantedPermissions.has("billing.usage.read") || grantedPermissions.has("virtual_key.read");
   }
   return true;
+}
+
+function routeAllowedForRole(routeCode, roleCode) {
+  if (RETIRED_WORKSPACE_ROUTES.has(routeCode)) return false;
+  if (ORGANIZATION_HIDDEN_ROUTES.has(routeCode)) return false;
+  const allowlist = ROLE_ROUTE_ALLOWLIST[String(roleCode ?? "").trim()];
+  return !allowlist || allowlist.has(routeCode);
 }
 
 function visibleInDefaultSidebar(routeCode, roleCode) {
@@ -535,6 +607,7 @@ function visibleInDefaultSidebar(routeCode, roleCode) {
   if (!route || !["primary", "task_home", "developer_center"].includes(route.placement)) {
     return false;
   }
+  if (!routeAllowedForRole(routeCode, roleCode)) return false;
   const groups = DEFAULT_SIDEBAR_GROUPS_BY_ROLE[String(roleCode ?? "").trim()];
   // Legacy callers without a role still receive the complete authorized
   // projection; only an explicit role activates the opinionated defaults.
@@ -622,8 +695,9 @@ async function request(controlApiUrl, path, options) {
 function normalizeGroup(value) {
   exact(value, ["expanded", "group_code", "items", "label_key"]);
   if (typeof value.expanded !== "boolean") invalidResponse();
-  const groupCode = nullableGroup(value.group_code);
-  if (groupCode === null) invalidResponse();
+  const rawGroupCode = nullableGroup(value.group_code);
+  if (rawGroupCode === null) invalidResponse();
+  const groupCode = rawGroupCode;
   const items = array(value.items, 30).map((item) => {
     const requiredKeys = ["description_key", "kind", "label_key", "order", "route_code"];
     const itemKeys = Object.keys(item).sort();
@@ -702,7 +776,7 @@ function nullableGroup(value) {
   if (value === null) return null;
   return choice(value, [
     "home", "workspace", "gateway", "finance", "governance", "applications",
-    "observability", "developer-center",
+    "system", "developer-center",
   ]);
 }
 

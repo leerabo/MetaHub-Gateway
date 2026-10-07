@@ -432,14 +432,27 @@ def _upsert_model(
 
     capabilities = json.dumps({"chat": True, "stream": True}, ensure_ascii=False)
     provider_model_id = model.get("provider_model_id") or model["upstream_model_name"]
-    connection.execute(
-        """
+    input_price = float(model.get("input_price_per_1k") or 0)
+    output_price = float(model.get("output_price_per_1k") or 0)
+    cache_price = float(
+        model.get("cache_price_per_1k", model.get("input_price_per_1k") or 0) or 0
+    )
+    currency = (model.get("currency") or "CNY").upper()
+    price_schema_version = model.get("price_schema_version") or "seed-v1"
+    # Historical migration fixtures intentionally stop before the cache-price
+    # column exists. Keep seed replay compatible with those schemas while
+    # populating the cache price whenever the current column is available.
+    has_cache_price = "cache_price_per_1k" in table_columns(connection, "models")
+    cache_columns = ", cache_price_per_1k" if has_cache_price else ""
+    cache_values = ", ?" if has_cache_price else ""
+    cache_update = ", cache_price_per_1k=excluded.cache_price_per_1k" if has_cache_price else ""
+    sql = f"""
         INSERT INTO models(
           model_id, tenant_id, provider_id, model_alias, upstream_model_name, provider_model_id,
-          display_name, capabilities, context_window, input_price_per_1k, output_price_per_1k,
+          display_name, capabilities, context_window, input_price_per_1k, output_price_per_1k{cache_columns},
           currency, price_schema_version, status, created_at, updated_at
         )
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{cache_values}, ?, ?, 'active', datetime('now'), datetime('now'))
         ON CONFLICT(tenant_id, model_alias) DO UPDATE SET
           upstream_model_name=excluded.upstream_model_name,
           provider_model_id=excluded.provider_model_id,
@@ -447,28 +460,29 @@ def _upsert_model(
           capabilities=excluded.capabilities,
           context_window=excluded.context_window,
           input_price_per_1k=excluded.input_price_per_1k,
-          output_price_per_1k=excluded.output_price_per_1k,
+          output_price_per_1k=excluded.output_price_per_1k{cache_update},
           currency=excluded.currency,
           price_schema_version=excluded.price_schema_version,
           status='active',
           updated_at=datetime('now')
-        """,
-        (
-            model_id,
-            tenant_id,
-            provider_id,
-            model["model_alias"],
-            provider_model_id,
-            provider_model_id,
-            model.get("display_name") or model["model_alias"],
-            capabilities,
-            int(model.get("context_window") or 0),
-            float(model.get("input_price_per_1k") or 0),
-            float(model.get("output_price_per_1k") or 0),
-            (model.get("currency") or "CNY").upper(),
-            model.get("price_schema_version") or "seed-v1",
-        ),
-    )
+        """
+    parameters = [
+        model_id,
+        tenant_id,
+        provider_id,
+        model["model_alias"],
+        provider_model_id,
+        provider_model_id,
+        model.get("display_name") or model["model_alias"],
+        capabilities,
+        int(model.get("context_window") or 0),
+        input_price,
+        output_price,
+    ]
+    if has_cache_price:
+        parameters.append(cache_price)
+    parameters.extend([currency, price_schema_version])
+    connection.execute(sql, parameters)
 
 
 def _upsert_commercial_provider_cost_rate(
@@ -514,15 +528,20 @@ def _upsert_commercial_provider_cost_rate(
         output_scaled = Decimal(model.get("output_price_per_1k") or "0") * Decimal(
             1_000_000
         )
+        cache_scaled = Decimal(
+            model.get("cache_price_per_1k", model.get("input_price_per_1k") or "0") or "0"
+        ) * Decimal(1_000_000)
     except (InvalidOperation, TypeError, ValueError):
         raise sqlite3.IntegrityError("seed commercial rate invalid") from None
     if (
         input_scaled != input_scaled.to_integral_value()
         or output_scaled != output_scaled.to_integral_value()
+        or cache_scaled != cache_scaled.to_integral_value()
     ):
         raise sqlite3.IntegrityError("seed commercial rate precision invalid")
     input_micros = int(input_scaled)
     output_micros = int(output_scaled)
+    cache_micros = int(cache_scaled)
     workspace_id = str(owner[0]["workspace_id"])
     membership_id = str(owner[0]["workspace_membership_id"])
     rate_id = "pcr_" + hashlib.sha256(
@@ -552,6 +571,7 @@ def _upsert_commercial_provider_cost_rate(
                 "input_rate_micros_per_1k": input_micros,
                 "model_id": model_id,
                 "output_rate_micros_per_1k": output_micros,
+                "cache_rate_micros_per_1k": cache_micros,
                 "provider_id": provider_id,
                 "source_type": "legacy_model",
             },
@@ -573,9 +593,10 @@ def _upsert_commercial_provider_cost_rate(
         INSERT INTO workspace_provider_cost_rate_versions(
           workspace_provider_cost_rate_version_id,workspace_provider_cost_rate_id,
           version_number,input_rate_micros_per_1k,output_rate_micros_per_1k,
+          cache_rate_micros_per_1k,
           effective_from,effective_until,source_type,source_id,source_sha256,status,
           revision,content_sha256,created_by_membership_id,created_at)
-        VALUES(?,?,1,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'),NULL,
+        VALUES(?,?,1,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'),NULL,
           'legacy_model',?,?,'active',1,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         """,
         (
@@ -583,6 +604,7 @@ def _upsert_commercial_provider_cost_rate(
             rate_id,
             input_micros,
             output_micros,
+            cache_micros,
             model_id,
             source_sha,
             content_sha,

@@ -202,13 +202,86 @@ test("renderModelAliasPanel shows admin controls and escapes unsafe values", () 
   );
 
   assert.match(html, /create-model-alias-form/);
+  assert.match(html, /data-model-alias-dialog/);
+  assert.equal((html.match(/<dialog[^>]*data-model-alias-dialog/g) ?? []).length, 1);
+  assert.match(html, /data-model-alias-dialog-view="create"[\s\S]*data-model-alias-dialog-view="edit"/u);
+  assert.match(html, /data-model-alias-create-open/);
   assert.match(html, /data-model-alias-status-form/);
-  assert.match(html, /data-fallback-policy-form/);
+  assert.match(html, /data-model-alias-edit-form/);
+  assert.match(html, /data-model-alias-edit-open="alias_1"/u);
+  assert.doesNotMatch(html, /data-fallback-policy-form|fallback-policy-editor/);
+  assert.match(html, /model-alias-routing-mode/);
+  assert.match(html, /name="routingMode" value="quality_cost"/);
+  assert.match(html, /model-alias-fallback-settings/);
+  assert.match(html, /备用模型 1 个/);
+  assert.doesNotMatch(html, /model-alias-fallback-separator/);
+  assert.match(html, /选择方式/);
+  assert.match(html, /请求开始时按你设置的顺序选择；请求出错后，可按故障切换尝试下一候选。/);
+  assert.match(html, /data-fallback-picker/);
+  assert.match(html, /type="checkbox" name="fallbackModelId"/);
+  assert.match(html, /data-fallback-drag/);
+  assert.doesNotMatch(html, /name="fallbackModelId" multiple/);
+  assert.match(html, /当前模型失败后按顺序尝试下一模型，直到成功或全部失败。/);
   assert.match(html, /data-routing-policy-version="5"/);
-  assert.match(html, /已启用 · v2 · 超时 \/ 5xx/);
+  assert.match(html, /已启用 · 失败后继续尝试/);
   assert.doesNotMatch(html, /<route>/);
   assert.match(html, /&lt;route&gt;/);
-  assert.match(html, /deepseek\/&lt;bad&gt;/);
+  // The catalog's readable model name wins over a stale alias summary; a
+  // technical model id must never leak into the rendered route row.
+  assert.match(html, /deepseek-chat/);
+  assert.doesNotMatch(html, /deepseek\/&lt;bad&gt;/);
+});
+
+test("route candidate snapshots keep readable names and prices before catalog refresh", () => {
+  const html = renderModelAliasPanel(
+    {
+      state: "ok",
+      model_aliases: [{
+        ...aliasPayload.model_aliases[0],
+        default_model_id: "snapshot-default",
+        default_internal_model_id: "snapshot-model",
+        default_provider_name: "Snapshot Provider",
+        routing_policy: {
+          ...aliasPayload.model_aliases[0].routing_policy,
+          candidates: [{
+            candidate_role: "default",
+            configured_priority: 0,
+            model_id: "snapshot-default",
+            internal_model_id: "snapshot-model",
+            provider_model_id: "kimi-k2.7-code",
+            display_name: null,
+            model_status: "active",
+            provider_code: "moonshot",
+            provider_name: "Kimi",
+            provider_status: "active",
+            input_price_per_1k: 6.5,
+            output_price_per_1k: 27,
+            cache_price_per_1k: 1.3,
+            currency: "CNY",
+          }],
+        },
+      }],
+    },
+    { state: "loading", models: [] },
+    withPermissionSnapshot(
+      { user: { role: "admin" } },
+      [PERMISSIONS.ROUTING_READ, PERMISSIONS.ROUTING_WRITE],
+    ),
+  );
+
+  assert.match(html, /kimi-k2\.7-code/);
+  assert.match(html, /输入 6\.5 \/ 输出 27 \/ 缓存命中 1\.3 CNY \/ 百万 Token/);
+  assert.doesNotMatch(html, /<strong>snapshot-default<\/strong>/);
+});
+
+test("model alias empty state uses the canonical model catalog route", () => {
+  const html = renderModelAliasPanel(
+    { state: "ok", model_aliases: [] },
+    { state: "ok", models: [] },
+    withPermissionSnapshot({ user: { role: "admin" } }, [PERMISSIONS.ROUTING_READ, PERMISSIONS.ROUTING_WRITE, PERMISSIONS.MODEL_READ]),
+    { state: "ok", environments: [{ environment_id: "env_1", status: "active" }] },
+  );
+  assert.match(html, /data-console-nav="models" data-console-route="workspace\.gateway\.models" data-console-target="workspace\.gateway\.models"/u);
 });
 
 test("renderModelAliasPanel is read-only for developer and hidden for viewer", () => {

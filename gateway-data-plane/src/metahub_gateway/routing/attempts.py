@@ -58,12 +58,12 @@ def create_routing_attempt(
 ) -> RoutingAttempt:
     """在上游调用前原子插入 started 行，并把唯一键作为重试风暴闸门。
 
-    sequence 只能是 1 或 2；同 tenant/request/sequence 已存在时绝不再次调用上游。
+    sequence 只能是 1..32；同 tenant/request/sequence 已存在时绝不再次调用上游。
     初始和备用执行门使用不同统一错误码，便于客户端判断失败发生在哪个阶段。
     """
 
-    # 状态机硬限制最多两次调用及固定角色，阻止调用方错误循环产生第三次上游请求。
-    if attempt_sequence not in {1, 2} or attempt_role not in {"primary", "fallback"}:
+    # 状态机硬限制最多 32 次调用及固定角色，阻止调用方错误循环产生无限上游请求。
+    if not 1 <= attempt_sequence <= 32 or attempt_role not in {"primary", "fallback"}:
         # 审计闸门校验失败时必须先于网络调用终止，避免出现无 attempt 的隐形流量。
         raise ApiError("gateway.routing_attempt_unavailable")
     attempt_id = f"rta_{uuid4().hex}"
@@ -94,7 +94,7 @@ def create_routing_attempt(
                 plan.fallback_policy_version,
                 attempt_sequence,
                 attempt_role,
-                "fallback" if attempt_sequence == 2 else "initial",
+                "fallback" if attempt_sequence > 1 else "initial",
                 trigger_error_code,
                 route.model_id,
                 route.model_alias,
@@ -114,10 +114,10 @@ def create_routing_attempt(
         _log_attempt_gate_failure(route, request_id, trace_id, attempt_sequence)
         code = (
             "gateway.fallback_unavailable"
-            if attempt_sequence == 2
+            if attempt_sequence > 1
             else "gateway.routing_attempt_unavailable"
         )
-        # 第二次闸门失败使用独立错误码，便于区分主调用未开始和备用调用未开始。
+        # 后续闸门失败使用独立错误码，便于区分首调用未开始和备用调用未开始。
         raise ApiError(code) from exc
     finally:
         if connection is not None:
@@ -336,7 +336,7 @@ def log_fallback_triggered(
         "to_provider_code": target.provider_code,
         "trigger_error_code": error.code,
         "error_category": error.error_category,
-        "attempt_sequence": 2,
+        "attempt_sequence": attempt.attempt_sequence,
     }
     event = build_webhook_event(
         tenant_id=attempt.tenant_id,

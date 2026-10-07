@@ -114,7 +114,6 @@ function renderHead(head = {}) {
       <div><dt>配置 revision</dt><dd>${escapeHtml(revision)}</dd></div>
       <div><dt>内置目录</dt><dd><code>${escapeHtml(head.builtin_catalog_version || "-")}</code></dd></div>
       <div><dt>更新时间</dt><dd>${escapeHtml(formatTime(head.updated_at))}</dd></div>
-      <div><dt>加载方式</dt><dd>Gateway 自动轮询</dd></div>
     </dl>
   `;
 }

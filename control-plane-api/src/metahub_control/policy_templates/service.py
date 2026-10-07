@@ -1905,7 +1905,7 @@ def _plan_low_cost(
         SELECT
           m.model_id,m.provider_id,m.provider_model_id,m.upstream_model_name,
           m.capabilities,m.status AS model_status,m.input_price_per_1k,
-          m.output_price_per_1k,m.currency,m.price_schema_version,
+          m.output_price_per_1k,m.cache_price_per_1k,m.currency,m.price_schema_version,
           p.provider_code,p.provider_type,p.auth_type,p.base_url,
           p.status AS provider_status,p.health_status,p.health_generation,p.health_updated_at
         FROM models m
@@ -1985,7 +1985,7 @@ def _plan_low_cost(
             continue
         price_row = connection.execute(
             """
-            SELECT price_plan_id,input_price_per_1k,output_price_per_1k,currency,
+             SELECT price_plan_id,input_price_per_1k,output_price_per_1k,cache_price_per_1k,currency,
                    price_schema_version,effective_from,source
             FROM model_price_plans
             WHERE tenant_id=? AND model_id=? AND currency='CNY'
@@ -1999,11 +1999,13 @@ def _plan_low_cost(
             if price_row is not None:
                 input_price = _stored_money(price_row["input_price_per_1k"])
                 output_price = _stored_money(price_row["output_price_per_1k"])
+                cache_price = _stored_money(price_row["cache_price_per_1k"])
                 price_identity = _resource_hash(
                     "price_plan",
                     {
                         "input_price_per_1k": format(input_price, "f"),
                         "output_price_per_1k": format(output_price, "f"),
+                        "cache_price_per_1k": format(cache_price, "f"),
                         "currency": price_row["currency"],
                         "schema": price_row["price_schema_version"],
                         "effective_from": price_row["effective_from"],
@@ -2016,11 +2018,13 @@ def _plan_low_cost(
                     continue
                 input_price = _stored_money(row["input_price_per_1k"])
                 output_price = _stored_money(row["output_price_per_1k"])
+                cache_price = _stored_money(row["cache_price_per_1k"])
                 price_identity = _resource_hash(
                     "model_catalog_price",
                     {
                         "input_price_per_1k": format(input_price, "f"),
                         "output_price_per_1k": format(output_price, "f"),
+                        "cache_price_per_1k": format(cache_price, "f"),
                         "currency": row["currency"],
                         "schema": row["price_schema_version"],
                     },
@@ -2031,7 +2035,7 @@ def _plan_low_cost(
         warnings = (health_warning,) if health_warning is not None else ()
         candidates.append(
             (
-                input_price + output_price,
+                input_price + output_price + cache_price,
                 str(row["model_id"]),
                 row,
                 price_row,

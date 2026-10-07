@@ -30,6 +30,7 @@ const requestedTargets = process.env.METAHUB_QA_TARGETS
 const targets = requestedTargets ?? Object.keys(WORKSPACE_SOURCE_ROUTE_REGISTRY);
 for (const target of targets) assert.ok(WORKSPACE_SOURCE_ROUTE_REGISTRY[target], `unknown audit route: ${target}`);
 const screenshotRoot = path.resolve(process.env.METAHUB_QA_ARTIFACT_ROOT ?? ".artifacts/product-qa", "role-screenshots");
+const screenshotAll = process.env.METAHUB_QA_SCREENSHOT_ALL === "true";
 await mkdir(screenshotRoot, { recursive: true });
 
 function routeLocal(page) {
@@ -60,7 +61,7 @@ async function login(page, role) {
 
 async function auditTarget(browser, role, storageState, target, allowed) {
   const context = await browser.newContext({ viewport: role.viewport, storageState, serviceWorkers: "block" });
-  const page = await context.newPage(); routeLocal(page); const responseErrors = []; const requestFailures = [];
+  const page = await context.newPage(); routeLocal(page); const responseErrors = []; const requestFailures = []; const expectedRequestCancellations = [];
   const consoleErrors = []; const pendingResponses = [];
   page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
   page.on("response", (response) => {
@@ -73,7 +74,15 @@ async function auditTarget(browser, role, storageState, target, allowed) {
       detail.requestId = typeof body.request_id === "string" ? body.request_id : null;
     }).catch(() => {}));
   });
-  page.on("requestfailed", (request) => requestFailures.push(`${request.method()} ${new URL(request.url()).pathname}`));
+  page.on("requestfailed", (request) => {
+    const pathname = new URL(request.url()).pathname;
+    const failure = request.failure()?.errorText;
+    if (request.method() === "POST" && pathname === "/workspace/navigation/page-views" && failure === "net::ERR_ABORTED") {
+      expectedRequestCancellations.push(`${request.method()} ${pathname}`);
+      return;
+    }
+    requestFailures.push(`${request.method()} ${pathname}`);
+  });
   let result;
   try {
     const routeCode = WORKSPACE_SOURCE_ROUTE_REGISTRY[target];
@@ -83,15 +92,15 @@ async function auditTarget(browser, role, storageState, target, allowed) {
     await page.waitForLoadState("networkidle", { timeout: 20_000 });
     await Promise.all(pendingResponses);
     const state = await facts(page);
-    if (state.interactive_overlap_count || ["webhooks", "budgets", "feedback-summary", "request-explanations"].includes(target)) {
+    if (screenshotAll || state.interactive_overlap_count || ["webhooks", "budgets", "feedback-summary", "request-explanations"].includes(target)) {
       const screenshot = path.join(screenshotRoot, `${role.name}-${target}.png`);
       await page.screenshot({ path: screenshot, fullPage: true });
       state.screenshot = path.relative(process.cwd(), screenshot);
     }
     assert.ok(allowed ? state.active === target : state.active !== target, `authorization navigation mismatch: ${target}, active=${state.active}, allowed=${allowed}`);
-    result = { target, routeCode, allowed, ...state, responseErrors, requestFailures, consoleErrors };
+    result = { target, routeCode, allowed, ...state, responseErrors, requestFailures, expectedRequestCancellations, consoleErrors };
   }
-  catch (error) { result = { target, failure: String(error.message), ...(await facts(page).catch(() => ({}))), responseErrors, requestFailures }; }
+  catch (error) { result = { target, failure: String(error.message), ...(await facts(page).catch(() => ({}))), responseErrors, requestFailures, expectedRequestCancellations }; }
   finally { await context.close(); }
   return result;
 }
@@ -142,6 +151,7 @@ try {
       ...navigationMetrics, pages, consoleErrorCount: consoleErrors.length, expectedBootstrap401 });
   }
   report.scope = "Seeded roles and local browser regression; no external identity, commercial acceptance or GA signoff.";
+  report.expected_request_cancellations = report.roles.flatMap((role) => role.pages.flatMap((page) => page.expectedRequestCancellations ?? []));
   report.passed = report.roles.every((role) => role.consoleErrorCount === 0 && role.pages.every((page) => !page.failure && page.overflowPx === 0 && page.clipped_control_count === 0 && page.interactive_overlap_count === 0 && page.pendingResponseMessages.length === 0 && page.forbidden.length === 0 && page.responseErrors.length === 0 && page.requestFailures.length === 0 && page.consoleErrors.length === 0));
   process.stdout.write(JSON.stringify(report));
 } finally { await browser.close(); }

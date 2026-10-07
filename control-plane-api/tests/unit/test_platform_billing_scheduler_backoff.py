@@ -8,9 +8,10 @@ from metahub_shared.runtime.errors import ApiError
 
 def test_meter_projection_failure_is_backed_off(monkeypatch):
     calls = []
-    clock = iter([100.0, 100.1, 100.2, 116.0, 116.1, 116.2])
+    clock = iter([100.0, 100.1, 100.2, 116.0, 116.1])
     monkeypatch.setattr(scheduler.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(scheduler, "_METER_RETRY_AFTER", 0.0)
+    monkeypatch.setattr(scheduler, "_METER_RECONCILIATION_RETRY_AFTER", 0.0)
 
     def fail(_config, *, worker_id):
         calls.append(worker_id)
@@ -22,7 +23,7 @@ def test_meter_projection_failure_is_backed_off(monkeypatch):
     assert scheduler.run_platform_meter_once(config) is False
     assert scheduler.run_platform_meter_once(config) is False
     assert scheduler.run_platform_meter_once(config) is False
-    assert calls == [scheduler.WORKER_ID, scheduler.WORKER_ID]
+    assert calls == [scheduler.WORKER_ID]
 
 
 def test_cycle_close_failure_is_backed_off(monkeypatch):

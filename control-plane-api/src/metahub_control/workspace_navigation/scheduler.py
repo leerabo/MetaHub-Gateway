@@ -174,7 +174,9 @@ def _backfill_preference(
         workspace_id=workspace_id,
         tenant_id=tenant_id,
     )
-    visible = _visible_specs(connection, projection, actor.permission_codes)
+    visible = _visible_specs(
+        connection, projection, actor.permission_codes, actor.membership_role,
+    )
     visible_primary = {item.route_code for item in visible if item.placement in _PRIMARY_PLACEMENTS}
     source_id = str(row["active_navigation_item_id"])
     source_spec = next(

@@ -43,6 +43,11 @@ BROWSER_SCRIPTS = {
     / "product_qa"
     / "web"
     / "prd148RoleAudit.mjs",
+    "prd148-navigation-audit": ROOT
+    / "tests"
+    / "product_qa"
+    / "web"
+    / "prd148NavigationLinkAudit.mjs",
     "prd148-public-audit": ROOT
     / "tests"
     / "product_qa"

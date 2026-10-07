@@ -290,6 +290,24 @@ test("renderer separates publication compatibility from partial coverage and nev
   ), "");
 });
 
+test("renderer collapses the form until environment, project and model setup exists", () => {
+  const html = renderPolicyDryRunPanel(
+    createEmptyPolicyDryRunState(),
+    {
+      environmentState: { state: "ok", environments: [] },
+      projectState: { state: "ok", projects: [] },
+      modelAliasesState: { state: "ok", model_aliases: [] },
+      modelsState: { state: "ok", models: [] },
+    },
+    authContext,
+  );
+  assert.match(html, /完成基础配置后才能运行预演/);
+  assert.match(html, /当前还缺少：环境（先创建并启用）、项目（先创建并启用）、模型与路由（先完成配置）/);
+  assert.match(html, /<details class="policy-dry-run-setup"\s*>/);
+  assert.doesNotMatch(html, /<details class="policy-dry-run-setup" open>/);
+  assert.match(html, /type="submit" disabled/);
+});
+
 test("lifecycle aborts stale operations and identity gate includes role and session", () => {
   const lifecycle = createPolicyDryRunLifecycle();
   const first = lifecycle.begin({ identity: "tenant-a-admin", navigation: "policy-simulator" });

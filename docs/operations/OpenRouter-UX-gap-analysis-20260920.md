@@ -2,13 +2,51 @@
 
 日期：2026-09-21（持续更新）
 
-## 2026-09-24 当前公开入口与子路径走查
+## 2026-09-28 模型服务添加入口收口
 
-本批按静态审查提出的四项问题完成了当前源码修复：删除首页永远隐藏的动画控制和无效状态；为 600px 以下首页补充可用的菜单、Escape 关闭和键盘 Enter 打开；将公开 HTML、动态页面链接和管理助手来源链接改为相对路径；把首页英雄区从固定高度与 `overflow:hidden` 改为内容优先的最小高度，避免横屏、低高度和系统字体放大时裁剪 CTA 或底部提示；同时修复控制台退出后跳回根路径导致子路径部署丢失的问题。
+“自定义”不再是已接入服务页里单独的一套表单，而是“添加模型服务”目录中的一个选项。组织管理员选择它后才看到服务名称、地址和按需展开的协议/认证设置，提交继续走现有 Provider 创建 API。
 
-验证绑定：`outputs/prd148-source-current-20260924-public-ui.json`（2702 files，SHA256 `45d1d5f3394ccef281b6b06a2612e81778efa1bc9a0dee70231a9463db6a4e79`）、`outputs/prd148-public-ui-current-20260924.json` 和 `.artifacts/product-qa-current/20260924-public-ui/`。前端全量单测 `2243/2243`、`npm run lint`（842 files）、`npm run build`（295 assets）通过；后端 `test_frontend_release_digest_exactly_matches_production_manifest` 通过，前后端生产资源摘要为 `37310b77af7bfba4697d6601a3a70112ed46381f176a32e265ef2fe0dd33aced`。
+厂家列表属于 SaaS 平台管理员的签名 Provider Catalog。组织管理员不维护全局厂家，只选择已发布服务并填写本组织持有的 Provider API KEY。当前目录没有 OpenAI/GPT、xAI/Grok 或 Anthropic/Claude 的可用条目时，组织可以先用自定义 OpenAI 兼容入口；GPT/Grok 需要先确认真实兼容端点并由 SaaS 管理员发布，Claude 需要真实 Anthropic 上游 Adapter，不能把 Gateway `/messages` 客户端协议入口当成上游适配完成。
+
+当前变更证据：`outputs/prd148-provider-catalog-custom-r2.json`，受影响前端测试 `98/98`、lint `842 files`、生产构建 `295 assets`，资源摘要 `332e4e48e878f7571ee9d5a3fdb4c24315d7dd907f71dd3a52cb02fbd9bfa9a2`。控制面 pytest 本轮在默认 Windows 临时目录权限错误处阻断，未进入 Provider 断言；该问题按测试夹具/环境失败记录，不作为产品通过或失败。
+
+## 2026-09-28 当前源码视觉与信息架构复核
+
+当前源码 revision 为 `6f36c2422a916a84ead01f6571a5158e253f7c15`。管理员英文、中文管理员、开发者和移动查看者各完成 60 页截图，共 240 张；截图文件、PNG 签名、尺寸和每角色路由唯一性均通过，接触表复核也未发现新的层级、空状态、响应式布局或职责回退问题。证据为 `outputs/prd148-human-visual-review-20260928-r1.json`、`outputs/prd148-screenshot-evidence-integrity-20260928-r1.json` 和 `.artifacts/product-qa/20260928-human-visual-contact-sheets-r1/`。
+
+当前 Workspace 路由注册表为 60 条，无重复 route code 或 source target。当前 seeded 角色审计的授权入口/默认侧栏/延后入口数量为：管理员 `45/12/17`，开发者 `27/9/9`，查看者 `3/3/0`；无权深链产生的重复画面是职责回退，不是重复注册。三角色每个 60/60 路由的控件、按钮和链接交互均无未标注输入、请求/响应错误、裁切或交互重叠，汇总见 `outputs/prd148-interactive-control-coverage-20260928-r1.json`。
+
+这说明当前版本已经收窄了首层认知负担，但能力总量仍远大于 OpenRouter：管理员仍有 45 个授权深链，应继续通过任务首页、状态卡和上下文入口承载，而不是全部恢复为默认菜单。当前证据仍是隔离 seeded Chromium 与源码复核，不等同于真实客户验收或 GA。
+
+## 2026-09-26 当前源码 r50 全页面复验
+
+本轮把“简单、容易找到下一步”扩展为逐页截图和可逆操作检查。管理员、开发者、查看者各 60 页，共 180/180 页面截图通过；当前源码页面、授权回退、请求、响应、控制台、溢出、裁切和重叠问题均为 0。三角色可逆鼠标/键盘交互各 60/60 通过，动作、标签、权限和布局问题均为 0；中文管理员 `zh-CN` 另完成 60/60 截图视觉审计。证据索引为 `outputs/prd148-current-evidence-index-final-20260926.json`，当前源码 SHA256 `31689646d3fe4eaf11a6d615d6b1766e7b1e8b0a23796fac68793f37fd949194`。
+
+本轮没有发现需要追加代码修复的页面缺陷。三角色合并交互批次曾因测试运行器 900 秒限制超时，不能算通过；按角色拆分后完整 180 页通过，夹具超时作为失败保留。截图和交互均是隔离 seeded Chromium 证据，不是原生 computer-use、真实外部账号或 GA。付费模块延期，72 小时观察与六方会签不执行，`prd148_complete=false`、`ga_approval=false` 保持。
+
+## 2026-09-26 中文用户使用容易度 r44 复验
+
+本轮把 OpenRouter 对比落到具体任务完成上：用户应先看到当前状态和下一步，低频设置默认收起，列表操作必须在当前行内可见。当前源码 r44 的管理员、开发者和查看者关键路径交互分别为 11/11、6/6、6/6；r43 的三角色 180 页截图作为前一源码快照的全路由历史基线保留。视觉抽查发现 MetaHub 组织 KEY 表格的操作列因最小列宽总和过大被挤出，管理员无法一眼判断轮换和停用按钮；收紧信息列并固定操作区后，1440px 桌面按钮完整可见，平板/移动仍按两列/单列展示。
+
+当前源码证据：`outputs/prd148-source-current-20260926-usability-r44.json`、`.artifacts/product-qa/20260926-key-fix-r44/`、`.artifacts/product-qa/20260926-usability-admin-r44/`、`.artifacts/product-qa/20260926-usability-developer-r44/`、`.artifacts/product-qa/20260926-usability-viewer-r44/`。前端全量单测 `2259/2259`、lint `842 files`、production build `295 assets` 通过。r43 的 180 页全路由截图尚未在 r44 CSS 修复后重跑，因此不作为当前源码完整截图证据；当前源码的完整 PRD-148/GA 门禁仍未通过。
+
+## 2026-09-25 用户可读性复验补丁
+
+易用性检查不仅看页面有没有功能，还看用户是否能在一眼内读懂数量和状态。英文管理员截图曾出现 `3 位Members`、`1 把active key(s)` 这样的混合短语，虽然不影响请求和布局，却会让用户怀疑页面仍处于半翻译状态。本批把计数器作为完整短语处理：成员显示为 `3 members`，活动 Provider KEY 显示为 `1 active key(s)`；中文默认界面保持中文。
+
+当前证据：源码快照 `outputs/prd148-source-current-20260925-usability-r13.json`（SHA256 `83f17deff1d5f96de77a272386b8a948922dd74cf1099bd85ac7ec2478a4ed12`），本地化回归 `12/12`，前端全量 `2251/2251`，lint `842 files`，build `295 assets`；英文管理员 quickstart/providers/users 的隔离 Chromium 片段 `3/3` 通过，报告和截图在 `.artifacts/product-qa/20260925-current-r15-english-home/`。生产资源摘要 `6971d55c4757cc5706ffaab47cebea2e63efbaf738c7ecc57ff86a8857e18d84` 与前后端 manifest 一致。
+
+这个补丁收口的是用户能否直接读懂页面的一个当前问题，不扩大真实业务验收结论。真实注册到 Gateway/计量/撤权、生产回滚与对账、HEAD/origin、正式 GA 仍没有完整当前证据，PRD-148 保持未完成。
+
+## 2026-09-25 当前公开入口与子路径走查
+
+本批按静态审查提出的四项问题完成了当前源码修复：删除首页永远隐藏的动画控制和无效状态；为 600px 以下首页补充可用的菜单、Escape 关闭和键盘 Enter 打开，并在打开、关闭、点击外部和恢复桌面宽度时维护焦点；将公开 HTML、动态页面链接和管理助手来源链接改为相对路径；把首页英雄区从固定高度与 `overflow:hidden` 改为内容优先的最小高度，避免横屏、低高度和系统字体放大时裁剪 CTA 或底部提示；同时修复控制台退出后跳回根路径导致子路径部署丢失的问题。
+
+验证绑定：当前源码为 `outputs/prd148-source-current-20260925-usability-r6.json`（2703 files，SHA256 `a2e4c94ff550148ee95882d78e11d17c931aed7024716ec3e73f49eddecc2cbe`），公开 Chromium 报告为 `.artifacts/product-qa-current/20260924-public-ui/report.json`（6/6 场景通过，SHA256 `ff84d8bc530d2b76295d8a5acd70aaa840523670cc919787f0b8c0574f7ee0f5`）。前端全量单测 `2249/2249`、私有 Gateway 中文文案回归 `32/32`、`npm run lint`（842 files）、`npm run build`（295 assets）通过；后端资源清单契约通过，前后端生产资源摘要为 `c7f35fb7139e8d3412e402630964604dade1a96c9cc478fb248770a5e6301be4`。角色审计与 Platform/Support/Partner/Device 旧产物绑定较早源码，只作为历史参考，不冒充最终源码全量证据。
 
 Playwright 走查结果：桌面 `1440x900`、移动 `390x844`、低高度 `390x480` 与真实挂载前缀 `/metahub/` 均为 0 横向溢出、0 裁剪、0 静态资源错误、0 非预期浏览器错误；移动菜单的鼠标点击、Escape、Enter 和菜单项焦点通过。匿名登录页桌面首屏约 290ms、移动约 316ms，密码显示/隐藏、错误密码 401、注册策略加载和两种视口布局通过。截图是自动化浏览器证据，不是人工眼睛或原生 computer-use 证据；它也不覆盖已登录组织业务、真实商业权益、生产 Partner/Device、发布回滚、对账、会签或 PRD-148 GA。
+
+本轮进一步执行了全量角色页面审计：admin、developer、viewer 各 60 个 Workspace 页面，共 180/180；平台运营三视口、Support/Partner/Device 有数据页和正向流程分别完成当前产物，布局、裁剪、交互重叠和意外网络/控制台问题均为 0。Gateway 协议/流式/默认模型单测 19/19，跨协议员工身份与计量集成 1/1。GA Launch 集成在仓库内隔离 basetemp 下形成完整终态 `5/9`，4 项因当前迁移头不匹配测试期望的 `0155` 回滚版本而失败，证据为 `outputs/prd148-ga-launch-integration-20260925.json`；不能宣称通过。默认 pytest 临时目录拒绝访问已作为测试夹具问题记录，未修改门槛。
 
 ## 结论
 
@@ -21,7 +59,7 @@ MetaHub 当前把员工接入、Workspace 管理、网关运维、财务控制�
 ## 调研范围与证据
 
 - MetaHub 来源：当前源码 `console-web/src/lib/workspaceNavigation.js` 与
-  `control-plane-api/src/metahub_control/workspace_navigation/catalog.py`。Workspace 路由表共有 59 条：Gateway 11、Finance 8、Governance 8、Observability 6、Workspace 6、Applications 5、Home 4、Developer Center 4，另有 Advanced 路由。
+  `control-plane-api/src/metahub_control/workspace_navigation/catalog.py`。2026-09-20 的历史记录为 59 条；当前源码路由注册表为 60 条，当前计数以 `outputs/prd148-route-coverage-20260927-r6.json` 为准。
 - MetaHub 已知体验证据：当前隔离角色审计和产品走查记录在
   `docs/testing/PRD-148-current.md`、
   `docs/testing/PRD-148-populated-domain-audit-20260920.md`。这些记录表明多数页面在权限和布局上可用，但也确认 Device 与 Partner 的真实业务数据路径仍未闭合。
@@ -45,9 +83,30 @@ MetaHub 当前把员工接入、Workspace 管理、网关运维、财务控制�
 | Settings、Credits、Notifications | 费用与通知先给摘要、阈值或待处理项，明细从页内继续。 | Finance 首页先显示本月支出、预算余量、异常和待处理事项；账本、争议、成本版本作为角色受限详情。 |
 | Activity、Logs、Privacy、Preferences | 账户活动、请求日志与隐私偏好保持为账户或 Workspace 的二级上下文。 | 个人使用者默认进入“我的接入、我的使用、我的请求”，而非完整的 Workspace 控制面。 |
 
+## 2026-09-30 路由能力对比：不是只有故障后备用
+
+这部分此前只写了页面组织方式，没有把运行时能力拆开说明。按当前源码和用户提供的 OpenRouter 已登录界面/公开文档材料，结论如下：
+
+| 能力 | MetaHub 当前实现 | OpenRouter 对标差距 |
+| --- | --- | --- |
+| 固定选择 | `fixed` 按别名的主模型、备用模型顺序选择。 | 有默认模型，但路由入口同时承担更丰富的模型池和 Provider 策略。 |
+| 可用性优先 | `availability_first` 在请求前根据健康状态和新鲜度优先选择健康候选，不必等主模型请求失败。 | OpenRouter 将可用性/Provider 选择放在同一条 Routing 配置体验中，用户可组合更多约束。 |
+| 成本优先 | `cost_first` 在完整候选集合合格时，按本次 Token 估算和同一价格快照比较成本；缺价或币种不可比时回到固定顺序。 | OpenRouter 的路由控制面更直接地暴露预算层、模型允许/排除和 Provider 约束。 |
+| 质量、成本、延迟 | `quality_cost` 使用冻结的质量、成本、延迟权重、质量门槛和最小样本数进行选择。 | OpenRouter 的 Auto Router/模型选择心智更接近“由平台按请求选择合适模型”，MetaHub 目前仍要求管理员先维护别名候选和治理参数。 |
+| 故障后回退 | 运行时可记录主/备用尝试及触发原因；这是候选选择之后的另一层机制。 | OpenRouter 也有 fallback/provider failover，但用户侧通常不需要先理解主模型、备用模型两个内部对象。 |
+| 候选规模 | 当前每条 Alias 支持 1 个默认模型和最多 31 个有序备用模型。请求开始前，四种路由模式会在完整候选集合中选择；发生白名单故障时，运行时沿冻结顺序继续尝试后续候选，最多 32 次上游尝试，成功即结束，全部失败才返回最终错误。 | OpenRouter 的产品体验更接近多个模型/Provider 的候选池，可按允许、排除、预算和 Provider 条件组合；MetaHub 仍可继续补充更丰富的 Provider 约束和可视化解释。 |
+
+因此，“我们的路由只能在默认模型失效后使用吗？”的答案是：**不是**。当前 MetaHub 的 `availability_first`、`cost_first` 和 `quality_cost` 都能在首次上游请求前从完整候选集合中选择；只有“运行时回退”这一层是在主尝试失败后按冻结顺序推进。当前实现已不再保持一次备用尝试的旧合同：非流式请求会在可重试的超时、限流、额度、网络不可用和上游 5xx 下继续遍历剩余候选，最多 32 次，且客户端看不到中间切换。
+
+当前证据位置：路由模式和表单在 `console-web/src/features/routing-policies/renderRoutingPolicyPanel.js`；运行时四种模式、32 条候选上限和选择阶段在 `shared-sdk/python/metahub_shared/runtime/routing_policy.py`；主/备用候选从模型别名读取在 `control-plane-api/src/metahub_control/model_aliases/service.py`；候选集合迁移为 `infra/migrations/0157_model_alias_fallback_candidates.sql`，候选事实表扩展为 `infra/migrations/0173_routing_candidates_32.sql`（PostgreSQL `0181`）。本轮已完成结构和单元验证；真实外部 Provider 的 32 候选端到端证据仍需单独验收，不能把本地夹具结果写成 GA 证据。
+
+### 产品决策建议
+
+中文免费首发阶段不需要立刻复制 OpenRouter 的全部路由面。当前已完成第一步：组织管理员在同一个“编辑路由”弹框中配置默认模型、多个备用模型、选择方式、质量成本延迟参数和故障切换条件，列表只保留可扫描的摘要；路由策略版本作为只读并发依据显示，不作为用户手工输入。故障后的多级尝试已落到运行时和审计表，后续重点是补充真实外部多候选、计量、撤权和跨协议回归证据。未完成这些真实链路前，不应在产品文案中宣称“Auto Router”或“支持任意模型池”。
+
 ## 量化的 MetaHub 导航差距
 
-当前 `20260920-role-audit-current-r2` 的 seeded 浏览器审计通过了权限和布局检查，但它也记录了可见导航入口数量：管理员 47、开发者 27、查看者 7。审计报告位于 `.artifacts/product-qa/20260920-role-audit-current-r2/prd148-role-audit-chromium-scale-1.json`，范围明确是本地 seeded 角色回归，不能作为真实用户验收。
+历史 `20260920-role-audit-current-r2` 的 seeded 审计记录了管理员 47、开发者 27、查看者 7 个授权入口；该数字只作为历史信息。当前源码基线为管理员 45、开发者 27、查看者 3 个授权入口，默认侧栏分别为 12、9、3，延后入口分别为 17、9、0；当前证据为 `.artifacts/product-qa/20260927-current-role-{admin,developer,viewer}-r6/` 与 `outputs/prd148-route-coverage-20260927-r6.json`。
 
 这三个数字不是缺陷计数，而是信息架构负荷的当前基线。与截图中的 OpenRouter Workspace 左栏相比，管理员和开发者首先要扫描的产品名词显著更多。下一轮重构应先将管理员的默认入口收敛到四个工作域，并让开发者、员工和查看者只看到当前职责需要的任务入口；全部深链、审计和 API 契约必须继续保留。
 
@@ -60,7 +119,7 @@ MetaHub 当前把员工接入、Workspace 管理、网关运维、财务控制�
 - `console-web/src/styles/main.css` 增加折叠区的可读布局，并保持窄屏侧栏抽屉和键盘可达性。
 - `tests/product_qa/web/prd148RoleAudit.mjs` 现在同时记录 `authorizedNavigationCount`、`defaultSidebarNavigationCount` 和 `deferredNavigationCount`，避免将深链总数误读成默认认知负担。
 
-当前 Chromium seeded 角色走查证据：`.artifacts/product-qa/20260920-role-audit-navigation-r5/prd148-role-audit-chromium-scale-1.json`。结果为 180/180 页面通过；管理员默认侧栏 27、开发者 20、查看者 4，全部授权入口仍为 47、27、7。该报告仍属于本地 seeded 回归，不替代真实商业验收、外部身份、六方会签或 PRD-148 GA 证据。
+历史 Chromium seeded 角色走查证据 `.artifacts/product-qa/20260920-role-audit-navigation-r5/` 的管理员默认侧栏 27、开发者 20、查看者 4 已被当前收敛结果取代。当前 240 张截图、三角色 60/60 路由交互和公开入口审计均绑定到 20260927/20260928 证据；它们仍属于本地 seeded 回归，不替代真实商业验收、外部身份、六方会签或 PRD-148 GA 证据。
 
 本轮验证还包括 `console-web` 导航/控制台单元测试 105/105、`npm run lint` 和 `npm run build`。生产资源摘要已同步为当前 manifest 中的 `d3626f40547c7d0bd63bfe81b34fc4bb9ae020b5b69c6928b48d0774b0bd63c6`。
 
@@ -462,8 +521,148 @@ SaaS 平台运营管理员和 Workspace 组织管理员继续严格分域：平�
 - SaaS 平台管理员只处理 Platform 域；组织管理员处理当前 Workspace 的 Provider、模型、默认路由、组织 KEY、预算和成员治理。
 - 组织管理员在“后台成员”中邀请、搜索、停用成员。原“模型使用者与 KEY”员工目录和管理员代发员工 KEY 入口已从生产界面移除。
 - 后台成员登录后自行创建、复制、轮换和撤销个人 MetaHub KEY，只能读取自己的 KEY 和个人用量；管理员的组织 KEY 与成员个人 KEY 不混在同一归属语义中。
-- 模型服务页提供一个默认收起的“自定义接入（中转站 / OpenAI 兼容地址）”入口。品牌目录只是快捷选项，不限制组织接入自定义中转站。
+- 模型服务页把“自定义中转站 / OpenAI 兼容”作为“添加模型服务”目录中的一个选项，名称、地址和高级协议设置在同一条添加流程中按需出现。厂家目录由 SaaS 平台管理员通过签名目录发布流程维护；组织管理员只选择已发布服务并填写本组织的 API KEY。OpenAI/GPT 与 xAI/Grok 可在确认对应 OpenAI 兼容端点后发布目录项；Anthropic/Claude 需要真实 Anthropic 上游适配，不能仅因 Gateway `/messages` 入口存在就宣称已接入。
 
 当前验证绑定：前端全量单测 2239/2239，`npm run lint` 840 files，`npm run build` 294 assets；成员个人 KEY、组织 KEY 视图和当前迁移链专项通过；控制面与前端生产资源摘要统一为 `c0ea8953b9c5bf12974dba01b0398a274ff276c707a1165a519ec04cafc7690a`。历史章节中的“员工 KEY 发放”仅保留为当时批次的事实记录，不应作为当前操作说明。
 
 本节仍只证明当前源码和隔离回归。真实商业权益、企业治理/私有 Gateway、生产 Partner/Device、发布复核/回滚、财务/隐私/安全/迁移对账和 HEAD/origin 尚未闭合；按用户决定不执行六方会签与 259200 秒稳定性观察，PRD-148 保持未完成。
+
+## 2026-09-25 易用性复验：英文投影不能混入中文 fallback
+
+管理员截图进一步说明，简洁不只是减少菜单数量，也包括每一次刷新都保持同一种语言。英文任务首页曾在静态投影路径中出现“Connect a model 模型服务”“模型服务 and service credential”“Configure 模型服务”。本批在 `localizeConsoleStaticHtml` 的完整短语层增加清理规则，避免把中文 fallback 作为英文标题、描述或操作按钮的一部分展示；中文首发路径和用户数据保持不变。
+
+证据：定向 i18n/任务首页回归 `58/58`，前端全量 `2249/2249`，lint `842 files`，build `295 assets`；当前源码快照 `outputs/prd148-source-current-20260925-usability-r6.json`，SHA256 `a2e4c94ff550148ee95882d78e11d17c931aed7024716ec3e73f49eddecc2cbe`。生产资源摘要为 `c7f35fb7139e8d3412e402630964604dade1a96c9cc478fb248770a5e6301be4`，与前端及控制面 manifest 一致。暴露问题的旧截图仍作为历史回归输入保存，修复后没有重新宣称一套完整三角色浏览器证据，因此 PRD-148 和 GA 继续未完成。
+
+## 2026-09-25 当前 UI 审查收口
+
+针对 OpenRouter 参考站点的差距审查，本轮没有继续堆叠页面能力，而是把用户能直接感知的四个问题收口：
+
+1. 首页没有动画时不再渲染永远隐藏的“暂停动画”按钮，也不保留无效的 disposed 状态；仍有装饰动画的登录页只提供真实可用的暂停/播放控制。
+2. 公开入口、子页面、CSS、模块和跨页链接使用相对路径，能够挂载到 /metahub/ 这类反向代理前缀；资源摘要由前端构建和控制面 manifest 双方校验。
+3. 移动端主导航改为可见的菜单按钮，支持鼠标、Enter、Esc、外部点击和焦点回归；不会因为隐藏桌面导航而丢失“产品能力”和“服务状态”入口。
+4. 首页首屏改为自然高度和可滚动内容，低高度设备不再由固定 svh 与 overflow:hidden 裁剪 CTA 或底部提示。
+
+当前验证绑定到 `outputs/prd148-source-current-20260925-usability-r6.json`（2703 个文件，SHA256 `a2e4c94ff550148ee95882d78e11d17c931aed7024716ec3e73f49eddecc2cbe`）和 `.artifacts/product-qa-current/20260924-public-ui/report.json`（6/6 场景通过，SHA256 `ff84d8bc530d2b76295d8a5acd70aaa840523670cc919787f0b8c0574f7ee0f5`）。最终全量前端测试 2249/2249、lint 842 files、build 295 assets，生产资源摘要 `c7f35fb7139e8d3412e402630964604dade1a96c9cc478fb248770a5e6301be4`，控制面资源摘要契约通过。
+
+这些结果是本地服务上的脚本化 Chromium 证据，不能称为原生 computer-use 或人工最终验收。真实商业链路、生产 Partner/Device 数据、发布复核/回滚、财务/隐私/安全/迁移对账、HEAD/origin 仍未闭合；六方会签和连续 259200 秒稳定性验证按用户决定不执行，PRD-148 继续未完成。
+
+## 2026-09-25 最终复验与发布边界
+
+OpenRouter 对标的当前源码改动已完成最终静态回归：180 张角色化 Chromium 截图覆盖 admin、developer、viewer，桌面 1440px 与移动 390px 均有证据；近空白、异常小尺寸、纯黑、页面失败、响应错误、请求失败、控制台错误、溢出、裁切和交互重叠均为 0。首页公开入口另有 6/6 场景通过，并覆盖 `/metahub/` 子路径、移动菜单、低高度首屏和登录交互。证据索引为 `outputs/prd148-current-evidence-index-final-20260925.json`，视觉索引为 `outputs/prd148-screenshot-visual-audit-20260925-final.json`。
+
+最终源码重新执行 `console-web/npm test`、`npm run lint`、`npm run build`，结果为 `2249/2249`、`842 files`、`295 assets`，当前资源摘要 `c7f35fb7139e8d3412e402630964604dade1a96c9cc478fb248770a5e6301be4` 已与控制面 manifest 对账。付费模块按用户决定延期，仅影响后续商业化发布；中文免费试用仍需把真实注册到组织、Provider/模型/路由、个人 KEY、Gateway 调用、计量/额度、撤权、发布复核/回滚、对账和 HEAD/origin 证据补齐。原生 computer-use、72 小时观察和六方会签按用户决定不执行，不能把脚本化截图审计写成 GA 通过。
+
+## 2026-09-25 用户使用容易度补充
+
+本轮中文管理员走查发现，模型服务价格页的“全是空格让用户填”是明显的可用性差距：页面首屏同时铺开筛选、新增价格和停用验证字段，用户必须先理解内部成本配置才能看到当前状态。OpenRouter 风格的简洁不等于删除组织、预算或路由能力，而是把默认信息层和操作层分开。
+
+当前修改为：
+
+- 默认先显示已有模型服务价格、币种、输入/输出价格、生效区间和状态；没有已有记录时显示明确空态。
+- 筛选入口显示“按模型服务、模型、币种或状态查找”，点击后才展开条件；已有筛选条件时自动保持展开。
+- 新增价格入口说明“组织所有者 · 只在需要调整组织成本时填写”，默认收起，避免把低频管理动作误当成日常工作。
+- 行内调整、采用参考和停用均先通过明确信息入口展开；停用验证不再在列表中露出空验证码输入框。
+- 中文字段改用“模型服务”“模型”“输入/输出/缓存命中价格 / 百万 Token”等用户语言，补齐标签和占位提示；后端权限、动态验证码和安全密钥要求不变。
+
+当前源码绑定为 `outputs/prd148-source-current-20260925-model-prices-ux-r2.json`（2703 files，SHA256 `e6e0bd3364a855e99ae48aea0c6e5a9cea7a7cd3400a2fafb887fc30baaedda5`），中文 admin 复验目录为 `.artifacts/product-qa/20260925-model-prices-zh-current/`，三角色终态为 `.artifacts/product-qa/20260925-screenshot-final-model-prices-r2/`；最终截图索引已补齐 180 张。全量前端单测 `2246/2246`、lint `842 files`、build `295 assets` 通过，资源摘要漂移已同步前后端 manifest 为 `fabbb192b15069850b2cc44f08a8c2a651fd1dc83491c71a0225ef3046896761`。
+
+这项修改只改善中文免费试用的首屏理解和操作路径。付费模块按用户决定延期；真实注册到组织、Provider/模型/路由、个人 KEY、Gateway 调用、计量/额度、撤权、发布复核/回滚、对账、HEAD/origin 和 PRD-148 GA 门禁仍未完成。
+
+## 2026-09-25 当前源码易用性复验
+
+本轮把“简洁”落实到中文首发用户实际看到的内容：控制台壳层对业务面板的最终 HTML 统一做中文静态文案投影，管理员首页、成员管理、模型服务和服务成本率页面不再混入 `Workspace members`、`Actions`、`Model providers` 或 `Configure 模型服务`。真实组织名、成员名、模型名、URL 和 Provider 元数据不做通用翻译。
+
+当前 Chromium 证据：中文管理员高频页面 `quickstart`、`users`、`providers`、`model-prices` 为 4/4；员工查看者 `390x844` 首页和越权深链回退通过；管理员首页、成员和模型服务的非破坏性鼠标交互为 3/3。报告分别为 `.artifacts/product-qa/20260925-usability-admin-r7-zh/prd148-role-audit-chromium-scale-1.json`、`.artifacts/product-qa/20260925-usability-viewer-r1/prd148-role-audit-chromium-scale-1.json` 和 `.artifacts/product-qa/20260925-usability-admin-interaction-r1/prd148-human-interaction-chromium-scale-1.json`。三份均为 0 页面/API/控制台/布局问题的隔离 seeded 证据，不冒充真实外部账户或人工 computer-use。
+
+当前源码为 `outputs/prd148-source-current-20260925-usability-r7.json`，SHA256 `33a48040103517f6e7ad2132c1ddd5593d8cc354694d92a8365dee252a7333c9`；前端单测 `2249/2249`、lint `842 files`、build `295 assets` 通过，前后端资源摘要为 `2be5799752f0abd80fae25c771e1af0148d4c58cbe2e780b42701afc55d359ae`。管理员首页仍保留四个工作域、总体进度和下一步卡片，这属于后续信息架构压缩观察项，不影响当前中文页面的文字一致性和高频操作路径。PRD-148 继续未完成。
+
+## 2026-09-25 首屏信息密度收口
+
+OpenRouter 的简洁差距不只在菜单数量，也在首次进入时只给用户一个可执行动作。本批保留 MetaHub 的组织、预算、路由和治理能力，但改变默认信息层级：管理员首页首屏只显示“核心接入进度”和当前下一步；完整三步、四个管理区域及其他低频事项改为默认收起的详情入口。这样组织管理员仍能管理 Provider、模型、成员、预算和治理，但不会先阅读四组状态卡再决定从哪里开始。
+
+本批同时修正进度口径：`核心接入进度` 的 `0 / 3` 只统计 Provider、模型、成员 KEY 三项交付；管理区域中的组织资料、成员职责等状态仍保留在展开内容中，不与首屏数字混用。中文使用“管理区域”，英文使用 `Management areas`，避免把内部“工作域”带到用户任务语言中。
+
+证据：`outputs/prd148-source-current-20260925-usability-r8.json`（SHA256 `9e8cf6051c3efee2ca5a5f6a91c72d10cafc84b94311390be4b578a9ea77493a`）、中文管理员高频交互 `.artifacts/product-qa/20260925-usability-admin-interaction-r3/`（3/3）和首页截图 `.artifacts/product-qa/20260925-usability-admin-quickstart-r1/`。前端单测 2249/2249、lint 842 files、构建 295 assets，资源摘要 `dc70140d5cc7ae5312d687a81e5ec4110182f3abbde39acdeafb2f5c78ef3f1e`。
+
+这项修改改善默认扫描路径，不减少任何授权入口，也不代表真实注册到 Gateway/计量/撤权、发布回滚、对账或 PRD-148 GA 已完成。
+
+## 2026-09-25 当前源码易用性验证收口
+
+本轮把“不要让用户面对一排空输入框”落实到当前源码验证：先同步生产资源清单，再重跑高频页面和可逆交互。管理员首页的唯一下一步仍保留在首屏；成员、模型服务、模型价格和个人 KEY 只在需要时展示搜索、筛选或编辑动作。组织管理员和员工的入口继续分域，员工不会看到平台运营或管理员动作。
+
+当前源码快照 `outputs/prd148-source-current-20260925-usability-r10.json`（2703 files，SHA256 `697f7f788fa4a4be6176e0341753ec92f14b755cdb9b7493ed3677407f554af8`）通过 `npm run lint`（842 files）、前端全量单测（2249/2249）和生产构建（295 assets）。前端与控制面生产资源摘要统一为 `c3856db9be0d5fc160c33ed0ef030dba3e4bd6fdcdbf7a2eee83687cbe54cc16`。
+
+当前脚本化 Chromium 证据：管理员桌面高频页面 5/5、员工移动端高频页面 4/4；同范围可逆鼠标/键盘交互管理员 5/5、员工 4/4。四份报告位于 `.artifacts/product-qa/20260925-current-r10-{admin,viewer,human-admin,human-viewer}/`。所有这些报告均无页面失败、请求失败、响应错误、控制台错误、横向溢出、裁切、交互重叠、动作失败或权限错误。
+
+此前 180 页三角色截图仍保留为历史视觉覆盖，因资源清单同步后没有重新跑完整 180 页，不在本节冒充当前源码全量证据。真实外部注册、商业 Gateway/计量、发布复核/回滚、财务/隐私/安全/迁移对账、HEAD/origin、72 小时稳定性和六方会签仍按证据索引标记为未完成或按用户决定不执行。
+
+## 2026-09-25 文案一致性复验
+
+本轮把视觉走查发现的英文混中文问题追到全局 `userFacingTextGuard`：它在异步刷新后无视 locale，把 `Provider` 等产品词替换为中文。现在该清理器按 `app.dataset.locale` 工作，英文管理员页面保留英文，中文页面继续清理旧渲染器的工程词；新增词典覆盖侧栏“组织管理”、成员页 `Search` 和 Provider 活动 KEY 数量。
+
+当前源码快照为 `outputs/prd148-source-current-20260925-usability-r11.json`（SHA256 `6694ac39ce5444b9c55d7cd12fc2a5fb7ff188532502f2cdd09b0487ed06db0b`），前端全量 `2250/2250`、定向回归 `29/29`、lint `842 files`、build `295 assets` 通过，资源摘要为 `4c0dded057f609f8642232cd97d009623b3c0d44fd77f182aad15fc787d2f7cb`。英文管理员 `quickstart/providers/users` `3/3` 的 Chromium 报告和截图位于 `.artifacts/product-qa/20260925-current-r13-english-home/`，混合语言 DOM、请求错误、溢出和交互重叠均为 0。
+
+这只证明当前高频页面的语言和布局可用性；真实注册、Gateway/计量/撤权、发布回滚、对账、HEAD/origin 和 GA 门禁仍未闭合，PRD-148 继续未完成。
+## 2026-09-25 员工视角的易用性补充（前一批分片）
+
+OpenRouter 式的简洁还要求用户知道“为什么没有这个页面”。当前中文查看者移动端在 `quickstart/virtual-keys/providers/users` 上完成 4/4 走查；个人 KEY 页面保留创建、查看和撤销自己的 KEY，Provider 与成员管理员页面按权限回退到员工首页。原先的“该入口不可用”容易被理解为服务故障，现改为“你当前的职责无法打开此页面，已返回可访问页面”，英文同步为 “Your current role cannot open this page. You were redirected to an accessible page.”
+
+这项调整把角色边界说给用户听，保留组织、预算、路由和治理能力，也保留 SaaS 平台管理员与 Workspace 组织管理员的身份分域。报告为 `.artifacts/product-qa/20260925-current-r17-zh-viewer/prd148-role-audit-chromium-scale-1.json`（SHA256 `f1cb4dd5bccdce1e42da734746bacd7a9e0a2d362a52f3945121caccba14506d`）和 `.artifacts/product-qa/20260925-current-r16-zh-admin/prd148-role-audit-chromium-scale-1.json`（SHA256 `16c3c87d1a91022d57e91b0d66ece6c9e6f1fa202b14bc74667f3332e5f873fe`）。这两份分片早于权限提示文案修复，当前源码终态以 r18 报告和 r14 快照为准。
+
+这仍是脚本化 Chromium 的当前源码证据，不是人工 computer-use 或真实客户验收；真实业务链路、发布复核/回滚、财务/隐私/安全/迁移对账和 PRD-148 完成门禁保持未闭合。
+## 2026-09-25 权限提示修复后的当前源码复验
+
+权限提示文案修改后重新执行当前源码三角色核心页面：管理员、开发者和查看者的 `quickstart/virtual-keys/providers/users` 共 12/12 通过。查看者 `390x844` 移动截图确认打开 Provider 或成员管理员深链时显示“你当前的职责无法打开此页面，已返回可访问页面”，并回到员工首页；这比“入口不可用”更容易理解，也没有把权限边界误报成服务故障。
+
+报告为 `.artifacts/product-qa/20260925-current-r18-zh-core/prd148-role-audit-chromium-scale-1.json`（SHA256 `f6ea61d7bec9cd26653f66040623306d6eb0cfadd186a0a2cc3f5ab128b23efb`），绑定当前源码 `outputs/prd148-source-current-20260925-usability-r14.json`（SHA256 `fab8072c1e2ddde7a358a9277c5ad546a958a9a2746284f14ef3a5dcf55ff80c`）。所有页面请求、响应、控制台、溢出、裁切和交互重叠均为 0；这仍是隔离 seeded Chromium 证据，不替代真实客户验收或 PRD-148 GA 门禁。
+
+## 2026-09-25 信息密度复验：把“能做”变成“先看懂”
+
+OpenRouter 的简洁感还来自默认状态只呈现高频任务。对照当前中文管理员页面，本轮发现两个会迫使用户先读大量控件的区域：成本账本一打开就平铺空筛选表单，角色权限一打开就平铺全部角色和权限。改动后的默认状态是：
+
+- 成本账本显示当前分录和汇总；“筛选成本账本”收起空字段，设置筛选后自动展开并显示已设置数量，清空后再次回到收起状态。
+- 权限页先显示当前角色的职责分组，首组可立即查看，其余分组按标题展开；“对比全部角色”是明确的二次操作，仍保留完整矩阵和保存能力。
+- 这两个页面都保留键盘焦点、原有后端授权和移动端纵向列表，不通过隐藏内容改变可用权限。
+
+当前证据绑定到 `outputs/prd148-source-current-20260925-usability-r15.json`（SHA256 `4fb2fe2e240a2e39577f1eac86ad19f87dce034c4184484a3df15595cc377992`）：中文管理员页面 2/2 和可逆交互 2/2 通过，报告分别为 `.artifacts/product-qa/20260925-usability-r23-zh/prd148-role-audit-chromium-scale-1.json` 与 `.artifacts/product-qa/20260925-usability-r24-human-zh/prd148-human-interaction-chromium-scale-1.json`；前端全量单测 `2253/2253`。这说明当前高频管理路径更容易首次扫描，不代表真实外部账户、商业 Gateway、发布回滚、对账或 PRD-148 GA 已完成。
+
+## 2026-09-26 空配置不再铺满首屏
+
+本轮把“全是空格让用户填”继续收口到策略模拟器：当组织还没有环境、项目或模型路由时，首屏只说明缺少的前置配置和下一步，完整请求条件表单默认收起；配置齐全时表单自动展开，管理员仍可运行完整预演。英文偏好下同一提示也保持完整英文，不再出现 `Project`、`Active` 与中文句子混排。
+
+当前源码绑定为 `outputs/prd148-source-current-20260926-usability-r21.json`（2703 files，SHA256 `c26c425f3cafef6615bab88790c8ee768f43be30caadb91fa60f471bdba28853`）。本地化/用量/策略定向回归 `34/34`、前端全量单测 `2256/2256`、lint `842 files`、build `295 assets` 通过，资源摘要为 `36e2c3ba1aff4c8b1614b5595800ae5eb7660988ed9afea8ab6d82aae3467b95`。管理员策略模拟器当前页 `1/1` 和开发者 API 文档当前页 `1/1` 的 Chromium 报告分别在 `.artifacts/product-qa/20260926-current-targeted-admin-policy-r21/`、`.artifacts/product-qa/20260926-current-targeted-developer-api-r21/`。
+
+这项修改只改变默认信息层级，不隐藏已授权能力或改变后端权限；仍是隔离 seeded 浏览器证据，不替代真实客户业务链路、发布回滚、对账或 PRD-148 GA 门禁。
+
+## 2026-09-26 r45 易用性对标复核
+
+OpenRouter 的简洁感主要来自默认信息层级：用户先看到当前状态和一个可执行动作，低频配置在明确入口后再展开。MetaHub 不能删除组织、预算、路由和治理能力，但可以让组织管理员和员工先看懂各自的任务边界。本批按这个标准复核当前源码：
+
+- 组织管理员概览只显示有数据的组织摘要，空区域折叠；组织、财务、Gateway 和治理仍可从导航进入。
+- 成员管理以搜索和分页表格为主，成员操作固定在行内，避免把大规模成员渲染成连续卡片。
+- Provider 页面先显示已配置服务，自定义中转站 / OpenAI 兼容地址作为收起入口；品牌选项只是快捷方式。
+- 组织 KEY 和个人 KEY 分开。组织管理员管理组织 KEY，后台成员自行管理个人 KEY；员工不需要填写组织后台表单。
+- 查看者移动端默认只看到自己的空间和接入说明，进入管理员深链会得到职责提示和可访问回退。
+
+当前源码的角色审计与可逆交互各为 15/15，证据在 `.artifacts/product-qa/20260926-usability-current-r45/` 和 `.artifacts/product-qa/20260926-usability-human-r45/`；源码快照为 `outputs/prd148-source-current-20260926-usability-r45.json`，SHA256 `63c7dc9230d8154d2624146d9217a734b6e28bdbb99df06a80f6ab84d875e37d`。前端单测 2259/2259、lint 842 files、构建 295 assets，资源摘要 `3a73b84e5fa3b021cc5b55ca3959ebda80ae17a00214a0f3f33be7001069dd53`。
+
+这证明了当前源码的中文首发高频路径更容易扫描和操作，不等同于真实客户验收、完整注册到 Gateway/计量/撤权、发布回滚、对账或 PRD-148 完成。付费模块延期、六方会签和 72 小时观察按用户决定不执行。
+
+## 2026-09-28 内部字段与模型服务入口收口
+
+对标复核继续围绕 OpenRouter 的“先选择、后配置”信息层级推进。MetaHub 保留组织、预算、路由和治理这些产品差异，但不再把实现这些能力所需的工程字段直接放到组织管理员面前：
+
+- 品牌服务与自定义中转站 / OpenAI 兼容服务合并到“添加模型服务”的同一个选择框，迁移参考项不再混入组织可接入列表。
+- Provider 列表移除类型、Provider code 和普通用户无须理解的兼容规则入口，只显示服务名称、地址、状态、最近检查和操作。
+- 模型目录移除 MetaHub 内部模型名、能力、上下文等高级字段，路由选择只显示模型名称和模型服务；高级异常处理按权限收起。
+- 请求编号、追踪号、区域/认证代码、版本、哈希和数据库 ID 继续留在 API、状态层和不可见提交字段中，服务于路由、撤权、并发和审计，但不再作为普通用户文案。
+
+当前审查记录为 `docs/operations/user-facing-internal-metadata-audit-20260928.md`，扫描 196 个功能文件、95 个渲染文件；受影响定向回归 `85/85`，lint 842 files，build 295 assets，生产资源摘要 `b7012aa806c15ad100ce7b79946e48ace8262fde5f2a9481efb982fbf3cae005`。这批是当前源码 UI 投影证据，真实客户链路、发布复核/回滚、财务/隐私/安全/迁移对账与 PRD-148 GA 门禁仍未闭合。
+
+## 2026-09-29 KEY 操作收敛
+
+OpenRouter 式简洁界面的关键不是删除组织能力，而是把低频配置移出默认视线。本批把个人 KEY 页面改为列表加一个“创建 KEY”按钮：创建表单、一次性明文、复制和隐藏动作共用一个原生弹窗，不再让空表单和结果把页面撑长。管理员不必先创建个人 KEY 才能完成组织接入；`project_key_ready` 仍表示组织已具备成员自助创建 KEY 的能力。
+
+“MetaHub KEY”在成员入口、接入示例、迁移提示、观测和异常页面统一为“个人 KEY”，避免把个人调用凭据误读成组织级配置。解释性文案审计记录在 `docs/operations/user-facing-explanatory-copy-audit-20260929.md`：当前渲染模板得到 44 个词法候选，必要提示保留，明确冗余的 KEY 解释已移除。定向回归 `72/72`、向导后端单测 `7/7`、Workspace 导航集成 `6/6`、lint 842 files、build 295 assets 通过；源码证据为 `outputs/prd148-source-current-20260929-key-modal-r4.json`，SHA256 `f7b9f0b3fd3b32aff8a84699c96e91d6081635360094877cb593eb3c70f7cb85`，生产资源摘要 `2583dbe04de67e30e1f2023b7e4511c0f7f35a13453b75f5e38372900d4a41be`。
+
+这批仍只证明当前源码的用户投影和定向交互，不代表全量 QA、真实外部业务链路或 PRD-148 完成。

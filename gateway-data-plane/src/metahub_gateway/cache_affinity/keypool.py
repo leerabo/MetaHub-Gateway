@@ -298,15 +298,13 @@ def _validate_execution_gate_arguments(
     这样每条 Selection 才能由唯一父终态恢复，而不会制造无法审计的 Provider 调用。
     """
 
-    # 空链路或第三次 attempt 都无法绑定唯一父门，必须在打开数据库事务前拒绝。
-    if not request_id or not trace_id or attempt_sequence not in {1, 2}:
+    # 空链路或超过 32 次 attempt 都无法绑定唯一父门，必须在打开数据库事务前拒绝。
+    if not request_id or not trace_id or not 1 <= attempt_sequence <= 32:
         raise ApiError("gateway.cache_affinity_unavailable")
     # 同时存在或同时缺失父 ID 都会让终态来源不唯一，禁止创建 Selection。
     if (routing_attempt_id is None) == (stream_session_id is None):
         raise ApiError("gateway.cache_affinity_unavailable")
-    # 本期流式不执行 Fallback，因此 StreamSession 只能对应首个 attempt 序号。
-    if stream_session_id is not None and attempt_sequence != 1:
-        raise ApiError("gateway.cache_affinity_unavailable")
+    # 每个流式候选都有自己的 starting StreamSession；序号只需保持在冻结上限内。
 
 
 def _revalidate_configuration(
@@ -547,7 +545,8 @@ def _select_key_in_transaction(
         for row in candidates:
             try:
                 plain_value = decrypt_provider_key(
-                    str(row["encrypted_key"]), encryption_secret=config.provider_key_encryption_secret,
+                    str(row["encrypted_key"]),
+                    encryption_secret=config.provider_key_encryption_secret,
                 )
             # 单把损坏密文只使该候选失格；日志使用真实 request/trace 但禁止 Credential 标识。
             # 继续尝试同租户同 Provider 的下一把托管 Key，不能回退全局环境 Key。
@@ -745,7 +744,7 @@ def _restore_existing_selection(
     stream_session_id: str | None,
     endpoint_revision: str,
 ) -> tuple[SelectedProviderKey | None, CacheAffinitySelectionHandle]:
-    """严格恢复同一意图和 target；不一致时拒绝第二次 Provider 调用。"""
+    """严格恢复同一意图和 target；不一致时拒绝未审计的后续 Provider 调用。"""
 
     expected = (
         str(selection["cache_affinity_id"]) == affinity.cache_affinity_id

@@ -1,4 +1,5 @@
 import { icon } from "../public-home/icons.js";
+import { localizeConsoleStaticHtml } from "../../i18n/localizeConsoleStaticHtml.js";
 
 // 默认导航定义控制控制台骨架的兜底菜单，后端返回的角色化导航仍是最终入口来源。
 const DEFAULT_NAVIGATION = [
@@ -7,7 +8,7 @@ const DEFAULT_NAVIGATION = [
     label: "概览",
     group: "总览",
     target_section: "overview",
-    description: "查看本地服务状态和下一步引导。",
+    description: "查看本地服务状态和待处理事项。",
     empty_state_hint: "等待控制面导航接口响应。",
     order: 10,
   },
@@ -21,19 +22,17 @@ const GROUP_KEY_BY_LABEL = {
   finance: "finance",
   governance: "governance",
   applications: "applications",
-  observability: "observability",
   "developer-center": "developer-center",
   advanced: "advanced",
   "高级工具": "advanced",
   "Advanced tools": "advanced",
   系统: "system",
   System: "system",
+  SYSTEM: "system",
   // PAGE-071 位于调用与成本分组，英文偏好只改变展示标签，不改变后端导航 ID 或权限集合。
   调用与成本: "calls-and-cost",
   "Calls & Cost": "calls-and-cost",
 };
-
-const DEFAULT_GROUP_ITEM_LIMIT = 3;
 
 /**
  * 渲染控制台主框架。
@@ -46,15 +45,22 @@ export function renderConsoleShell({
   i18n,
   branding = null,
 }) {
-  const navigationItems = navigationItemsFromState(consoleShellState).map((item) =>
-    localizeNavigationItem(item, i18n),
-  );
-  const activeItem = activeNavigationItem(consoleShellState, navigationItems);
+  // Legacy feature renderers still emit a few static English labels. Project
+  // the complete content boundary once so Chinese users never see mixed
+  // labels while user data, URLs, and backend identifiers remain untouched.
+  const localizedContentHtml = localizeConsoleStaticHtml(contentHtml, i18n);
   const roleCode = consoleShellState?.navigation?.role_code
     ?? consoleShellState?.workspaceContext?.role
     ?? authContext?.workspace?.role;
+  const navigationItems = navigationItemsFromState(consoleShellState).map((item) =>
+    localizeNavigationItem(item, i18n, roleCode),
+  );
+  const activeItem = activeNavigationItem(consoleShellState, navigationItems);
   const shellCopy = workspaceRoleShellCopy(roleCode, i18n);
-  const homeItem = ["quickstart", "overview"].map((id) => navigationItems.find((item) =>
+  const homeItemOrder = ["owner", "admin"].includes(roleCode)
+    ? ["overview", "quickstart"]
+    : ["quickstart", "overview"];
+  const homeItem = homeItemOrder.map((id) => navigationItems.find((item) =>
     item.id === id && item.visible !== false && !item.disabled)).find(Boolean);
   const sidebarCollapsed = sidebarCollapsedFromState(consoleShellState);
   const expandedGroupKey = String(consoleShellState?.sidebarExpandedGroupKey ?? "").trim();
@@ -90,10 +96,15 @@ export function renderConsoleShell({
           </button>
         </div>
         ${renderNavigationGroups(navigationItems, activeItem.id, expandedGroupKey, i18n)}
-        ${renderDeferredNavigationControls(navigationItems, activeItem.id, i18n, consoleShellState?.navigation?.role_code)}
         ${renderAdvancedToolsEntry(consoleShellState?.navigation, i18n, consoleShellState?.navigation?.role_code)}
       </aside>
       <main class="console-main" aria-labelledby="console-main-title" data-workspace-role="${escapeAttribute(roleCode ?? "")}">
+        <div class="console-page-context" aria-label="当前工作区">
+          <span class="console-page-context-mark" aria-hidden="true"></span>
+          <span>MetaHub 工作区</span>
+          <span aria-hidden="true">/</span>
+          <strong>${escapeHtml(shellCopy.sidebarTitle)}</strong>
+        </div>
         ${homeItem && activeItem.id !== homeItem.id
           ? `<a class="console-home-return" href="#${homeItem.id === "quickstart" ? "workspace.home.getting-started" : "workspace.home.overview"}" aria-label="${escapeAttribute(t(i18n, "shell.home_return_aria", "返回空间首页"))}">${icon("arrow-left")}<span>${escapeHtml(t(i18n, "shell.home", "空间首页"))}</span></a>` : ""}
         <div class="console-main-heading">
@@ -104,7 +115,9 @@ export function renderConsoleShell({
           </div>
         </div>
         ${renderShellMessage(consoleShellState, i18n)}
-        ${contentHtml}
+        <div class="console-page-body">
+          ${localizedContentHtml}
+        </div>
       </main>
     </section>
   `;
@@ -184,7 +197,9 @@ function isCompactNavigationViewport() {
 export function navigationItemsFromState(consoleShellState) {
   const items = consoleShellState?.navigation?.navigation_items;
   return Array.isArray(items) && items.length > 0
-    ? [...items].sort((left, right) => Number(left.order ?? 0) - Number(right.order ?? 0))
+    ? [...items].sort((left, right) => navigationGroupOrder(left) - navigationGroupOrder(right)
+      || Number(left.order ?? 0) - Number(right.order ?? 0)
+      || String(left.id ?? "").localeCompare(String(right.id ?? "")))
     : DEFAULT_NAVIGATION;
 }
 
@@ -203,15 +218,24 @@ export function activeNavigationItem(consoleShellState, navigationItems) {
  * 把后端返回的导航项转换为展示文案。
  * 边界：只改变 label/description/group，不改变 id、target_section 或权限结果。
  */
-function localizeNavigationItem(item, i18n) {
+function localizeNavigationItem(item, i18n, roleCode = null) {
   const key = navigationMessageKey(item);
   const description = t(i18n, `${key}.description`, item.description ?? "");
+  const defaultLabel = t(i18n, `nav.task.${item.id}`, t(i18n, key, item.label ?? item.id));
+  const label = item.id === "virtual-keys" && ["owner", "admin"].includes(roleCode)
+    ? t(i18n, "nav.task.organization-keys", "KEY 管理")
+    : defaultLabel;
+  // 数据生命周期由平台管理员负责。组织管理员不应在侧栏看到一个点开后
+  // 只能得到“无权限”的入口；后端仍保留深链和权限校验，便于平台运维。
+  const hideForOrganizationAdmin = item.id === "tenant-data-lifecycle"
+    && ["owner", "admin"].includes(roleCode);
   return {
     ...item,
-    label: t(i18n, `nav.task.${item.id}`, t(i18n, key, item.label ?? item.id)),
+    label,
     group: localizeGroupLabel(item.group, i18n),
     description,
     empty_state_hint: t(i18n, `${key}.description`, item.empty_state_hint ?? description),
+    ...(hideForOrganizationAdmin ? { sidebar_visible: false, placement: "hidden" } : {}),
   };
 }
 
@@ -227,18 +251,44 @@ function navigationMessageKey(item) {
  */
 export function localizeConsoleGroup(group, i18n) {
   const fallback = String(group ?? "");
-  const groupKey = GROUP_KEY_BY_LABEL[fallback];
+  const normalized = fallback.trim();
+  const groupKey = GROUP_KEY_BY_LABEL[normalized]
+    ?? GROUP_KEY_BY_LABEL[normalized.toLowerCase()]
+    ?? GROUP_KEY_BY_LABEL[normalized.toUpperCase()];
   return groupKey ? t(i18n, `nav.group.${groupKey}`, fallback) : fallback;
 }
 
 const localizeGroupLabel = localizeConsoleGroup;
+
+const CANONICAL_GROUP_ORDER = Object.freeze([
+  "home",
+  "workspace",
+  "gateway",
+  "finance",
+  "governance",
+  "applications",
+  "developer-center",
+  "system",
+  "advanced",
+]);
+
+function navigationGroupOrder(item) {
+  const group = String(item?.group_code ?? item?.group ?? "").trim().toLowerCase();
+  const index = CANONICAL_GROUP_ORDER.indexOf(group);
+  return index === -1 ? CANONICAL_GROUP_ORDER.length : index;
+}
 
 /**
  * 按 group 渲染侧边栏导航，保证不同角色只看到后端返回的可见入口。
  */
 function renderNavigationGroups(items, activeId, expandedGroupKey = "", i18n) {
   const groups = [];
-  for (const item of items.filter((candidate) => candidate.sidebar_visible !== false)) {
+  const orderedItems = [...items]
+    .filter((candidate) => candidate.sidebar_visible !== false)
+    .sort((left, right) => navigationGroupOrder(left) - navigationGroupOrder(right)
+      || Number(left.order ?? 0) - Number(right.order ?? 0)
+      || String(left.id ?? "").localeCompare(String(right.id ?? "")));
+  for (const item of orderedItems) {
     let group = groups.find((entry) => entry.name === item.group);
     if (!group) {
       group = { name: item.group, items: [] };
@@ -268,47 +318,12 @@ function renderNavigationGroups(items, activeId, expandedGroupKey = "", i18n) {
             <span class="sidebar-group-chevron" aria-hidden="true">⌄</span>
           </button>
           <div id="${itemsId}" class="sidebar-group-items"${isCollapsed ? " hidden" : ""}>
-            ${group.items.slice(0, DEFAULT_GROUP_ITEM_LIMIT).map((item) => renderNavigationItem(item, activeId, true)).join("")}
-            ${renderDeferredGroupItems(group.items.slice(DEFAULT_GROUP_ITEM_LIMIT), activeId, i18n)}
+            ${group.items.map((item) => renderNavigationItem(item, activeId, true)).join("")}
           </div>
         </nav>
       `;
     })
     .join("");
-}
-
-function renderDeferredGroupItems(items, activeId, i18n) {
-  if (items.length === 0) return "";
-  const label = t(i18n, "shell.more_group_controls", "更多控制");
-  const active = items.some((item) => item.id === activeId);
-  return '<details class="sidebar-group-more"' + (active ? " open" : "") + '><summary>' + escapeHtml(label)
-    + ' (' + items.length + ')</summary><div class="sidebar-group-more-items">'
-    + items.map((item) => renderNavigationItem(item, activeId, false)).join("") + "</div></details>";
-}
-
-function renderDeferredNavigationControls(items, activeId, i18n, roleCode = null) {
-  // Employees use the task home as their product surface. Authorized deep
-  // links remain valid, but a collapsed management menu would reintroduce the
-  // vocabulary and choice overload that the role projection removed.
-  if (roleCode === "viewer") return "";
-  const deferred = items.filter((item) => item.sidebar_visible === false
-    && ["primary", "task_home", "developer_center"].includes(item.placement));
-  if (deferred.length === 0) return "";
-  const groups = [];
-  for (const item of deferred) {
-    let group = groups.find((entry) => entry.name === item.group);
-    if (!group) {
-      group = { name: item.group, items: [] };
-      groups.push(group);
-    }
-    group.items.push(item);
-  }
-  const label = t(i18n, "shell.more_controls", "更多控制");
-  return '<details class="sidebar-deferred-controls"><summary><span>' + escapeHtml(label)
-    + '</span><small>' + deferred.length + '</small></summary><div class="sidebar-deferred-list">'
-    + groups.map((group) => '<section data-sidebar-deferred-group="' + escapeAttribute(sidebarGroupKey(group)) + '"><strong>' + escapeHtml(group.name) + '</strong>'
-      + group.items.map((item) => renderNavigationItem(item, activeId, false)).join("") + "</section>").join("")
-    + "</div></details>";
 }
 
 /** Group identity is derived only from backend navigation IDs, not display labels. */
@@ -383,7 +398,7 @@ function renderShellMessage(consoleShellState, i18n) {
   if (error) {
     return `
       <div class="empty-state error-state console-shell-message">
-        ${escapeHtml(error.message ?? t(i18n, "shell.navigation_failed", "控制台导航操作失败"))} request_id: ${escapeHtml(error.requestId ?? "-")}
+        ${escapeHtml(error.message ?? t(i18n, "shell.navigation_failed", "控制台导航操作失败"))}
       </div>
     `;
   }
@@ -406,7 +421,6 @@ function renderUserMenu(authContext, i18n, navigation, consoleShellState) {
         <span>${escapeHtml(workspace.name ?? "")}</span><small>${escapeHtml(workspaceRoleLabel(workspace.role, i18n))}</small></div>
       <a class="user-menu-preferences" href="identity.html?view=account#security">${escapeHtml(t(i18n, "shell.account_settings", "账号设置"))}</a>
       <a class="user-menu-preferences" href="identity.html?view=workspaces">${escapeHtml(t(i18n, "shell.switch_workspace", "切换组织"))}</a>
-      <button type="button" data-partner-handoff>${escapeHtml(t(i18n, "shell.partner_portal", "Partner 门户"))}</button>
       <button id="logout-button" type="button">${escapeHtml(t(i18n, "shell.logout", "登出"))}</button>
     </div>`;
   }

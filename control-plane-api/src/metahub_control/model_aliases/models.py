@@ -14,8 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field
 class RoutingPolicyCandidateInfo(BaseModel):
     """RoutingPolicy 当前主备配置的安全摘要。
 
-    该结构只说明 Alias 指向的 Model/Provider 元数据，不返回价格正文、Endpoint、
-    KeyPool 数量或任何凭据；真实请求选择仍以 routing_candidates 历史事实为准。
+    该结构只说明 Alias 指向的 Model/Provider 元数据，并可返回模型目录已保存的
+    输入、输出和缓存命中价格；Endpoint、KeyPool 数量和任何凭据永远不进入响应。
     """
 
     candidate_role: str
@@ -27,6 +27,13 @@ class RoutingPolicyCandidateInfo(BaseModel):
     provider_code: str
     provider_name: str
     provider_status: str
+    # The catalog model name is safe user-facing metadata.  Keep it in the
+    # candidate snapshot so an older model list cannot fall back to a UUID.
+    provider_model_id: str | None = None
+    input_price_per_1k: float | None = None
+    output_price_per_1k: float | None = None
+    cache_price_per_1k: float | None = None
+    currency: str | None = None
 
 
 class QualityCostConfigInfo(BaseModel):
@@ -46,7 +53,8 @@ class QualityCostConfigInfo(BaseModel):
 class RoutingPolicyInfo(BaseModel):
     """ModelAlias 一对一 RoutingPolicy 的版本化安全展示对象。
 
-    该对象只返回当前租户可见的模式、版本和候选摘要；不携带价格明细、凭据或 Endpoint。
+    该对象返回当前租户可见的模式、版本和候选摘要；候选可带已保存的三项价格，
+    但不携带凭据或 Endpoint。
     """
 
     routing_policy_id: str
@@ -125,6 +133,8 @@ class ModelAliasInfo(BaseModel):
     fallback_display_name: str | None
     fallback_provider_code: str | None
     fallback_provider_name: str | None
+    # 新接口返回完整有序备用候选；旧的单个 fallback_* 字段继续保留兼容历史客户端。
+    fallback_model_ids: list[str] = Field(default_factory=list)
     fallback_policy: FallbackPolicyInfo | None = None
     # CacheAffinity 仅返回 Alias 级安全配置，不暴露 Prompt 摘要、Binding 或凭据快照。
     cache_affinity: CacheAffinityInfo | None = None
@@ -175,6 +185,7 @@ class CreateModelAliasRequest(BaseModel):
     environment: str | None = None
     default_model_id: str | None = None
     fallback_model_id: str | None = None
+    fallback_model_ids: list[str] | None = Field(default=None, max_length=31)
     description: str | None = None
     status: str | None = "active"
 
@@ -192,6 +203,7 @@ class UpdateModelAliasRequest(BaseModel):
     environment: str | None = None
     default_model_id: str | None = None
     fallback_model_id: str | None = None
+    fallback_model_ids: list[str] | None = Field(default=None, max_length=31)
     description: str | None = None
     status: str | None = None
     # 只要修改 Alias 路由图就必须提交当前策略版本；description-only 更新允许省略。
@@ -209,7 +221,8 @@ class UpdateFallbackPolicyRequest(BaseModel):
 
     enabled: bool
     fallback_model_id: str | None = None
-    trigger_conditions: list[str] | None = Field(default=None, max_length=3)
+    fallback_model_ids: list[str] | None = Field(default=None, max_length=31)
+    trigger_conditions: list[str] | None = Field(default=None, max_length=5)
     expected_routing_policy_version: int = Field(ge=1)
 
 

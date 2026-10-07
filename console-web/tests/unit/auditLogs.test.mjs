@@ -397,15 +397,16 @@ test("audit panel renders safe expandable summaries, full ids and mobile labels"
   assert.match(html, /变更后/);
   assert.match(html, /&lt;script&gt;unsafe&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>unsafe<\/script>/);
-  assert.match(html, new RegExp(longRequestId));
-  assert.match(html, /data-copy-audit-id=/);
+  assert.doesNotMatch(html, new RegExp(longRequestId));
+  assert.doesNotMatch(html, /data-copy-audit-id=/);
   assert.match(html, /id="audit-log-export-csv"/);
   assert.match(html, /aria-label="导出当前筛选的 CSV"/);
   assert.match(html, /data-audit-export-feedback[^>]*hidden/);
-  assert.match(html, /audit\.exported/);
-  assert.match(html, /policy_snapshot\.published/);
-  assert.match(html, /provider_error_map/);
-  for (const label of ["时间", "操作者", "动作", "对象", "变更字段", "来源 IP", "request_id", "摘要"]) {
+  assert.match(html, /审计记录 · 已导出/);
+  assert.match(html, /访问策略 · 已发布/);
+  const visibleText = html.replace(/<[^>]*>/gu, " ");
+  assert.doesNotMatch(visibleText, /provider_error_map/);
+  for (const label of ["时间", "操作者", "动作", "对象", "变更字段", "摘要"]) {
     assert.match(html, new RegExp(`data-label="${label}"`));
   }
   assert.doesNotMatch(html, /\.\.\./);
@@ -426,10 +427,10 @@ test("audit panel renders bounded export success and error feedback without raw 
       rawCsv: "secret,csv",
     },
   }, auditAdminContext());
-  assert.match(completed, new RegExp(`aex_${"b".repeat(32)}`));
-  assert.match(completed, new RegExp("a".repeat(64)));
+  assert.doesNotMatch(completed, new RegExp(`aex_${"b".repeat(32)}`));
+  assert.doesNotMatch(completed, new RegExp("a".repeat(64)));
   assert.match(completed, /行数:/);
-  assert.match(completed, /req_export_result/);
+  assert.doesNotMatch(completed, /req_export_result/);
   assert.doesNotMatch(completed, /must-not-render/);
   assert.doesNotMatch(completed, /secret,csv/);
 
@@ -443,8 +444,8 @@ test("audit panel renders bounded export success and error feedback without raw 
       message: "raw SQL and header dump must not render",
     },
   }, auditAdminContext());
-  assert.match(failed, /audit_export\.too_large/);
-  assert.match(failed, /req_too_large/);
+  assert.doesNotMatch(failed, /audit_export\.too_large/);
+  assert.doesNotMatch(failed, /req_too_large/);
   assert.doesNotMatch(failed, /raw SQL/);
   assert.doesNotMatch(failed, /header dump/);
 });
@@ -463,8 +464,8 @@ test("audit panel shows code/request_id errors and stable empty pagination", () 
     auditAdminContext(),
   );
 
-  assert.match(errorHtml, /audit_log.filter_invalid/);
-  assert.match(errorHtml, /req_bad_filter/);
+  assert.doesNotMatch(errorHtml, /audit_log.filter_invalid/);
+  assert.doesNotMatch(errorHtml, /req_bad_filter/);
   assert.match(errorHtml, /audit-log-filter-form/);
   assert.match(errorHtml, /audit-log-filter-reset/);
   assert.match(emptyHtml, /0-0 \/ 0/);
@@ -513,7 +514,7 @@ test("audit navigation renders for admin and remains hidden from developer", () 
   });
 
   assert.match(adminContainer.innerHTML, /audit-logs-panel/);
-  assert.match(adminContainer.innerHTML, new RegExp(longRequestId));
+  assert.doesNotMatch(adminContainer.innerHTML, new RegExp(longRequestId));
   assert.doesNotMatch(developerContainer.innerHTML, /audit-logs-panel/);
   assert.doesNotMatch(developerContainer.innerHTML, new RegExp(longRequestId));
   assert.doesNotMatch(developerContainer.innerHTML, /audit-log-export-csv/);

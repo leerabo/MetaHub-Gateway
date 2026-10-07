@@ -479,6 +479,16 @@ test("PRD-146 shell menu renders the real Workspace account without Legacy user 
   assert.doesNotMatch(html, /undefined/);
 });
 
+test("PRD-146 Workspace menu keeps only account, workspace and logout actions", () => {
+  const current = shell();
+  for (const role of ["owner", "admin", "viewer"]) {
+    current.workspaceContext.role = role;
+    const html = renderConsoleShell({ consoleShellState: current, contentHtml: "" });
+    assert.match(html, /id="logout-button"/u);
+    assert.doesNotMatch(html, /data-partner-handoff/u);
+  }
+});
+
 for (const locale of ["zh-CN", "en-US"]) {
   test(`PRD-146 every registered Workspace route has a ${locale} display label`, () => {
     const i18n = createI18n(locale);
@@ -647,8 +657,8 @@ test("PRD-146 unavailable route fallback does not claim a role denial or a fixed
   assert.equal(result.activeNavigationItemId, "feedback-summary");
   assert.equal(result.sidebarExpandedGroupKey, "observability");
   assert.equal(cleared, true);
-  assert.match(result.warning, /入口.*不可用/);
-  assert.doesNotMatch(result.warning, /角色|权限|概览/);
+  assert.match(result.warning, /职责|权限|角色/);
+  assert.match(result.warning, /可访问页面|accessible page/);
 });
 
 test("PRD-146 successful visible navigation clears only the previous shell messages", async () => {

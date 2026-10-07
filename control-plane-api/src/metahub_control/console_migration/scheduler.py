@@ -37,20 +37,27 @@ from .manifest import (
 
 logger = logging.getLogger("metahub.control.console_migration.scheduler")
 ContextFactory = Callable[[FastAPI], AbstractAsyncContextManager[None]]
-DEFAULT_LEASE_SECONDS = 15.0
+DEFAULT_LEASE_SECONDS = 45.0
 # Lease renewal is bounded by one third of the default 15 second lease. Five
 # seconds keeps the registry responsive while avoiding a continuous SQLite
 # writer stream that can starve health reads on the local trial database.
 DEFAULT_POLL_SECONDS = 5.0
 DEFAULT_SHUTDOWN_SECONDS = 10.0
+# SQLite uses one database writer and keeps a page cache per live connection.
+# Starting every registry queue at once makes the local trial process hold dozens
+# of caches and lets lock waits accumulate. Keep all queues enabled, but time-slice
+# a small bounded set locally. PostgreSQL retains full queue concurrency.
+SQLITE_MAX_ACTIVE_CONTEXTS = 2
+SQLITE_CONTEXT_MAX_AGE_SECONDS = 90.0
+OBSERVATION_INTERVAL_SECONDS = 30.0
 SLOW_DATABASE_SECONDS = 0.5
 # 观测行是后台诊断事实，不应为争用业务写锁等待整个通用 SQLite 超时。
 # 观测失败会按既有 dependency_unavailable 计数并在下一轮重试；业务请求不能被这条非关键写入拖住。
-OBSERVATION_BUSY_TIMEOUT_MILLISECONDS = 100
+OBSERVATION_BUSY_TIMEOUT_MILLISECONDS = 250
 # Registry lease writes are maintenance traffic. A long SQLite busy wait can
 # block the coordinator worker for the whole HTTP read timeout. Fail fast and
 # retry on the next coordinator tick while the current lease is still valid.
-COORDINATOR_BUSY_TIMEOUT_MILLISECONDS = 750
+COORDINATOR_BUSY_TIMEOUT_MILLISECONDS = 2000
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +92,7 @@ class _ActiveContext:
     binding: SchedulerContextBinding
     manager: AbstractAsyncContextManager[None]
     leases: tuple[SchedulerLeaseProof, ...]
+    started_at: float
 
 
 @asynccontextmanager
@@ -163,16 +171,60 @@ async def _coordinator_loop(
     lease_seconds = max(3.0, lease_seconds)
     poll_seconds = min(max(0.05, poll_seconds), lease_seconds / 3)
     active: dict[tuple[str, str], _ActiveContext] = {}
+    # SQLite 上限只限制同时存活的上下文；轮转游标保证达到上限后，
+    # 下一轮会继续尝试后续域和队列，而不是每次从 bindings[0] 重来。
+    binding_cursor = 0
+    queue_cursors: dict[str, int] = {}
     stats = _CoordinatorStats()
     observation_task: asyncio.Task | None = None
+    last_observation_at = 0.0
     try:
         while not stop.is_set():
             await _renew_active(app, replica_code, active, stats, lease_seconds)
-            for binding in bindings:
+            # A local SQLite process cannot afford one permanent task tree per
+            # scheduler domain. Retire the oldest context gracefully after a
+            # bounded interval so the next enabled binding gets a turn. This is
+            # deliberately age based rather than cancellation based: scheduler
+            # workers may be awaiting a database thread and must finish cleanup.
+            now = monotonic()
+            retire_key = next(
+                (
+                    key for key, child in sorted(
+                        active.items(), key=lambda item: item[1].started_at
+                    )
+                    if now - child.started_at >= SQLITE_CONTEXT_MAX_AGE_SECONDS
+                ),
+                None,
+            )
+            if retire_key is not None:
+                await _stop_active(app, replica_code, active, retire_key, stats)
+            if bindings:
+                binding_order = tuple(
+                    (index, bindings[(binding_cursor + index) % len(bindings)])
+                    for index in range(len(bindings))
+                )
+            else:
+                binding_order = ()
+            for binding_index, binding in binding_order:
                 if stop.is_set():
                     break
+                active_scheduler_codes = {
+                    child.binding.scheduler_code for child in active.values()
+                }
+                # 同一域的分片必须可以全部启动，否则该域自己的 worker 集合会
+                # 永远缺少队列。SQLite 限制只作用于不同域之间的并发上下文。
+                if (
+                    _sqlite_scheduler_mode(config)
+                    and len(active) >= SQLITE_MAX_ACTIVE_CONTEXTS
+                    and binding.scheduler_code not in active_scheduler_codes
+                ):
+                    break
                 await _renew_active(app, replica_code, active, stats, lease_seconds)
-                queues = _queue_claim_order(binding.scheduler_code, replica_code)
+                queues = _queue_claim_order(
+                    binding.scheduler_code,
+                    replica_code,
+                    rotation=queue_cursors.get(binding.scheduler_code, 0),
+                )
                 if all((binding.scheduler_code, queue.code) in active for queue in queues):
                     continue
                 lease = None
@@ -221,7 +273,14 @@ async def _coordinator_loop(
                     binding=binding,
                     manager=manager,
                     leases=leases,
+                    started_at=monotonic(),
                 )
+                binding_cursor = (binding_cursor + binding_index + 1) % len(bindings)
+                queue_index = next(
+                    (index for index, queue in enumerate(queues) if queue.code == lease.queue_code),
+                    0,
+                )
+                queue_cursors[binding.scheduler_code] = (queue_index + 1) % len(queues)
                 stats.accepted_count += 1
                 stats.persisted_count += 1
             _publish_active_state(app, active)
@@ -232,11 +291,15 @@ async def _coordinator_loop(
             # A disabled local scheduler profile has no active lease or registry
             # binding; avoid starting the diagnostic writer in that mode because
             # it would still contend on SQLite despite doing no useful work.
-            if observation_task is None:
+            if (
+                observation_task is None
+                and monotonic() - last_observation_at >= OBSERVATION_INTERVAL_SECONDS
+            ):
                 observation_task = asyncio.create_task(
                     _observe(app, replica_code, active, stats),
                     name="scheduler-coordinator-observation",
                 )
+                last_observation_at = monotonic()
             try:
                 await asyncio.wait_for(stop.wait(), timeout=poll_seconds)
             except TimeoutError:
@@ -250,6 +313,10 @@ async def _coordinator_loop(
         if observation_task is not None:
             await observation_task
         await _observe(app, replica_code, active, stats)
+
+
+def _sqlite_scheduler_mode(config: AppConfig) -> bool:
+    return str(getattr(config, "database_url", "") or "").lower().startswith("sqlite:")
 
 
 async def _renew_active(
@@ -365,14 +432,15 @@ async def _stop_active(
         _warning(scheduler_code, exc.code)
 
 
-def _queue_claim_order(scheduler_code: str, replica_code: str):
+def _queue_claim_order(scheduler_code: str, replica_code: str, *, rotation: int = 0):
     queues = SCHEDULER_QUEUES_BY_SCHEDULER.get(scheduler_code, ())
     if not queues:
         return ()
-    offset = int.from_bytes(
+    base_offset = int.from_bytes(
         hashlib.sha256(f"{replica_code}\x1f{scheduler_code}".encode()).digest()[:8],
         "big",
     ) % len(queues)
+    offset = (base_offset + max(0, int(rotation))) % len(queues)
     return queues[offset:] + queues[:offset]
 
 
@@ -453,7 +521,10 @@ def _claim_scheduler_leases(
     connection = _connect(config)
     try:
         _configure_coordinator_connection(connection)
-        connection.execute("BEGIN IMMEDIATE")
+        # Observation is telemetry, not scheduler authority. A deferred
+        # transaction lets active business writers finish instead of competing
+        # for the SQLite writer lock before the single upsert is ready.
+        connection.execute("BEGIN")
         registry_generation = _validate_registry(connection, definition)
         _validate_queue_contracts(connection, scheduler_code)
         now = _database_now(connection)

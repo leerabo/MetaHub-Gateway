@@ -65,6 +65,36 @@ UNKNOWN_ERROR_RULE = ErrorDiagnosisRule(
 
 ERROR_DIAGNOSIS_RULES: tuple[ErrorDiagnosisRule, ...] = (
     ErrorDiagnosisRule(
+        rule_id="gateway_stream_session_unavailable",
+        error_codes=("gateway.stream_session_unavailable",),
+        category="gateway_internal",
+        reason="网关无法建立流式连接，该候选模型没有收到请求。",
+        suggestion="系统会继续尝试下一个可用模型；如果所有候选都失败，请检查网关状态。",
+        action="检查网关流式会话和网络状态。",
+        severity="error",
+        retryable=True,
+    ),
+    ErrorDiagnosisRule(
+        rule_id="gateway_upstream_transport_failed",
+        error_codes=("gateway.upstream_transport_failed",),
+        category="provider_network",
+        reason="模型服务网络连接失败。",
+        suggestion="系统会继续尝试下一个可用模型；请检查模型服务地址和网络。",
+        action="检查模型服务连接和网关网络。",
+        severity="warning",
+        retryable=True,
+    ),
+    ErrorDiagnosisRule(
+        rule_id="gateway_upstream_unavailable",
+        error_codes=("gateway.upstream_unavailable",),
+        category="provider_unavailable",
+        reason="模型服务暂时不可用。",
+        suggestion="系统会继续尝试下一个可用模型；稍后可再次调用。",
+        action="检查模型服务状态和备用模型配置。",
+        severity="warning",
+        retryable=True,
+    ),
+    ErrorDiagnosisRule(
         rule_id="local_endpoint_input_invalid",
         error_codes=(
             "provider.local_endpoint_requires_local_api",

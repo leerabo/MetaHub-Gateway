@@ -33,7 +33,7 @@ export async function createProject({ controlApiUrl, authentication, token, sign
     },
     body: JSON.stringify(
       compactPayload({
-        project_code: projectCode,
+        ...(projectCode ? { project_code: projectCode } : {}),
         name,
         description,
       }),
@@ -63,6 +63,12 @@ export async function updateProject({ controlApiUrl, authentication, token, sign
   });
 }
 
+export async function deleteProject({ controlApiUrl, authentication, token, signal, projectId }) {
+  return projectsRequest(`${controlApiUrl}/projects/${encodeURIComponent(projectId)}`, {
+    method: "DELETE", authentication, token, signal,
+  });
+}
+
 /**
  * 查询当前租户可见的应用列表。
  * project_id 是业务筛选条件，不是安全边界；后端仍按登录态 tenant_id 过滤。
@@ -81,7 +87,7 @@ export async function listApplications({ controlApiUrl, authentication, token, s
  * 创建项目下的应用归属。
  * 应用必须挂在项目下面，前端不允许绕过 project_id 提交独立应用。
  */
-export async function createApplication({ controlApiUrl, authentication, token, signal, projectId, applicationCode, name, description }) {
+export async function createApplication({ controlApiUrl, authentication, token, signal, projectId, applicationCode: _applicationCode, name, description }) {
   return projectsRequest(`${controlApiUrl}/applications`, {
     method: "POST",
     authentication, token, signal,
@@ -91,7 +97,6 @@ export async function createApplication({ controlApiUrl, authentication, token, 
     body: JSON.stringify(
       compactPayload({
         project_id: projectId,
-        application_code: applicationCode,
         name,
         description,
       }),
@@ -118,6 +123,31 @@ export async function updateApplication({ controlApiUrl, authentication, token, 
         status,
       }),
     ),
+  });
+}
+
+export async function deleteApplication({ controlApiUrl, authentication, token, signal, applicationId }) {
+  return projectsRequest(`${controlApiUrl}/applications/${encodeURIComponent(applicationId)}`, {
+    method: "DELETE", authentication, token, signal,
+  });
+}
+
+/** 读取应用成员选择器的分页候选和完整已选 ID。 */
+export async function listApplicationMembers({ controlApiUrl, authentication, token, signal, applicationId, search, limit = 25, offset = 0 } = {}) {
+  const url = new URL(`${controlApiUrl}/applications/${encodeURIComponent(applicationId)}/members`);
+  setOptionalParam(url, "search", search);
+  url.searchParams.set("limit", String(limit));
+  url.searchParams.set("offset", String(offset));
+  return projectsRequest(url.toString(), { authentication, token, signal });
+}
+
+/** 保存应用成员集合；同步员工个人 KEY 的当前项目和应用归属。 */
+export async function updateApplicationMembers({ controlApiUrl, authentication, token, signal, applicationId, membershipIds } = {}) {
+  return projectsRequest(`${controlApiUrl}/applications/${encodeURIComponent(applicationId)}/members`, {
+    method: "PUT",
+    authentication, token, signal,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ membership_ids: Array.from(new Set((membershipIds ?? []).map((value) => String(value)))) }),
   });
 }
 

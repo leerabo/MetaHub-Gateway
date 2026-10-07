@@ -30,6 +30,7 @@ class ModelCatalogInfo(BaseModel):
     context_window: int
     input_price_per_1k: float
     output_price_per_1k: float
+    cache_price_per_1k: float
     currency: str
     price_schema_version: str | None
     status: str
@@ -75,6 +76,8 @@ class CreateModelRequest(BaseModel):
     context_window: int | None = 0
     input_price_per_1k: float | None = 0
     output_price_per_1k: float | None = 0
+    # 旧客户端未携带缓存价时由服务层沿用输入价；显式 0 仍表示免费命中。
+    cache_price_per_1k: float | None = None
     currency: str | None = "CNY"
     price_schema_version: str | None = None
     description: str | None = None
@@ -94,6 +97,7 @@ class UpdateModelRequest(BaseModel):
     context_window: int | None = None
     input_price_per_1k: float | None = None
     output_price_per_1k: float | None = None
+    cache_price_per_1k: float | None = None
     currency: str | None = None
     price_schema_version: str | None = None
     description: str | None = None

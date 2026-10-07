@@ -529,6 +529,8 @@ SUMMARY_FIELDS: dict[str, frozenset[str]] = {
             "status",
             "default_model_id",
             "fallback_model_id",
+            "fallback_model_count",
+            "fallback_model_order_sha256",
             "routing_mode",
             "quality_weight_bps",
             "cost_weight_bps",

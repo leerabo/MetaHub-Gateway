@@ -20,6 +20,7 @@ class ResolvedCostRate:
     currency: str
     input_price_per_1k: Decimal
     output_price_per_1k: Decimal
+    cache_price_per_1k: Decimal
     price_schema_version: str
     source: str
     source_id: str | None
@@ -40,6 +41,7 @@ def resolve_workspace_cost_rate(
             """
             SELECT rate.provider_id,provider.provider_code,rate.model_id,rate.currency,
               version.input_rate_micros_per_1k,version.output_rate_micros_per_1k,
+              version.cache_rate_micros_per_1k,
               version.workspace_provider_cost_rate_version_id,version.effective_from
             FROM workspace_tenant_bindings binding
             JOIN workspace_provider_cost_rates rate
@@ -67,19 +69,25 @@ def resolve_workspace_cost_rate(
               AND unixepoch(version.effective_from)<=unixepoch(?)
               AND(version.effective_until IS NULL
                 OR unixepoch(version.effective_until)>unixepoch(?))
+              AND NOT EXISTS(
+                SELECT 1
+                FROM workspace_provider_cost_rate_versions later
+                WHERE later.workspace_provider_cost_rate_id=version.workspace_provider_cost_rate_id
+                  AND later.status IN('active','superseded')
+                  AND unixepoch(later.effective_from)<=unixepoch(?)
+                  AND unixepoch(later.effective_from)>unixepoch(version.effective_from)
+              )
               AND model.status='active' AND provider.status='active'
             ORDER BY version.effective_from DESC,
               version.workspace_provider_cost_rate_version_id DESC
-            LIMIT 2
+            LIMIT 1
             """,
-            (tenant_id, model_id, observed_at, observed_at),
+            (tenant_id, model_id, observed_at, observed_at, observed_at),
         ).fetchall()
-        if len(rows) > 1:
-            raise sqlite3.IntegrityError("workspace_provider_cost_rate_ambiguous")
         if not rows:
             # A retired Workspace rate is an explicit migration boundary: no
             # active workspace price remains authoritative, so legacy model
-            # catalog data may be read for old databases.  An active head with
+            # catalog data may be read for old databases. An active head with
             # no effective version (future/expired/invalid) stays fail-closed.
             active_head = connection.execute(
                 """
@@ -95,9 +103,57 @@ def resolve_workspace_cost_rate(
             ).fetchone()
             if active_head is not None:
                 return None
-            return _resolve_legacy_rate(
-                connection, tenant_id=tenant_id, model_id=model_id, observed_at=observed_at
-            )
+            # A disabled head is an explicit compatibility boundary. Keep
+            # legacy prices usable for migrations and old fixtures, while a
+            # model with no Workspace rate resource remains unpriced below.
+            retired_rate = connection.execute(
+                """
+                SELECT 1
+                FROM workspace_provider_cost_rates rate
+                JOIN workspace_provider_cost_rate_heads head
+                  ON head.workspace_provider_cost_rate_id=rate.workspace_provider_cost_rate_id
+                WHERE rate.tenant_id=? AND rate.model_id=?
+                  AND head.adoption_state='disabled'
+                  AND EXISTS(
+                    SELECT 1
+                    FROM workspace_provider_cost_rate_versions version
+                    WHERE version.workspace_provider_cost_rate_id=rate.workspace_provider_cost_rate_id
+                      AND version.source_type='legacy_model'
+                  )
+                LIMIT 1
+                """,
+                (tenant_id, model_id),
+            ).fetchone()
+            if retired_rate is not None:
+                return _resolve_legacy_rate(
+                    connection,
+                    tenant_id=tenant_id,
+                    model_id=model_id,
+                    observed_at=observed_at,
+                )
+            # Older workspaces may have valid model-catalog prices but no
+            # Workspace rate resource yet. Use that explicit versioned price
+            # until the workspace resource is created; a missing schema still
+            # remains unpriced and can never be mistaken for free.
+            legacy_price = connection.execute(
+                """
+                SELECT price_schema_version
+                FROM models
+                WHERE tenant_id=? AND model_id=? AND status='active'
+                """,
+                (tenant_id, model_id),
+            ).fetchone()
+            legacy_schema = str(legacy_price["price_schema_version"] or "").strip() if legacy_price is not None else ""
+            # ``legacy-*`` is the explicit migration marker for a catalog value
+            # that must not be used for new accounting facts.
+            if legacy_schema and not legacy_schema.startswith("legacy-"):
+                return _resolve_legacy_rate(
+                    connection,
+                    tenant_id=tenant_id,
+                    model_id=model_id,
+                    observed_at=observed_at,
+                )
+            return None
         row = rows[0]
         version_id = str(row["workspace_provider_cost_rate_version_id"])
         return ResolvedCostRate(
@@ -107,6 +163,7 @@ def resolve_workspace_cost_rate(
             currency=_currency(row["currency"]),
             input_price_per_1k=_micros(row["input_rate_micros_per_1k"]),
             output_price_per_1k=_micros(row["output_rate_micros_per_1k"]),
+            cache_price_per_1k=_micros(row["cache_rate_micros_per_1k"]),
             price_schema_version=f"provider-cost-v1:{version_id}",
             source="workspace_provider_cost_rate",
             source_id=version_id,
@@ -132,6 +189,8 @@ def _resolve_legacy_rate(
           CASE WHEN plan.price_plan_id IS NOT NULL
             THEN plan.output_price_per_1k ELSE model.output_price_per_1k END output_price,
           CASE WHEN plan.price_plan_id IS NOT NULL
+            THEN plan.cache_price_per_1k ELSE model.cache_price_per_1k END cache_price,
+          CASE WHEN plan.price_plan_id IS NOT NULL
             THEN plan.currency ELSE model.currency END currency,
           CASE WHEN plan.price_plan_id IS NOT NULL
             THEN plan.price_schema_version ELSE model.price_schema_version END schema_version,
@@ -154,17 +213,22 @@ def _resolve_legacy_rate(
     try:
         input_price = Decimal(str(row["input_price"]))
         output_price = Decimal(str(row["output_price"]))
+        cache_price = Decimal(str(row["cache_price"]))
     except (InvalidOperation, TypeError, ValueError):
         raise sqlite3.IntegrityError("legacy_provider_cost_rate_invalid") from None
     if (
         not input_price.is_finite()
         or not output_price.is_finite()
+        or not cache_price.is_finite()
         or input_price < 0
         or output_price < 0
         or input_price > MAX_PRICE_PER_1K
         or output_price > MAX_PRICE_PER_1K
+        or cache_price < 0
+        or cache_price > MAX_PRICE_PER_1K
         or max(-input_price.as_tuple().exponent, 0) > MAX_PRICE_DECIMAL_PLACES
         or max(-output_price.as_tuple().exponent, 0) > MAX_PRICE_DECIMAL_PLACES
+        or max(-cache_price.as_tuple().exponent, 0) > MAX_PRICE_DECIMAL_PLACES
     ):
         raise sqlite3.IntegrityError("legacy_provider_cost_rate_invalid")
     price_plan_id = row["price_plan_id"]
@@ -175,6 +239,7 @@ def _resolve_legacy_rate(
         currency=_currency(row["currency"]),
         input_price_per_1k=input_price,
         output_price_per_1k=output_price,
+        cache_price_per_1k=cache_price,
         price_schema_version=str(row["schema_version"]),
         source="price_plan" if price_plan_id is not None else "model_catalog",
         source_id=(str(price_plan_id) if price_plan_id is not None else None),

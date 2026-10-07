@@ -299,7 +299,7 @@ test("PRD-052 budget center renders aggregate summaries and ledger-reservation s
   );
 
   assert.match(html, /预算中心/);
-  assert.match(html, /Environment 摘要/);
+  assert.match(html, /运行环境摘要/);
   assert.match(html, /适用预算作用链/);
   assert.match(html, /有效动作/);
   assert.match(html, /Project A 日预算/);
@@ -308,6 +308,8 @@ test("PRD-052 budget center renders aggregate summaries and ledger-reservation s
   assert.match(html, /72.000000/);
   assert.match(html, /8.000000/);
   assert.match(html, /bb_project_a/);
+  assert.match(html, /data-budget-block-id="bb_project_a"/);
+  assert.doesNotMatch(html, /<em>bsc_/);
   assert.match(html, /data-budget-scope-option="project"/);
   assert.match(html, /data-budget-scope-option="virtual_key"/);
   assert.match(html, /id="budget-scope-chain-key"/);

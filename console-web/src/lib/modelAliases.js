@@ -45,6 +45,7 @@ export async function createModelAlias({
   environment,
   defaultModelId,
   fallbackModelId,
+  fallbackModelIds,
   description,
 }) {
   // 路由和模型判断决定实际上游调用，必须保持可解释和可追踪。
@@ -61,6 +62,7 @@ export async function createModelAlias({
       environment,
       default_model_id: defaultModelId,
       fallback_model_id: fallbackModelId || undefined,
+      fallback_model_ids: fallbackModelIds ?? undefined,
       description,
     }),
   }, requestId), signal, { requestId });
@@ -82,6 +84,7 @@ export async function updateModelAlias({
   environment,
   defaultModelId,
   fallbackModelId,
+  fallbackModelIds,
   description,
   status,
   expectedRoutingPolicyVersion,
@@ -99,6 +102,7 @@ export async function updateModelAlias({
       environment,
       default_model_id: defaultModelId,
       fallback_model_id: fallbackModelId,
+      fallback_model_ids: fallbackModelIds,
       description,
       status,
       expected_routing_policy_version: expectedRoutingPolicyVersion,
@@ -119,6 +123,7 @@ export async function updateFallbackPolicy({
   modelAliasId,
   enabled,
   fallbackModelId,
+  fallbackModelIds,
   triggerConditions,
   clearFallbackModel = false,
   expectedRoutingPolicyVersion,
@@ -131,8 +136,11 @@ export async function updateFallbackPolicy({
   };
   if (clearFallbackModel) {
     body.fallback_model_id = null;
+    body.fallback_model_ids = [];
   } else if (fallbackModelId !== undefined) {
     body.fallback_model_id = fallbackModelId;
+  } else if (fallbackModelIds !== undefined) {
+    body.fallback_model_ids = fallbackModelIds;
   }
   return modelAliasesRequest(
     `${controlApiUrl}/model-aliases/${encodeURIComponent(modelAliasId)}/fallback`,
@@ -322,7 +330,7 @@ function safeCurrentRoutingPolicy(payload) {
     status: candidate.status,
     version: candidate.version,
     candidates: Array.isArray(candidate.candidates)
-      ? candidate.candidates.slice(0, 2).map(safeRoutingPolicyCandidate)
+      ? candidate.candidates.slice(0, 32).map(safeRoutingPolicyCandidate)
       : [],
     warnings: Array.isArray(candidate.warnings) ? candidate.warnings.slice(0, 20) : [],
     created_at: candidate.created_at,

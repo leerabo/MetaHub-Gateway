@@ -308,6 +308,27 @@ test("renderConsoleShell localizes the advanced navigation group", () => {
   assert.doesNotMatch(html, />advanced<\/span>/u);
 });
 
+test("organization admins do not see the platform-only data management entry", () => {
+  const html = renderConsoleShell({
+    authContext: { user: { display_name: "Admin", email: "admin@example.com", role: "admin" } },
+    consoleShellState: {
+      activeNavigationItemId: "overview",
+      navigation: {
+        role_code: "admin",
+        active_navigation_item_id: "overview",
+        navigation_items: [
+          { id: "overview", label: "概览", group: "总览", target_section: "overview", order: 1 },
+          { id: "tenant-data-lifecycle", label: "数据管理", group: "空间", target_section: "tenant-data-lifecycle", order: 2 },
+        ],
+      },
+    },
+    contentHtml: "",
+    i18n: createI18n("zh-CN"),
+  });
+  assert.doesNotMatch(html, /data-console-nav="tenant-data-lifecycle"/u);
+  assert.doesNotMatch(html, /数据管理/u);
+});
+
 test("localizeConsoleGroup keeps internal group codes stable while localizing display text", () => {
   const zh = createI18n("zh-CN");
   const en = createI18n("en-US");
@@ -389,7 +410,7 @@ test("renderConsoleShell restores only one expanded navigation group", () => {
   assert.equal((html.match(/class="sidebar-group-items" hidden/g) ?? []).length, 1);
 });
 
-test("renderConsoleShell reveals an active deferred item inside more controls", () => {
+test("renderConsoleShell keeps all home entries together", () => {
   const html = renderConsoleShell({
     authContext: { user: { display_name: "Admin", email: "admin@example.com", role: "admin" } },
     consoleShellState: {
@@ -407,11 +428,56 @@ test("renderConsoleShell reveals an active deferred item inside more controls", 
     contentHtml: "<section>Content</section>",
   });
 
-  assert.match(html, /class="sidebar-group-more" open>[\s\S]*data-console-nav="quickstart"/u);
+  assert.doesNotMatch(html, /class="sidebar-group-more"/u);
   assert.match(html, /data-console-nav="quickstart"[^>]*aria-current="page"/u);
 });
 
-test("deferred controls retain a stable business group hook", () => {
+test("renderConsoleShell exposes every item in an expanded group", () => {
+  const html = renderConsoleShell({
+    authContext: { user: { display_name: "Admin", email: "admin@example.com", role: "admin" } },
+    consoleShellState: {
+      sidebarExpandedGroupKey: "gateway",
+      navigation: {
+        active_navigation_item_id: "providers",
+        navigation_items: [
+          { id: "overview", label: "概览", group: "首页", group_code: "home", order: 1 },
+          { id: "providers", label: "模型服务", group: "Gateway", group_code: "gateway", order: 1 },
+          { id: "models", label: "模型目录", group: "Gateway", group_code: "gateway", order: 2 },
+          { id: "routing", label: "路由", group: "Gateway", group_code: "gateway", order: 3 },
+          { id: "keys", label: "KEY 管理", group: "Gateway", group_code: "gateway", order: 4 },
+        ],
+      },
+    },
+    contentHtml: "",
+  });
+
+  assert.match(html, /data-sidebar-group="gateway"[^>]*>[\s\S]*data-console-nav="providers"[\s\S]*data-console-nav="models"[\s\S]*data-console-nav="routing"[\s\S]*data-console-nav="keys"/u);
+  assert.doesNotMatch(html, /sidebar-group-more|sidebar-deferred-controls|更多控制/u);
+  assert.match(html, /data-sidebar-group-toggle="gateway"[^>]*aria-expanded="true"/u);
+  assert.match(html, /data-sidebar-group-toggle="home"[^>]*aria-expanded="false"/u);
+});
+
+test("organization overview does not show a self-return home link", () => {
+  const html = renderConsoleShell({
+    authContext: { user: { display_name: "Admin", email: "admin@example.com", role: "admin" } },
+    consoleShellState: {
+      navigation: {
+        role_code: "admin",
+        active_navigation_item_id: "overview",
+        navigation_items: [
+          { id: "overview", label: "Overview", group: "Home", group_code: "home", order: 1 },
+          { id: "quickstart", label: "Getting started", group: "Home", group_code: "home", order: 2 },
+        ],
+      },
+      activeNavigationItemId: "overview",
+      activeRouteCode: "workspace.home.overview",
+    },
+    contentHtml: "<section>Content</section>",
+  });
+  assert.doesNotMatch(html, /console-home-return/u);
+});
+
+test("hidden navigation items stay out of the sidebar", () => {
   const html = renderConsoleShell({
     authContext: { user: { display_name: "Admin", email: "admin@example.com", role: "admin" } },
     consoleShellState: {
@@ -424,7 +490,7 @@ test("deferred controls retain a stable business group hook", () => {
     },
     contentHtml: "<section>Content</section>",
   });
-  assert.match(html, /data-sidebar-deferred-group="finance"/u);
+  assert.doesNotMatch(html, /data-console-nav="usage"|sidebar-deferred-controls|data-sidebar-deferred-group/u);
 });
 
 test("renderDeveloperStart renders active navigation content when shell state is present", () => {

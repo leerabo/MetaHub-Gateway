@@ -480,11 +480,18 @@ test("renderers escape dynamic facts and preserve Platform versus Workspace boun
     ...createWorkspaceCommercialAccountingStore().snapshot(),
     phase: "ready",
     canManageRates: true,
-    rates: workspaceRates({ rates: [rate({ provider_name: unsafe })] }),
+    models: { models: [{ provider_name: unsafe, display_name: "Kimi", currency: "CNY", input_price_per_1k: 1, cache_price_per_1k: 0.5, output_price_per_1k: 2, status: "active" }] },
   }, [{ id: "usage" }, { id: "budgets" }, { id: "private-admin", visible: false }]);
   assert.match(finOpsHtml, /unsafe&lt;script&gt;alert\(1\)&lt;\/script&gt;/u);
-  assert.match(finOpsHtml, /href="#usage"/u);
-  assert.match(finOpsHtml, /href="#budgets"/u);
+  assert.match(finOpsHtml, /data-console-nav="usage"/u);
+  assert.match(finOpsHtml, /data-console-nav="budgets"/u);
+  assert.match(finOpsHtml, /生效时间/u);
+  assert.match(finOpsHtml, /<td>0\.5<\/td>/u);
+  assert.match(finOpsHtml, /用量与价格/u);
+  assert.match(finOpsHtml, /前往模型目录修改价格/u);
+  assert.doesNotMatch(finOpsHtml, /筛选成本率|新增模型服务价格/u);
+  assert.doesNotMatch(finOpsHtml, /<details[^>]+open[^>]*>/u);
+  assert.doesNotMatch(finOpsHtml, /微单位|模型服务 ID|模型 ID/u);
   assert.doesNotMatch(finOpsHtml, /private-admin|content_sha256|permission_fingerprint/u);
 });
 
@@ -603,6 +610,7 @@ function referenceRate(overrides = {}) {
     currency: "CNY",
     input_rate_micros_per_1k: 15_000,
     output_rate_micros_per_1k: 30_000,
+    cache_rate_micros_per_1k: 7_500,
     effective_from: NOW,
     effective_until: LATER,
     source_version: "provider-price-2026-09",
@@ -743,6 +751,7 @@ function rate(overrides = {}) {
     version_number: 2,
     input_rate_micros_per_1k: 12_000,
     output_rate_micros_per_1k: 24_000,
+    cache_rate_micros_per_1k: 6_000,
     effective_from: NOW,
     effective_until: LATER,
     source_type: "manual",

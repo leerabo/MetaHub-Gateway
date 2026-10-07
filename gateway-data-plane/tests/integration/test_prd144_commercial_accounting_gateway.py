@@ -113,9 +113,9 @@ def _scenario(template: Path, tmp_path: Path) -> SimpleNamespace:
             currency="CNY",
             membership_id=str(owner["workspace_membership_id"]),
             versions=(
-                (VERSION_LKG, 1, 1_000_000, 2_000_000, "2020-01-01T00:00:00Z",
+                (VERSION_LKG, 1, 1_000_000, 2_000_000, 500_000, "2020-01-01T00:00:00Z",
                  "2100-01-01T00:00:00Z", "superseded"),
-                (VERSION_FUTURE, 2, 3_000_000, 4_000_000, "2100-01-01T00:00:00Z",
+                (VERSION_FUTURE, 2, 3_000_000, 4_000_000, 1_500_000, "2100-01-01T00:00:00Z",
                  None, "active"),
             ),
             head_version=VERSION_FUTURE,
@@ -130,7 +130,7 @@ def _scenario(template: Path, tmp_path: Path) -> SimpleNamespace:
             currency="CNY",
             membership_id=str(owner["workspace_membership_id"]),
             versions=(
-                (VERSION_CURRENT, 1, 500_000, 1_000_000,
+                (VERSION_CURRENT, 1, 500_000, 1_000_000, 250_000,
                  "2020-01-01T00:00:00Z", None, "active"),
             ),
             head_version=VERSION_CURRENT,
@@ -145,7 +145,7 @@ def _scenario(template: Path, tmp_path: Path) -> SimpleNamespace:
             currency="USD",
             membership_id=str(owner["workspace_membership_id"]),
             versions=(
-                (VERSION_USD, 1, 1_500_000, 2_500_000,
+                (VERSION_USD, 1, 1_500_000, 2_500_000, 750_000,
                  "2020-01-01T00:00:00Z", None, "active"),
             ),
             head_version=VERSION_USD,
@@ -185,8 +185,8 @@ def _insert_model(
         INSERT INTO models(
           model_id,tenant_id,provider_id,model_alias,upstream_model_name,
           capabilities,status,created_at,updated_at,input_price_per_1k,
-          output_price_per_1k,currency,price_schema_version)
-        VALUES(?,?,?,?,?,'{}','active',?,?,?,?,?,?)
+          output_price_per_1k,cache_price_per_1k,currency,price_schema_version)
+        VALUES(?,?,?,?,?,'{}','active',?,?,?,?,?,?,?)
         """,
         (
             model_id,
@@ -198,6 +198,7 @@ def _insert_model(
             OBSERVED,
             "99.000000",
             "99.000000",
+            "49.500000",
             currency,
             "legacy-price-must-not-resolve",
         ),
@@ -214,7 +215,7 @@ def _insert_rate(
     model_id: str,
     currency: str,
     membership_id: str,
-    versions: tuple[tuple[str, int, int, int, str, str | None, str], ...],
+    versions: tuple[tuple[str, int, int, int, int, str, str | None, str], ...],
     head_version: str,
 ) -> None:
     connection.execute(
@@ -226,15 +227,16 @@ def _insert_rate(
         """,
         (rate_id, workspace_id, tenant_id, provider_id, model_id, currency, OBSERVED),
     )
-    for version_id, number, input_rate, output_rate, start, end, status in versions:
+    for version_id, number, input_rate, output_rate, cache_rate, start, end, status in versions:
         connection.execute(
             """
             INSERT INTO workspace_provider_cost_rate_versions(
               workspace_provider_cost_rate_version_id,workspace_provider_cost_rate_id,
               version_number,input_rate_micros_per_1k,output_rate_micros_per_1k,
+              cache_rate_micros_per_1k,
               effective_from,effective_until,source_type,source_id,source_sha256,
               status,revision,content_sha256,created_by_membership_id,created_at)
-            VALUES(?,?,?,?,?,?,?,'manual',?,?,?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?,'manual',?,?,?,?,?,?,?)
             """,
             (
                 version_id,
@@ -242,6 +244,7 @@ def _insert_rate(
                 number,
                 input_rate,
                 output_rate,
+                cache_rate,
                 start,
                 end,
                 f"manual-{version_id}",
@@ -404,7 +407,9 @@ def test_budget_routing_batch_and_cache_share_exact_workspace_rate(
             price_as_of=OBSERVED_AT,
         )
         assert budget.price_available is True
-        assert budget.cost_cny == Decimal("0.200000")
+        # Prices use the current per-million-token contract. 100 input and 50
+        # output tokens at 99/99 per million cost 0.000200 CNY.
+        assert budget.cost_cny == Decimal("0.000200")
         usd_budget = _estimate_request_cost(
             connection,
             usd_route,
@@ -454,7 +459,7 @@ def test_budget_routing_batch_and_cache_share_exact_workspace_rate(
         )
         connection.commit()
         assert available is True
-        assert estimate.amount == Decimal("0.200000")
+        assert estimate.amount == Decimal("0.000200")
         assert estimate.price_schema_version == f"provider-cost-v1:{VERSION_LKG}"
         assert estimate.price_snapshot_evidence is not None
         assert estimate.price_snapshot_evidence.source == "response_cache_reference"
@@ -486,7 +491,7 @@ def test_usage_writes_exact_rate_snapshot_and_all_internal_finops_owners(
         require_durable=True,
     )
     assert committed is not None and committed.created is True
-    assert committed.amount == "0.200000"
+    assert committed.amount == "0.000200"
     assert committed.price_snapshot_source == "workspace_provider_cost_rate"
     assert committed.price_schema_version == f"provider-cost-v1:{VERSION_LKG}"
     with closing(connect_database(scenario.config.database_url)) as connection:

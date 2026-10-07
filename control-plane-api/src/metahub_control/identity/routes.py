@@ -122,6 +122,7 @@ async def login(request: Request, response: Response) -> IdentitySessionResponse
         client_host=request.client.host if request.client else None,
     )
     _set_identity_cookies(response, _config(request), issued.session_token, issued.csrf_token)
+    _clear_workspace_cookies(response)
     return IdentitySessionResponse(
         account=issued.account,
         current_session=issued.current_session,
@@ -213,6 +214,7 @@ async def register(
     _set_identity_device_cookie(response, device_token)
     if not isinstance(pending, PendingIdentityChallenge):
         _set_identity_cookies(response, _config(request), pending.session_token, pending.csrf_token)
+        _clear_workspace_cookies(response)
         return IdentitySessionResponse(
             account=pending.account,
             current_session=pending.current_session,
@@ -241,6 +243,7 @@ async def verify(request: Request, response: Response) -> IdentitySessionRespons
         device_token=device_token,
     )
     _set_identity_cookies(response, _config(request), issued.session_token, issued.csrf_token)
+    _clear_workspace_cookies(response)
     _set_identity_device_cookie(response, device_token)
     return IdentitySessionResponse(
         account=issued.account,
@@ -329,6 +332,7 @@ async def reset_password(request: Request, response: Response) -> IdentitySessio
         device_token=device_token,
     )
     _set_identity_cookies(response, _config(request), issued.session_token, issued.csrf_token)
+    _clear_workspace_cookies(response)
     _set_identity_device_cookie(response, device_token)
     return IdentitySessionResponse(
         account=issued.account,
@@ -944,6 +948,7 @@ async def rotate_password(request: Request, response: Response) -> IdentityRotat
         client_host=request.client.host if request.client else None,
     )
     _set_identity_cookies(response, _config(request), issued.session_token, issued.csrf_token)
+    _clear_workspace_cookies(response)
     return IdentityRotateResponse(
         rotated=True,
         account=issued.account,
@@ -1258,6 +1263,12 @@ def _clear_identity_cookies(response: Response) -> None:
         httponly=False,
         samesite="strict",
     )
+    _clear_workspace_cookies(response)
+
+
+def _clear_workspace_cookies(response: Response) -> None:
+    """Remove the browser's account-scoped Workspace credentials."""
+
     response.delete_cookie(
         WORKSPACE_SESSION_COOKIE,
         path="/",

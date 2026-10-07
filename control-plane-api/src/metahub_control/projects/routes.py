@@ -9,27 +9,33 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 
 from metahub_control.audit import build_audit_request_meta
 from metahub_control.auth import AuthContext, require_workspace_or_legacy_permissions
 
 from .models import (
     ApplicationListResponse,
+    ApplicationMembersResponse,
     ApplicationResponse,
     CreateApplicationRequest,
     CreateProjectRequest,
     ProjectListResponse,
     ProjectResponse,
     UpdateApplicationRequest,
+    UpdateApplicationMembersRequest,
     UpdateProjectRequest,
 )
 from .service import (
     create_application,
     create_project,
+    delete_application,
+    delete_project,
     list_applications,
     list_projects,
     update_application,
+    list_application_members,
+    update_application_members,
     update_project,
 )
 
@@ -53,6 +59,7 @@ async def get_projects(
         context,
         status=status_filter,
         search=search,
+        personal_only="project.write" not in context.permission_codes,
         request_id=_request_id(request),
         trace_id=_trace_id(request),
     )
@@ -100,6 +107,22 @@ async def patch_project(
     )
 
 
+@router.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_project(
+    project_id: str,
+    request: Request,
+    context: Annotated[AuthContext, Depends(require_workspace_or_legacy_permissions("project.write"))],
+) -> Response:
+    delete_project(
+        request.app.state.config,
+        context,
+        project_id,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get("/applications", response_model=ApplicationListResponse)
 async def get_applications(
     request: Request,
@@ -119,6 +142,7 @@ async def get_applications(
         project_id=project_id,
         status=status_filter,
         search=search,
+        personal_only="project.write" not in context.permission_codes,
         request_id=_request_id(request),
         trace_id=_trace_id(request),
     )
@@ -166,6 +190,70 @@ async def patch_application(
         application_id,
         payload,
         audit_request_meta=build_audit_request_meta(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+
+
+@router.delete("/applications/{application_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_application(
+    application_id: str,
+    request: Request,
+    context: Annotated[AuthContext, Depends(require_workspace_or_legacy_permissions("project.write"))],
+) -> Response:
+    delete_application(
+        request.app.state.config,
+        context,
+        application_id,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/applications/{application_id}/members", response_model=ApplicationMembersResponse)
+async def get_application_members(
+    application_id: str,
+    request: Request,
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("project.read")),
+    ],
+    search: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> ApplicationMembersResponse:
+    """读取应用成员选择器的分页候选。"""
+
+    return list_application_members(
+        request.app.state.config,
+        context,
+        application_id,
+        search=search,
+        limit=limit,
+        offset=offset,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+
+
+@router.put("/applications/{application_id}/members", response_model=ApplicationMembersResponse)
+async def put_application_members(
+    application_id: str,
+    payload: UpdateApplicationMembersRequest,
+    request: Request,
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("project.write")),
+    ],
+) -> ApplicationMembersResponse:
+    """保存应用的完整成员选择集合。"""
+
+    return update_application_members(
+        request.app.state.config,
+        context,
+        application_id,
+        payload,
         request_id=_request_id(request),
         trace_id=_trace_id(request),
     )

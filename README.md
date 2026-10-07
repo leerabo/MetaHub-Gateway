@@ -1,8 +1,105 @@
 # MetaHub AI Gateway
 
+本轮全站视觉重设计（2026-09-30）：公共首页、账号入口和控制台已统一到 B2B AI Gateway 工作台语言。控制台进一步从整页大卡片改为固定工作区导航、页头上下文带、操作区和数据工作面，Provider、路由、成员、用量、预算和私有 Gateway 均按任务重新分区；首页改为左右分区的产品入口，登录页改为深色品牌侧栏与聚焦表单。设计 token、结构重设计、截图检查和 QA 限制记录在 `docs/operations/ui-design-system-20260930.md`。控制台角色截图位于 `.artifacts/product-qa/20260930-console-r9/role-screenshots/`；该批次在 240 秒运行器容量限制内超时，未把部分截图计为全路由通过。`npm run lint` 与 `npm run build` 均通过，当前资源摘要为 `d39e16f228169cea0e2d5538d6c086f0ca3cbbf22b96a0b6ffc33e7e8503d7a9`。本次复核同时移除了模型路由创建弹框的旧“高级设置”折叠入口，并将错误提示改为普通用户可理解的检查提示。
+全量前端单测当前为 `2245/2270`，25 个失败为已有旧夹具/旧文案合同漂移，详见 `.tmp/ui-redesign-npm-test-20260930.log`；受影响的 UI 渲染定向单测 `20/20` 通过。
+
+路由与项目输入（2026-10-01）：每条模型路由可配置 1 个默认模型和最多 31 个备用模型，备用模型在同一个路由弹框中用勾选列表选择，并可拖动或用上下按钮调整优先顺序；四种请求前路由方式会从完整候选集合中选择。旧的 `fallback_model_id` 仍保留为兼容投影。项目创建不再要求用户填写项目编码，控制面按项目名称在组织内自动生成唯一内部编码，列表和选择器只显示项目名称。相关候选迁移为 `infra/migrations/0157_model_alias_fallback_candidates.sql` / PostgreSQL `0165`，对比说明见 `docs/operations/OpenRouter-UX-gap-analysis-20260920.md`。本轮 `npm run lint`、`npm run build`、Python `compileall` 和模型路由/项目定向 Node 回归均通过；这不改变 PRD-148 尚未完成的状态。
+
+路由链持久化闭环（2026-10-05）：此前执行器已支持 32 个候选，但 `routing_candidates` 审计表仍限制 priority 0/1、rank 1/2 和单个 fallback，导致 1 主 31 备无法真实落库。本轮新增 SQLite `0173_routing_candidates_32.sql` 与 PostgreSQL `0181_routing_candidates_32.sql`：候选表、唯一索引和图触发器现支持 1 主 31 备，非流式白名单故障会继续沿冻结顺序尝试后续候选，最多 32 次；成功即返回，全部失败才返回最终错误。临时库验证 32 条可写、priority=32 被拒绝、完整性检查通过；路由定向单测通过。真实外部 Provider 的 32 候选端到端验收仍未完成，PRD-148 继续未完成。
+
+侧栏导航规则（2026-09-30）：分组采用单组手风琴；展开 Gateway 或其它大类时，直接显示该组全部已授权入口，其余分组自动折叠。已移除“更多控制”延迟菜单和组内截断。
+
+当前 UI 设计基线（2026-09-30）：控制台统一使用 4px 间距基数、6px 控件圆角、8px 数据工作面圆角、青绿色操作色和统一焦点环；模型路由的添加与编辑共用一个弹框，模型目录的添加模型和编辑模型也改为弹框，Provider/API KEY 继续使用弹框，列表页不再嵌入编辑表单。动作型入口统一使用按钮或控制台导航按钮，真正的页面导航、官方文档和引用来源保留为链接。首次进入模型服务页不再加载完整厂家目录，点击添加时才读取目录。此前定向回归 `74/74`，本轮模型/路由/壳层回归 `382/382`，本轮导航/Provider/模型回归 `88/88`，lint `842 files`，生产构建 `295 assets`；当前资源摘要为 `3823d06408a9b99b854606aff546b05d053ca583e68b140b5b9928fdf9a6b0a0`。公开入口桌面、移动、低高度和 `/metahub/` 子路径视觉复验 `6/6` 通过；管理员 Provider 和模型路由隔离 Chromium 视觉复验 `2/2`，查看者移动端高频路由 `4/4` 通过。新的三角色角色审计生成了 `.artifacts/product-qa/20260930-console-r9/role-screenshots/`，在 240 秒运行器上限内超时，未计为全路由通过。设计规则和验证范围见 `docs/operations/ui-design-system-20260930.md`；这些是当前自动化证据，不代表 PRD-148 或 GA 完成。
+
+角色入口收口（2026-09-29）：组织管理员完成接入向导后默认进入组织概览，残留的向导地址会自动回退；开发者默认进入开发者接入，只看到 Gateway 接入、个人 KEY、API/SDK/MCP 和用量，不再看到 Provider、模型目录、模型路由、本地模型或私有 Gateway。员工继续使用“我的接入”。本轮又把同一边界下沉到控制面：即使开发者或查看者继承了较宽的历史权限，后端导航、任务首页、偏好回填和高级入口也不会返回组织配置。角色边界见 `docs/operations/role-surface-matrix-20260929.md`。控制面角色集成 `7/7`、导航定向回归 `39/39`、接入与 KEY 定向回归 `68/68`、合并定向 Node 回归 `94/94`、lint `842 files`、生产构建 `295 assets` 通过，当前源码快照为 `outputs/prd148-source-current-20260929-role-surface-r1.json`（SHA256 `fe86d8fdd93f579ac8b2a4bf7e274cb4c32d380e0ce81a833b87e3b30d311bf1`），生产资源摘要为 `d2330882668afdd3067eb04c56ad2212389cb797e495b5f43722aeaa17f04cd4`。本机服务已重启，注册入口 [http://127.0.0.1:5173/identity.html](http://127.0.0.1:5173/identity.html)，Gateway `:8000`、Control `:8001`、Status `:8002` 健康检查均返回 `200`。权威当前索引为 `outputs/prd148-current-evidence-index-final-20260929-r12.json`，PRD-148 仍未完成。
+
+界面文字清理（2026-09-29）：白标、模型价格和企业 Chat 不再显示版本号、请求号、厂家代码、Token、策略、缓存等内部信息；无变量模板不再渲染空提示。员工接入页移除重复的协议路径和 KEY 管理说明，自定义模型服务卡片移除重复用途说明。异步文案出口统一把工程词投影为用户语言，并清理内部字段留下的空标签。定向单测 88/88、lint 842 files、生产构建 295 assets 通过；完整前端单测 2239/2265，26 个旧夹具断言仍需迁移，未计为本轮产品通过。文案审计见 `docs/operations/user-facing-explanatory-copy-audit-20260929.md`，PRD-148 仍未完成。
+
+当前界面重设计（2026-09-28）：组织管理员在“添加模型服务”中直接选择品牌或“自定义中转站 / OpenAI 兼容”，不再进入第二套自定义页面；Provider 列表、模型目录和路由只保留业务名称、服务地址、状态、计价和操作，内部 ID、区域/认证代码、版本、哈希、能力与上下文等字段不再作为普通用户信息显示。Provider 工程诊断改为“服务状态”，高级异常处理按权限收起。当前定向集合 85/85 通过、lint 842 files、build 295 assets，绑定 `outputs/prd148-source-current-20260928-ui-metadata-r4.json`，生产资源摘要 `b7012aa806c15ad100ce7b79946e48ace8262fde5f2a9481efb982fbf3cae005`；PRD-148 仍未完成。
+
+内部信息清理（2026-09-28）：模型服务、调用日志、审计日志、用量和成本账本的用户界面已统一使用业务文案。调用日志不再显示错误诊断、预算命中、路由决策、Fallback 等工程术语；成本账本使用“扣减/增加”“模型服务用量”，审计筛选隐藏模型服务错误目录等内部对象。请求编号、模型服务/模型内部 ID、版本、游标和哈希仍保留在 API、状态层和审计证据中，但不作为普通用户文本显示。审计脚本当前扫描 196 个功能文件、95 个渲染文件，词法命中 1,874 处，其中 726 处位于渲染文件，已按可见文本与隐藏提交值区分；详见 `docs/operations/user-facing-internal-metadata-audit-20260928.md`。本轮定向回归：调用日志 18/18、审计日志 15/15、成本账本 12/12、Provider 13/13、人类走查 49/49；lint 842 files、生产构建 295 assets 通过。全量单测仍有历史测试夹具要求旧 request_id 或内部字段的失败，不能把它们算作产品通过。
+
+试用前状态（2026-09-28）：本轮测试已完成，试用数据库已清空并通过完整性检查。23 张账号、组织、Workspace、成员、Provider、模型、KEY、会话、用量和请求业务表均为 `0`，迁移与系统目录保留；最新证据为 `outputs/prd148-database-clear-user-trial-20260928-user-reset-20260928T033059Z.json`。数据库触发器保留不可变的滥用与身份审计记录（不属于试用业务数据）。本机服务已启动：注册入口 [http://127.0.0.1:5173/identity.html](http://127.0.0.1:5173/identity.html)，Gateway `:8000`、Control `:8001`、Status `:8002` 健康检查均返回 `200`。
+
+新用户第一步（2026-09-28）：注册并创建组织后会直接进入 `console.html#workspace.home.getting-started` 的“开始使用”页。组织管理员首屏会显示接入进度和一个明确的“下一步”按钮，默认先点“配置模型服务”，然后按“配置模型”完成模型与默认路由；成员 KEY 在接入页启用后由成员登录组织空间自行创建。管理员不需要猜测应打开哪个后台菜单，也不需要等待员工第一次调用才算完成。当前前端全量单测为 `2263/2263`，lint `842 files`，生产构建 `295 assets`；当前源码快照为 `outputs/prd148-source-current-20260928-onboarding-r1.json`，SHA256 `3ea64d3b0b2f82f74c801b9de60224d127287123ffdf326291461da0a5deff8c`，生产资源摘要 `655bb59527f492521b1c444d3f401a1711df59c8b07215956661d1344d47ca6e`。
+
+这条引导和本机回归只说明试用入口已准备好，不代表 PRD-148 或 GA 完成；真实外部业务链路、发布复核/回滚、对账、正式稳定性和 HEAD/origin 仍按证据索引保留未闭合状态，`prd148_complete=false`、`ga_approval=false`。
+
+模型服务目录修正（2026-09-28）：自定义中转站 / OpenAI 兼容现在是“添加模型服务”列表中的一个选项，名称、地址和高级协议设置在同一条流程中按需显示；已接入服务页不再有第二套自定义表单。厂家列表由 SaaS 平台管理员通过签名目录发布，组织管理员只选择已发布服务并填写本组织 API KEY。OpenAI/GPT、xAI/Grok 只有在真实 OpenAI 兼容端点发布到目录后才会显示为可用；Anthropic/Claude 仍需真实 Anthropic 上游适配，不能因 Gateway `/messages` 入口存在就宣称已接入。当前变更证据为 `outputs/prd148-provider-catalog-custom-r2.json`，受影响前端测试 `98/98`、lint `842 files`、build `295 assets`，生产资源摘要 `332e4e48e878f7571ee9d5a3fdb4c24315d7dd907f71dd3a52cb02fbd9bfa9a2`。
+
+当前 UI/导航审计绑定源码快照 `outputs/prd148-source-current-20260928-onboarding-r1.json`（2705 files，SHA256 `3ea64d3b0b2f82f74c801b9de60224d127287123ffdf326291461da0a5deff8c`），三角色全路由截图 `180/180`、逐控件导航 `180/180`、前端单测 `2263/2263`、lint `842 files`、生产构建 `295 assets` 通过。脚本化 QA 不等同于真实客户验收；`prd148_complete=false`、`ga_approval=false` 继续保持。
+
+2026-09-28 Support 易用性修复与试用前复核：Support 页把“创建工单”放到标题和筛选区之间，默认收起完整表单，空列表提示从上方创建，避免进入页面先看到大量空输入框。Support 定向单测 `8/8`，前端全量单测 `2262/2262`，lint `842 files`，生产构建 `295 assets`；最新生产资源摘要为 `d9fd1d31f3346b057f204c07ea59932353ea8d5d31893c7314b2945787f8bcff`。当前源码快照为 `outputs/prd148-source-current-20260928-support-r2.json`，SHA256 `3c644fcf0b849e10759dd12d52e8ac72779ce7781b39cc2e88f0b01cf97f774f`。
+
+测试完成后已使用项目数据库连接封装幂等清空本机试用库：23 张账号、组织、Workspace、成员、Provider、模型、KEY、会话、用量和请求业务表前后均为 0，`integrity_check=ok`、外键检查为空；迁移、权限目录、Provider 目录、Gateway cell、调度基线和不可变目录事件保留。证据为 `outputs/prd148-database-clear-user-trial-20260928-post-tests-r2.json`。服务当前运行，注册页为 `http://127.0.0.1:5173/identity.html`，Gateway `:8000`、Control `:8001`、Status `:8002` 健康检查均为 `200`。
+
+本轮 Support 改动发生在先前角色全量截图之后，旧截图不代表这次改动后的全量页面证明；完整真实业务链路、发布复核/回滚、财务/隐私/安全/迁移对账仍未闭合，按用户决定不执行 72 小时观察和六方会签，`prd148_complete=false`、`ga_approval=false` 保持。最新证据索引为 `outputs/prd148-current-evidence-index-final-20260928-r5.json`。
+
+当前源码全角色截图复验：英文管理员、中文管理员、开发者和移动查看者各 `60/60`，共 `240` 张截图，所有路由的授权落点、按钮/链接、响应、请求、控制台、溢出、裁切和交互重叠均通过；扫描器未发现真实内部 ID 或工程字段。像素审计报告为 `outputs/prd148-screenshot-visual-audit-20260928-role-audit-r3.json`，240 张截图无近空白、纯黑或异常尺寸；角色报告目录为 `.artifacts/product-qa/20260928-current-role-{admin,admin-zh,developer,viewer}-r2/`。前端 lint 已通过（842 files，295 shipped sources）。最新证据索引为 `outputs/prd148-current-evidence-index-final-20260928-r3.json`。
+
+同一源码的非破坏性交互走查也已按角色完成 `60/60`：管理员检查 793 个控件、开发者 840 个、移动查看者 258 个；可逆折叠、筛选、详情、菜单和返回动作均无请求失败、响应错误、控制台错误、未标注控件或布局问题。报告在 `.artifacts/product-qa/20260928-current-interaction-{admin,developer,viewer}-r2/`。创建、删除、撤权和审批等破坏性动作没有由通用走查自动执行，保留给业务流程验收。
+
+240 张当前截图已按英文管理员、中文管理员、开发者和移动查看者生成接触表并完成结构化人眼抽查；首屏、空态、表格、表单、详情/弹窗、迁移指南和移动窄屏未发现新的层级、间距、响应式或职责回退问题。报告为 `outputs/prd148-human-visual-review-20260928-r2.json`，接触表在 `.artifacts/product-qa/20260928-current-human-visual-contact-sheets-r2/`。
+
+2026-09-28 页面内部信息扫描与试用库复位：当前源码下，管理员和开发者迁移指南定向回归各 `1/1`，查看者完整角色审计 `60/60`；请求失败、响应错误、控制台错误、布局问题和真实内部标识泄露均为 0。扫描器曾把代码示例中的 `request_id:` 变量标签误报，已改为只匹配真实 ID 值或内部 ID 前缀，复验报告分别为 `.artifacts/product-qa/20260928-internal-text-admin-r3/`、`.artifacts/product-qa/20260928-internal-text-developer-r2/` 和 `.artifacts/product-qa/20260928-internal-text-viewer-r1/`。本轮又完成本地模型服务英文页面 `1/1` 隔离 Chromium 回归，创建对话框显示 `Model alias` 与 `Upstream model name`，证据为 `.artifacts/product-qa/20260928-local-model-i18n-r1/`。随后停止服务并完成最终幂等清库：23 张账号、组织、Workspace、成员、Provider、模型、KEY、会话、用量和请求业务表清理前后均为 0，`integrity_check=ok`、外键检查为空，证据为 `outputs/prd148-database-clear-user-trial-20260928-final.json`；服务已重启，四个本机入口均返回 200。当前源码快照为 `outputs/prd148-source-current-20260928-local-model-i18n-r2.json`，SHA256 `ab00231d15ce372ce557edbec6048e640f57a72fda759e7c9c3db36fdfb545d2`。这表示本机可以从注册开始试用，不代表 PRD-148 或 GA 完成；真实外部业务链路、发布/回滚、对账、正式稳定性和 HEAD/origin 仍未闭合，`prd148_complete=false`、`ga_approval=false` 保持。
+
+2026-09-28 公开页面与试用前复核：公开入口 `index.html`、`identity.html`、`privacy.html`、`status.html`、`partner.html`、`platform.html` 在桌面和移动视口共 `12/12` 通过；无请求失败、控制台错误、横向溢出、控件裁切或未标注输入。报告为 `outputs/prd148-public-surface-20260928-r1.json`，截图在 `.artifacts/product-qa/20260928-public-surface-r1/`。随后再次幂等清空本机试用库，23 张关键账号、组织、Workspace、成员、Provider、模型、KEY、会话、用量和请求表均为 0，`integrity_check=ok`、外键检查为空，证据为 `outputs/prd148-database-clear-user-trial-20260928-post-public-qa.json`。服务当前可试用：注册页 `http://127.0.0.1:5173/identity.html`，Gateway `http://127.0.0.1:8000`，Control `http://127.0.0.1:8001`，Status `http://127.0.0.1:8002`。这只是本机试用就绪，不代表 PRD-148 或 GA 完成；真实外部业务链路、发布/回滚、对账、正式稳定性和 HEAD/origin 仍未闭合，`prd148_complete=false`、`ga_approval=false` 保持。
+
+当前源码隔离 Chromium 三角色旅程复验 `3/3` 通过，登出回首页在当前重跑中通过；网络失败、控制台错误、横向溢出、裁切和交互重叠均为 0，最大导航耗时 511ms。报告为 `.artifacts/product-qa/20260928-workspace-rerun/browser-real-chromium-scale-1.json`。四角色 240 个页面截图逐一存在、PNG 有效、尺寸正常且每角色路由唯一，完整性报告为 `outputs/prd148-screenshot-evidence-integrity-20260928-r1.json`。历史 2026-09-16 登出超时仍保留为真实观察失败，不能抹除或改写为 GA 通过。
+
+随后对四角色的 240 张当前截图生成接触表并进行人眼结构复核：管理员英文、中文管理员、开发者和移动查看者各 60 页；抽查管理员首页/成员/模型服务、员工移动首页和公开首页。层级、空状态、响应式布局和权限回退均未发现新的 UI 问题；权限回退产生的重复画面属于预期职责边界。记录为 `outputs/prd148-human-visual-review-20260928-r1.json`，接触表位于 `.artifacts/product-qa/20260928-human-visual-contact-sheets-r1/`。
+
+当前角色分片交互报告还逐页汇总了控件：管理员 60 页包含 814 个控件、521 个按钮和 192 个链接；开发者 60 页包含 831 个控件、625 个按钮和 155 个链接；查看者 60 页包含 258 个控件、127 个按钮和 128 个链接。三角色均为 0 未标注输入、0 页面/请求失败、0 响应错误、0 裁切和 0 交互重叠，报告为 `outputs/prd148-interactive-control-coverage-20260928-r1.json`。
+
+2026-09-27 当前源码 r6 试用前复核：管理员英文、中文管理员、开发者和移动查看者各完成 `60/60` 当前路由截图审计，页面/API/请求/响应/控制台、权限回退、溢出、裁切和交互重叠均为 0；240 张截图的像素审计近空白、纯黑和异常小尺寸均为 0。管理员、开发者和查看者的 60 个唯一路由均完成可逆鼠标/键盘交互分片复验，标签、布局、动作、权限和请求问题均为 0。证据索引为 `outputs/prd148-current-evidence-index-final-20260927-r6.json`，完整入口与重复页审计为 `outputs/prd148-route-coverage-20260927-r6.json`，截图视觉证据为 `outputs/prd148-screenshot-visual-audit-20260927-current-r6.json`。此前单次 360 秒全量运行器超时已保留为夹具记录，分片和单页复验才是当前全路由证据。
+
+本轮测试结束后已再次幂等清空本机试用数据库；23 张关键注册与 Workspace 业务表均为 0，`integrity_check=ok`、外键检查为空，证据为 `outputs/prd148-database-clear-user-trial-20260927-post-qa.json`。本机 `dev` 注册的人机验证已按试用约定关闭，`test` 保持关闭、`prod` 保持开启。服务当前可试用：注册页 `http://127.0.0.1:5173/identity.html`，Gateway `http://127.0.0.1:8000`，Control `http://127.0.0.1:8001`，Status `http://127.0.0.1:8002`。这只是本机试用就绪，不代表 PRD-148 或 GA 完成；真实外部业务链路、发布/回滚、对账、正式稳定性和 HEAD/origin 仍未闭合，`prd148_complete=false`、`ga_approval=false` 保持。
+
+2026-09-27 当前源码最终试用前复核：英文管理员价格页与用量页定向视觉回归 `2/2` 通过，静态标签已统一为英文，用户模型名和属性值未被重写；前端全量单测 `2262/2262`、lint `842 files`、生产构建 `295 assets` 通过。当前源码快照为 `outputs/prd148-source-current-20260927-locale-r1.json`，SHA256 `dbbfae39e0f0ac94e465d5998f38208056e06bbeaaf8dd82f8d36c139a799815`，生产资源摘要为 `7b923a966e6e2e6547bb371b356b120366eb6d92405f610cd541fbfab6a64a77`。测试完成后已停止服务完成数据库最终清理并重启：23 个关键试用业务表均为 0，`integrity_check=ok`、外键检查为空，证据为 `outputs/prd148-database-clear-user-trial-20260927-final.json`；服务地址为 `http://127.0.0.1:5173/identity.html`、Gateway `:8000`、Control `:8001`、Status `:8002`。当前仅表示本机可开始试用；真实外部业务链路、发布/回滚、对账、正式稳定性和 HEAD/origin 仍未闭合，`prd148_complete=false`、`ga_approval=false` 保持。完整索引见 `outputs/prd148-current-evidence-index-final-20260927-r5.json`。
+
+2026-09-27 当前试用前检查：本轮前端全量单测 `2259/2259`、lint `842 files`、生产构建 `295 assets` 通过；控制面调度器摘要测试在仓库内隔离临时目录 `43/43` 通过，默认 Windows 临时目录失败归类为测试夹具权限问题。当前源码快照为 `outputs/prd148-source-current-20260927-final-r3.json`，源码指纹 `4c6249032524d1f5f145a461be929eec0e990ddb7cd62dd3d3addc96aab047d7`，生产资源摘要为 `74a1a560509edc278e2246e27fbfc2c0347fce9ae621f2f02b4130ea7d3d1f92`。总览单列布局修复后，管理员、开发者、查看者和中文管理员总览各 `1/1`，0 页面/API/浏览器错误、0 溢出、0 裁切、0 交互重叠；报告与截图分别在 `.artifacts/product-qa/20260927-final-overview-{admin,developer,viewer,admin-zh}-r3/`。最终复核后已再次确认 23 个关键注册与 Workspace 业务表为 0，`integrity_check=ok`、外键违规为 0；本次记录见 `outputs/prd148-trial-db-reset-20260927T-final-r3.json`。服务保持运行，可从 `http://127.0.0.1:5173/identity.html` 重新注册试用。
+
+2026-09-26 最终当前源码 QA 与试用环境复位：当前源码快照为 `outputs/prd148-source-current-20260926-final.json`，SHA256 `3aa4321e8799facc73706f01cc6969f59dcd9b42915bbeae987cfbecb3c61bdc`。前端全量单测 `2259/2259`、lint `842 files`、production build `295 assets` 通过；最终三角色全路由 Chromium 截图 `180/180`，视觉像素审计 180/180，0 页面、请求、响应、控制台、溢出、裁切、重叠、近空白、纯黑或异常小尺寸问题，证据在 `.artifacts/product-qa/20260926-final-role/` 和 `outputs/prd148-screenshot-visual-audit-20260926-final-role.json`。随后按角色拆分完成三角色可逆交互复验：管理员、开发者、查看者各 `60/60`，合计 `180/180`，动作、标签、权限、布局、请求、响应和控制台问题均为 0；报告在 `.artifacts/product-qa/20260926-human-admin-final/`、`.artifacts/product-qa/20260926-human-developer-final/` 和 `.artifacts/product-qa/20260926-human-viewer-final/`。先前串行运行器在 92/180 页超时的原始临时目录仍保留在 `.tmp/product-qa-browser/20260926-123505-8a6ec1e8/`，不覆盖拆分终态。最终证据索引为 `outputs/prd148-current-evidence-index-final-20260926.json`。
+
+最终 QA 后已清空本机试用数据库的 23 个关键可变注册与 Workspace 业务表：`users`、组织、Workspace、Provider、模型、KEY、会话、用量和请求记录均为 0，`integrity_check=ok`、外键违规为 0；最新备份、清理前后计数及 SHA256 见 `outputs/prd148-trial-db-reset-20260926-post-qa.json`。服务启动后请从注册页重新开始试用。付费模块延期，72 小时稳定性观察与六方会签不执行；`prd148_complete=false`、`ga_approval=false` 保持。
+
+2026-09-26 当前源码 r50 用户易用性审计：管理员、开发者、查看者各 60 页，共 180/180 页面截图通过；无页面、请求、响应、控制台、溢出、裁切或重叠问题。三角色可逆鼠标/键盘交互各 60/60 通过，动作、标签、权限和布局问题均为 0；中文管理员 `zh-CN` 另行完成 60/60 截图视觉审计。当前源码快照为 `outputs/prd148-source-current-20260926-usability-r50.json`，SHA256 `31689646d3fe4eaf11a6d615d6b1766e7b1e8b0a23796fac68793f37fd949194`；完整证据索引为 `outputs/prd148-current-evidence-index-final-20260926.json`。报告目录为 `.artifacts/product-qa/20260926-current-full-r50/`、`.artifacts/product-qa/20260926-current-human-admin-r50/`、`.artifacts/product-qa/20260926-current-human-developer-r50/`、`.artifacts/product-qa/20260926-current-human-viewer-r50/` 和 `.artifacts/product-qa/20260926-current-full-admin-zh-r50/`。这些是隔离 seeded Chromium 的当前源码证据，不是原生 computer-use、真实外部账号或 GA；付费模块延期，72 小时观察与六方会签不执行，`prd148_complete=false`、`ga_approval=false` 保持。
+
+2026-09-26 中文用户使用容易度 r44 复验：r43 分片截图保留了三角色 180 页历史视觉基线（管理员、开发者、查看者各 60 页，绑定 r42 源码）；r44 当前源码重新复核组织 KEY 页面，管理员、开发者、查看者目标页均通过，管理员 1440px 下轮换和停用按钮完整可见。管理员 11/11、开发者 6/6、查看者 6/6 的高频鼠标键盘可逆交互也全部通过。视觉复核发现组织 KEY 桌面表格右侧操作列被过宽的最小列挤出，已收紧信息列并固定操作区；平板和移动端仍按两列/单列布局。历史截图分析为 `outputs/prd148-screenshot-visual-audit-20260926-r44.json`，当前源码组织 KEY 复核在 `.artifacts/product-qa/20260926-key-fix-r44/`，交互证据在 `.artifacts/product-qa/20260926-usability-admin-r44/`、`.artifacts/product-qa/20260926-usability-developer-r44/` 和 `.artifacts/product-qa/20260926-usability-viewer-r44/`。当前源码快照为 `outputs/prd148-source-current-20260926-usability-r44.json`（2703 files，SHA256 `ab28d34b317b8cfa94d2980f577a9100facc3a4a44625206b9306d918850fc1f`），前端全量单测 `2259/2259`、lint `842 files`、production build `295 assets` 通过，资源摘要为 `73cafd62584c2c9c5e17a06ca31831a595d109985d6b47d2fae96015385e64bf`。当前源码尚未重新生成三角色完整 180 页截图，不能把历史截图当作 r44 当前全量证据；这些仍是隔离 seeded Chromium 证据，不等同于真实外部账号、真实业务链路或 GA。付费模块延期，72 小时观察与六方会签按用户决定不执行，`prd148_complete=false`、`ga_approval=false` 保持。
+
+2026-09-26 中文用户使用容易度 r42 复验：组织管理员首页保留组织成员汇总，员工/查看者首页只显示自己的组织空间摘要，不再泄露组织成员总数；管理员概览中的空数据块显示“暂无记录”，内部来源修订号不再显示。管理员概览（1440x900）和查看者概览（390x844）均通过当前源码角色边界审计，页面、请求、控制台、溢出、裁切和重叠问题为 0；证据分别见 `.artifacts/product-qa/20260926-current-overview-admin-r42/` 和 `.artifacts/product-qa/20260926-current-overview-viewer-r42/`，管理员视觉复核见 `.artifacts/product-qa/20260926-current-overview-admin-r42-visual/`。当前源码快照为 `outputs/prd148-source-current-20260926-usability-r42.json`（2703 files，SHA256 `2912b077059e15acec379f9f6a05d2e844a4e6a475cdc5cfa1c34714e3b4add2`）。前端全量单测 `2259/2259`、lint `842 files`、生产构建 `295 assets` 通过，资源摘要为 `1f9ba7be6befe4ed295bea50a75a1932d2bb021763b673d798f2c4df9a97d944`。中文管理员高频路径 `11/11`、员工移动高频路径 `11/11`、管理员交互 `8/8`、员工交互 `6/6` 保持通过；三角色全路由批次在 300 秒运行器上限内超时，不能计为完整通过。真实业务链路、HEAD/origin 和 PRD-148 GA 仍未完成，`prd148_complete=false`、`ga_approval=false` 保持。
+
+2026-09-26 中文首发预算页易用性修复：预算页不再把 `mhv_dev_seed` 这类内部前缀展示给组织管理员，选择器、作用链和规则维度只显示组织 KEY 名称；本地种子名称按语言显示为“默认组织 KEY / Default organization KEY”，内部 ID 仍只保留在提交值和 `data-*` 属性。当前源码快照为 `outputs/prd148-source-current-20260926-usability-r36.json`（2703 files，SHA256 `78ff67b9f2d54a0cd8e90d49061e477cf53c1a3da185ede402426dd2169e972f`）。预算相关单测 `10/10`、前端全量单测 `2257/2257` 通过；管理员/员工高频路径各 `11/11`、管理员交互 `8/8`、员工交互 `6/6` 均通过，最新证据在 `.artifacts/product-qa/20260926-current-*-zh-r36/` 和对应 `*-interaction-r36/`。页面与动作错误为 0；三角色全路由、真实业务链路和调度器运行时告警仍不构成 GA，`prd148_complete=false`、`ga_approval=false` 保持。
+
+2026-09-26 中文用户易用性与职责边界复验：预算、用量、策略模拟器和模型服务的低频空表单保持默认收起；组织管理员不再收到平台内部“数据管理/部署环境”导航，旧投影也能安全兼容。当前源码快照为 `outputs/prd148-source-current-20260926-usability-r31.json`（2703 files，SHA256 `bd26e2fd8d4c9b039b1be837cdb0e7e1555bb0839fa0288a0d20cb13649fa6c5`）。前端全量单测 `2257/2257`、lint `842 files`、production build `295 assets` 通过；前后端生产资源摘要统一为 `cf063e0b2c855f486092274f39e448b1c42f284572cd13a7c5e3350983bb6fbc`，后端 Workspace 导航专项 6/6 通过。服务重启后，中文管理员高频路径 11/11、员工移动高频路径 11/11、管理员可逆鼠标/键盘交互 8/8、员工移动交互 6/6 仍通过，最新报告在 `.artifacts/product-qa/20260926-current-admin-zh-r32/`、`.artifacts/product-qa/20260926-current-viewer-zh-r32/`、`.artifacts/product-qa/20260926-current-admin-zh-interaction-r32/` 和 `.artifacts/product-qa/20260926-current-viewer-zh-interaction-r32/`。三角色全路由 240 秒批次超时，保留为运行器问题，不算通过；上述证据仍是隔离 seeded 脚本化 Chromium，不等同于真实外部账号、完整业务链路或 GA。付费模块延期，72 小时观察和六方会签不执行，`prd148_complete=false`、`ga_approval=false` 保持。
+
+2026-09-26 用户使用容易度复验收口：当前源码快照为 `outputs/prd148-source-current-20260926-usability-r21.json`（2703 files，SHA256 `c26c425f3cafef6615bab88790c8ee768f43be30caadb91fa60f471bdba28853`）。本地化/用量/策略定向单测 `34/34`、前端全量单测 `2256/2256`、lint `842 files`、production build `295 assets` 通过，生产资源摘要为 `36e2c3ba1aff4c8b1614b5595800ae5eb7660988ed9afea8ab6d82aae3467b95`。当前源码管理员策略模拟器页 `1/1` 通过：缺少环境、项目或模型路由时只显示下一步并收起空表单；开发者 API 文档页 `1/1` 通过：员工可直接看到统一网关地址、个人 MetaHub KEY 规则和协议入口，无发布内容时只显示一个明确空态。该批仍是隔离 seeded Chromium 证据，不等同于真实外部账号、完整业务链路或 GA；付费模块按用户决定延期，72 小时稳定性观察和六方会签不执行，`prd148_complete=false`、`ga_approval=false` 保持。
+
+2026-09-25 用户使用容易度补丁复验：英文管理员成员页和模型服务页截图暴露的 `3 位Members`、`1 把active key(s)` 已在本地化出口归一为 `3 members`、`1 active key(s)`，并增加计数混合文案回归。当前源码快照为 `outputs/prd148-source-current-20260925-usability-r13.json`（2703 files，SHA256 `83f17deff1d5f96de77a272386b8a948922dd74cf1099bd85ac7ec2478a4ed12`）；前端全量单测 `2251/2251`，新增本地化文件回归 `12/12`，lint `842 files`，build `295 assets` 通过。前后端生产资源摘要统一为 `6971d55c4757cc5706ffaab47cebea2e63efbaf738c7ecc57ff86a8857e18d84`。隔离 Chromium 英文管理员 quickstart/providers/users `3/3` 通过，实际截图已确认数量文案单一语言，报告和截图在 `.artifacts/product-qa/20260925-current-r15-english-home/`。这仍是 seeded 脚本化浏览器回归，不是原生 computer-use、真实外部账户或 GA；真实业务链路、发布复核/回滚、对账和 HEAD/origin 仍未闭合，`prd148_complete=false`、`ga_approval=false` 保持。
+
+2026-09-25 用户使用容易度复验更新：英文管理员界面的全局文案清理器不再把 `Provider` 等英文词强制改成中文，侧栏、任务首页、模型服务和成员页现在保持单一语言；“组织管理”“Search”“active key(s)”等遗漏词也已纳入本地化。当前源码快照为 `outputs/prd148-source-current-20260925-usability-r11.json`（2703 files，SHA256 `6694ac39ce5444b9c55d7cd12fc2a5fb7ff188532502f2cdd09b0487ed06db0b`）。前端全量单测 `2250/2250`、定向本地化/壳层回归 `29/29`、lint `842 files`、build `295 assets` 通过，前后端生产资源摘要统一为 `4c0dded057f609f8642232cd97d009623b3c0d44fd77f182aad15fc787d2f7cb`。隔离 Chromium 管理员英文 quickstart/providers/users `3/3` 通过，截图和 DOM 均无页面、请求、响应、控制台、溢出、裁切、重叠或混合语言问题，证据为 `.artifacts/product-qa/20260925-current-r13-english-home/`。该证据仍是 seeded 脚本化浏览器回归，不是原生 computer-use、真实外部账户或 GA；真实业务链路、发布复核/回滚、对账和 HEAD/origin 仍未闭合，`prd148_complete=false`、`ga_approval=false` 保持。
+
+2026-09-25 当前源码易用性复验收口：先同步生产资源清单，再对中文首发用户的高频路径进行当前版本验证。当前源码快照为 `outputs/prd148-source-current-20260925-usability-r10.json`（2703 files，SHA256 `697f7f788fa4a4be6176e0341753ec92f14b755cdb9b7493ed3677407f554af8`）；前端全量单测 `2249/2249`、`npm run lint`（842 files）、`npm run build`（295 assets）和控制面资源摘要契约通过，前后端生产资源摘要统一为 `c3856db9be0d5fc160c33ed0ef030dba3e4bd6fdcdbf7a2eee83687cbe54cc16`。管理员桌面高频页面 5/5、员工移动端高频页面 4/4，通过当前源码的可逆鼠标/键盘交互分别为 5/5 和 4/4；证据目录为 `.artifacts/product-qa/20260925-current-r10-{admin,viewer,human-admin,human-viewer}/`。这些是隔离 seeded 的脚本化 Chromium 证据，不是原生 computer-use、真实外部账户或 GA。180 页三角色截图保留为历史视觉覆盖，未因清单同步冒充当前源码全量证据。付费按用户决定延期，72 小时观察和六方会签不执行；真实注册到 Gateway/计量/撤权、发布复核/回滚、财务/隐私/安全/迁移对账及 HEAD/origin 仍未闭合，`prd148_complete=false`、`ga_approval=false` 保持。
+
+2026-09-25 管理员首屏易用性收口：按 OpenRouter 的首次使用路径检查后，首页总进度明确为“核心接入进度”，只统计 Provider、模型和成员 KEY 三项管理员交付；当前唯一下一步保留在首屏，完整步骤、四个管理区域和其他管理事项默认收起，组织、预算、路由和治理入口仍保留在授权导航和展开区域中。当前源码快照为 `outputs/prd148-source-current-20260925-usability-r8.json`（2703 files，SHA256 `9e8cf6051c3efee2ca5a5f6a91c72d10cafc84b94311390be4b578a9ea77493a`），任务首页回归 49/49，前端全量回归 2249/2249，lint 842 files，build 295 assets；资源摘要 `dc70140d5cc7ae5312d687a81e5ec4110182f3abbde39acdeafb2f5c78ef3f1e` 已与控制面 manifest 对账。中文管理员首页、成员和模型服务非破坏性交互 3/3 通过；首页截图见 `.artifacts/product-qa/20260925-usability-admin-quickstart-r1/`。本轮仍是隔离 seeded 的脚本化 Chromium，不是人工 computer-use 或真实外部账户验收；付费按用户决定延期，72 小时观察和六方会签不执行，真实业务链路、发布复核/回滚、对账和 HEAD/origin 未闭合，`prd148_complete=false`、`ga_approval=false` 保持。
+
+2026-09-25 用户使用容易度复验：管理员英文任务首页曾在静态刷新路径中混入“Connect a model 模型服务”“模型服务 and service credential”“Configure 模型服务”。当前 HTML 本地化出口已按完整短语清理这些 fallback，新增回归通过；前端全量单测 `2249/2249`、lint `842 files`、build `295 assets`，前后端生产资源摘要为 `c7f35fb7139e8d3412e402630964604dade1a96c9cc478fb248770a5e6301be4`。当前源码证据为 `outputs/prd148-source-current-20260925-usability-r6.json`（2703 files，SHA256 `a2e4c94ff550148ee95882d78e11d17c931aed7024716ec3e73f49eddecc2cbe`）。修复后的完整三角色浏览器截图尚未重跑；控制面 pytest 因系统 Python 未安装 pytest 未计为通过。真实业务链路、发布复核/回滚、对账、HEAD/origin 和 PRD-148 GA 仍未闭合。
+
+本机静态浏览器冒烟证据为 `outputs/prd148-public-static-usability-20260925.json`，并由当前 Chromium 报告 `.artifacts/product-qa-current/20260924-public-ui/report.json` 复验：390x480 首页的移动菜单、焦点、Esc 回收和无横向溢出通过；390x844 登录页的字段标签、密码显示切换和无请求失败通过；公开 UI 6/6 场景通过。私有 Workspace 角色走查仍未被这份公开入口报告覆盖。
+
+README 下方同日的旧摘要、旧源码快照和旧测试数量保留作历史证据；当前发布前复核以本段、`outputs/prd148-current-evidence-index-final-20260925.json` 和 `docs/testing/PRD-148-public-ui-20260925.md` 为准。
+
+2026-09-25 用户体验收口：模型服务价格页默认只展示已有价格记录，筛选、新增价格和停用验证改为明确的按需展开区，避免组织管理员进入页面就面对成排空输入框；中文 admin 截图和三角色 `model-prices` 复验均通过，0 页面/请求/响应/控制台/溢出/裁切/重叠错误。前端全量单测 `2246/2246`、lint `842 files`、build `295 assets` 通过；本次资源摘要漂移已同步前后端 manifest 为 `fabbb192b15069850b2cc44f08a8c2a651fd1dc83491c71a0225ef3046896761`。当前源码绑定为 `outputs/prd148-source-current-20260925-model-prices-ux-r2.json`（2703 files，SHA256 `e6e0bd3364a855e99ae48aea0c6e5a9cea7a7cd3400a2fafb887fc30baaedda5`），视觉索引为 180 张。付费模块按用户决定延期；真实业务链路、发布复核/回滚、对账、HEAD/origin、原生 computer-use 和 PRD-148 GA 门禁仍未闭合。
+
+2026-09-25 最终源码回归复验：在当前工作树上重新执行 `console-web/npm test`、`npm run lint` 和 `npm run build`，结果分别为 2246/2246、842 files、295 assets；此前资源摘要 `620e1c8dff57d8c84015192e5735309168be81b8c97ce3ae97a2571980d736f0` 属于表单收口前版本，当前 manifest 已更新为 `fabbb192b15069850b2cc44f08a8c2a651fd1dc83491c71a0225ef3046896761`。付费模块按用户决定延期；真实业务链路、发布复核/回滚、对账、HEAD/origin、原生 computer-use 和 PRD-148 GA 门禁仍未闭合。
+
+2026-09-25 逐页视觉与角色复核最终批次：按 SaaS 平台/组织管理员、开发者和员工查看者身份，把 Workspace 路由拆成五个业务域分片，当前源码共生成 180 张完整 Chromium 页面截图（桌面 1440px、移动 390px），页面失败、HTTP 响应错误、请求失败、控制台错误、横向溢出、控件裁切和交互重叠均为 0；视觉像素审计为 0 近空白、0 异常小尺寸、0 纯黑截图。实际修正了移动端员工顶部操作区、员工误显示 Partner 门户、审计日志内部字段示例、管理员空数据总览纵向堆叠和模型价格页默认铺开空表单。证据索引为 `outputs/prd148-current-evidence-index-final-20260925.json`，截图视觉索引为 `outputs/prd148-screenshot-visual-audit-20260925-final.json`，当前源码 SHA256 为 `e6e0bd3364a855e99ae48aea0c6e5a9cea7a7cd3400a2fafb887fc30baaedda5`，生产资源摘要为 `fabbb192b15069850b2cc44f08a8c2a651fd1dc83491c71a0225ef3046896761`。付费权益、订阅和结算按用户决定延期，不阻塞本次中文免费试用；真实注册到组织、Provider/模型/路由、个人 KEY、Gateway 调用、计量/额度和撤权、发布复核/回滚、对账及 HEAD/origin 仍没有完整当前证据，PRD-148 保持未完成。
+
+2026-09-25 首页与角色化走查续验：修复首页永远隐藏的动画按钮、公开入口根路径资源、移动端无替代导航和首屏固定高度裁剪问题；当前源码快照为 `outputs/prd148-source-current-20260925-public-ui-postfix-r5.json`（2702 files，SHA256 `933e2e68cc23db972f281840375f0034f3c5ac1511940eae9aaf346418f4eee8`）。公开入口在 1440x900、390x844、390x480 和 `/metahub/` 子路径通过，公开 UI 脚本化浏览器报告 6/6 场景通过，0 资源失败、0 控制台错误、0 横向溢出或首屏裁剪；移动菜单和登录表单交互也通过。私有 Gateway 中文文案回归 32/32，全量前端单测 2246/2246、lint 842 files、build 295 assets 和前后端资源摘要契约通过，生产资源摘要为 `620e1c8dff57d8c84015192e5735309168be81b8c97ce3ae97a2571980d736f0`。旧角色审计及 Platform/Support/Partner/Device 产物绑定较早源码，保留作历史参考，不宣称为最终源码全量证据。Gateway 协议/默认模型单测 19/19、跨协议员工计量集成 1/1；GA Launch 集成 5/9，4 项因迁移基线不匹配 `0155` 回滚期望失败，详见 `outputs/prd148-ga-launch-integration-20260925.json`。这些仍是本地自动化与 seeded 身份证据，不等同于真实商业链路、发布复核/回滚、会签、正式稳定性或 HEAD/origin；PRD-148 保持未完成。
+
 2026-09-24 成员撤权、角色化后台与公开入口续验：当前源码快照为 `outputs/prd148-source-current-20260924-public-ui.json`（2702 files，SHA256 `45d1d5f3394ccef281b6b06a2612e81778efa1bc9a0dee70231a9463db6a4e79`）。前端全量单测 2243/2243、lint 842 files、build 295 assets 通过，前后端生产资源摘要为 `37310b77af7bfba4697d6601a3a70112ed46381f176a32e265ef2fe0dd33aced`；摘要契约测试通过。Playwright 当前 UI 走查覆盖桌面、390px 移动、390x480 低高度、鼠标菜单、Escape/Enter 键盘、登录密码显示切换、错误登录、注册策略和 `/metahub/` 子路径，证据为 `outputs/prd148-public-ui-current-20260924.json` 与 `.artifacts/product-qa-current/20260924-public-ui/`。移除成员会立即停用个人及管理员分配 KEY、关联使用者和活动 Workspace session，旧组织后台入口统一进入按角色过滤的 Console。宽 Gateway 集成因迁移夹具长时间无终态而中断，本地调度器仍有 lease/reconciliation/SQLite 警告；这些不构成 GA，PRD-148 保持未完成。详见 `outputs/prd148-member-key-current-20260924.json`。
 
-2026-09-24 当前中文首发交付语义修正：组织管理员与 SaaS 平台管理员继续严格分域。组织管理员在“后台成员”中邀请、搜索、停用成员；不再使用管理员代发的“模型使用者与 KEY”员工目录。后台成员登录后自己创建、复制、轮换和撤销个人 MetaHub KEY，只能看到自己的 KEY 与个人用量；组织管理员在组织 KEY 页面管理组织级 KEY。模型服务页保留一个默认收起的“自定义接入（中转站 / OpenAI 兼容地址）”入口，品牌目录不是唯一选择。当前代码验证：前端全量 2239/2239，`npm run build` 294 assets，`npm run lint` 840 files；后端 Virtual Key、最新迁移链和生产资源摘要专项通过。生产资源摘要为 `c0ea8953b9c5bf12974dba01b0398a274ff276c707a1165a519ec04cafc7690a`。这些是当前源码与隔离测试证据，不等同于真实商业权益、生产 Partner/Device、发布回滚、对账或 GA；PRD-148 继续未完成。
+2026-09-24 当前中文首发交付语义修正：组织管理员与 SaaS 平台管理员继续严格分域。组织管理员在“后台成员”中邀请、搜索、停用成员；不再使用管理员代发的“模型使用者与 KEY”员工目录。后台成员登录后自己创建、复制、轮换和撤销个人 MetaHub KEY，只能看到自己的 KEY 与个人用量；组织管理员在组织 KEY 页面管理组织级 KEY。模型服务页把“自定义中转站 / OpenAI 兼容”作为“添加模型服务”目录中的一个选项，不再拆出第二套添加流程。厂家目录由 SaaS 平台管理员发布；组织管理员只选择已发布服务并填写本组织的 API KEY。目录没有 GPT、Grok 或 Claude 时，组织可以先用自定义入口；GPT/Grok 可使用 OpenAI 兼容协议，Claude 仍需真实 Anthropic 上游适配和 SaaS 目录发布后再标记为可用。当前代码验证：前端全量 2239/2239，`npm run build` 294 assets，`npm run lint` 840 files；后端 Virtual Key、最新迁移链和生产资源摘要专项通过。生产资源摘要为 `c0ea8953b9c5bf12974dba01b0398a274ff276c707a1165a519ec04cafc7690a`。这些是当前源码与隔离测试证据，不等同于真实商业权益、生产 Partner/Device、发布回滚、对账或 GA；PRD-148 继续未完成。
 
 2026-09-23 管理员接入闭环与控制台布局修正：管理员完成度只计算 Provider、模型/路由和员工 KEY，KEY 发放完成后即可交付，不等待员工第一次调用；首次调用仍由服务端记录为真实使用事实。员工 KEY 对话框提供“删除”操作，调用现有 DELETE 软禁用接口使凭据立即失效，并折叠保留历史计量/审计记录。控制台根容器改为使用可用视口宽度（桌面最大 1800px，窄屏自适应），避免内容长期挤在 1120px 中央区域。前端 lint 844 files、生产构建 296 assets 通过；`production-surface-manifest.json` 已同步当前资源摘要。PRD-148 仍未完成。
 
@@ -163,6 +260,8 @@ PRD-095 并发、游标和 warm session P95 单项本轮隔离重跑 1/1 通过�
   本机人类路径走查记录见 [PRD-148 人类路径走查](docs/testing/PRD-148-human-path-20260915.md)，只覆盖本地试用身份和脱敏测试凭据，不构成正式 GA 证据。
   2026-09-15 当前源码矩阵复跑：Platform 38/38、Workspace 62/62、Partner/Support 16 通过加 1 个退役入口 skipped、Device 14/14、GA/Gateway 40/40；当前 All QA 5/5、PERF smoke/pressure 3/3、Chromium admin/developer/viewer 真实角色旅程通过。最新索引见 `outputs/prd148-current-evidence-index-final-20260915.json`。外部付费、企业治理/私有 Gateway、六方会签、真实回滚、对账和 scheduler-enabled 72 小时观察仍缺证据，PRD-148 继续未完成。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
+
+2026-09-27 全量前端回归完成后，已清空本地试用数据库的租户业务数据。前端单测 `2261/2261`、lint `842 files`、production build `295 assets` 通过；实际数据库 `.data/metahub-dev-prd117.sqlite3` 的账号、组织、成员、Provider、模型、KEY、会话、用量、路由和预算锚点均为 `0` 行，迁移 `154` 条及 Provider catalog/权限/调度基线保留。`integrity_check=ok`、`foreign_key_check=[]`，服务重启后 `5173/8000/8001/8002` 全部返回 `200`。详见 [前端回归证据](outputs/prd148-frontend-full-regression-20260927.json)、[试用库清空证据](outputs/prd148-database-clear-user-trial-20260927.json) 和 [当前证据索引](outputs/prd148-current-evidence-index-final-20260927-r4.json)。该清空只为从注册开始的本地试用准备，`prd148_complete=false`、`ga_approval=false`，不代表 GA 或全部 PRD 完成。
 
 ## 当前状态
 
@@ -1326,7 +1425,7 @@ Control 的宿主 8001 端口由独立 Nginx `control-ingress:prd147-v1` 提供�
 - Virtual Key 限流测试：覆盖 `PATCH /virtual-keys/{id}/limits`、RPM/TPM/并发超限、不同 Key 隔离、Redis 不可用 fail closed、失败 request_logs、前端限制表单和 HTML 转义。
 - 管理审计测试：覆盖 Provider/两类 Key/预算/DLP 管理变更、同事务回滚、admin-only 查询、跨租户隔离、不可变记录、动作和 JSON 约束、IP/User-Agent 清洗、摘要脱敏、最小 Webhook 事件和控制台响应式交互。
 - Provider 健康测试：覆盖 0025 迁移、手工/周期领取、失败转红与恢复转绿、逐 Key 认证状态、固定错误分类、租户/RBAC、探测日志、Webhook 状态转换、数据面预请求避障、过期 Fail Open、Dashboard 摘要和响应式健康页。
-- 非流式 Fallback 测试：覆盖 0026 正向/回滚迁移、策略幂等版本、admin 写/developer 读/viewer 拒绝、主模型 5xx 后备用成功、流式禁止切换、最多两次 attempt、主备预算总和、最终模型用量关联、失败用量 unavailable、事件脱敏和响应式策略编辑器；PRD-047 已锁定原始 `reserved_cost_cny` 不改写，且主失败备成功仅把主估算保留在 `outstanding_cost_cny`。
+- 非流式 Fallback 测试：覆盖 0026 正向/回滚迁移、策略幂等版本、admin 写/developer 读/viewer 拒绝、主模型 5xx 后备用成功、流式禁止切换、最多 32 次有序 attempt、完整候选最坏预算、最终模型用量关联、失败用量 unavailable、事件脱敏和响应式策略编辑器；PRD-047 已锁定原始 `reserved_cost_cny` 不改写，且失败候选的估算保留在 `outstanding_cost_cny`。
 - SSE 流式代理测试：覆盖 0027 正向/回滚迁移、StreamSession 租户与状态约束、正常多块透传、首块/块间超时、ASGI 客户端断开、上游读异常、幂等关闭、部分 Usage、`stream.timeout` 脱敏事件、调试台增量预览和主动停止。
 - 控制台 Node test：覆盖服务状态读取、控制台主框架渲染、导航 active 状态、HTML 转义和后端不可用时的页面降级。
 - 控制台轻量 lint：检查基础格式。
@@ -1652,7 +1751,7 @@ M0 支持当前租户维护统一 ModelCatalog。对外调用方使用 `internal
 
 模型目录接口：
 - `GET /models`：admin/developer 读取当前租户模型目录，支持 `status`、`provider_id` 和 `capability` 过滤。
-- `POST /models`：admin 创建模型，字段包括 `internal_model_id`、`provider_id`、`provider_model_id`、能力标签、上下文长度、输入/输出价格、币种和备注。
+- `POST /models`：admin 创建模型，字段包括 `internal_model_id`、`provider_id`、`provider_model_id`、能力标签、上下文长度、输入/输出/缓存命中价格（界面按每百万 Token 展示）、币种和备注。
 - `PATCH /models/{id}`：admin 更新 Provider 绑定、上游模型 ID、能力、价格或启用/禁用状态。
 
 安全约束：
@@ -1706,7 +1805,7 @@ PRD-017 后，`usage_ledger` 作为 UsageRecord 物理表保存请求级 Token �
 
 - 上游返回 usage 时，Adapter 归一化 `input_tokens`、`output_tokens`、`total_tokens` 和 `cache_tokens`，`estimated=false`、`usage_source=upstream`。
 - 上游缺少 usage 时，数据面只按请求/响应文本长度做粗略估算，不保存文本原文，`estimated=true`、`usage_source=estimated`。
-- M0 不做复杂汇率回溯；人民币成本写 `cost_cny`，美元成本写 `cost_usd`，`cost_amount + currency` 保留原币种金额。
+- 计费账本仍按 `cost_amount + currency` 保留原币种金额；成本优先路由的 USD/CNY 比较汇率由组织成本核算页维护，并按生效时间版本化，历史账务不回算。
 
 安全约束：
 
@@ -1782,11 +1881,11 @@ PRD-046 已完成。管理员可在策略上线前用一条当前构造的上下
 PRD-047 已完成两轮设计自审、实现期安全复审、主体代码、专项/全量、0036 迁移、真实三服务/API/Webhook/Usage、停止后数据库与日志复核和真实 Chrome 三档验收。当前实现边界如下：
 
 - 每个正常 ModelAlias 持久化一条版本化 RoutingPolicy；存量和新建 Alias 默认为 `fixed v1`。候选仍只来自 Alias 的 default/fallback，不新增任意候选管理 API，也不新增 Project/User/Department override。
-- `fixed` 保留现有主备稳定顺序且不读 KeyPool/价格；`availability_first` 在健康与 KeyPool 过滤后优先新鲜 healthy；`cost_first` 只有两条候选均合格时才读取同一 `as_of` 价格和估算 Token，以 15 位 Decimal 成本排序，正常缺价或混币使用稳定原因码回退 fixed 顺序。
+- `fixed` 保留现有候选稳定顺序且不读 KeyPool/价格；`availability_first` 在健康与 KeyPool 过滤后优先新鲜 healthy；`cost_first` 对完整合格候选集合读取同一 `as_of` 价格和估算 Token，以 15 位 Decimal 成本排序，正常缺价或混币使用稳定原因码回退 fixed 顺序。
 - active CNY Budget 只接受带版本的 CNY 合法价格，缺失、非 CNY、越界或损坏价格统一返回 `gateway.budget_unavailable`。主备准入仍按最坏总额写入不可改写的 `reserved_cost_cny`；`outstanding_cost_cny` 只保留终态后仍未结算的上游分项，即主成功/Provider 前本地失败为 0、主失败备成功为主估算、双上游失败为主备总额。
 - 进程级 Provider Key 只能在非生产 active 默认租户、active Provider、code 和数据库/冻结 Route Endpoint 均匹配运维基准时作为兼容回退；生产或其他租户必须使用自己的托管 Key。
 - `GET /model-aliases` 为 admin/developer 返回当前 Policy 和配置候选安全摘要；admin-only `PATCH /model-aliases/{id}/routing-mode` 使用认证后 8 KiB 严格 JSON、精确字段/类型、锁内 CAS、同 request_id 持久幂等、同事务 audit/event 和跨租户 404。协议与重试合同见 [ModelAlias RoutingPolicy API](docs/api/routing-policies.md)。
-- Gateway 在同一冻结事务读取 mode 所需的最小 Health/KeyPool/价格/Fallback 事实并原子写 `routing_decisions`、`routing_candidates`；动态模式无法形成可追踪事实时在 Provider 前失败关闭。调用日志详情返回 Policy ID/版本/mode、成本比较时点与 Token 估算，以及最多两条强类型候选事实。
+- Gateway 在同一冻结事务读取 mode 所需的最小 Health/KeyPool/价格/Fallback 事实并原子写 `routing_decisions`、`routing_candidates`；动态模式无法形成可追踪事实时在 Provider 前失败关闭。调用日志详情返回 Policy ID/版本/mode、成本比较时点与 Token 估算，以及最多 32 条强类型候选事实。
 - 0036 migration 新增 `model_alias_routing_policies`、`routing_policy_events`、`routing_candidates` 和 `budget_reservations.outstanding_cost_cny`，扩展并重建 `routing_decisions` 和 `audit_logs`，以 tenant-qualified 复合外键、owner/version/identity/immutable 触发器约束 Policy/Alias/Model/Provider/Decision/Candidate 图；PRD-030 遗留 NULL Environment Key 只按同租户 code 安全兼容，Policy-bound Decision 使用 request 部分唯一索引而不删除 0035 重复历史。历史行与链路字段保真的唯一安全例外是不可逆删除旧 Provider Audit 摘要中的 `base_url`；down 不恢复 URL，但保留已安全化的其他历史。
 - Console 新增 `routing-policies` 页面：admin 编辑，developer 只读，viewer 不渲染页面且不预取；保存状态绑定 Session、tenant、user、role、Alias、Policy ID/版本、草稿代次和 request ID，拒绝迟到或身份漂移响应。
 - 最终批次 `artifacts/prd047/20260719T145100` 通过真实三服务/API/Webhook/Usage、隐私与 owner-safe cleanup，以及 1280x720、900x800、390x844 Chrome。停止后数据库 SHA-256 为 `daf0acfc9d88aa79681cbcbc83d763738ee280f23059abca0d78e1f9e9972039`，36 条迁移/最高 0036、完整性 `ok`、外键违规 0、WAL/SHM 与端口监听均为 0；2 条保留的 enabled RoutingPolicy 只绑定 disabled Alias，可调用计数为 0。
@@ -2667,14 +2766,15 @@ M0.5 不实现多地域环境、部署集群映射、环境审批流或跨环境
 
 PRD-031 建立有效期价格计划与不可变 Usage 快照：
 
-- `POST /model-prices` 仅 admin 可用，登记模型输入/输出 Token 每千单价、CNY/USD 币种、版本和带时区生效时间。
+- `POST /model-prices` 仅 admin 可用，登记模型输入/输出/缓存命中 Token 每百万单价、CNY/USD 币种、版本和带时区生效时间；API 字段名保留 `*_per_1k` 以兼容旧客户端。
+- 成本公式为“普通输入 Token × 输入价 + 缓存命中 Token × 缓存命中价 + 输出 Token × 输出价”，缓存命中价缺省时仅对旧数据兼容回填为输入价；显式零价仍表示免费。
 - `GET /model-prices` 对 admin/developer 开放，按服务器时刻动态展示历史、当前和待生效计划；viewer 由后端拒绝。
 - Gateway 只按可信 `tenant_id + model_id + 服务器 UTC 时间` 选择最近已生效计划，客户端不能覆盖价格计划或生效时刻。
 - 每条 Usage 创建独立 `price_snapshots`，复制实际单价、版本、`price_plan_id` 和 `effective_from`；新价格不会修改旧成本或旧快照。
 - 没有价格计划的存量模型继续使用模型目录兼容价格，避免破坏 PRD-017 已有调用链路。
 - `price.updated` 事件和 Webhook 只包含模型、版本、币种和生效时间，不包含任何 Key、Authorization、Prompt 或 Response。
 
-M0.5 不自动抓取厂商价格、不做汇率换算、历史账单重算、价格审批或批量导入。
+M0.5 不自动抓取厂商价格、不改写原币种账务、不重算历史账单或引入价格审批；组织可在成本核算页维护路由比较汇率版本。
 
 ## Provider 计费归一化边界
 
@@ -2686,7 +2786,7 @@ PRD-032 为 Provider Adapter 建立统一文本用量契约：
 - `GET /usage/records` 继续由后端限制 admin/developer；控制台用量详情展示安全 normalized/raw 双口径，viewer 不能通过手写请求绕过权限。
 - 非流式成功调用记录 `usage.normalized` 安全结构化事件，保留 request_id、trace_id 和 tenant_id 追踪，不在数据面热路径同步派发 Webhook。
 
-M0.5 只处理文本 Token，不处理图片、语音、视频、复杂阶梯计费、自动抓价或无快照汇率换算。
+M0.5 只处理文本 Token，不处理图片、语音、视频、复杂阶梯计费或自动抓价；成本排序使用有快照的组织汇率，缺少汇率时回退固定顺序。
 
 ## 预算耗尽阻断与恢复边界
 
@@ -2709,7 +2809,7 @@ PRD-036 在模型别名最小路由和 Provider 健康预检之后增加请求�
 
 - `PATCH /model-aliases/{id}/fallback` 仅 admin 可写；developer 可从别名列表读取策略，viewer 由后端拒绝。目标模型必须属于当前租户、处于 active 且不能与主模型相同。
 - 只有非流式请求的受控 `timeout`、HTTP 429 和 HTTP 5xx 可触发备用模型；DNS、TLS、本地参数、鉴权、预算、DLP 等错误不会重试，流式请求绝不在输出中途切换模型。
-- 每个非流式请求最多两次上游调用。每次网络调用前必须先创建 `routing_attempts.started` 审计记录；第二次闸门失败时禁止调用 Provider，避免产生无法追踪的流量和重试风暴。
+- 每个非流式请求最多 32 次上游调用。每次网络调用前必须先创建 `routing_attempts.started` 审计记录；第 33 次闸门失败时禁止调用 Provider，避免产生无法追踪的流量和重试风暴。
 - `request_logs` 保存是否触发、attempt 数量和最终 attempt；成功 Usage 关联最终 attempt 和最终模型。上游失败且没有 usage 时记录 `unavailable`，不伪造 0 Token 或 0 成本。
 - 预算准入按主模型与备用模型最坏成本之和预留；流式请求仅预留初始路由。主请求可能已被 Provider 计费，因此不能只按最终成功模型预留；主失败备成功时保留主估算为 outstanding，双上游失败保留主备总额，Provider 前本地失败则为 0。
 - `route.fallback_triggered` 使用稳定事件 ID 投递到有界后台队列，Webhook 最多重试三次；模型请求热路径不等待接收端 HTTP，事件和日志不包含 Provider Key、Authorization、Prompt 或 Response。
@@ -2928,3 +3028,18 @@ S1 当前真实链路仍未重新启动：历史批次在 `1280.onboarding-navig
 2026-09-23 Private Gateway 安装器二次收敛：截图走查确认部署选择、步骤、下载与六项机器要求同时平铺，进一步增加首次配置的扫描负担。现将低频环境规格收进默认闭合的“环境要求”，保留部署、版本、规格、架构、进度和签名下载的直接可见性；安装 API、权限、下载和验证流程未变。定向单测 12/12、lint 844 files、生产构建 296 assets、Control manifest 对账 8/8，以及隔离 Device/Partner Chromium 正向流程均通过；后者还确认环境要求可展开和收起，Device 创建 201、一次性材料和刷新持久化继续有效，布局与意外浏览器错误均为 0。当前源码快照为 `outputs/prd148-source-current-20260923-installer-density-r3.json`，SHA256 `107409ad5ec76a7bb2a9d2c236fbbe53eb2ad08f9f77c350150db9ede28145ee`，资源摘要 `dbf35088bbe1dd22faa4813e89679c03d30ac9629bcb3e5e3417dd533bf4e224`。本批仅是隔离 seeded UI 证据，不改变试用的商业与 GA 边界；PRD-148 保持未完成。
 
  2026-09-23 当前源码 S1 浏览器重放：隔离 SQLite 上的注册、组织、邀请成员、Workspace 会话、Provider 渐进配置视图、员工个人 KEY 创建/轮换和员工停用均执行成功，且 15 个已保存页面无溢出或小输入字体问题。随后在 `1280.onboarding-navigation.tenant` 截图捕获阶段超时；页面已完成、字体已加载、没有待处理资源或请求，但完整流程仍为失败，不能把部分成功改写为 S1 通过。没有修改超时或放宽断言，当前按未解决浏览器捕获失败保留。它只使用本地 feedback 契约和 seeded Provider catalog，不是 KIMI、商业额度、付费权益或 GA 证据。索引为 `outputs/prd148-s1-browser-current-20260923.json`；PRD-148 保持未完成。  2026-09-23 S1 双视口复核随后在相同业务与截图阈值下通过：1280x900 和 390x844 共 18 个注册、组织、邀请、Workspace 会话、Provider 视图、员工个人 KEY、停用、onboarding 和 SDK 下载步骤，以及 32 个布局视图，页面错误、资源错误、外部请求、溢出和小输入字体问题均为 0。终态为 `.artifacts/s1-browser-fdoyqs67/acceptance.json`，摘要为 `outputs/prd148-s1-browser-current-20260923-r2.json`，绑定源码 SHA256 `3051b71e8d625881976665897280fe3f1e9ea01af8f91272d978b7f2e99515d6`。历史截图超时仍保留为历史失败；本流仍只使用 seeded Provider catalog 和本地 feedback 契约，不证明 KIMI、付费权益、商业计量或 GA，PRD-148 保持未完成。
+2026-09-25 中文首发易用性复验继续绑定当前源码：管理员桌面高频页面 3/3、员工移动端高频页面 4/4 通过，报告分别为 `.artifacts/product-qa/20260925-current-r16-zh-admin/prd148-role-audit-chromium-scale-1.json` 和 `.artifacts/product-qa/20260925-current-r17-zh-viewer/prd148-role-audit-chromium-scale-1.json`。员工访问无权限管理员深链时会明确提示当前职责无法打开页面并返回可访问首页；个人 KEY 仍由员工自行管理。源码快照为 `outputs/prd148-source-current-20260925-usability-r14.json`，SHA256 `fab8072c1e2ddde7a358a9277c5ad546a958a9a2746284f14ef3a5dcf55ff80c`，前后端生产资源摘要为 `05a51d4f8c654caac8115de93b2f7bec9f80c273ae918a0d23925f6bc0ba805d`。`prd146ConsoleEntry` 70/70、lint 842 files、build 295 assets 和摘要契约 43/43 通过。
+
+这些结果是隔离 seeded 的脚本化浏览器证据，不等同于真实外部账户、人工 computer-use 或完整注册到 Gateway/计量/撤权验收；付费模块按用户决定延期，PRD-148 仍保持未完成。
+
+权限提示修复后，当前源码三角色核心页面 `quickstart/virtual-keys/providers/users` 共 12/12 通过，报告为 `.artifacts/product-qa/20260925-current-r18-zh-core/prd148-role-audit-chromium-scale-1.json`（SHA256 `f6ea61d7bec9cd26653f66040623306d6eb0cfadd186a0a2cc3f5ab128b23efb`）。查看者移动端打开管理员深链时会看到职责权限说明并返回员工首页。该报告仍是隔离 seeded Chromium 证据，PRD-148 真实业务链路和 GA 门禁保持未完成。
+
+2026-09-25 中文首发易用性继续收口：成本账本的空筛选默认收起，权限矩阵默认按当前职责分组展示，完整角色对比改为明确操作；中文管理员 2/2 页面和 2/2 可逆交互通过，前端全量单测 2253/2253。当前源码证据为 `outputs/prd148-source-current-20260925-usability-r15.json`，完整边界见 `docs/testing/PRD-148-public-ui-20260925.md` 与 `outputs/prd148-current-evidence-index-final-20260925.json`。真实业务链路、发布复核/回滚、财务/隐私/安全/迁移对账和 HEAD/origin 仍未闭合，PRD-148 保持未完成。
+
+此前 2026-09-26 r17 中文首发易用性批次（历史对照）：用量筛选默认收起，空账本不再堆叠七个空聚合表；请求编号、环境、项目、应用和用量来源改为用户可读中文；策略模拟器在缺少环境/项目/模型时给出明确下一步。源码快照为 `outputs/prd148-source-current-20260926-usability-r17.json`，SHA256 `cac8e06fe4d9b55c56bbb74a06311ec83e83465b479ba56fd8ec462fe2b25ed5`。以上证据早于 r21 的空表单收起和英文动态文案修复，最终当前状态以本文件顶部 r21 记录和 `outputs/prd148-current-evidence-index-final-20260926.json` 为准。
+
+2026-09-26 当前中文用户易用性 r46：在 r45 的管理员、开发者、查看者 15/15 角色审计和 15/15 可逆交互基础上，死信页移除普通用户可见的 `request_id`、错误码和 `console_whdl` 内部标识；源码快照 `outputs/prd148-source-current-20260926-usability-r46.json`，SHA256 `acb6cafb269d948f19baa5670ebd73f3d86f951df5747bf0edfa45a692e8caf8`。前端全量单测 `2259/2259`、lint `842 files`、构建 `295 assets`，前后端资源摘要 `e456a336e1b4f5f0070c0d09486e93ed9027179babe0154cff6b8f38adcbb738` 已对账。浏览器报告仍在 `.artifacts/product-qa/20260926-usability-current-r45/` 和 `.artifacts/product-qa/20260926-usability-human-r45/`，属于隔离 seeded 证据，不代表真实客户验收或 PRD-148 完成；`prd148_complete=false`、`ga_approval=false` 保持，付费模块延期、六方会签和 72 小时观察按用户决定不执行。
+
+2026-09-28 当前源码最终试用前复验：Support 修复后的三角色全路由 Chromium 截图为 180/180（管理员、开发者、移动查看者各 60/60），中文管理员、开发者和移动查看者的角色分片可逆交互审计各 60/60 通过；页面、请求、响应、控制台、布局、标注、授权和动作问题均为 0。三角色合并交互批次在 1200 秒运行器上限超时，已按测试运行器容量问题记录，未改写为产品通过。最终源码快照为 `outputs/prd148-source-current-20260928-final-trial.json`（2704 files，SHA256 `3c644fcf0b849e10759dd12d52e8ac72779ce7781b39cc2e88f0b01cf97f774f`）；证据索引见 `outputs/prd148-current-evidence-index-final-20260928-r5.json`，浏览器证据在 `.artifacts/product-qa/20260928-current-source-role-r3/` 和 `.artifacts/product-qa/20260928-current-source-interaction-{admin-zh,developer,viewer}-r1/`；限定目录像素审计为 180 张、近空白/纯黑/异常尺寸均为 0。
+
+全部浏览器审计结束后，本地试用数据库再次幂等清理，23 张业务表为 0 行，`integrity_check=ok`、`foreign_key_check=[]`；迁移、权限目录、Provider 目录、Gateway 单元和调度基线保留。最终清库证据为 `outputs/prd148-database-clear-user-trial-20260928-final-qa-20260927T224154Z.json`，可恢复备份为 `.data/backups/metahub-dev-prd117-before-final-user-trial-20260927T224154Z.sqlite3`。Console `http://127.0.0.1:5173/identity.html`、Gateway `http://127.0.0.1:8000/health`、Control `http://127.0.0.1:8001/health`、Status `http://127.0.0.1:8002/health` 均返回 200。该状态表示可以从注册开始试用，不代表真实外部客户验收、发布复核/回滚、财务/隐私/安全/迁移对账、HEAD/origin 或 GA；`prd148_complete=false`、`ga_approval=false` 保持。

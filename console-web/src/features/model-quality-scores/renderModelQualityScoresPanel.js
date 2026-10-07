@@ -454,7 +454,7 @@ export function renderModelQualityScoresPanel(state, authContext, filters = {}) 
 function renderFilterForm(filters) {
   return `
     <form class="model-quality-filter" id="model-quality-filter-form">
-      <label><span>模型 ID</span><input name="modelId" maxlength="128" value="${escapeAttribute(filters.modelId ?? "")}" /></label>
+      <label for="model-quality-model-id"><span>模型 ID</span><input id="model-quality-model-id" name="modelId" aria-label="模型 ID" maxlength="128" value="${escapeAttribute(filters.modelId ?? "")}" /></label>
       <div class="model-quality-filter-actions">
         <button type="submit">查询</button>
         <button type="button" id="model-quality-filter-reset">清空</button>
@@ -514,7 +514,7 @@ function renderScoreEditor(row) {
     <form data-model-quality-form data-model-id="${escapeAttribute(row.modelId)}" aria-busy="${row.busy ? "true" : "false"}">
       <label>
         <span>人工评分（%）</span>
-        <input name="manualQualityPercent" inputmode="decimal" type="number" min="0" max="100" step="0.01" value="${escapeAttribute(bpsInputValue(row.draftManualQualityBps))}" ${row.busy || row.conflicted ? "disabled" : ""} />
+        <input id="model-quality-manual-${escapeAttribute(row.modelId)}" name="manualQualityPercent" aria-label="${escapeAttribute(`人工评分（%）：${row.modelId}`)}" inputmode="decimal" type="number" min="0" max="100" step="0.01" value="${escapeAttribute(bpsInputValue(row.draftManualQualityBps))}" ${row.busy || row.conflicted ? "disabled" : ""} />
       </label>
       <div class="model-quality-buttons">
         <button type="submit" ${cannotSave ? "disabled" : ""}>${row.busy ? "保存中" : "保存"}</button>

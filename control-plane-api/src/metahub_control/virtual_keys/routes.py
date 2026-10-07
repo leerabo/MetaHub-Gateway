@@ -17,6 +17,7 @@ from metahub_control.auth import AuthContext, require_workspace_or_legacy_permis
 from .models import (
     CreateVirtualKeyRequest,
     CreateVirtualKeyResponse,
+    RevealVirtualKeyResponse,
     RotateVirtualKeyRequest,
     UpdateVirtualKeyLimitsRequest,
     UpdateVirtualKeyRequest,
@@ -27,6 +28,7 @@ from .service import (
     create_virtual_key,
     disable_virtual_key,
     list_virtual_keys,
+    reveal_virtual_key,
     rotate_virtual_key,
     update_virtual_key,
     update_virtual_key_limits,
@@ -105,6 +107,26 @@ def post_virtual_key_rotation(
         virtual_key_id,
         payload,
         audit_request_meta=build_audit_request_meta(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+        personal_only=_personal_only(context),
+    )
+
+
+@router.post("/{virtual_key_id}/reveal", response_model=RevealVirtualKeyResponse)
+def post_virtual_key_reveal(
+    virtual_key_id: str,
+    request: Request,
+    context: Annotated[
+        AuthContext, Depends(require_workspace_or_legacy_permissions("virtual_key.read"))
+    ],
+) -> RevealVirtualKeyResponse:
+    """Reveal a saved key only for an explicit copy action."""
+
+    return reveal_virtual_key(
+        request.app.state.config,
+        context,
+        virtual_key_id,
         request_id=_request_id(request),
         trace_id=_trace_id(request),
         personal_only=_personal_only(context),

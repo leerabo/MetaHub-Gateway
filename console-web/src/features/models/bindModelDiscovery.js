@@ -9,8 +9,17 @@ export function bindModelDiscovery(form, { request }) {
   const discover = form.querySelector("[data-discover-models]");
   const manual = form.querySelector("[data-model-manual]");
   const feedback = form.querySelector("[data-model-discovery-feedback]");
-  const inputPrice = form.querySelector("[name='inputPricePer1k']");
-  const outputPrice = form.querySelector("[name='outputPricePer1k']");
+  const inputPrice = form.querySelector("[name='inputPricePerMillion']");
+  const outputPrice = form.querySelector("[name='outputPricePerMillion']");
+  const cachePrice = form.querySelector("[name='cachePricePerMillion']");
+  const pricingConfigured = form.querySelector("[data-model-pricing-configured]");
+  const markPricingConfigured = () => {
+    if (pricingConfigured) pricingConfigured.value = "true";
+  };
+  [inputPrice, outputPrice, cachePrice].filter(Boolean).forEach((field) => {
+    field.addEventListener("input", markPricingConfigured);
+    field.addEventListener("change", markPricingConfigured);
+  });
   if (!provider || !input || !select || !discover || !feedback) return;
   const showManual = () => {
     select.hidden = true; select.disabled = true; select.required = false;
@@ -61,6 +70,8 @@ export function bindModelDiscovery(form, { request }) {
       if (selectedPrice && inputPrice && outputPrice) {
         if (Number.isFinite(Number(selectedPrice.input_per_1k))) inputPrice.value = String(selectedPrice.input_per_1k);
         if (Number.isFinite(Number(selectedPrice.output_per_1k))) outputPrice.value = String(selectedPrice.output_per_1k);
+        if (cachePrice && Number.isFinite(Number(selectedPrice.cache_per_1k))) cachePrice.value = String(selectedPrice.cache_per_1k);
+        markPricingConfigured();
       }
       if (manual) manual.hidden = false;
       feedback.textContent = result.catalog_truncated ? "已读取前 200 个模型，请选择或手动填写。" : `已读取 ${ids.length} 个模型，请选择。`;
@@ -69,7 +80,7 @@ export function bindModelDiscovery(form, { request }) {
       showManual();
       feedback.textContent = error?.code === "provider_health.catalog_unsupported"
         ? "此模型服务不支持自动读取，请手动填写厂家模型名称。"
-        : `自动读取失败，请手动填写。${error?.requestId ? ` request_id: ${error.requestId}` : ""}`;
+        : "自动读取失败，请手动填写。";
     } finally {
       if (run === discoveryRun) { discover.disabled = false; discover.textContent = "重新读取模型列表"; }
     }
@@ -91,6 +102,8 @@ export function bindModelDiscovery(form, { request }) {
       if (price && inputPrice && outputPrice) {
         if (Number.isFinite(Number(price.input_per_1k))) inputPrice.value = String(price.input_per_1k);
         if (Number.isFinite(Number(price.output_per_1k))) outputPrice.value = String(price.output_per_1k);
+        if (cachePrice && Number.isFinite(Number(price.cache_per_1k))) cachePrice.value = String(price.cache_per_1k);
+        markPricingConfigured();
       }
     } catch { /* ignore malformed optional price hints */ }
   });

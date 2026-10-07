@@ -1,0 +1,2 @@
+-- SQLite development migrations are rebuilt from the clean baseline; the
+-- additive cache-rate columns remain in historical databases.

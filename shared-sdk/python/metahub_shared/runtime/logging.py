@@ -1,6 +1,7 @@
 """模块职责：说明本文件在 MetaHub 企业级 AI Gateway 中承担的接口、服务或测试职责。
 
-维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，Provider Key 与 Token 不得明文落日志。
+维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，
+Provider Key 与 Token 不得明文落日志。
 来源文件：shared-sdk/python/metahub_shared/runtime/logging.py
 """
 
@@ -133,6 +134,12 @@ class JsonFormatter(logging.Formatter):
             "actor_id",
             "object_id",
             "payload",
+            # 数据库诊断只允许结构化错误分类，不记录 SQL、筛选条件或凭据。
+            "sqlite_errorcode",
+            "sqlite_errorname",
+            "exception_type",
+            "workspace_session",
+            "write_attempt",
         ):
             # 密钥相关分支只处理哈希、前缀或密文，禁止明文 Key 进入日志。
             if hasattr(record, key):

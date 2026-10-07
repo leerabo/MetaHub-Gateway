@@ -123,7 +123,7 @@ function renderTools(items, owner, busy) {
           <tr>
             <th data-label="Tool"><strong>${escapeHtml(tool.title === "-" ? tool.remote_name : tool.title)}</strong><span>${escapeHtml(tool.remote_name)}</span><code>${escapeHtml(tool.mcp_tool_id)}</code></th>
             <td data-label="Schema"><code>${shortHash(tool.input_schema_effective_sha256)}</code><small>schema r${numberText(tool.schema_revision)}</small></td>
-            <td data-label="治理"><span>${tool.risk_level === "high" ? "高危" : "标准"}</span><small>${tool.approval_required ? "需要审批" : "无需审批"} · policy r${numberText(tool.policy_revision)}</small></td>
+            <td data-label="治理"><span>${tool.risk_level === "high" ? "高危" : "标准"}</span><small>${tool.approval_required ? "需要审批" : "无需审批"}</small></td>
             <td data-label="授权"><span>${numberText(tool.allowed_role_count)} 角色 / ${numberText(tool.allowed_user_count)} 用户</span><small>${tool.required_permission_codes.length ? tool.required_permission_codes.map(escapeHtml).join(" · ") : "仅 mcp.invoke"}</small></td>
             <td data-label="状态"><span class="mcp-status tone-${escapeAttribute(tool.status)}">${statusLabel(tool.status)}</span></td>
             <td data-label="操作" class="mcp-tool-actions">

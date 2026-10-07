@@ -204,6 +204,10 @@ def list_finops_ledger(
             f"""
             SELECT
               le.*, a.reason,
+              COALESCE(model.display_name, model.model_alias) AS model_display_name,
+              provider.name AS provider_name,
+              project.name AS project_name,
+              application.name AS application_name,
               u.display_name AS actor_display_name, u.email AS actor_email,
               dispute.finops_ledger_dispute_id AS output_safety_dispute_id,
               dispute.tenant_id AS output_safety_dispute_tenant_id,
@@ -240,6 +244,14 @@ def list_finops_ledger(
              AND a.finops_adjustment_id=le.finops_adjustment_id
             LEFT JOIN users u
               ON u.tenant_id=le.tenant_id AND u.user_id=le.actor_user_id
+            LEFT JOIN models model
+              ON model.tenant_id=le.tenant_id AND model.model_id=le.model_id
+            LEFT JOIN providers provider
+              ON provider.tenant_id=le.tenant_id AND provider.provider_id=le.provider_id
+            LEFT JOIN projects project
+              ON project.tenant_id=le.tenant_id AND project.project_id=le.project_id
+            LEFT JOIN applications application
+              ON application.tenant_id=le.tenant_id AND application.application_id=le.application_id
             LEFT JOIN finops_ledger_disputes dispute
               ON dispute.tenant_id=le.tenant_id
              AND dispute.finops_ledger_entry_id=le.finops_ledger_entry_id
@@ -1021,11 +1033,15 @@ def _ledger_entry_info(row: sqlite3.Row) -> FinOpsLedgerEntryInfo:
         total_tokens=_non_negative_integer(row["total_tokens"]),
         cache_tokens=_non_negative_integer(row["cache_tokens"]),
         model_id=_optional_db_identifier(row["model_id"]),
+        model_display_name=_optional_db_text(row["model_display_name"]) if "model_display_name" in row.keys() else None,
         provider_id=_optional_db_identifier(row["provider_id"]),
+        provider_name=_optional_db_text(row["provider_name"]) if "provider_name" in row.keys() else None,
         virtual_key_id=_optional_db_identifier(row["virtual_key_id"]),
         environment_id=_optional_db_identifier(row["environment_id"]),
         project_id=_optional_db_identifier(row["project_id"]),
+        project_name=_optional_db_text(row["project_name"]) if "project_name" in row.keys() else None,
         application_id=_optional_db_identifier(row["application_id"]),
+        application_name=_optional_db_text(row["application_name"]) if "application_name" in row.keys() else None,
         estimated=_sqlite_boolean(row["estimated"]),
         status=status,
         created_at=_parse_db_time(row["created_at"]),

@@ -76,7 +76,7 @@ def list_models(
             SELECT
               m.model_id, m.tenant_id, m.provider_id, m.model_alias, m.upstream_model_name,
               m.provider_model_id, m.display_name, m.capabilities, m.context_window,
-              m.input_price_per_1k, m.output_price_per_1k, m.currency, m.price_schema_version,
+              m.input_price_per_1k, m.output_price_per_1k, m.cache_price_per_1k, m.currency, m.price_schema_version,
               m.status, m.description, m.created_at, m.updated_at, m.disabled_at,
               p.provider_code, p.name AS provider_name
             FROM models m
@@ -120,12 +120,19 @@ def create_model(
     context_window = _normalize_context_window(payload.context_window)
     input_price = _normalize_price(payload.input_price_per_1k)
     output_price = _normalize_price(payload.output_price_per_1k)
+    cache_price = _normalize_price(
+        payload.cache_price_per_1k
+        if payload.cache_price_per_1k is not None
+        else payload.input_price_per_1k
+    )
     currency = _normalize_currency(payload.currency)
     price_schema_version = _normalize_optional_text(payload.price_schema_version, 80, "model.create_invalid")
     description = _normalize_optional_text(payload.description, MAX_DESCRIPTION_LENGTH, "model.create_invalid")
     status = _normalize_status(payload.status)
     model_id = str(uuid4())
     now = _to_db_time(_utcnow())
+    if price_schema_version is None and _price_fields_supplied(payload):
+        price_schema_version = _manual_price_version(now)
     disabled_at = now if status == "disabled" else None
     disabled_by = context.user.user_id if status == "disabled" else None
     with ResourceWriteTransaction(_connect(config), config, context, "model.write") as transaction:
@@ -137,11 +144,11 @@ def create_model(
                 """
                 INSERT INTO models(
                   model_id, tenant_id, provider_id, model_alias, upstream_model_name, provider_model_id,
-                  display_name, capabilities, context_window, input_price_per_1k, output_price_per_1k,
+                  display_name, capabilities, context_window, input_price_per_1k, output_price_per_1k, cache_price_per_1k,
                   currency, price_schema_version, description, status, created_by, disabled_at, disabled_by,
                   created_at, updated_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     model_id,
@@ -155,6 +162,7 @@ def create_model(
                     context_window,
                     input_price,
                     output_price,
+                    cache_price,
                     currency,
                     price_schema_version,
                     description,
@@ -200,6 +208,15 @@ def update_model(
         before = _load_model(connection, context.user.tenant_id, model_id)
         supplied_fields = _supplied_fields(payload)
         updates: dict[str, object | None] = {}
+        price_fields_changed = bool(
+            supplied_fields
+            & {
+                "input_price_per_1k",
+                "output_price_per_1k",
+                "cache_price_per_1k",
+                "currency",
+            }
+        )
 
         # Provider 分支会影响上游选择和密钥池，必须显式保留决策边界。
         # Provider 分支会影响上游选择和密钥池，必须显式保留决策边界。
@@ -228,6 +245,8 @@ def update_model(
             updates["input_price_per_1k"] = _normalize_price(payload.input_price_per_1k)
         if "output_price_per_1k" in supplied_fields:
             updates["output_price_per_1k"] = _normalize_price(payload.output_price_per_1k)
+        if "cache_price_per_1k" in supplied_fields:
+            updates["cache_price_per_1k"] = _normalize_price(payload.cache_price_per_1k)
         # 成本与币种按模型目录口径处理，避免不同币种或估算值被混成一类。
         if "currency" in supplied_fields:
             updates["currency"] = _normalize_currency(payload.currency)
@@ -246,6 +265,8 @@ def update_model(
             raise ApiError("model.update_empty")
 
         now = _to_db_time(_utcnow())
+        if price_fields_changed and "price_schema_version" not in supplied_fields:
+            updates["price_schema_version"] = _manual_price_version(now)
         set_clauses = [f"{column}=?" for column in updates]
         values = list(updates.values())
         disabled_event = before.status != "disabled" and updates.get("status") == "disabled"
@@ -299,7 +320,7 @@ def _load_model(connection: sqlite3.Connection, tenant_id: str, model_id: str) -
         SELECT
           m.model_id, m.tenant_id, m.provider_id, m.model_alias, m.upstream_model_name,
           m.provider_model_id, m.display_name, m.capabilities, m.context_window,
-          m.input_price_per_1k, m.output_price_per_1k, m.currency, m.price_schema_version,
+          m.input_price_per_1k, m.output_price_per_1k, m.cache_price_per_1k, m.currency, m.price_schema_version,
           m.status, m.description, m.created_at, m.updated_at, m.disabled_at,
           p.provider_code, p.name AS provider_name
         FROM models m
@@ -351,6 +372,7 @@ def _model_info(row: sqlite3.Row) -> ModelCatalogInfo:
         context_window=int(row["context_window"] or 0),
         input_price_per_1k=float(row["input_price_per_1k"] or 0),
         output_price_per_1k=float(row["output_price_per_1k"] or 0),
+        cache_price_per_1k=float(row["cache_price_per_1k"] or 0),
         currency=row["currency"],
         price_schema_version=row["price_schema_version"],
         status=row["status"],
@@ -481,7 +503,7 @@ def _normalize_context_window(value: int | None) -> int:
 def _normalize_price(value: float | None) -> float:
     """按共享价格合同校验模型目录单价并返回兼容浮点值。
 
-    参数：``value`` 是请求 DTO 已解析的每千 Token 单价，空值沿用历史零价默认值。
+    参数：``value`` 是请求 DTO 已解析的每百万 Token 单价，空值沿用历史零价默认值。
     返回：可写入现有模型目录 NUMERIC 字段的非负有限浮点数。
     约束：上限和小数位必须与成本路由、PricePlan 完全一致；目录入口不能写入一个
     随后会让路由或 Usage 失败的价格事实，非法值统一返回 ``model.price_invalid``。
@@ -638,6 +660,28 @@ def _supplied_fields(payload: UpdateModelRequest) -> set[str]:
     return set(fields)
 
 
+def _price_fields_supplied(payload: CreateModelRequest) -> bool:
+    """Return whether creation explicitly included any price input.
+
+    A zero price is still a deliberate free price, while an omitted price block
+    remains unpriced until an administrator configures it.
+    """
+
+    fields = getattr(payload, "model_fields_set", None)
+    if fields is None:
+        fields = getattr(payload, "__fields_set__", set())
+    return bool(
+        set(fields)
+        & {"input_price_per_1k", "output_price_per_1k", "cache_price_per_1k"}
+    )
+
+
+def _manual_price_version(now: str) -> str:
+    """Create an opaque, stable version label for a manually entered price."""
+
+    return f"manual-{now}"
+
+
 def _create_field_names() -> tuple[str, ...]:
     """在 模型目录 内部复用 create field names 辅助逻辑，集中处理边界值和错误映射。
     
@@ -654,6 +698,7 @@ def _create_field_names() -> tuple[str, ...]:
         "context_window",
         "input_price_per_1k",
         "output_price_per_1k",
+        "cache_price_per_1k",
         "currency",
         "price_schema_version",
         "description",

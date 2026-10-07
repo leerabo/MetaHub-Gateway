@@ -194,6 +194,32 @@ def create_catalog_provider(
             transaction.commit()
             return result
 
+        # 同一组织对同一厂家只保留一个目录实例；后退/前进后再次提交直接恢复原实例，
+        # 避免为同一个 Kimi/OpenAI 服务生成多行重复配置。幂等键冲突必须先于此判断，
+        # 这样相同幂等键携带不同请求体仍会返回 provider_catalog.idempotency_conflict。
+        existing_instance = connection.execute(
+            """
+            SELECT provider_catalog_instance_id
+            FROM provider_catalog_instances
+            WHERE workspace_id=? AND tenant_id=? AND entry_code=?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (owner.workspace_id, owner.tenant_id, entry.entry_code),
+        ).fetchone()
+        if existing_instance is not None:
+            result = CatalogProviderCreateResponse(
+                instance=_instance_summary(
+                    connection, owner, str(existing_instance["provider_catalog_instance_id"])
+                ),
+                idempotent_replay=True,
+                next_action="configure_provider_key",
+                request_id=_identifier(request_id),
+                trace_id=_identifier(trace_id),
+            )
+            transaction.commit()
+            return result
+
         now = _db_time(_utcnow())
         provider_id = str(uuid4())
         instance_id = _id("pci_")

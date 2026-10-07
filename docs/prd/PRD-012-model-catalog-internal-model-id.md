@@ -67,8 +67,9 @@
 | `provider_model_id` | TEXT | NULL，迁移后回填 | 上游模型 ID；新建时必填 |
 | `display_name` | TEXT | NULL | 控制台显示名 |
 | `context_window` | INTEGER | NOT NULL DEFAULT 0 | 最大上下文长度，0 表示未知 |
-| `input_price_per_1k` | NUMERIC | NOT NULL DEFAULT 0 | 输入 token 每千价格 |
-| `output_price_per_1k` | NUMERIC | NOT NULL DEFAULT 0 | 输出 token 每千价格 |
+| `input_price_per_1k` | NUMERIC | NOT NULL DEFAULT 0 | 输入 Token 每百万价格（字段名为兼容历史客户端保留） |
+| `output_price_per_1k` | NUMERIC | NOT NULL DEFAULT 0 | 输出 Token 每百万价格（字段名为兼容历史客户端保留） |
+| `cache_price_per_1k` | NUMERIC | NOT NULL DEFAULT 0 | 缓存命中 Token 每百万价格（缺省时按输入价兼容回填） |
 | `currency` | TEXT | NOT NULL DEFAULT `'CNY'` | 币种，M0 支持 `CNY`/`USD` |
 | `price_schema_version` | TEXT | NULL | 价格版本占位，后续 FinOps 使用 |
 | `description` | TEXT | NULL | 备注 |
@@ -178,7 +179,7 @@
 - `provider_id` 必须属于当前租户且 Provider 状态不是物理删除对象；M0 允许绑定 disabled Provider，但数据面调用时会因 Provider disabled 返回 `gateway.provider_not_found`。
 - `provider_model_id` 为上游模型 ID，必填。
 - `capabilities` 必须是对象，只接受布尔值标签；M0 推荐标签：`chat`、`embeddings`、`stream`、`tools`、`json_mode`、`vision`。
-- 价格字段必须为非负数；M0 单位固定为每千 token。
+- 价格字段必须为非负数；当前单位固定为每百万 Token。数据库/API 字段名仍保留 `_per_1k` 以兼容历史客户端。
 - 创建后写 `model.updated` 结构化事件，payload 不含密钥。
 
 ### PATCH /models/{id}

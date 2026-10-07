@@ -2245,6 +2245,7 @@ function workspaceDetailView(state, permissions) {
   return `
     <header class="platform-page-heading platform-workspace-heading"><div><button class="platform-back-button" type="button" data-platform-action="close-workspace">← 返回目录</button><p>${escapeHtml(kindLabel(workspace.kind))}</p><h1>${escapeHtml(workspace.display_name)}</h1><small>${escapeHtml(workspace.workspace_id)}${workspace.slug ? ` · ${escapeHtml(workspace.slug)}` : ""}</small></div><div class="platform-detail-status">${status(workspace.operational_status)}<span>Operational rev ${number(workspace.operational_revision)}</span></div></header>
     ${canLifecycle ? lifecycleCommands(workspace) : ""}
+    ${canLifecycle ? privateGatewayCapabilityCommand(workspace) : ""}
     <section class="platform-band platform-workspace-summary">
       <div class="platform-section-heading"><div><p>Operational facts</p><h2>运营摘要</h2></div><span>更新于 ${formatTime(workspace.updated_at)}</span></div>
       <dl class="platform-fact-grid">
@@ -2273,6 +2274,11 @@ function workspaceDetailView(state, permissions) {
       <div class="platform-history-column"><div class="platform-section-heading"><div><p>Action intents</p><h2>最近动作</h2></div></div>${actionTimeline(actions)}</div>
       <div class="platform-history-column"><div class="platform-section-heading"><div><p>Operational events</p><h2>事件时间线</h2></div></div>${eventTimeline(events)}</div>
     </section>`;
+}
+
+function privateGatewayCapabilityCommand(workspace) {
+  const enabled = Boolean(workspace.private_gateway_enabled);
+  return `<section class="platform-command-bar"><div><strong>私有 Gateway</strong><span>${enabled ? "已为该组织开通" : "该组织尚未开通"}</span></div><button class="${enabled ? "platform-danger" : "platform-primary"}" type="button" data-platform-action="toggle-private-gateway">${enabled ? "关闭" : "开通"}</button></section>`;
 }
 
 function lifecycleCommands(workspace) {

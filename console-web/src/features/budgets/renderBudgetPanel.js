@@ -19,9 +19,9 @@ const ACTION_LABELS = {
 // 固定层级标签只负责展示，预算冲突顺序和 deny-wins 结论必须使用后端 aggregate。
 const SCOPE_LABELS = {
   tenant: "租户",
-  project: "Project",
-  application: "Application（兼容）",
-  virtual_key: "Virtual Key",
+  project: "项目",
+  application: "应用",
+  virtual_key: "调用 KEY",
 };
 
 /**
@@ -36,9 +36,7 @@ export function renderBudgetPanel(budgetState, authContext, virtualKeysState, pr
   if (!budgetState) {
     return renderLoadingPanel();
   }
-  // 预算接口错误必须带 request_id 展示，方便管理员把控制台提示和后端日志串起来。
   if (budgetState.state === "error") {
-    // 读取刷新失败不能覆盖此前 POST/PATCH 的结构化错误，尤其要保留 409 的 request_id。
     return `${renderActionError(budgetState.actionError)}${renderErrorPanel(budgetState)}`;
   }
 
@@ -57,8 +55,10 @@ export function renderBudgetPanel(budgetState, authContext, virtualKeysState, pr
       </div>
       <span class="budget-count">${escapeHtml(rules.length)} 条规则</span>
     </div>
-    ${renderActionError(budgetState.actionError)}
-    ${renderFeedback(budgetState.feedback)}
+    <div class="console-page-toolbar budget-toolbar">
+      ${renderActionError(budgetState.actionError)}
+      ${renderFeedback(budgetState.feedback)}
+    </div>
     ${renderAggregateBand(aggregate, statusPayload.budget_date, rules.length)}
     ${renderEnvironmentSummaries(summaries)}
     ${renderScopeChainSelector(virtualKeysState, budgetState.selectedVirtualKeyId)}
@@ -82,7 +82,7 @@ function renderLoadingPanel() {
 }
 
 /**
- * 渲染预算接口错误状态，并保留 request_id 便于控制面日志定位。
+ * 渲染预算接口错误状态。
  */
 function renderErrorPanel(state) {
   return `
@@ -91,7 +91,7 @@ function renderErrorPanel(state) {
       <p>预算状态暂不可用。</p>
     </div>
     <div class="empty-state error-state">
-      ${escapeHtml(state.message ?? "预算接口读取失败")} request_id: ${escapeHtml(state.requestId ?? "-")}
+      ${escapeHtml(state.message ?? "预算接口读取失败，请稍后重试")}
     </div>
   `;
 }
@@ -179,8 +179,8 @@ function renderEnvironmentSummaries(summaries) {
     return "";
   }
   return `
-    <section class="budget-summary-section" aria-label="Environment 预算摘要">
-      <h3>Environment 摘要</h3>
+    <section class="budget-summary-section" aria-label="运行环境预算摘要">
+      <h3>运行环境摘要</h3>
       ${summaries.map((environment) => `
         <div class="budget-environment-summary">
           <header>
@@ -218,8 +218,8 @@ function renderScopeSummary(item) {
 }
 
 /**
- * 渲染 Virtual Key 作用链选择器。
- * 选择值只发送不透明 Key ID；Environment、Project 和 Application 由后端重新恢复并校验。
+ * 渲染调用 KEY 作用链选择器。
+ * 选择值只发送不透明 Key ID；运行环境、项目和应用由后端重新恢复并校验。
  */
 function renderScopeChainSelector(virtualKeysState, selectedVirtualKeyId) {
   const virtualKeys = virtualKeysState?.virtual_keys ?? [];
@@ -228,11 +228,11 @@ function renderScopeChainSelector(virtualKeysState, selectedVirtualKeyId) {
   }
   return `
     <label class="budget-chain-selector">
-      <span>作用链</span>
+      <span>选择调用 KEY</span>
       <select id="budget-scope-chain-key">
         ${virtualKeys.map((item) => `
           <option value="${escapeAttribute(item.virtual_key_id)}" ${item.virtual_key_id === selectedVirtualKeyId ? "selected" : ""}>
-            ${escapeHtml(item.name)} · ${escapeHtml(item.key_prefix ?? item.virtual_key_id)}
+            ${escapeHtml(displayVirtualKeyName(item.name))}
           </option>
         `).join("")}
       </select>
@@ -246,7 +246,7 @@ function renderScopeChainSelector(virtualKeysState, selectedVirtualKeyId) {
 function renderScopeChain(statuses, aggregate) {
   const scopeChain = aggregate.scope_chain ?? [];
   if (!scopeChain.length) {
-    return `<div class="empty-state budget-empty">当前 Environment 尚无可展示的预算作用链。</div>`;
+    return `<div class="empty-state budget-empty">当前运行环境尚无可展示的预算作用链。</div>`;
   }
   return `
     <section class="budget-chain-section" aria-label="适用预算作用链">
@@ -274,10 +274,9 @@ function renderScopeChainRow(scope, statuses) {
     status.scope_type === scope.scope_type && status.scope_id === scope.scope_id
   ));
   return `
-    <div class="budget-chain-row" role="row">
+    <div class="budget-chain-row" role="row" data-budget-scope-id="${escapeAttribute(scope.budget_scope_id ?? scope.scope_id ?? "")}">
       <div data-label="层级">
         <strong>${escapeHtml(scopeDisplayName(scope))}</strong>
-        <em>${escapeHtml(scope.budget_scope_id ?? scope.scope_id ?? "-")}</em>
       </div>
       <div data-label="状态">
         <mark class="status-mark status-${escapeAttribute(item?.status ?? "unconfigured")}">
@@ -303,8 +302,25 @@ function scopeDisplayName(scope) {
   if (!scope) {
     return "-";
   }
-  return scope.scope_label
+  const label = scope.scope_label
     ?? `${SCOPE_LABELS[scope.scope_type] ?? scope.scope_type ?? "scope"} · ${scope.scope_id ?? "-"}`;
+  return cleanScopeLabel(label);
+}
+
+function cleanScopeLabel(label) {
+  // Key prefixes are useful for diagnostics but add no meaning to a budget decision.
+  // Keep the opaque id in data attributes and show only the administrator's label.
+  const cleaned = String(label).replace(/\s*\((?:mhv|mh|sk|pk|key)[a-z0-9_*:-]*\)\s*$/iu, "").trim();
+  if (/^local development virtual key$/iu.test(cleaned)) {
+    return /^en(?:-|$)/iu.test(globalThis.document?.documentElement?.lang ?? "")
+      ? "Default organization KEY"
+      : "默认调用 KEY";
+  }
+  return cleaned || "-";
+}
+
+function displayVirtualKeyName(name) {
+  return cleanScopeLabel(name || "未命名调用 KEY");
 }
 /**
  * 渲染 active BudgetBlock 提示，使用后端调用链字段帮助管理员定位首次阻断。
@@ -314,10 +330,9 @@ function renderBlockNotice(item) {
     return "";
   }
   return `
-    <div class="budget-block-notice" role="status">
+    <div class="budget-block-notice" role="status" data-budget-block-id="${escapeAttribute(item.budget_block_id)}">
       <strong>请求已阻断</strong>
       <span>${escapeHtml(formatDateTime(item.blocked_at))}</span>
-      <code>${escapeHtml(item.budget_block_id)}</code>
     </div>
   `;
 }
@@ -334,37 +349,39 @@ function renderBudgetForm(virtualKeysState, projectState, environmentState, rule
     ? (environmentState.environments ?? []).filter((item) => item.status === "active")
     : [];
   return `
-    <form class="budget-rule-form" id="budget-rule-form">
-      <h3>设置日预算</h3>
+    <details class="budget-create-disclosure">
+      <summary>设置日预算</summary>
+      <p>为组织、项目、应用或调用 KEY 设置每日额度。</p>
+      <form class="budget-rule-form" id="budget-rule-form">
       <label>
         <span>环境</span>
         <select name="environmentId" ${environments.length ? "" : "disabled"}>
           ${environments.length
             ? environments.map((item) => `<option value="${escapeAttribute(item.environment_id)}">${escapeHtml(item.name)} / ${escapeHtml(item.code)}</option>`).join("")
-            : `<option value="">请先创建 active Environment</option>`}
+            : `<option value="">请先创建可用运行环境</option>`}
         </select>
       </label>
       <label>
         <span>维度</span>
         <select name="scopeType">
           <option value="tenant">租户</option>
-          <option value="project">Project</option>
-          <option value="application">Application</option>
-          <option value="virtual_key">Virtual Key</option>
+          <option value="project">项目</option>
+          <option value="application">应用</option>
+          <option value="virtual_key">调用 KEY</option>
         </select>
       </label>
       <label>
-        <span>Scope ID</span>
+        <span>具体对象</span>
         <select name="scopeId">
           <option value="" data-budget-scope-option="tenant">租户预算不需要选择</option>
           ${projects
-            .map((item) => `<option value="${escapeAttribute(item.project_id)}" data-budget-scope-option="project" hidden disabled>Project · ${escapeHtml(item.name)} (${escapeHtml(item.project_code ?? "-")})</option>`)
+            .map((item) => `<option value="${escapeAttribute(item.project_id)}" data-budget-scope-option="project" hidden disabled>项目 · ${escapeHtml(item.name)} (${escapeHtml(item.project_code ?? "-")})</option>`)
             .join("")}
           ${applications
-            .map((item) => `<option value="${escapeAttribute(item.application_id)}" data-budget-scope-option="application" hidden disabled>Application · ${escapeHtml(item.name)} (${escapeHtml(item.project_name ?? "-")})</option>`)
+            .map((item) => `<option value="${escapeAttribute(item.application_id)}" data-budget-scope-option="application" hidden disabled>应用 · ${escapeHtml(item.name)} (${escapeHtml(item.project_name ?? "-")})</option>`)
             .join("")}
           ${virtualKeys
-            .map((item) => `<option value="${escapeAttribute(item.virtual_key_id)}" data-budget-scope-option="virtual_key" data-environment-id="${escapeAttribute(item.environment_id ?? "")}" hidden disabled>Virtual Key · ${escapeHtml(item.name)} (${escapeHtml(item.key_prefix ?? "-")})</option>`)
+            .map((item) => `<option value="${escapeAttribute(item.virtual_key_id)}" data-budget-scope-option="virtual_key" data-environment-id="${escapeAttribute(item.environment_id ?? "")}" hidden disabled>调用 KEY · ${escapeHtml(displayVirtualKeyName(item.name))}</option>`)
             .join("")}
         </select>
       </label>
@@ -398,7 +415,8 @@ function renderBudgetForm(virtualKeysState, projectState, environmentState, rule
         <button type="submit" ${environments.length ? "" : "disabled"}>保存预算</button>
         <span>${escapeHtml(rules.length ? "已配置规则可直接更新" : "当前没有预算规则")}</span>
       </div>
-    </form>
+      </form>
+    </details>
   `;
 }
 
@@ -439,12 +457,11 @@ function renderRuleTable(rules, canWrite) {
 function renderRuleRow(item, canWrite) {
   const today = item.today_status ?? {};
   return `
-    <div class="budget-rule-row" role="row">
+    <div class="budget-rule-row" role="row" data-budget-rule-id="${escapeAttribute(item.budget_rule_id)}">
       <span class="budget-rule-name" data-label="规则">
         <strong>${escapeHtml(item.name)}</strong>
-        <em>${escapeHtml(item.budget_rule_id)}</em>
       </span>
-      <span class="budget-rule-scope" data-label="维度">${escapeHtml(item.environment_name ?? item.environment ?? "-")} · ${escapeHtml(item.scope_label ?? item.scope_id)}</span>
+      <span class="budget-rule-scope" data-label="维度">${escapeHtml(item.environment_name ?? item.environment ?? "-")} · ${escapeHtml(cleanScopeLabel(item.scope_label ?? item.scope_id))}</span>
       <span data-label="日预算">${escapeHtml(item.daily_budget_cny)} CNY</span>
       <span data-label="告警">${escapeHtml(item.warning_threshold_percent)}%</span>
       <span class="budget-mode-cell" data-label="100% 动作">
@@ -484,7 +501,7 @@ function renderModeControl(item) {
 function renderEmptyRuleRow() {
   return `
     <div class="budget-rule-row budget-rule-empty" role="row">
-      <span>尚未配置租户、Project 或 Virtual Key 日预算。</span>
+      <span>尚未配置租户、项目或调用 KEY 日预算。</span>
     </div>
   `;
 }
@@ -493,13 +510,12 @@ function renderEmptyRuleRow() {
  * 渲染预算写入错误提示。
  */
 function renderActionError(error) {
-  // 错误态是用户可见反馈入口，需要保留后端 request_id 便于排查。
   if (!error) {
     return "";
   }
   return `
     <div class="budget-action-error" role="alert">
-      ${escapeHtml(error.message ?? "预算操作失败")} request_id: ${escapeHtml(error.requestId ?? "-")}
+      ${escapeHtml(error.message ?? "预算操作失败，请稍后重试")}
     </div>
   `;
 }

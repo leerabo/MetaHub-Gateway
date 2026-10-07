@@ -44,7 +44,7 @@ export function renderWorkspaceSubscription(state = {}) {
 }
 
 export function renderWorkspaceInternalFinOps(state = {}, navigationItems = []) {
-  const rates = state.rates?.rates ?? [];
+  const models = state.models?.models ?? [];
   const available = new Set(
     (Array.isArray(navigationItems) ? navigationItems : [])
       .filter((item) => item?.visible !== false && item?.disabled !== true)
@@ -52,31 +52,55 @@ export function renderWorkspaceInternalFinOps(state = {}, navigationItems = []) 
   );
   return '<section class="workspace-commercial-accounting" data-workspace-commercial-root="internal-finops">'
     + pageHeading(
-      "企业内部 FinOps",
-      "Provider 成本率与内部成本事实",
-      state.loading?.length ? "正在同步" : String(rates.length) + " 个版本",
+      "组织成本",
+      "模型成本与用量记录",
+      state.loading?.length ? "正在同步" : String(models.length) + " 个模型",
     )
-    + stateMessage(state)
-    + finOpsLinks(available)
-    + rateFilters(state)
+     + stateMessage(state)
+     + fxRateSection(state)
+     + finOpsLinks(available)
     + '<section class="commercial-band">'
-      + sectionHeading("Provider 成本率", status(state.phase))
+      + sectionHeading("模型成本", '<button type="button" data-model-cost-open-catalog>前往模型目录修改价格</button>')
       + '<div class="commercial-table-wrap"><table class="commercial-table">'
-        + '<thead><tr><th>Provider / 模型</th><th>币种</th><th>输入成本</th>'
-        + '<th>输出成本</th><th>生效区间</th><th>来源</th><th>状态</th><th>操作</th></tr></thead>'
+        + '<thead><tr><th>模型服务 / 模型</th><th>币种</th><th>输入 / 百万 Token</th>'
+        + '<th>缓存命中 / 百万 Token</th><th>输出 / 百万 Token</th><th>状态</th></tr></thead>'
         + '<tbody>'
-          + (rates.map((rate) => rateRow(rate, state.canManageRates)).join("")
-            || emptyRow(state.loading?.length ? "正在读取成本率" : "暂无成本率", 8))
+          + (models.map(modelCostRow).join("")
+            || emptyRow(state.loading?.length ? "正在读取模型价格" : "暂无模型", 6))
         + '</tbody>'
       + '</table></div>'
-      + pagination(
-        state.rateHistory?.length > 0,
-        Boolean(state.rates?.next_cursor),
-        "rate-previous",
-        "rate-next",
-      )
     + '</section>'
-    + (state.canManageRates ? createRateForm() : "")
+    + '</section>';
+}
+
+function modelCostRow(model) {
+  const priced = [model.input_price_per_1k, model.cache_price_per_1k, model.output_price_per_1k]
+    .every((value) => value !== null && value !== undefined && value !== "");
+  const price = (value) => priced ? escapeHtml(value) : "未配置";
+  return '<tr><td><strong>' + escapeHtml(model.provider_name || "未命名服务") + '</strong><small>'
+    + escapeHtml(model.display_name || model.internal_model_id || "未命名模型") + '</small></td>'
+    + '<td>' + escapeHtml(model.currency || "-") + '</td>'
+    + '<td>' + price(model.input_price_per_1k) + '</td>'
+    + '<td>' + price(model.cache_price_per_1k) + '</td>'
+    + '<td>' + price(model.output_price_per_1k) + '</td>'
+    + '<td>' + status(model.status) + '</td></tr>';
+}
+
+function fxRateSection(state) {
+  const rates = state.fxRates?.rates ?? [];
+  const current = rates.find((rate) => rate.status === "active") ?? rates[0] ?? null;
+  return '<section class="commercial-band commercial-fx-rate" aria-label="汇率设置">'
+    + sectionHeading("成本比较汇率", '<span>USD → CNY</span>')
+    + '<div class="commercial-fx-summary"><strong>1 USD = '
+    + escapeHtml(current?.usd_to_cny ?? "未设置") + ' CNY</strong>'
+    + (current ? '<small>自 ' + escapeHtml(formatDate(current.effective_from)) + ' 生效 · 第 '
+      + escapeHtml(current.version_number) + ' 版</small>' : '') + '</div>'
+    + (state.canManageRates ? '<form class="commercial-fx-form" data-workspace-fx-rate-command-form autocomplete="off">'
+      + '<label><span>1 USD 兑换 CNY</span><input name="usdToCny" inputmode="decimal" pattern="[0-9]+(\\.[0-9]{1,8})?" value="'
+      + escapeAttribute(current?.usd_to_cny ?? "7.2") + '" required /></label>'
+      + '<label><span>生效时间</span><input type="datetime-local" name="effectiveFrom" required /></label>'
+      + '<input type="hidden" name="expectedHeadRevision" value="' + escapeAttribute(current?.revision ?? 0) + '" />'
+      + stepUpFields("workspace") + '<button type="submit">保存汇率</button></form>' : '')
     + '</section>';
 }
 
@@ -171,115 +195,24 @@ function disputeForm(state, invoices) {
 
 function finOpsLinks(available) {
   const links = [
-    ["usage", "Usage / PriceSnapshot"],
-    ["finops-ledger", "内部账本"],
-    ["quota-buckets", "额度"],
-    ["budgets", "预算"],
+    ["usage", "workspace.finance.usage", "用量与价格"],
+    ["finops-ledger", "workspace.finance.internal-finops", "成本账本"],
+    ["quota-buckets", "workspace.finance.quota", "额度"],
+    ["budgets", "workspace.finance.budgets", "预算"],
   ].filter(([id]) => available.has(id));
   if (!links.length) return "";
   return '<nav class="commercial-related-links" aria-label="内部 FinOps 关联页面">'
-    + links.map(([id, label]) => (
-      '<a href="#' + escapeAttribute(id) + '">' + escapeHtml(label) + '</a>'
+    + links.map(([id, route, label]) => (
+      '<button type="button" data-console-nav="' + escapeAttribute(id) + '" data-console-route="' + escapeAttribute(route) + '" data-console-target="' + escapeAttribute(id) + '">' + escapeHtml(label) + '</button>'
     )).join("") + '</nav>';
-}
-
-function rateFilters(state) {
-  const filters = state.rateFilters ?? {};
-  return '<section class="commercial-band"><form class="commercial-filter"'
-    + ' data-workspace-provider-cost-filter-form autocomplete="off">'
-    + input("providerId", "Provider ID", filters.provider_id)
-    + input("modelId", "模型 ID", filters.model_id)
-    + '<label><span>币种</span><select name="currency">' + options(filters.currency, [
-      ["", "全部"], ["CNY", "CNY"], ["USD", "USD"],
-    ]) + '</select></label>'
-    + '<label><span>状态</span><select name="status">' + options(filters.status, [
-      ["", "全部"], ["active", "生效"], ["superseded", "已替代"], ["disabled", "已停用"],
-    ]) + '</select></label>'
-    + '<label><span>生效时点</span><input type="datetime-local" name="effectiveAt" value="'
-      + escapeAttribute(localDateValue(filters.effective_at)) + '" /></label>'
-    + '<button type="submit">筛选</button></form></section>';
-}
-
-function rateRow(rate, canManage) {
-  return '<tr><td><strong>' + escapeHtml(rate.provider_name) + '</strong><small>'
-    + escapeHtml(rate.provider_id) + " / " + escapeHtml(rate.model_alias)
-    + " / " + escapeHtml(rate.model_id) + '</small></td>'
-    + '<td>' + escapeHtml(rate.currency) + '</td>'
-    + '<td>' + micros(rate.input_rate_micros_per_1k, rate.currency) + '</td>'
-    + '<td>' + micros(rate.output_rate_micros_per_1k, rate.currency) + '</td>'
-    + '<td>' + formatDate(rate.effective_from) + '<small>'
-      + formatDate(rate.effective_until) + '</small></td>'
-    + '<td>' + escapeHtml(sourceLabel(rate.source_type)) + '<small>'
-      + escapeHtml(rate.source_ref) + '</small></td>'
-    + '<td>' + status(rate.status) + '<small>v' + rate.version_number
-      + " · r" + rate.head_revision + '</small></td>'
-    + '<td>' + (canManage ? rateActions(rate) : '<span class="commercial-muted">只读</span>')
-    + '</td></tr>';
-}
-
-function rateActions(rate) {
-  const forms = [];
-  if (rate.actions.includes("create_version")) {
-    forms.push('<details><summary>新版本</summary><form data-workspace-provider-cost-command-form'
-      + ' autocomplete="off"><input type="hidden" name="action" value="create_version" />'
-      + rateHidden(rate)
-      + numberInput("inputRate", "输入微单位 / 1K", rate.input_rate_micros_per_1k)
-      + numberInput("outputRate", "输出微单位 / 1K", rate.output_rate_micros_per_1k)
-      + '<label><span>生效时间</span><input type="datetime-local" name="effectiveFrom" required /></label>'
-      + '<label><span>结束时间</span><input type="datetime-local" name="effectiveUntil" /></label>'
-      + stepUpFields("workspace") + '<button type="submit">创建版本</button></form></details>');
-  }
-  if (rate.actions.includes("adopt_reference")) {
-    forms.push('<details><summary>采用参考</summary><form data-workspace-provider-cost-command-form'
-      + ' autocomplete="off"><input type="hidden" name="action" value="adopt_reference" />'
-      + rateHidden(rate)
-      + input("referenceRateId", "参考 release ID", "", true)
-      + stepUpFields("workspace") + '<button type="submit">采用</button></form></details>');
-  }
-  if (rate.actions.includes("disable")) {
-    forms.push('<form data-workspace-provider-cost-command-form autocomplete="off">'
-      + '<input type="hidden" name="action" value="disable" />' + rateHidden(rate)
-      + stepUpFields("workspace") + '<button class="is-danger" type="submit">停用</button></form>');
-  }
-  return '<div class="commercial-row-actions">' + forms.join("") + '</div>';
-}
-
-function createRateForm() {
-  return '<section class="commercial-band commercial-command">'
-    + sectionHeading("新建 Provider 成本率", '<span>Workspace owner</span>')
-    + '<form data-workspace-provider-cost-command-form autocomplete="off">'
-      + '<input type="hidden" name="action" value="create_version" />'
-      + '<input type="hidden" name="expectedHeadRevision" value="0" />'
-      + input("providerId", "Provider ID", "", true)
-      + input("modelId", "模型 ID", "", true)
-      + '<label><span>币种</span><select name="currency" required>'
-        + '<option value="CNY">CNY</option><option value="USD">USD</option></select></label>'
-      + numberInput("inputRate", "输入微单位 / 1K", 0)
-      + numberInput("outputRate", "输出微单位 / 1K", 0)
-      + '<label><span>生效时间</span><input type="datetime-local" name="effectiveFrom" required /></label>'
-      + '<label><span>结束时间</span><input type="datetime-local" name="effectiveUntil" /></label>'
-      + stepUpFields("workspace")
-      + '<button type="submit">创建成本率</button></form></section>';
-}
-
-function rateHidden(rate) {
-  return '<input type="hidden" name="resourceId" value="'
-    + escapeAttribute(rate.workspace_provider_cost_rate_id) + '" />'
-    + '<input type="hidden" name="expectedHeadRevision" value="'
-    + escapeAttribute(rate.head_revision) + '" />'
-    + '<input type="hidden" name="rateId" value="'
-    + escapeAttribute(rate.workspace_provider_cost_rate_id) + '" />'
-    + '<input type="hidden" name="providerId" value="' + escapeAttribute(rate.provider_id) + '" />'
-    + '<input type="hidden" name="modelId" value="' + escapeAttribute(rate.model_id) + '" />'
-    + '<input type="hidden" name="currency" value="' + escapeAttribute(rate.currency) + '" />';
 }
 
 function stepUpFields(scope) {
   return '<label><span>验证方式</span><select name="method"'
-    + ' data-workspace-commercial-step-up-method="' + escapeAttribute(scope) + '">'
+    + ' aria-label="验证方式" data-workspace-commercial-step-up-method="' + escapeAttribute(scope) + '">'
     + '<option value="totp">动态验证码</option><option value="webauthn">安全密钥</option>'
     + '</select></label><label data-workspace-commercial-step-up-code><span>动态验证码</span>'
-    + '<input name="verificationCode" inputmode="numeric" autocomplete="one-time-code"'
+    + '<input name="verificationCode" aria-label="动态验证码" inputmode="numeric" autocomplete="one-time-code"'
     + ' pattern="[0-9]{6}" maxlength="6" data-workspace-commercial-sensitive required /></label>';
 }
 
@@ -293,29 +226,6 @@ function fact(label, value) {
 function sectionHeading(title, meta) {
   return '<div class="commercial-section-heading"><h2>' + escapeHtml(title)
     + '</h2>' + meta + '</div>';
-}
-function input(name, label, value, required = false) {
-  return '<label><span>' + escapeHtml(label) + '</span><input name="' + escapeAttribute(name)
-    + '" value="' + escapeAttribute(value ?? "") + '" maxlength="128"'
-    + (required ? " required" : "") + ' /></label>';
-}
-function numberInput(name, label, value) {
-  return '<label><span>' + escapeHtml(label) + '</span><input type="number" name="'
-    + escapeAttribute(name) + '" min="0" step="1" value="' + escapeAttribute(value)
-    + '" required /></label>';
-}
-function options(selected, entries) {
-  return entries.map(([value, label]) => (
-    '<option value="' + escapeAttribute(value) + '"'
-      + (value === selected ? " selected" : "") + '>' + escapeHtml(label) + '</option>'
-  )).join("");
-}
-function pagination(previous, next, previousAction, nextAction) {
-  return '<div class="commercial-pagination">'
-    + '<button type="button" data-workspace-commercial-action="' + previousAction + '"'
-      + (previous ? "" : " disabled") + ' aria-label="上一页">&#8592;</button>'
-    + '<button type="button" data-workspace-commercial-action="' + nextAction + '"'
-      + (next ? "" : " disabled") + ' aria-label="下一页">&#8594;</button></div>';
 }
 function emptyRow(message, columns) {
   return '<tr><td colspan="' + columns + '" class="commercial-empty">' + escapeHtml(message) + '</td></tr>';
@@ -379,14 +289,6 @@ function decisionLabel(value) {
     claim_not_supported: "证据不支持",
   })[value] ?? value;
 }
-function sourceLabel(value) {
-  return ({
-    manual: "手工版本",
-    platform_reference: "官方参考",
-    legacy_model_price: "历史模型价格",
-    legacy_model: "历史模型基线",
-  })[value] ?? value;
-}
 function money(value, currency) {
   if (value === null || value === undefined) return "-";
   try {
@@ -399,22 +301,12 @@ function money(value, currency) {
     return String(value) + " " + String(currency ?? "");
   }
 }
-function micros(value, currency) {
-  return escapeHtml(String(value)) + '<small>micro ' + escapeHtml(currency) + " / 1K</small>";
-}
 function formatDate(value) {
   if (!value) return "-";
   const date = new Date(value);
   return Number.isFinite(date.getTime())
     ? date.toLocaleString("zh-CN", { hour12: false })
     : "-";
-}
-function localDateValue(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "";
-  const offset = date.getTimezoneOffset() * 60_000;
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 }
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/gu, (character) => ({

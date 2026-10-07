@@ -108,7 +108,6 @@ export function renderCompetitorComparison({ comparison, authContext, activeTab 
         <div>
           <p class="eyebrow">帮助中心 / 竞品对比 · v${escapeHtml(comparison.version)}</p>
           <h2 id="competitor-title">竞品定位与能力映射</h2>
-          <p>用于产品、售前和交付统一口径。内容按公开资料与 MetaHub 当前实现核验，不构成采购、法律或安全结论。</p>
         </div>
         <dl class="competitor-version"><dt>资料核验</dt><dd>${escapeHtml(comparison.verifiedAt)}</dd></dl>
       </header>
@@ -166,7 +165,7 @@ function renderPositioningPanel(comparison, activeTab) {
       <div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>平台</th><th>对象类型</th><th>与 MetaHub 关系</th><th>公开关注点</th><th>常见接入形态</th><th>MetaHub 当前映射</th></tr></thead><tbody>
         ${comparison.platforms.map(renderPlatformRow).join("")}
       </tbody></table></div>
-      <p class="competitor-note">仅当客户明确要求桥接既有聚合入口时，才评估 migration_compatible Adapter；该入口不得成为默认上游、推荐上游或模型厂商分类。</p>
+      <p class="competitor-note">客户明确要求桥接时，再评估迁移入口。</p>
     </section>
   `;
 }

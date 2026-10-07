@@ -132,45 +132,70 @@ export function renderPolicyDryRunPanel(state, context, authContext) {
     environments,
   );
   const busy = safeState.status === "submitting";
+  const hasEnvironments = environments.length > 0;
+  const hasProjects = projects.length > 0;
+  const hasModels = models.length > 0;
+  const missingPrerequisites = [
+    hasEnvironments ? "环境" : "环境（先创建并启用）",
+    hasProjects ? "项目" : "项目（先创建并启用）",
+    hasModels ? "模型与路由" : "模型与路由（先完成配置）",
+  ].filter((item) => /（/u.test(item));
+  const setupReady = missingPrerequisites.length === 0;
   return `
     <div class="policy-dry-run-heading">
       <div>
         <h2 id="policy-dry-run-title">策略模拟器</h2>
-        <p>当前 active 候选</p>
+        <p>使用当前可用的环境、项目和模型检查一次请求会如何处理。</p>
       </div>
       <span class="policy-dry-run-status" data-status="${escapeAttribute(safeState.status)}" tabindex="-1">${statusLabel(safeState.status)}</span>
     </div>
     ${renderError(safeState.error)}
-    <form id="policy-dry-run-form" autocomplete="off">
-      <fieldset ${busy ? "disabled" : ""}>
-        <legend>请求上下文</legend>
-        <label><span>Environment</span>
-          <select name="environmentId" required>${renderOptions(environments, safeState.environmentId, "environment_id", environmentLabel, "请选择 Environment")}</select>
-        </label>
-        <label><span>Project</span>
-          <select name="projectId" required>${renderOptions(projects, safeState.projectId, "project_id", projectLabel, "请选择 Project")}</select>
-        </label>
-        <label><span>模型</span>
-          <select name="model" required>${renderOptions(models, safeState.model, "value", (item) => item.label, "请选择模型")}</select>
-        </label>
-        <label><span>数据等级</span>
-          <input name="dataClass" maxlength="64" required value="${escapeAttribute(safeState.dataClass)}" />
-        </label>
-        <label><span>最大输出 Token</span>
-          <input name="maxOutputTokens" type="number" min="1" max="131072" step="1" value="${escapeAttribute(safeState.maxOutputTokens)}" />
-        </label>
-        <label class="policy-dry-run-prompt"><span>Prompt</span>
-          <textarea name="prompt" maxlength="20000" rows="7" required spellcheck="false" autocomplete="off"></textarea>
-        </label>
-      </fieldset>
-      <div class="policy-dry-run-actions">
-        <button type="submit" ${busy ? "disabled" : ""}>${busy ? "预演中" : "运行预演"}</button>
-        <button type="button" data-policy-dry-run-clear ${busy ? "disabled" : ""}>清空</button>
-        <span role="status" aria-live="polite">${busy ? "正在计算" : ""}</span>
-      </div>
-    </form>
+    ${renderPrerequisiteNotice(missingPrerequisites)}
+    <details class="policy-dry-run-setup" ${setupReady ? "open" : ""}>
+      <summary>设置请求条件${setupReady ? "" : "（完成基础配置后再运行）"}</summary>
+      <form id="policy-dry-run-form" autocomplete="off">
+        <fieldset ${busy ? "disabled" : ""}>
+          <legend>请求上下文</legend>
+          <label><span>环境</span>
+            <select name="environmentId" required ${hasEnvironments ? "" : "disabled"}>${renderOptions(environments, safeState.environmentId, "environment_id", environmentLabel, hasEnvironments ? "请选择环境" : "暂无可用环境")}</select>
+            ${hasEnvironments ? "" : "<small class=\"policy-dry-run-field-hint\">请先在“环境”页面创建并启用一个环境。</small>"}
+          </label>
+          <label><span>项目</span>
+            <select name="projectId" required ${hasProjects ? "" : "disabled"}>${renderOptions(projects, safeState.projectId, "project_id", projectLabel, hasProjects ? "请选择项目" : "暂无可用项目")}</select>
+            ${hasProjects ? "" : "<small class=\"policy-dry-run-field-hint\">请先在“项目”页面创建并启用一个项目。</small>"}
+          </label>
+          <label><span>模型</span>
+            <select name="model" required ${hasModels ? "" : "disabled"}>${renderOptions(models, safeState.model, "value", (item) => item.label, hasModels ? "请选择模型" : "暂无可用模型")}</select>
+            ${hasModels ? "" : "<small class=\"policy-dry-run-field-hint\">请先完成模型服务和路由配置。</small>"}
+          </label>
+          <label><span>数据等级</span>
+            <input name="dataClass" maxlength="64" required value="${escapeAttribute(safeState.dataClass)}" />
+          </label>
+          <label><span>最大输出 Token</span>
+            <input name="maxOutputTokens" type="number" min="1" max="131072" step="1" value="${escapeAttribute(safeState.maxOutputTokens)}" />
+          </label>
+          <label class="policy-dry-run-prompt"><span>要检查的内容</span>
+            <textarea name="prompt" maxlength="20000" rows="7" required spellcheck="false" autocomplete="off" placeholder="输入一段准备发送给模型的内容"></textarea>
+          </label>
+        </fieldset>
+        <div class="policy-dry-run-actions">
+          <button type="submit" ${busy || !setupReady ? "disabled" : ""}>${busy ? "预演中" : "运行预演"}</button>
+          <button type="button" data-policy-dry-run-clear ${busy ? "disabled" : ""}>清空</button>
+          <span role="status" aria-live="polite">${busy ? "正在计算" : ""}</span>
+        </div>
+      </form>
+    </details>
     ${renderExplanation(safeState.result)}
   `;
+}
+
+function renderPrerequisiteNotice(missingPrerequisites) {
+  if (!missingPrerequisites.length) return "";
+  return `<div class="policy-dry-run-prerequisites" role="status">
+    <strong>完成基础配置后才能运行预演</strong>
+    <span>当前还缺少：${escapeHtml(missingPrerequisites.join("、"))}。</span>
+    <small>先完成这些设置，下面的请求条件表单才会启用。</small>
+  </div>`;
 }
 
 /**
@@ -401,12 +426,17 @@ function candidatePriceLabel(item) {
   const input = item?.input_price_per_1k;
   const output = item?.output_price_per_1k;
   if (input !== null && input !== undefined || output !== null && output !== undefined) {
-    return `${input ?? "-"} / ${output ?? "-"} ${currency} / 1K`;
+    return `${tokenPricePerMillion(input)} / ${tokenPricePerMillion(output)} ${currency} / 百万 Token`;
   }
   if (item?.price_status === "not_evaluated" || item?.price_source === "not_evaluated") {
     return "未评估";
   }
   return "缺价";
+}
+
+function tokenPricePerMillion(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? String(number) : "-";
 }
 
 /** 渲染 DLP 安全摘要，后端合同禁止 pattern、命中文本和 hash。 */

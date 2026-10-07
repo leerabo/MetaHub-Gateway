@@ -165,7 +165,7 @@ function renderTemplateVariables(template, state) {
   }
   if (!template) return "";
   if (!template.variables.length) {
-    return `<div class="enterprise-chat-template-variables"><span>此模板无需变量</span></div>`;
+    return "";
   }
   return `<div class="enterprise-chat-template-variables">
     ${template.variables.map((item) => `<label>
@@ -198,35 +198,15 @@ function renderMessages(messages) {
     <article class="enterprise-chat-message" data-role="${item.role === "assistant" ? "assistant" : "user"}"
       data-enterprise-chat-message-index="${index}">
       <div class="enterprise-chat-message-body"></div>
-      ${item.role === "assistant" ? renderExecution(item.execution) : ""}
     </article>
   `).join("");
 }
 
-/** assistant 下方只显示固定治理白名单，长链路 ID 允许换行且不进入链接。 */
-function renderExecution(value) {
-  if (!value) return "";
-  const total = Number(value.total_tokens ?? 0);
-  const policy = value.policy?.decision ?? "unknown";
-  return `
-    <dl class="enterprise-chat-governance">
-      <div><dt>Token</dt><dd>${escapeHtml(total)}</dd></div>
-      <div><dt>成本</dt><dd>¥${escapeHtml(value.cost_cny ?? "0.000000")}</dd></div>
-      <div><dt>Policy</dt><dd>${escapeHtml(policy)}</dd></div>
-      <div><dt>Fallback</dt><dd>${value.fallback_triggered ? "是" : "否"}</dd></div>
-      <div><dt>Cache</dt><dd>${escapeHtml(cacheLabel(value.cache_status))}</dd></div>
-      <div class="enterprise-chat-request-id"><dt>request_id</dt><dd>${escapeHtml(value.request_id ?? "-")}</dd></div>
-    </dl>
-  `;
-}
-
-/** 错误只展示统一 code/message/request_id，不拼接异常、Prompt、Provider 或 Endpoint。 */
+/** 错误只展示用户可执行的消息，不把内部调用标识写入聊天窗口。 */
 function renderError(error) {
   if (!error) return "";
   return `<div class="enterprise-chat-error" role="alert">
-    <strong>${escapeHtml(error.code ?? "chat.gateway_unavailable")}</strong>
     <span>${escapeHtml(error.message ?? "企业 Chat 暂时不可用")}</span>
-    <code>request_id: ${escapeHtml(error.requestId ?? "-")}</code>
   </div>`;
 }
 
@@ -240,11 +220,6 @@ function statusText(state) {
   // 上限提示由状态机提供固定文案；这里不计算或回显正文长度，避免 Prompt 进入模板或辅助状态。
   if (state.historyLimitReached === true) return state.historyLimitMessage ?? "";
   return "";
-}
-
-/** 缓存状态使用固定中文标签，未知值不直接回显。 */
-function cacheLabel(value) {
-  return ({ hit: "命中", miss: "未命中", not_configured: "未配置", unknown: "未知" })[value] ?? "未知";
 }
 
 /** 转义纯文本，保留换行由 CSS white-space 控制。 */

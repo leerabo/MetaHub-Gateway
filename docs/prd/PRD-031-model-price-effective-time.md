@@ -6,7 +6,7 @@
 - 优先级：P0
 - 当前状态：实现与聚焦验收完成，全量回归结果见测试记录
 - 依赖：PRD-012 模型目录、PRD-017 Usage 与成本估算、PRD-030 Environment 隔离
-- 明确边界：不自动抓取厂商价格，不做汇率换算，不重算已入账 Usage
+- 明确边界：不自动抓取厂商价格，不改变原币种计费或已入账 Usage；成本优先路由使用组织成本核算页维护的、按生效时间版本化的 USD/CNY 比较汇率
 
 ## 实现结论
 
@@ -51,8 +51,9 @@
 | `price_plan_id` | TEXT | PK | `prp_` 前缀稳定 ID |
 | `tenant_id` | TEXT | NOT NULL, FK | 租户隔离边界 |
 | `model_id` | TEXT | NOT NULL, FK | 当前租户模型 |
-| `input_price_per_1k` | NUMERIC | >= 0 | 输入 Token 每千个原币单价 |
-| `output_price_per_1k` | NUMERIC | >= 0 | 输出 Token 每千个原币单价 |
+| `input_price_per_1k` | NUMERIC | >= 0 | 输入 Token 每百万个原币单价（字段名兼容历史客户端） |
+| `output_price_per_1k` | NUMERIC | >= 0 | 输出 Token 每百万个原币单价（字段名兼容历史客户端） |
+| `cache_price_per_1k` | NUMERIC | >= 0 | 缓存命中 Token 每百万个原币单价（缺省时按输入价兼容回填） |
 | `currency` | TEXT | CNY/USD | 原始账单币种，不做换汇 |
 | `price_schema_version` | TEXT | NOT NULL | 人工版本；未填时由服务生成 |
 | `effective_from` | TEXT | NOT NULL | UTC ISO 生效时刻 |
@@ -82,7 +83,7 @@
 
 ### 模型目录兼容字段
 
-`models.input_price_per_1k/output_price_per_1k/currency/price_schema_version` 暂不删除，用于旧数据和未建立 PricePlan 的兼容回退。Gateway 选择顺序为“已生效 PricePlan -> 模型目录兼容价格”。模型目录页面把价格编辑入口迁移到模型价格页；原 API 字段暂保留，避免破坏 PRD-012 客户端。
+`models.input_price_per_1k/output_price_per_1k/currency/price_schema_version` 暂不删除，用于迁移期间的旧数据兼容。Gateway 优先选择按请求时刻生效的 Workspace 成本率；没有 Workspace 价格资源时保持未定价，不把模型目录字段静默当作新账价格。仅迁移生成的 `legacy_model` 成本率头被明确停用时，才允许读取旧 PricePlan/模型目录兼容值。模型目录页面把价格编辑入口迁移到模型价格页；原 API 字段暂保留，避免破坏 PRD-012 客户端。
 
 ## API 设计
 
@@ -103,6 +104,10 @@
 
 响应 `201`：`price_plan`、`request_id`、`trace_id`。金额使用 JSON 字符串返回，避免二进制浮点尾差。允许登记过去、当前或未来时刻；过去时刻不会触发历史 Usage 重算，只影响创建后按当前时间执行的新请求。
 
+### `POST /model-prices/batch`
+
+请求体为 `plans` 数组，最多 100 条，适合一次补录多个历史价格时间段。所有计划、价格事件和当前目录兼容字段在同一事务提交；任一模型、时间或版本冲突都会整体回滚。
+
 ### `GET /model-prices`
 
 admin/developer 可读。查询参数：
@@ -121,7 +126,7 @@ admin/developer 可读。查询参数：
 - 顶部使用模型筛选和状态分段控件；列表按模型分组并显示历史、当前、待生效状态。
 - admin 可打开“新增价格”表单，选择模型、输入两类单价、币种、版本和 UTC 生效时间。
 - developer 只读；viewer 无入口。前端隐藏仅改善体验，后端仍执行 RBAC。
-- 页面明确显示“已入账用量不会重算”，但不加入自动抓价、汇率、批量导入或审批流。
+- 页面明确显示“已入账用量不会重算”；批量补录通过 `POST /model-prices/batch` 完成，不自动抓价、不改写原币种账务、不引入审批流。路由比较汇率在组织成本核算页单独版本化维护。
 - 金额字段使用文本输入和后端 Decimal 校验；页面不自行做财务舍入。
 
 ## 错误码设计
@@ -147,7 +152,7 @@ admin/developer 可读。查询参数：
 2. 模型必须通过 `tenant_id + model_id` 查询，跨租户 ID 对外表现为不存在。
 3. Gateway 不接受价格 ID、币种或生效时间覆盖参数，只按可信模型和服务器 UTC 时间选价。
 4. 创建事件、Webhook 和结构化日志不记录 Provider Key、Virtual Key、Authorization、Prompt、Response 或上游原始账单正文。
-5. 金额全部使用 `Decimal`；CNY/USD 分栏记录，不做隐式汇率换算。
+5. 金额全部使用 `Decimal`；CNY/USD 分栏记录，不在计费账本中做隐式汇率换算。路由排序只消费显式的组织汇率版本。
 6. 已入账 `usage_ledger`、`price_snapshots` 不更新；创建历史生效计划也不能回放修改旧账。
 7. Webhook 在主事务提交后 best-effort 分发，失败不回滚已创建价格计划。
 
@@ -200,4 +205,4 @@ admin/developer 可读。查询参数：
 2. 同时保留“模型+生效时刻唯一”和“模型+版本唯一”，错误映射不暴露 SQLite 文本。
 3. 允许回填过去生效时间，但明确绝不更新旧 Usage；这覆盖历史计划录入而不破坏账本不可变性。
 4. 当前 RBAC 未定义 finance，按现有架构由 admin 写、developer 读，并在文档中保留未来 finance 接入点，不在本 PRD 扩大基础角色模型。
-5. 不加入自动抓价、汇率、审批、批量导入或复杂计费维度，符合 Excel 和架构 MVP 边界。
+5. 不加入自动抓价、价格审批或复杂计费维度；历史价格补录通过受限批量接口完成。组织汇率版本仅服务成本比较，不改变账务事实。

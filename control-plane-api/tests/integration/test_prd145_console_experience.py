@@ -8,6 +8,7 @@ import secrets
 import shutil
 import sqlite3
 from contextlib import closing
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -422,6 +423,18 @@ async def test_domain_overviews_assistants_and_credential_isolation(
         assert workspace.headers["cache-control"] == "no-store, private"
         assert platform.headers["x-permission-fingerprint"] != ""
         assert workspace.headers["x-permission-fingerprint"] != ""
+
+        owner_sections = {section["source_code"] for section in workspace.json()["sections"]}
+        assert "role_tasks" in owner_sections
+
+        runtime["workspace"] = replace(runtime["workspace"], membership_role="viewer")
+        viewer_workspace = await client.get(
+            "/workspace/overview", headers=_workspace_headers(runtime)
+        )
+        assert viewer_workspace.status_code == 200, viewer_workspace.text
+        viewer_sections = {section["source_code"] for section in viewer_workspace.json()["sections"]}
+        assert "role_tasks" not in viewer_sections
+        runtime["workspace"] = replace(runtime["workspace"], membership_role="owner")
 
         platform_answer = await client.post(
             "/platform/assistant/query",

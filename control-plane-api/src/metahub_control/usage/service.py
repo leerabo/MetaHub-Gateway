@@ -172,9 +172,7 @@ def list_usage_records(
             f"""
         SELECT
           ul.usage_ledger_id, ul.tenant_id, ul.request_id, rl.trace_id,
-          (SELECT kc.consumer_id FROM virtual_key_consumers kc
-            WHERE kc.tenant_id=ul.tenant_id
-              AND kc.virtual_key_id=COALESCE(ul.virtual_key_id, rl.virtual_key_id)) AS consumer_id,
+          COALESCE(kc.consumer_id, vk.created_by) AS consumer_id,
           COALESCE(ul.virtual_key_id, rl.virtual_key_id) AS virtual_key_id,
           vk.key_prefix AS virtual_key_prefix,
           COALESCE(ul.environment_id, rl.environment_id) AS environment_id,
@@ -197,6 +195,7 @@ def list_usage_records(
         FROM usage_ledger ul
         LEFT JOIN request_logs rl ON rl.tenant_id=ul.tenant_id AND rl.request_id=ul.request_id
         LEFT JOIN virtual_keys vk ON vk.tenant_id=ul.tenant_id AND vk.virtual_key_id=COALESCE(ul.virtual_key_id, rl.virtual_key_id)
+        LEFT JOIN virtual_key_consumers kc ON kc.tenant_id=vk.tenant_id AND kc.virtual_key_id=vk.virtual_key_id
         LEFT JOIN environments e ON e.tenant_id=ul.tenant_id AND e.environment_id=COALESCE(ul.environment_id, rl.environment_id)
         LEFT JOIN projects p ON p.tenant_id=ul.tenant_id AND p.project_id=COALESCE(ul.project_id, rl.project_id)
         LEFT JOIN applications a ON a.tenant_id=ul.tenant_id AND a.application_id=COALESCE(ul.application_id, rl.application_id)
@@ -454,10 +453,13 @@ def build_usage_filters(
         params.append(filters["virtual_key_id"])
     if filters.get("consumer_id"):
         clauses.append(
-            "EXISTS (SELECT 1 FROM virtual_key_consumers kc "
-            "WHERE kc.tenant_id=ul.tenant_id "
-            "AND kc.virtual_key_id=COALESCE(ul.virtual_key_id, rl.virtual_key_id) "
-            "AND kc.consumer_id=?)"
+            "EXISTS (SELECT 1 FROM virtual_keys filtered_key "
+            "LEFT JOIN virtual_key_consumers kc "
+            "ON kc.tenant_id=filtered_key.tenant_id "
+            "AND kc.virtual_key_id=filtered_key.virtual_key_id "
+            "WHERE filtered_key.tenant_id=ul.tenant_id "
+            "AND filtered_key.virtual_key_id=COALESCE(ul.virtual_key_id, rl.virtual_key_id) "
+            "AND COALESCE(kc.consumer_id, filtered_key.created_by)=?)"
         )
         params.append(filters["consumer_id"])
     if filters["environment_id"]:
@@ -678,15 +680,20 @@ def _load_by_consumer(
     except ApiError as exc:
         if exc.code != "auth.permission_denied":
             raise
-    label_sql = "c.display_name AS consumer_name, c.department AS consumer_department," if labels else ""
-    label_join = (
-        "LEFT JOIN workspace_consumers c ON c.tenant_id=kc.tenant_id AND c.consumer_id=kc.consumer_id"
+    label_sql = (
+        "COALESCE(c.display_name, member.display_name) AS consumer_name, "
+        "c.department AS consumer_department,"
         if labels else ""
     )
-    label_group = ", c.display_name, c.department" if labels else ""
+    label_join = (
+        "LEFT JOIN workspace_consumers c ON c.tenant_id=vk.tenant_id AND c.consumer_id=kc.consumer_id "
+        "LEFT JOIN users member ON member.tenant_id=vk.tenant_id AND member.user_id=vk.created_by"
+        if labels else ""
+    )
+    label_group = ", c.display_name, c.department, member.display_name" if labels else ""
     rows = connection.execute(
         f"""
-        SELECT kc.consumer_id, {label_sql} COUNT(*) AS request_count,
+        SELECT COALESCE(kc.consumer_id, vk.created_by) AS consumer_id, {label_sql} COUNT(*) AS request_count,
           COALESCE(SUM(ul.input_tokens), 0) AS input_tokens,
           COALESCE(SUM(ul.output_tokens), 0) AS output_tokens,
           COALESCE(SUM(ul.total_tokens), 0) AS total_tokens,
@@ -697,12 +704,14 @@ def _load_by_consumer(
           COALESCE(SUM(CASE WHEN ul.estimated=0 THEN 1 ELSE 0 END), 0) AS real_usage_records
         FROM usage_ledger ul
         LEFT JOIN request_logs rl ON rl.tenant_id=ul.tenant_id AND rl.request_id=ul.request_id
-        LEFT JOIN virtual_key_consumers kc ON kc.tenant_id=ul.tenant_id
-          AND kc.virtual_key_id=COALESCE(ul.virtual_key_id, rl.virtual_key_id)
+        LEFT JOIN virtual_keys vk ON vk.tenant_id=ul.tenant_id
+          AND vk.virtual_key_id=COALESCE(ul.virtual_key_id, rl.virtual_key_id)
+        LEFT JOIN virtual_key_consumers kc ON kc.tenant_id=vk.tenant_id
+          AND kc.virtual_key_id=vk.virtual_key_id
         {label_join}
         {where_sql}
-        GROUP BY kc.consumer_id{label_group}
-        ORDER BY total_tokens DESC, kc.consumer_id
+        GROUP BY COALESCE(kc.consumer_id, vk.created_by){label_group}
+        ORDER BY total_tokens DESC, consumer_id
         """,
         params,
     ).fetchall()

@@ -7,9 +7,11 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import re
 import sqlite3
+import unicodedata
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -26,11 +28,18 @@ from metahub_control.audit import (
 )
 from metahub_control.auth import AuthContext
 from metahub_control.auth.resource_transactions import ResourceWriteTransaction
-from metahub_control.virtual_keys.service import load_virtual_key_audit_snapshot
+from metahub_control.virtual_keys.service import (
+    load_virtual_key_audit_snapshot,
+    record_virtual_key_binding_change,
+    sync_application_key_lifecycle,
+    sync_project_key_lifecycle,
+)
 
 from .models import (
     ApplicationInfo,
     ApplicationListResponse,
+    ApplicationMemberInfo,
+    ApplicationMembersResponse,
     ApplicationResponse,
     CreateApplicationRequest,
     CreateProjectRequest,
@@ -38,6 +47,7 @@ from .models import (
     ProjectListResponse,
     ProjectResponse,
     UpdateApplicationRequest,
+    UpdateApplicationMembersRequest,
     UpdateProjectRequest,
 )
 
@@ -59,6 +69,7 @@ def list_projects(
     *,
     status: str | None,
     search: str | None,
+    personal_only: bool = False,
     request_id: str,
     trace_id: str,
 ) -> ProjectListResponse:
@@ -78,6 +89,22 @@ def list_projects(
         clauses.append("(p.project_code LIKE ? OR p.name LIKE ?)")
         like_value = f"%{normalized_search}%"
         params.extend([like_value, like_value])
+    if personal_only:
+        # 成员只能看到自己被分配的项目，或自己 KEY 当前归属的项目。
+        clauses.append(
+            "("
+            "EXISTS (SELECT 1 FROM application_memberships am "
+            "JOIN workspace_memberships wm ON wm.tenant_id=am.tenant_id "
+            "AND wm.workspace_membership_id=am.workspace_membership_id "
+            "WHERE am.tenant_id=p.tenant_id AND am.application_id IN "
+            "(SELECT application_id FROM applications WHERE tenant_id=p.tenant_id AND project_id=p.project_id) "
+            "AND am.status='active' AND wm.status='active' AND wm.legacy_user_id=?) "
+            "OR EXISTS (SELECT 1 FROM virtual_keys own_key "
+            "WHERE own_key.tenant_id=p.tenant_id AND own_key.project_id=p.project_id "
+            "AND own_key.created_by=?)"
+            ")"
+        )
+        params.extend([context.user.user_id, context.user.user_id])
     connection = _connect(config)
     try:
         rows = connection.execute(
@@ -120,13 +147,18 @@ def create_project(
     项目编码是租户内对账标识，重复时返回稳定冲突错误码，不透出底层唯一约束名称。
     """
 
-    project_code = _normalize_code(payload.project_code, "project.code_invalid")
     name = _normalize_name(payload.name, "project.name_invalid")
     description = _normalize_description(payload.description)
     with ResourceWriteTransaction(_connect(config), config, context, "project.write") as transaction:
         connection = transaction.connection
         context = transaction.context
         owner_user_id = _normalize_optional_owner(connection, context.user.tenant_id, payload.owner_user_id)
+        # 用户不需要填写内部编码；旧 API 显式传入时仍兼容，控制台请求则按名称自动生成。
+        project_code = (
+            _normalize_code(payload.project_code, "project.code_invalid")
+            if payload.project_code
+            else _generate_project_code(connection, context.user.tenant_id, name)
+        )
         now = _to_db_time(_utcnow())
         project_id = f"prj_{uuid4().hex}"
         try:
@@ -193,7 +225,7 @@ def update_project(
     with ResourceWriteTransaction(_connect(config), config, context, "project.write") as transaction:
         connection = transaction.connection
         context = transaction.context
-        _load_project(connection, context.user.tenant_id, project_id)
+        current_project = _load_project(connection, context.user.tenant_id, project_id)
         updates: list[str] = []
         values: list[object | None] = []
         if "name" in provided:
@@ -208,18 +240,155 @@ def update_project(
         if "status" in provided:
             updates.append("status=?")
             values.append(_normalize_status(payload.status, "project.status_invalid"))
+            next_status = values[-1]
+        else:
+            next_status = current_project.status
         updates.extend(["updated_by=?", "updated_at=?"])
-        values.extend([context.user.user_id, _to_db_time(_utcnow()), context.user.tenant_id, project_id])
+        now = _to_db_time(_utcnow())
+        values.extend([context.user.user_id, now, context.user.tenant_id, project_id])
         connection.execute(
             f"UPDATE projects SET {', '.join(updates)} WHERE tenant_id=? AND project_id=?",
             values,
         )
+        if next_status != current_project.status:
+            sync_project_key_lifecycle(
+                connection,
+                tenant_id=context.user.tenant_id,
+                project_id=project_id,
+                project_status=next_status,
+                actor_user_id=context.user.user_id,
+                now=now,
+            )
         transaction.commit()
         return ProjectResponse(
             project=_load_project(connection, context.user.tenant_id, project_id),
             request_id=request_id,
             trace_id=trace_id,
         )
+
+
+def delete_project(
+    config: AppConfig,
+    context: AuthContext,
+    project_id: str,
+    *,
+    request_id: str,
+    trace_id: str,
+) -> None:
+    """Physically remove a project tree that has never been used.
+
+    A newly created project may already contain one or more empty applications.
+    Those child rows are configuration, not usage, so deleting the project also
+    removes those unused applications and their creation events in one
+    transaction. Any key, request log, or usage ledger reference blocks the
+    physical delete so historical accounting remains intact.
+    """
+
+    with ResourceWriteTransaction(_connect(config), config, context, "project.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        _load_project(connection, context.user.tenant_id, project_id)
+        has_keys = connection.execute(
+            "SELECT 1 FROM virtual_keys WHERE tenant_id=? AND project_id=? LIMIT 1",
+            (context.user.tenant_id, project_id),
+        ).fetchone()
+        child_rows = connection.execute(
+            """
+            SELECT application_id
+            FROM applications
+            WHERE tenant_id=? AND project_id=?
+            ORDER BY application_id
+            """,
+            (context.user.tenant_id, project_id),
+        ).fetchall()
+        child_application_ids = [str(row["application_id"]) for row in child_rows]
+        child_key = None
+        if child_application_ids:
+            placeholders = ",".join("?" for _ in child_application_ids)
+            child_key = connection.execute(
+                f"""
+                SELECT 1
+                FROM virtual_keys
+                WHERE tenant_id=? AND application_id IN ({placeholders})
+                LIMIT 1
+                """,
+                [context.user.tenant_id, *child_application_ids],
+            ).fetchone()
+        has_history = connection.execute(
+            """
+            SELECT 1
+            WHERE EXISTS (
+              SELECT 1 FROM request_logs WHERE tenant_id=? AND project_id=?
+            )
+            OR EXISTS (
+              SELECT 1 FROM usage_ledger WHERE tenant_id=? AND project_id=?
+            )
+            OR EXISTS (
+              SELECT 1 FROM virtual_key_binding_history WHERE tenant_id=? AND project_id=?
+            )
+            """,
+            (
+                context.user.tenant_id,
+                project_id,
+                context.user.tenant_id,
+                project_id,
+                context.user.tenant_id,
+                project_id,
+            ),
+        ).fetchone()
+        child_history = None
+        if child_application_ids:
+            placeholders = ",".join("?" for _ in child_application_ids)
+            child_history = connection.execute(
+                f"""
+                SELECT 1
+                WHERE EXISTS (
+                  SELECT 1 FROM request_logs
+                  WHERE tenant_id=? AND application_id IN ({placeholders})
+                )
+                OR EXISTS (
+                  SELECT 1 FROM usage_ledger
+                  WHERE tenant_id=? AND application_id IN ({placeholders})
+                )
+                OR EXISTS (
+                  SELECT 1 FROM virtual_key_binding_history
+                  WHERE tenant_id=? AND application_id IN ({placeholders})
+                )
+                """,
+                [
+                    context.user.tenant_id,
+                    *child_application_ids,
+                    context.user.tenant_id,
+                    *child_application_ids,
+                    context.user.tenant_id,
+                    *child_application_ids,
+                ],
+            ).fetchone()
+        if has_keys or child_key or has_history or child_history:
+            raise ApiError("project.delete_in_use")
+        connection.execute(
+            "DELETE FROM project_events WHERE tenant_id=? AND project_id=?",
+            (context.user.tenant_id, project_id),
+        )
+        if child_application_ids:
+            placeholders = ",".join("?" for _ in child_application_ids)
+            connection.execute(
+                f"DELETE FROM project_events WHERE tenant_id=? AND application_id IN ({placeholders})",
+                [context.user.tenant_id, *child_application_ids],
+            )
+            connection.execute(
+                f"DELETE FROM application_memberships WHERE tenant_id=? AND application_id IN ({placeholders})",
+                [context.user.tenant_id, *child_application_ids],
+            )
+            connection.execute(
+                f"DELETE FROM applications WHERE tenant_id=? AND application_id IN ({placeholders})",
+                [context.user.tenant_id, *child_application_ids],
+            )
+        connection.execute(
+            "DELETE FROM projects WHERE tenant_id=? AND project_id=?",
+            (context.user.tenant_id, project_id),
+        )
+        transaction.commit()
 
 
 def list_applications(
@@ -229,6 +398,7 @@ def list_applications(
     project_id: str | None,
     status: str | None,
     search: str | None,
+    personal_only: bool = False,
     request_id: str,
     trace_id: str,
 ) -> ApplicationListResponse:
@@ -255,6 +425,20 @@ def list_applications(
             clauses.append("(a.application_code LIKE ? OR a.name LIKE ?)")
             like_value = f"%{normalized_search}%"
             params.extend([like_value, like_value])
+        if personal_only:
+            clauses.append(
+                "("
+                "EXISTS (SELECT 1 FROM application_memberships am "
+                "JOIN workspace_memberships wm ON wm.tenant_id=am.tenant_id "
+                "AND wm.workspace_membership_id=am.workspace_membership_id "
+                "WHERE am.tenant_id=a.tenant_id AND am.application_id=a.application_id "
+                "AND am.status='active' AND wm.status='active' AND wm.legacy_user_id=?) "
+                "OR EXISTS (SELECT 1 FROM virtual_keys own_key "
+                "WHERE own_key.tenant_id=a.tenant_id AND own_key.application_id=a.application_id "
+                "AND own_key.created_by=?)"
+                ")"
+            )
+            params.extend([context.user.user_id, context.user.user_id])
         rows = connection.execute(
             f"""
             SELECT
@@ -295,7 +479,6 @@ def create_application(
     """
 
     project_id = _normalize_required_text(payload.project_id, "project.not_found")
-    application_code = _normalize_code(payload.application_code, "application.code_invalid")
     name = _normalize_name(payload.name, "application.name_invalid")
     description = _normalize_description(payload.description)
     with ResourceWriteTransaction(_connect(config), config, context, "project.write") as transaction:
@@ -303,6 +486,20 @@ def create_application(
         context = transaction.context
         project = _load_project(connection, context.user.tenant_id, project_id)
         _ensure_writable_parent_status(project.status)
+        # 应用编码是内部稳定标识，控制台用户不需要填写。旧客户端可能仍会
+        # 带上已废弃的中文/空编码字段；这些值不能阻塞创建，统一回退到名称生成。
+        raw_application_code = str(payload.application_code or "").strip()
+        if raw_application_code:
+            try:
+                application_code = _normalize_code(raw_application_code, "application.code_invalid")
+            except ApiError:
+                application_code = _generate_application_code(
+                    connection, context.user.tenant_id, project_id, name
+                )
+        else:
+            application_code = _generate_application_code(
+                connection, context.user.tenant_id, project_id, name
+            )
         now = _to_db_time(_utcnow())
         application_id = f"app_{uuid4().hex}"
         try:
@@ -417,6 +614,15 @@ def update_application(
                 f"UPDATE applications SET {', '.join(updates)} WHERE tenant_id=? AND application_id=?",
                 values,
             )
+            if "status" in provided and values[updates.index("status=?")] != current.status:
+                sync_application_key_lifecycle(
+                    connection,
+                    tenant_id=context.user.tenant_id,
+                    application_id=application_id,
+                    application_status=values[updates.index("status=?")],
+                    actor_user_id=context.user.user_id,
+                    now=now,
+                )
             if project_changed:
                 # Key 归属更新必须继续携带认证租户和已锁定 Application，
                 # 不能仅凭客户端提供的 ID 批量写入。
@@ -429,6 +635,14 @@ def update_application(
                     (next_project_id, now, context.user.tenant_id, application_id),
                 )
                 for virtual_key_id, object_name, before_summary in key_snapshots:
+                    record_virtual_key_binding_change(
+                        connection,
+                        tenant_id=context.user.tenant_id,
+                        virtual_key_id=virtual_key_id,
+                        project_id=next_project_id,
+                        application_id=application_id,
+                        effective_at=now,
+                    )
                     after_object_name, after_summary = load_virtual_key_audit_snapshot(
                         connection,
                         context.user.tenant_id,
@@ -472,6 +686,350 @@ def update_application(
             )
         return ApplicationResponse(
             application=application,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+
+
+def delete_application(
+    config: AppConfig,
+    context: AuthContext,
+    application_id: str,
+    *,
+    request_id: str,
+    trace_id: str,
+) -> None:
+    """Physically remove only an unused application with no issued keys."""
+
+    with ResourceWriteTransaction(_connect(config), config, context, "project.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        _load_application(connection, context.user.tenant_id, application_id)
+        has_keys = connection.execute(
+            "SELECT 1 FROM virtual_keys WHERE tenant_id=? AND application_id=? LIMIT 1",
+            (context.user.tenant_id, application_id),
+        ).fetchone()
+        has_history = connection.execute(
+            """
+            SELECT 1
+            WHERE EXISTS (
+              SELECT 1 FROM request_logs WHERE tenant_id=? AND application_id=?
+            )
+            OR EXISTS (
+              SELECT 1 FROM usage_ledger WHERE tenant_id=? AND application_id=?
+            )
+            OR EXISTS (
+              SELECT 1 FROM virtual_key_binding_history WHERE tenant_id=? AND application_id=?
+            )
+            """,
+            (
+                context.user.tenant_id,
+                application_id,
+                context.user.tenant_id,
+                application_id,
+                context.user.tenant_id,
+                application_id,
+            ),
+        ).fetchone()
+        if has_keys or has_history:
+            raise ApiError("application.delete_in_use")
+        connection.execute(
+            "DELETE FROM project_events WHERE tenant_id=? AND application_id=?",
+            (context.user.tenant_id, application_id),
+        )
+        connection.execute(
+            "DELETE FROM application_memberships WHERE tenant_id=? AND application_id=?",
+            (context.user.tenant_id, application_id),
+        )
+        connection.execute(
+            "DELETE FROM applications WHERE tenant_id=? AND application_id=?",
+            (context.user.tenant_id, application_id),
+        )
+        transaction.commit()
+
+
+def list_application_members(
+    config: AppConfig,
+    context: AuthContext,
+    application_id: str,
+    *,
+    search: str | None,
+    limit: int,
+    offset: int,
+    request_id: str,
+    trace_id: str,
+) -> ApplicationMembersResponse:
+    """读取应用成员选择器，候选成员分页，已选 ID 单独完整返回。"""
+
+    normalized_search = _normalize_optional_search(search)
+    connection = _connect(config)
+    try:
+        _load_application(connection, context.user.tenant_id, application_id)
+        clauses = [
+            "member.tenant_id=?",
+            "member.status='active'",
+            "member.role_code!='service_account'",
+        ]
+        params: list[object] = [context.user.tenant_id]
+        if normalized_search:
+            clauses.append("(lower(account.display_name) LIKE ? OR lower(account.email_normalized) LIKE ?)")
+            pattern = f"%{normalized_search.lower()}%"
+            params.extend([pattern, pattern])
+        where = " AND ".join(clauses)
+        total = int(connection.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM workspace_memberships member
+            JOIN global_accounts account ON account.account_id=member.account_id
+            WHERE {where}
+            """,
+            params,
+        ).fetchone()[0])
+        rows = connection.execute(
+            f"""
+            SELECT member.workspace_membership_id, account.display_name,
+                   member.role_code, member.status,
+                   CASE WHEN assignment.application_membership_id IS NULL THEN 0 ELSE 1 END AS selected
+            FROM workspace_memberships member
+            JOIN global_accounts account ON account.account_id=member.account_id
+            LEFT JOIN application_memberships assignment
+              ON assignment.tenant_id=member.tenant_id
+             AND assignment.application_id=?
+             AND assignment.workspace_membership_id=member.workspace_membership_id
+             AND assignment.status='active'
+            WHERE {where}
+            ORDER BY account.display_name, member.workspace_membership_id
+            LIMIT ? OFFSET ?
+            """,
+            [application_id, *params, limit, offset],
+        ).fetchall()
+        selected_rows = connection.execute(
+            """
+            SELECT workspace_membership_id
+            FROM application_memberships
+            WHERE tenant_id=? AND application_id=? AND status='active'
+            ORDER BY workspace_membership_id
+            """,
+            (context.user.tenant_id, application_id),
+        ).fetchall()
+        return ApplicationMembersResponse(
+            application_id=application_id,
+            members=[
+                ApplicationMemberInfo(
+                    membership_id=row["workspace_membership_id"],
+                    display_name=row["display_name"],
+                    role=row["role_code"],
+                    status=row["status"],
+                    selected=bool(row["selected"]),
+                )
+                for row in rows
+            ],
+            selected_membership_ids=[row["workspace_membership_id"] for row in selected_rows],
+            limit=limit,
+            offset=offset,
+            total=total,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    finally:
+        connection.close()
+
+
+def update_application_members(
+    config: AppConfig,
+    context: AuthContext,
+    application_id: str,
+    payload: UpdateApplicationMembersRequest,
+    *,
+    request_id: str,
+    trace_id: str,
+) -> ApplicationMembersResponse:
+    """以一次事务替换应用成员授权集合，并同步成员个人 KEY 的当前应用归属。"""
+
+    raw_ids = payload.membership_ids or []
+    membership_ids = list(dict.fromkeys(str(item).strip() for item in raw_ids if str(item).strip()))
+    if len(membership_ids) > 10000:
+        raise ApiError("application.members_invalid")
+    with ResourceWriteTransaction(_connect(config), config, context, "project.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        application = _load_application(connection, context.user.tenant_id, application_id)
+        if membership_ids:
+            placeholders = ",".join("?" for _ in membership_ids)
+            valid_count = connection.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM workspace_memberships
+                WHERE tenant_id=? AND status='active' AND role_code!='service_account'
+                  AND workspace_membership_id IN ({placeholders})
+                """,
+                [context.user.tenant_id, *membership_ids],
+            ).fetchone()[0]
+            if int(valid_count) != len(membership_ids):
+                raise ApiError("application.members_invalid")
+        previous_member_rows = connection.execute(
+            """
+            SELECT wm.legacy_user_id
+            FROM application_memberships am
+            JOIN workspace_memberships wm
+              ON wm.tenant_id=am.tenant_id
+             AND wm.workspace_membership_id=am.workspace_membership_id
+            WHERE am.tenant_id=? AND am.application_id=? AND am.status='active'
+            """,
+            (context.user.tenant_id, application_id),
+        ).fetchall()
+        previous_member_ids = {str(row["legacy_user_id"]) for row in previous_member_rows}
+        next_member_rows = connection.execute(
+            f"""
+            SELECT legacy_user_id
+            FROM workspace_memberships
+            WHERE tenant_id=? AND status='active'
+              AND workspace_membership_id IN ({','.join('?' for _ in membership_ids) or "NULL"})
+            """,
+            [context.user.tenant_id, *membership_ids],
+        ).fetchall()
+        next_member_ids = {str(row["legacy_user_id"]) for row in next_member_rows}
+        connection.execute(
+            "DELETE FROM application_memberships WHERE tenant_id=? AND application_id=?",
+            (context.user.tenant_id, application_id),
+        )
+        now = _to_db_time(_utcnow())
+        for membership_id in membership_ids:
+            connection.execute(
+                """
+                INSERT INTO application_memberships(
+                  application_membership_id,tenant_id,application_id,workspace_membership_id,
+                  status,created_by,created_at,updated_at
+                ) VALUES(?,?,?,?, 'active', ?, ?, ?)
+                """,
+                (
+                    f"apm_{uuid4().hex}",
+                    context.user.tenant_id,
+                    application_id,
+                    membership_id,
+                    context.user.user_id,
+                    now,
+                    now,
+                ),
+            )
+        # 当前产品口径是一名员工一把个人 KEY 对应一个当前应用。成员被
+        # 分配到应用后，已有个人 KEY 自动切换到该应用；项目/应用停用或成员
+        # 移除造成的暂停，在重新分配到 active 应用时恢复，管理员手动停用保持不变。
+        member_rows = connection.execute(
+            f"""
+            SELECT legacy_user_id
+            FROM workspace_memberships
+            WHERE tenant_id=? AND status='active'
+              AND workspace_membership_id IN ({','.join('?' for _ in membership_ids)})
+            """,
+            [context.user.tenant_id, *membership_ids],
+        ).fetchall() if membership_ids else []
+        project_status = connection.execute(
+            """
+            SELECT p.status
+            FROM applications a
+            JOIN projects p ON p.tenant_id=a.tenant_id AND p.project_id=a.project_id
+            WHERE a.tenant_id=? AND a.application_id=?
+            """,
+            (context.user.tenant_id, application_id),
+        ).fetchone()["status"]
+        removed_member_ids = previous_member_ids - next_member_ids
+        if removed_member_ids:
+            removed_placeholders = ",".join("?" for _ in removed_member_ids)
+            connection.execute(
+                f"""
+                UPDATE virtual_keys
+                SET status='disabled', credential_revision=credential_revision+1,
+                    disabled_at=?, disabled_by=?, disabled_reason='member_removed', updated_at=?
+                WHERE tenant_id=? AND application_id=? AND deleted_at IS NULL
+                  AND status='active' AND created_by IN ({removed_placeholders})
+                """,
+                [
+                    now,
+                    context.user.user_id,
+                    now,
+                    context.user.tenant_id,
+                    application_id,
+                    *removed_member_ids,
+                ],
+            )
+        for member_row in member_rows:
+            legacy_user_id = member_row["legacy_user_id"]
+            key_rows = connection.execute(
+                """
+                SELECT virtual_key_id, project_id, application_id, status, disabled_reason
+                FROM virtual_keys
+                WHERE tenant_id=? AND created_by=? AND deleted_at IS NULL
+                ORDER BY created_at, virtual_key_id
+                """,
+                (context.user.tenant_id, legacy_user_id),
+            ).fetchall()
+            for key_row in key_rows:
+                now_for_key = _to_db_time(_utcnow())
+                same_binding = (
+                    key_row["project_id"] == application.project_id
+                    and key_row["application_id"] == application_id
+                )
+                should_resume = (
+                    key_row["status"] == "disabled"
+                    and project_status == "active"
+                    and application.status == "active"
+                    and key_row["disabled_reason"] in {"project_inactive", "manual", "member_removed"}
+                    and (
+                        key_row["disabled_reason"] in {"project_inactive", "member_removed"}
+                        or (key_row["project_id"] is None and key_row["application_id"] is None)
+                    )
+                )
+                should_mark_inactive = (
+                    not (project_status == "active" and application.status == "active")
+                    and key_row["status"] == "disabled"
+                    and key_row["disabled_reason"] in {"manual", "member_removed", "project_inactive"}
+                )
+                if same_binding and not should_resume:
+                    continue
+                connection.execute(
+                    """
+                    UPDATE virtual_keys
+                    SET project_id=?, application_id=?,
+                        status=CASE WHEN ? THEN 'active' ELSE status END,
+                        disabled_at=CASE WHEN ? THEN NULL ELSE disabled_at END,
+                        disabled_by=CASE WHEN ? THEN NULL ELSE disabled_by END,
+                        disabled_reason=CASE WHEN ? THEN 'manual'
+                                             WHEN ? THEN 'project_inactive'
+                                             ELSE disabled_reason END,
+                        updated_at=?
+                    WHERE tenant_id=? AND virtual_key_id=?
+                    """,
+                    (
+                        application.project_id,
+                        application_id,
+                        should_resume,
+                        should_resume,
+                        should_resume,
+                        should_resume,
+                        should_mark_inactive,
+                        now_for_key,
+                        context.user.tenant_id,
+                        key_row["virtual_key_id"],
+                    ),
+                )
+                if not same_binding:
+                    record_virtual_key_binding_change(
+                        connection,
+                        tenant_id=context.user.tenant_id,
+                        virtual_key_id=key_row["virtual_key_id"],
+                        project_id=application.project_id,
+                        application_id=application_id,
+                        effective_at=now_for_key,
+                    )
+        transaction.commit()
+        return list_application_members(
+            config,
+            context,
+            application_id,
+            search=None,
+            limit=100,
+            offset=0,
             request_id=request_id,
             trace_id=trace_id,
         )
@@ -691,6 +1249,52 @@ def _normalize_code(value: object | None, error_code: str) -> str:
         # 编码一旦进入历史账本就不应频繁修改，创建时必须严格拦截非法值。
         raise ApiError(error_code)
     return code
+
+
+def _generate_project_code(connection: sqlite3.Connection, tenant_id: str, name: str) -> str:
+    """从项目名称生成租户内唯一的内部编码，用户无需理解或填写该值。"""
+
+    normalized = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", normalized).strip("-").lower()
+    if not slug or not slug[0].isalpha():
+        slug = f"project-{hashlib.sha256(name.encode('utf-8')).hexdigest()[:8]}"
+    slug = slug[:64]
+    if len(slug) < 2:
+        slug = f"{slug}-project"[:64]
+    base = slug
+    suffix = 1
+    while connection.execute(
+        "SELECT 1 FROM projects WHERE tenant_id=? AND project_code=?",
+        (tenant_id, slug),
+    ).fetchone() is not None:
+        suffix += 1
+        suffix_text = f"-{suffix}"
+        slug = f"{base[:64-len(suffix_text)]}{suffix_text}"
+    return slug
+
+
+def _generate_application_code(
+    connection: sqlite3.Connection, tenant_id: str, project_id: str, name: str
+) -> str:
+    """从应用名称生成项目内唯一编码，控制台用户无需填写内部标识。"""
+
+    normalized = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", normalized).strip("-").lower()
+    if not slug or not slug[0].isalpha():
+        slug = f"app-{hashlib.sha256(f'{project_id}:{name}'.encode('utf-8')).hexdigest()[:8]}"
+    slug = slug[:64]
+    if len(slug) < 2:
+        slug = f"{slug}-app"[:64]
+    base = slug
+    suffix = 1
+    while connection.execute(
+        "SELECT 1 FROM applications WHERE tenant_id=? AND project_id=? AND application_code=?",
+        (tenant_id, project_id, slug),
+    ).fetchone() is not None:
+        suffix += 1
+        suffix_text = f"-{suffix}"
+        slug = f"{base[:64-len(suffix_text)]}{suffix_text}"
+    return slug
 
 
 def _normalize_name(value: object | None, error_code: str) -> str:

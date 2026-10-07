@@ -158,3 +158,84 @@ test("renderDeveloperStart migrates the quickstart route to the Workspace task h
   assert.doesNotMatch(container.innerHTML, /http:\/\/gateway\.local/);
   assert.doesNotMatch(container.innerHTML, /API 文档 · OpenAI-Compatible/);
 });
+
+test("overview gives a new organization an explicit first action", () => {
+  const container = { innerHTML: "" };
+  renderDeveloperStart(container, {
+    authContext: {
+      user: { display_name: "Owner", email: "owner@example.com", role: "owner", tenant_id: "tenant_1" },
+      tenant: { name: "新组织" },
+      permission_codes: ["workspace.console.overview.read"],
+    },
+    consoleShellState: {
+      navigation: {
+        active_navigation_item_id: "overview",
+        role_code: "owner",
+        navigation_items: [
+          { id: "overview", label: "概览", group: "空间", target_section: "overview", order: 1 },
+          { id: "quickstart", label: "开始使用", group: "空间", target_section: "quickstart", order: 2 },
+        ],
+      },
+    },
+    workspaceTaskHomeState: {
+      role_code: "owner",
+      source_freshness: "fresh",
+      tasks: [
+        { task_code: "provider_connected", status: "ready", action_enabled: true, action_route_code: "workspace.gateway.providers" },
+        { task_code: "model_catalog_ready", status: "blocked", action_enabled: false, action_route_code: "workspace.gateway.models" },
+        { task_code: "project_key_ready", status: "blocked", action_enabled: false, action_route_code: "workspace.gateway.virtual-keys" },
+      ],
+    },
+    workspaceConsoleExperienceState: {
+      status: "ready",
+      overview: { status: "ready", sections: [] },
+    },
+  });
+
+  assert.match(container.innerHTML, /配置模型接入/u);
+  assert.doesNotMatch(container.innerHTML, /再交给员工使用|最后让成员.*个人 KEY/u);
+  assert.match(container.innerHTML, /当前事项/u);
+  assert.match(container.innerHTML, /配置模型服务/u);
+  assert.match(container.innerHTML, /data-workspace-task-route="workspace.gateway.providers"/u);
+});
+
+test("completed organization setup removes the wizard from overview and keeps information cards", () => {
+  const container = { innerHTML: "" };
+  renderDeveloperStart(container, {
+    authContext: {
+      user: { display_name: "Owner", email: "owner@example.com", role: "owner", tenant_id: "tenant_1" },
+      tenant: { name: "组织" },
+      permission_codes: ["workspace.console.overview.read"],
+    },
+    consoleShellState: {
+      navigation: {
+        active_navigation_item_id: "overview",
+        role_code: "owner",
+        navigation_items: [
+          { id: "overview", label: "概览", group: "空间", target_section: "overview", order: 1 },
+          { id: "quickstart", label: "开始使用", group: "空间", target_section: "quickstart", order: 2 },
+        ],
+      },
+    },
+    workspaceTaskHomeState: {
+      role_code: "owner",
+      source_freshness: "fresh",
+      tasks: [
+        { task_code: "provider_connected", status: "completed", action_enabled: true, action_route_code: "workspace.gateway.providers" },
+        { task_code: "model_catalog_ready", status: "completed", action_enabled: true, action_route_code: "workspace.gateway.models" },
+      ],
+    },
+    workspaceConsoleExperienceState: {
+      status: "ready",
+      overview: {
+        status: "ready",
+        sections: [{ source_code: "status", freshness: "fresh", metrics: [{ metric_code: "records", value: 3, state_code: "ready" }] }],
+      },
+    },
+  });
+
+  assert.doesNotMatch(container.innerHTML, /workspace-first-use-panel/u);
+  assert.doesNotMatch(container.innerHTML, /组织接入进度/u);
+  assert.match(container.innerHTML, /workspace-console-experience-panel/u);
+  assert.match(container.innerHTML, /3/u);
+});

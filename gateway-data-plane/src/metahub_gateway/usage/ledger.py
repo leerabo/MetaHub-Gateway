@@ -45,7 +45,7 @@ NORMALIZATION_WARNING_CODES = {
     "provider_currency_missing",
 }
 # spool 使用独立版本号和精确字段集合；未知字段必须失败关闭，避免未来上下文扩展时把敏感值落盘。
-_SPOOL_RECORD_SCHEMA_VERSION = 7
+_SPOOL_RECORD_SCHEMA_VERSION = 8
 # v1-v6 字段集必须长期保留用于恢复升级前已 fsync 的待重放记录；各版本使用精确集合，
 # 旧记录缺失的安全证据只能解释为“未记录”，不能用宽松默认冒充新版本事实。
 _SPOOL_CONTEXT_FIELDS_V1 = frozenset(
@@ -173,6 +173,7 @@ _SPOOL_EVIDENCE_FIELDS = frozenset(
         "currency",
         "input_price_per_1k",
         "output_price_per_1k",
+        "cache_price_per_1k",
         "price_schema_version",
         "source",
         "price_plan_id",
@@ -362,6 +363,7 @@ class PriceSnapshotEvidence:
     source: str
     price_plan_id: str | None = None
     effective_from: str | None = None
+    cache_price_per_1k: str = "0"
 
 
 @dataclass(frozen=True)
@@ -955,6 +957,7 @@ def record_usage_ledger(
                 context,
                 input_tokens=write_intent.input_tokens,
                 output_tokens=write_intent.output_tokens,
+                cache_tokens=write_intent.cache_tokens,
                 now=write_intent.pricing_observed_at,
                 usage_ledger_id=write_intent.usage_ledger_id,
                 capture_intent=write_intent,
@@ -1480,6 +1483,7 @@ def _bind_price_snapshot_owner(
     matched = connection.execute(
         """
         SELECT version.input_rate_micros_per_1k,version.output_rate_micros_per_1k,
+          version.cache_rate_micros_per_1k,
           version.effective_from,version.content_sha256
         FROM workspace_provider_cost_rate_versions version
         JOIN workspace_provider_cost_rates rate
@@ -1503,6 +1507,8 @@ def _bind_price_snapshot_owner(
             == Decimal(evidence.input_price_per_1k)
             and Decimal(int(matched["output_rate_micros_per_1k"])) / Decimal(1_000_000)
             == Decimal(evidence.output_price_per_1k)
+            and Decimal(int(matched["cache_rate_micros_per_1k"])) / Decimal(1_000_000)
+            == Decimal(evidence.cache_price_per_1k)
             and str(matched["effective_from"]) == evidence.effective_from
         )
     except (InvalidOperation, TypeError, ValueError):
@@ -1800,16 +1806,23 @@ def _serialize_usage_spool_record(
         # v7 在写盘前就验证微元精度与额度上限，不能制造永远无法重放的已签名记录。
         _spool_quota_exposure_text(context.quota_reservation_outstanding_cny)
     # 有额度预留时必须使用 v7 保存未决 Provider 覆盖额；否则保留旧版本的最小字段合同。
+    # 价格快照一旦存在就使用 v8，把缓存命中单价和输入/输出单价一起冻结；
+    # 没有价格证据的历史兼容路径继续使用原有 v4-v7 合同。
     record_version = (
-        7
-        if context.quota_reservation_outstanding_cny is not None
-        else (6 if batch_present else (5 if output_safety_values is not None else 4))
+        8
+        if intent.captured_estimate is not None
+        else (
+            7
+            if context.quota_reservation_outstanding_cny is not None
+            else (6 if batch_present else (5 if output_safety_values is not None else 4))
+        )
     )
     context_fields = {
         4: _SPOOL_CONTEXT_FIELDS_V4,
         5: _SPOOL_CONTEXT_FIELDS_V5,
         6: _SPOOL_CONTEXT_FIELDS_V6,
         7: _SPOOL_CONTEXT_FIELDS_V7,
+        8: _SPOOL_CONTEXT_FIELDS_V7,
     }[record_version]
     # 字段集合是显式白名单；RequestLogContext 未来新增字段不会自动落盘。
     context_payload = {name: getattr(context, name) for name in context_fields}
@@ -1842,6 +1855,7 @@ def _serialize_usage_spool_record(
                 "currency": evidence.currency,
                 "input_price_per_1k": evidence.input_price_per_1k,
                 "output_price_per_1k": evidence.output_price_per_1k,
+                "cache_price_per_1k": evidence.cache_price_per_1k,
                 "price_schema_version": evidence.price_schema_version,
                 "source": evidence.source,
                 "price_plan_id": evidence.price_plan_id,
@@ -1893,9 +1907,9 @@ def _deserialize_usage_spool_record(
         payload,
         frozenset({"schema_version", "context", "usage", "estimate"}),
     )
-    # v1-v7 均为已审查的升级证据；历史版本缺少新增摘要只能解释为“未记录”，未来版本仍拒绝。
+    # v1-v8 均为已审查的升级证据；历史版本缺少新增摘要只能解释为“未记录”，未来版本仍拒绝。
     record_version = record["schema_version"]
-    if record_version not in {1, 2, 3, 4, 5, 6, _SPOOL_RECORD_SCHEMA_VERSION}:
+    if record_version not in {1, 2, 3, 4, 5, 6, 7, _SPOOL_RECORD_SCHEMA_VERSION}:
         raise ValueError("finops_spool_payload_version_invalid")
     context_fields = {
         1: _SPOOL_CONTEXT_FIELDS_V1,
@@ -1905,6 +1919,7 @@ def _deserialize_usage_spool_record(
         5: _SPOOL_CONTEXT_FIELDS_V5,
         6: _SPOOL_CONTEXT_FIELDS_V6,
         7: _SPOOL_CONTEXT_FIELDS_V7,
+        8: _SPOOL_CONTEXT_FIELDS_V7,
     }[record_version]
     context_value = _spool_mapping(record["context"], context_fields)
     usage_value = _spool_mapping(record["usage"], _SPOOL_USAGE_FIELDS)
@@ -1977,7 +1992,7 @@ def _deserialize_usage_spool_record(
             context_value["output_safety_decision"],
             context_value["billing_disposition"],
             # v5/v6 明确绑定安全或 Batch 终态；v7 还可服务无扫描的额度恢复路径。
-            allow_absent=record_version == 7,
+            allow_absent=record_version >= 7,
         )
     )
     budget_current = _spool_optional_decimal_text(
@@ -1990,7 +2005,11 @@ def _deserialize_usage_spool_record(
     quota_reservation_outstanding = (
         _spool_quota_exposure_text(context_value["quota_reservation_outstanding_cny"])
         if record_version == 7
-        else None
+        else (
+            _spool_optional_decimal_text(context_value["quota_reservation_outstanding_cny"])
+            if record_version >= 8
+            else None
+        )
     )
     batch_values = (
         context_value["batch_job_id"],
@@ -2150,7 +2169,9 @@ def _deserialize_usage_spool_record(
             usage_value["provider_cost_cny"]
         ),
         normalization_warnings=list(warnings_value),
-        captured_estimate=_deserialize_spool_estimate(record["estimate"]),
+        captured_estimate=_deserialize_spool_estimate(
+            record["estimate"], record_version=record_version
+        ),
     )
     if batch_present and (
         intent.captured_estimate is None
@@ -2392,15 +2413,20 @@ def _deserialize_spool_session_risk_context(value: dict[str, Any]) -> dict[str, 
     }
 
 
-def _deserialize_spool_estimate(value: object) -> CostEstimate | None:
+def _deserialize_spool_estimate(
+    value: object, *, record_version: int
+) -> CostEstimate | None:
     """恢复原入账时价格证据，并校验原币金额、CNY/USD 分拆与快照字段互相一致。"""
 
     if value is None:
         return None
     estimate_value = _spool_mapping(value, _SPOOL_ESTIMATE_FIELDS)
-    evidence_value = _spool_mapping(
-        estimate_value["evidence"], _SPOOL_EVIDENCE_FIELDS
+    evidence_fields = (
+        _SPOOL_EVIDENCE_FIELDS
+        if record_version >= 8
+        else _SPOOL_EVIDENCE_FIELDS - {"cache_price_per_1k"}
     )
+    evidence_value = _spool_mapping(estimate_value["evidence"], evidence_fields)
     amount = _spool_money_text(estimate_value["amount"])
     cost_cny = _spool_money_text(estimate_value["cost_cny"])
     cost_usd = _spool_money_text(estimate_value["cost_usd"])
@@ -2443,6 +2469,11 @@ def _deserialize_spool_estimate(value: object) -> CostEstimate | None:
         raise ValueError("finops_spool_payload_invalid")
     input_price = _spool_price_text(evidence_value["input_price_per_1k"])
     output_price = _spool_price_text(evidence_value["output_price_per_1k"])
+    cache_price = (
+        _spool_price_text(evidence_value["cache_price_per_1k"])
+        if record_version >= 8
+        else Decimal("0")
+    )
     price_plan_id = _spool_optional_text(evidence_value["price_plan_id"], maximum=128)
     effective_from = _spool_optional_text(evidence_value["effective_from"], maximum=64)
     model_id = _spool_optional_text(evidence_value["model_id"], maximum=128)
@@ -2456,6 +2487,7 @@ def _deserialize_spool_estimate(value: object) -> CostEstimate | None:
             or amount != Decimal("0")
             or input_price != Decimal("0")
             or output_price != Decimal("0")
+            or cache_price != Decimal("0")
             or price_plan_id is not None
         ):
             # 缺价证据只能是零额、零单价和固定版本，任何偏差都不是原始缺价事实。
@@ -2487,6 +2519,7 @@ def _deserialize_spool_estimate(value: object) -> CostEstimate | None:
         currency=currency,
         input_price_per_1k=format(input_price, "f"),
         output_price_per_1k=format(output_price, "f"),
+        cache_price_per_1k=format(cache_price, "f"),
         price_schema_version=version,
         source=source,
         price_plan_id=price_plan_id,
@@ -3217,11 +3250,11 @@ def _insert_price_snapshot_evidence(
         """
         INSERT INTO price_snapshots(
           price_snapshot_id, tenant_id, request_id, model_id, provider_id, provider_code,
-          currency, input_price_per_1k, output_price_per_1k, price_schema_version,
+          currency, input_price_per_1k, output_price_per_1k, cache_price_per_1k, price_schema_version,
           billing_dimensions, provider_raw_mapping, source, status, created_at, updated_at,
           price_plan_id, effective_from
         )
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
         """,
         (
             evidence.price_snapshot_id,
@@ -3233,6 +3266,7 @@ def _insert_price_snapshot_evidence(
             evidence.currency,
             evidence.input_price_per_1k,
             evidence.output_price_per_1k,
+            evidence.cache_price_per_1k,
             evidence.price_schema_version,
             json.dumps(billing_dimensions, ensure_ascii=False, sort_keys=True),
             json.dumps(provider_mapping, ensure_ascii=False, sort_keys=True),
@@ -3371,6 +3405,7 @@ def _estimate_cost(
     *,
     input_tokens: int,
     output_tokens: int,
+    cache_tokens: int = 0,
     now: str,
     usage_ledger_id: str | None = None,
     capture_intent: UsageLedgerIntent | None = None,
@@ -3381,6 +3416,17 @@ def _estimate_cost(
     客户端不能指定价格计划或时间，因此无法通过请求体绕过价格生效边界。
     """
 
+    # 缓存命中 Token 必须属于输入 Token；非法上游用量不能被计成负的普通输入。
+    if (
+        type(input_tokens) is not int
+        or input_tokens < 0
+        or type(output_tokens) is not int
+        or output_tokens < 0
+        or type(cache_tokens) is not int
+        or cache_tokens < 0
+        or cache_tokens > input_tokens
+    ):
+        raise sqlite3.IntegrityError("invalid_cache_tokens")
     # 正常路径传入预生成 Usage ID；直接单测估价时也生成合法 ID，确保缺价快照满足 0041 owner 合同。
     snapshot_usage_id = usage_ledger_id or f"usg_{uuid4().hex}"
     # 模型路由结果决定上游调用，异常时必须用统一错误码停止。
@@ -3426,6 +3472,7 @@ def _estimate_cost(
         )
     input_price = rate.input_price_per_1k
     output_price = rate.output_price_per_1k
+    cache_price = rate.cache_price_per_1k
     currency = rate.currency
     # 版本号不能替损坏的金额或币种背书；否则非法值会被伪装成可审计的 active 零价快照。
     if input_price is None or output_price is None or currency is None:
@@ -3447,9 +3494,10 @@ def _estimate_cost(
         with localcontext() as decimal_context:
             decimal_context.prec = 50
             amount = (
-                Decimal(input_tokens) * input_price
+                Decimal(max(input_tokens - cache_tokens, 0)) * input_price
+                + Decimal(cache_tokens) * cache_price
                 + Decimal(output_tokens) * output_price
-            ) / Decimal(1000)
+            ) / Decimal(1_000_000)
             money_amount = _money_amount(amount)
     # 极端乘积或量化失败沿用损坏价格降级，避免 Provider 已成功后向客户端返回 500。
     except (DecimalException, OverflowError):
@@ -3470,6 +3518,7 @@ def _estimate_cost(
         rate=rate,
         input_price=input_price,
         output_price=output_price,
+        cache_price=cache_price,
         currency=currency,
     )
     estimate = CostEstimate(
@@ -3500,6 +3549,7 @@ def _build_price_snapshot_evidence(
     rate: ResolvedCostRate,
     input_price: Decimal,
     output_price: Decimal,
+    cache_price: Decimal,
     currency: str,
 ) -> PriceSnapshotEvidence:
     """构造本次成本估算使用的不可变价格证据，不执行任何数据库写入。
@@ -3515,6 +3565,7 @@ def _build_price_snapshot_evidence(
         currency=currency,
         input_price_per_1k=format(input_price, "f"),
         output_price_per_1k=format(output_price, "f"),
+        cache_price_per_1k=format(cache_price, "f"),
         price_schema_version=rate.price_schema_version,
         source=rate.source,
         price_plan_id=(rate.source_id if rate.source == "price_plan" else None),

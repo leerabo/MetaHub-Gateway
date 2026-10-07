@@ -69,7 +69,7 @@ export function renderProviderHealthDashboardCard(state, authContext, consoleShe
   const exceptions = (state.provider_health ?? []).filter((item) => ["unhealthy", "observing"].includes(item.effective_health_status)).slice(0, 3);
   const canOpenStatus = canOpenProviderStatus(authContext, consoleShellState);
   return `<section class="dashboard-card provider-health-dashboard">
-    <div class="dashboard-card-heading"><h3>Provider 健康</h3>${canOpenStatus ? `<a href="#provider-health">查看详情</a>` : ""}</div>
+    <div class="dashboard-card-heading"><h3>Provider 健康</h3>${canOpenStatus ? '<button type="button" class="dashboard-card-action" data-console-nav="provider-health" data-console-route="workspace.gateway.provider-health" data-console-target="provider-health">查看详情</button>' : ""}</div>
     <strong class="provider-health-ratio">${escapeHtml(healthyRatio)}%</strong>
     <span>异常 ${escapeHtml(summary.unhealthy ?? 0)} · 观察中 ${escapeHtml(summary.observing ?? 0)}</span>
     <div class="dashboard-list">${exceptions.length ? exceptions.map((item) => `<div class="dashboard-list-row"><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(STATUS_LABELS[item.effective_health_status])}</span></div>`).join("") : `<div class="empty-state">暂无异常 Provider</div>`}</div>

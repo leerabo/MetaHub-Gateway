@@ -101,14 +101,17 @@ async function auditHome(browser, url, label, viewport) {
     await toggle.click();
     await expectAttribute(toggle, "aria-expanded", "true");
     assert.equal(await page.locator("[data-home-mobile-nav]").isVisible(), true);
+    assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("href")), "#capabilities");
     await page.keyboard.press("Escape");
     await expectAttribute(toggle, "aria-expanded", "false");
     assert.equal(await page.locator("[data-home-mobile-nav]").isVisible(), false);
+    assert.equal(await page.evaluate(() => document.activeElement?.matches("[data-home-nav-toggle]")), true);
     await toggle.focus();
     await page.keyboard.press("Enter");
     await expectAttribute(toggle, "aria-expanded", "true");
-    await page.locator("[data-home-mobile-nav] a").first().focus();
-    assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("href")), "#capabilities");
+    await page.mouse.click(12, 300);
+    await expectAttribute(toggle, "aria-expanded", "false");
+    assert.equal(await page.evaluate(() => document.activeElement?.matches("[data-home-nav-toggle]")), true);
   }
 
   assert.deepEqual(staticFailures, [], `${label}: static resource failures`);

@@ -42,6 +42,8 @@ class VirtualKeyInfo(BaseModel):
     environment_name: str
     environment_status: str
     description: str | None
+    owner_display_name: str | None = None
+    owner_user_id: str | None = None
     project_id: str | None = None
     project_name: str | None = None
     application_id: str | None = None
@@ -50,10 +52,12 @@ class VirtualKeyInfo(BaseModel):
     consumer_status: str | None = None
     credential_revision: int = 1
     status: str
+    disabled_reason: str = "manual"
     last_used_at: datetime | None
     created_at: datetime
     updated_at: datetime
     disabled_at: datetime | None = None
+    has_recoverable_secret: bool = False
     rate_limit_rule: RateLimitRuleInfo | None = None
 
 
@@ -111,6 +115,12 @@ class CreateVirtualKeyResponse(VirtualKeyResponse):
     边界：该结构只保存脱敏业务字段，不应加入明文密钥、Token 或 Prompt 内容。
     """
 
+
+    plain_value: str
+
+
+class RevealVirtualKeyResponse(VirtualKeyResponse):
+    """A protected, explicit response used only for copying a saved key."""
 
     plain_value: str
 

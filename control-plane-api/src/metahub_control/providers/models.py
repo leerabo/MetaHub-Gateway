@@ -58,6 +58,14 @@ class ProviderResponse(BaseModel):
     trace_id: str
 
 
+class ProviderDeleteResponse(BaseModel):
+    """删除未被业务事实引用的 Provider 后返回的安全确认。"""
+
+    deleted_provider_id: str
+    request_id: str
+    trace_id: str
+
+
 class ProviderKeyInfo(BaseModel):
     """Provider KeyPool 的脱敏展示信息。
 
@@ -100,6 +108,14 @@ class ProviderKeyResponse(BaseModel):
     """
 
     provider_key: ProviderKeyInfo
+    request_id: str
+    trace_id: str
+
+
+class ProviderKeyDeleteResponse(BaseModel):
+    """删除 Provider Key 后返回的安全确认。"""
+
+    deleted_provider_key_id: str
     request_id: str
     trace_id: str
 

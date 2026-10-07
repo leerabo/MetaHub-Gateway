@@ -273,7 +273,7 @@ def _install_real_slo_sessions(runtime) -> tuple[str, str, str, str]:
 @pytest.fixture
 def runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     database_url = _url(tmp_path / "prd144.sqlite3")
-    assert apply_migrations(database_url).applied[-1] == "0156"
+    assert apply_migrations(database_url).applied[-1] == "0164"
     monkeypatch.setenv("METAHUB_SEED_ADMIN_PASSWORD", secrets.token_urlsafe(32))
     apply_seed_data(database_url)
     config = _config(database_url)
@@ -697,6 +697,7 @@ async def test_reference_rate_workspace_adoption_idempotency_and_api_boundaries(
         currency="USD",
         input_rate_micros_per_1k=1250,
         output_rate_micros_per_1k=3750,
+        cache_rate_micros_per_1k=625,
         effective_from=datetime(2026, 10, 1, tzinfo=UTC),
         effective_until=datetime(2027, 1, 1, tzinfo=UTC),
         source_version="official-2026-q4",
@@ -784,6 +785,7 @@ async def test_reference_rate_workspace_adoption_idempotency_and_api_boundaries(
                 currency="USD",
                 input_rate_micros_per_1k=1500,
                 output_rate_micros_per_1k=4000,
+                cache_rate_micros_per_1k=750,
                 effective_from=datetime(2026, 11, 1, tzinfo=UTC),
                 effective_until=datetime(2027, 2, 1, tzinfo=UTC),
             ),
@@ -800,6 +802,7 @@ async def test_reference_rate_workspace_adoption_idempotency_and_api_boundaries(
             currency="USD",
             input_rate_micros_per_1k=1500,
             output_rate_micros_per_1k=4000,
+            cache_rate_micros_per_1k=750,
             effective_from=datetime(2027, 1, 1, tzinfo=UTC),
             effective_until=datetime(2027, 4, 1, tzinfo=UTC),
         ),

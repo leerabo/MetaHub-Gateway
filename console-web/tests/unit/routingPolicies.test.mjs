@@ -563,10 +563,10 @@ test("routing policy renderer gives admin editor developer readonly and viewer n
   const viewerHtml = renderRoutingPolicyPanel(state, viewerContext);
   assert.match(adminHtml, /data-routing-policy-form/);
   assert.match(adminHtml, /成本优先/);
-  assert.match(adminHtml, /质量成本/);
+  assert.match(adminHtml, /质量、成本与延迟/);
   assert.match(adminHtml, /qualityWeightPercent/);
   assert.match(adminHtml, /minimumSampleCount/);
-  assert.match(adminHtml, /备用角色/);
+  assert.match(adminHtml, /备用模型/);
   assert.match(adminHtml, /&lt;script&gt;alias&lt;\/script&gt;/);
   assert.doesNotMatch(adminHtml, /<script>alias<\/script>|<img src=x>|必然被选中|已触发 Fallback/);
   assert.match(developerHtml, /路由策略/);

@@ -80,13 +80,14 @@ def migrated_database_template(tmp_path_factory: pytest.TempPathFactory) -> Path
     database_path = root / "template.sqlite3"
     database_url = f"sqlite:///{database_path.as_posix()}"
     result = apply_migrations(database_url)
-    assert result.applied[-1] == "0072"
+    # The shared fixture runs the complete current SQLite migration chain.
+    assert result.applied[-1] == "0164"
     apply_seed_data(database_url)
     connection = connect_database(database_url)
     try:
         assert connection.execute(
             "SELECT MAX(version) FROM schema_migrations WHERE status='applied'"
-        ).fetchone()[0] == "0072"
+        ).fetchone()[0] == "0164"
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:
@@ -183,10 +184,23 @@ def _scenario(
         connection.execute(
             """
             UPDATE models
-            SET input_price_per_1k='0.100000',
-                output_price_per_1k='0.200000',currency='CNY',
+            SET input_price_per_1k='100.000000',
+                output_price_per_1k='200.000000',currency='CNY',
                 price_schema_version='prd076-settlement-price-v1'
             WHERE tenant_id=? AND model_id=?
+            """,
+            (row["tenant_id"], row["model_id"]),
+        )
+        # Exercise the legacy model-catalog fallback explicitly; current
+        # workspace rates are authoritative when enabled.
+        connection.execute(
+            """
+            UPDATE workspace_provider_cost_rate_heads
+            SET adoption_state='disabled',head_revision=head_revision+1
+            WHERE workspace_provider_cost_rate_id IN(
+              SELECT workspace_provider_cost_rate_id FROM workspace_provider_cost_rates
+              WHERE tenant_id=? AND model_id=?
+            )
             """,
             (row["tenant_id"], row["model_id"]),
         )

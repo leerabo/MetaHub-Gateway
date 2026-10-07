@@ -80,7 +80,7 @@ test("usage shows immutable consumer attribution and protects financial DOM", ()
   const html = renderUsagePanel(state, context);
   assert.match(html, /按使用者用量/);
   assert.match(html, /未绑定使用者/);
-  assert.match(html, /con_&lt;img&gt;/);
+  assert.match(html, /value="con_&quot;&lt;img&gt;"/);
   assert.doesNotMatch(html, /<img>/);
   assert.equal(renderUsagePanel(state, withPermissionSnapshot({ user: { role: "viewer" } }, [])), "");
 });

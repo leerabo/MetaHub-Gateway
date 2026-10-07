@@ -22,6 +22,7 @@ export function renderDeveloperContracts(state) {
   const supplyChain = state.supply_chain ?? {};
   const entries = state.changelog?.entries ?? [];
   const schemas = state.schemas ?? [];
+  const hasPublishedContent = versions.length > 0 || releases.length > 0 || entries.length > 0 || schemas.length > 0;
   return `
     <section class="panel developer-contracts-panel" aria-labelledby="developer-contracts-title">
       <header class="developer-contracts-heading">
@@ -29,15 +30,15 @@ export function renderDeveloperContracts(state) {
         <span class="developer-contracts-state">${number(versions.length)} 个版本</span>
       </header>
       <p class="developer-contracts-feedback" data-developer-contract-feedback aria-live="polite"></p>
-      <div class="developer-contracts-summary" aria-label="契约概览">
+      ${hasPublishedContent ? `<div class="developer-contracts-summary" aria-label="契约概览">
         ${summary("已发布 API", versions.filter((item) => item.status === "published").length)}
         ${summary("安全检查通过", releases.filter((item) => (
           supplyChain[item.sdk_release_id]?.report?.gate_outcome === "passed"
         )).length)}
         ${summary("Webhook 结构", schemas.length)}
         ${summary("版本事件", entries.length)}
-      </div>
-      <section class="developer-contracts-band" aria-labelledby="developer-api-versions-title">
+      </div>` : ""}
+      ${hasPublishedContent ? `<section class="developer-contracts-band" aria-labelledby="developer-api-versions-title">
         <div class="developer-contracts-section-heading">
           <div><p>兼容性</p><h3 id="developer-api-versions-title">API 版本</h3></div>
         </div>
@@ -66,7 +67,10 @@ export function renderDeveloperContracts(state) {
           <div><p>事件契约</p><h3 id="developer-webhook-schemas-title">Webhook 数据结构</h3></div>
         </div>
         ${schemas.length ? webhookTable(schemas) : empty("暂无已发布的 Webhook 数据结构。")}
-      </section>
+      </section>` : `<section class="developer-contracts-empty-band" aria-label="发布内容为空">
+        <h3>暂无已发布内容</h3>
+        <p>当前还没有可供组织成员使用的 API 版本、SDK 或 Webhook 契约。发布后，版本、安全检查和更新记录会显示在这里。</p>
+      </section>`}
     </section>`;
 }
 

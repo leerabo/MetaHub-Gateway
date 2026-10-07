@@ -90,7 +90,7 @@ test("enterprise catalog client sends only signed coordinates and bounded filter
   assert.doesNotMatch(serialized, /tenant_id|workspace_id|base_url|plain_value|credential|secret/iu);
 });
 
-test("Provider page exposes official, local, and migration catalog modes without endpoint or secret fields", () => {
+test("Provider page exposes official, local, and custom catalog modes without internal migration fields", () => {
   const auth = withPermissionSnapshot(
     { user: { role: "owner" } },
     [PERMISSIONS.PROVIDER_READ, PERMISSIONS.PROVIDER_WRITE, PERMISSIONS.PROVIDER_CATALOG_READ],
@@ -116,20 +116,29 @@ test("Provider page exposes official, local, and migration catalog modes without
 
   assert.match(html, /选择模型厂家/u);
   assert.match(html, /data-provider-catalog-create-form/u);
-  assert.match(html, /href="console.html#workspace.gateway.private-endpoints"/u);
-  assert.match(html, /仅说明迁移兼容性/u);
-  assert.match(html, /data-provider-catalog-preflight-form/u);
-  assert.match(html, /下一步：配置客户自持 Provider Key/u);
+  assert.match(html, /data-console-nav="local-models"/u);
+  assert.doesNotMatch(html, /平台会自动选择默认区域和可用能力/u);
+  assert.doesNotMatch(html, /OpenRouter（迁移参考）|仅说明迁移兼容性/u);
+  assert.doesNotMatch(html, /provider-catalog-technical|服务详情|服务区域|模型能力|chat\s*·|stream|tools|customer_credential|原生接入|revision|当前实例|providerCode/u);
   assert.doesNotMatch(html, /api\.deepseek\.com|sk-[A-Za-z0-9]|Authorization:/u);
   assert.doesNotMatch(html, /<unsafe>/u);
-  assert.match(html, /&lt;unsafe&gt;/u);
+  assert.doesNotMatch(html, /&lt;unsafe&gt;/u);
 
   const configured = renderProviderPanel({
     state: "ok", providers: [], providerKeysByProviderId: {},
     providerCatalog: { ...catalogResponse(), state: "ok", activeTab: "providers" },
   }, auth);
-  assert.match(configured, /create-provider-form/u);
-  assert.match(configured, /data-provider-tab="catalog">添加模型服务/u);
+  assert.match(configured, /data-provider-catalog-open[^>]*>添加模型服务/u);
+  assert.match(configured, /<dialog class="provider-catalog-dialog" data-provider-catalog-dialog/u);
+  assert.match(configured, /data-provider-catalog-dialog[\s\S]*data-provider-catalog-selection/u);
+  assert.doesNotMatch(configured, /data-provider-tab="catalog"/u);
+
+  const custom = renderProviderPanel({
+    state: "ok", providers: [], providerKeysByProviderId: {},
+    providerCatalog: { ...catalogResponse(), state: "ok", activeTab: "catalog", selectedEntryCode: "custom_openai_compatible" },
+  }, auth);
+  assert.match(custom, /create-provider-form/u);
+  assert.match(custom, /自定义中转站 \/ OpenAI 兼容/u);
 });
 
 test("Platform catalog client uses Cookie, CSRF, CAS, and no workspace authorization", async () => {
@@ -242,10 +251,10 @@ test("PRD-119 source keeps enterprise and Platform DOM and credential domains se
   assert.doesNotMatch(enterprise, /data-platform-provider-catalog/u);
   assert.doesNotMatch(platformRender, /data-provider-catalog-create-form|plainValue|Provider Key/u);
   assert.match(platformClient, /credentials: "include"/u);
-  assert.match(mainSource, /loadProvidersState\(\{ includeCatalog: true \}\)/u);
+  assert.match(mainSource, /loadProvidersState\(\{ includeCatalog: providerCatalogRequested \}\)/u);
   assert.match(mainSource, /providerCatalogFeedback = "筛选已应用"/u);
   assert.doesNotMatch(mainSource, /providerCatalogFeedback = "正在筛选"/u);
-  assert.match(css, /@media \(max-width: 900px\)[\s\S]*\.provider-catalog-filters/u);
+  assert.doesNotMatch(css, /provider-catalog-filters|provider-catalog-meta|provider-catalog-capabilities/u);
 });
 
 function catalogResponse() {

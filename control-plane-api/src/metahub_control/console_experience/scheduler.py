@@ -27,7 +27,10 @@ from metahub_control.workspace_navigation.scheduler import (
 
 logger = logging.getLogger("metahub.control.console_experience.scheduler")
 WORKER_ID = f"console-experience-{uuid4().hex}"
-POLL_SECONDS = 2.0
+# Empty queues are maintenance work, not a request-path SLA. A two-second
+# loop made every idle worker repeatedly reopen SQLite snapshots and contend for
+# BEGIN IMMEDIATE. Keep completed work responsive, but back off idle queues.
+POLL_SECONDS = 10.0
 RECONCILIATION_INTERVAL_SECONDS = 300
 LEASE_SECONDS = 30
 SHUTDOWN_TIMEOUT_SECONDS = 10.0
@@ -271,7 +274,7 @@ def _release(config: AppConfig, lease: _SchedulerLease, *, worked: bool) -> None
         delay = (
             RECONCILIATION_INTERVAL_SECONDS
             if lease.worker_kind == "reconciliation"
-            else 1 if worked else 2
+            else 1 if worked else POLL_SECONDS
         )
         updated = connection.execute(
             """UPDATE console_experience_scheduler_state
@@ -417,7 +420,7 @@ def _release_navigation(
             (
                 f"worked:{stamp}" if worked else f"idle:{stamp}",
                 stamp,
-                _db_time(now + timedelta(seconds=1 if worked else 2)),
+                _db_time(now + timedelta(seconds=1 if worked else POLL_SECONDS)),
                 stamp,
                 lease.worker_kind,
                 lease.generation,

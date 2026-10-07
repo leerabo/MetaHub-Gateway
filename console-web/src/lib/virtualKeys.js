@@ -54,6 +54,14 @@ export function rotateVirtualKey({ controlApiUrl, authentication, token, signal,
   });
 }
 
+/** Copy a previously saved key through an explicit, permission-checked action. */
+export function revealVirtualKey({ controlApiUrl, authentication, token, signal, virtualKeyId }) {
+  return virtualKeysRequest(`${controlApiUrl}/virtual-keys/${encodeURIComponent(virtualKeyId)}/reveal`, {
+    method: "POST",
+    authentication, token, signal,
+  });
+}
+
 /**
  * 更新 Virtual Key 元数据或状态。
  *

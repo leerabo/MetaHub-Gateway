@@ -10,6 +10,7 @@ import {
   renderCompetitorComparison,
 } from "../../src/features/competitor-comparison/renderCompetitorComparison.js";
 import { renderProviderPanel } from "../../src/features/providers/renderProviderPanel.js";
+import { renderProviderCatalog } from "../../src/features/providers/renderProviderCatalog.js";
 import { recordConsolePageView } from "../../src/lib/consoleShell.js";
 import { createUniquePageVisitTracker } from "../../src/lib/consoleVisitTracker.js";
 import { PERMISSIONS, withPermissionSnapshot } from "./permissionTestContext.mjs";
@@ -39,7 +40,6 @@ test("comparison renders neutral positioning, verified sources and escaped autho
     ),
   });
   assert.match(html, /对标平台 \/ 竞品平台 \/ 迁移兼容对象，不是模型厂商，也不是 MetaHub 默认上游/);
-  assert.match(html, /不构成采购、法律或安全结论/);
   assert.match(html, /未知或未核验不等于缺失/);
   assert.match(html, /2026-07-15/);
   assert.match(html, /target="_blank" rel="noopener noreferrer"/);
@@ -177,20 +177,29 @@ test("competitor event client sends exact safe contract without tenant or user f
   assert.equal(JSON.stringify(captured.body).includes("user_id"), false);
 });
 
-test("provider UI exposes only generic migration adapter and never competitor provider values", () => {
-  const html = renderProviderPanel(
-    { state: "ok", providers: [], providerKeysByProviderId: {} },
-    withPermissionSnapshot(
-      { user: { role: "admin" } },
-      [PERMISSIONS.PROVIDER_READ, PERMISSIONS.PROVIDER_WRITE],
-    ),
-  );
-  assert.match(html, /value="migration_compatible"/);
-  assert.match(html, /迁移兼容（聚合入口）/);
-  assert.doesNotMatch(html, /value="migration_compatible" selected/);
-  assert.match(html, /<details class="provider-custom-setup">/);
+test("provider catalog keeps custom setup in the catalog and never treats competitors as providers", () => {
+  const html = renderProviderCatalog({
+    state: "ok",
+    selectedEntryCode: "custom_openai_compatible",
+    entries: [{
+      entry_code: "openrouter_migration",
+      display_name: "OpenRouter migration source",
+      provider_type: "migration_compatible",
+      service_class: "migration_source",
+      status: "deprecated",
+      instantiation_mode: "migration_only",
+      endpoints: [], capabilities: [],
+    }],
+  }, withPermissionSnapshot(
+    { user: { role: "admin" } },
+    [PERMISSIONS.PROVIDER_CATALOG_READ, PERMISSIONS.PROVIDER_WRITE],
+  ));
+  assert.match(html, /custom_openai_compatible/u);
+  assert.match(html, /create-provider-form/u);
+  assert.doesNotMatch(html, /OpenRouter（迁移参考）|仅说明迁移兼容性/u);
   assert.doesNotMatch(html, /value="openrouter"/i);
   assert.doesNotMatch(html, /value="silicon_?flow"/i);
+  assert.doesNotMatch(html, /<details class="provider-custom-setup">/u);
 });
 
 test("production CSS omits the retired competitor runtime selectors", async () => {

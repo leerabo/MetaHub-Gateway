@@ -107,7 +107,7 @@ const FACT_VALUE_KEYS = Object.freeze({
   ],
   routing_attempt: [
     "attempt_sequence", "attempt_role", "trigger_type", "trigger_error_code",
-    "model_id", "internal_model_id", "provider_id", "provider_code", "status",
+    "model_id", "model_name", "internal_model_id", "provider_id", "provider_code", "provider_name", "status",
     "error_code", "error_category", "upstream_http_status", "retryable",
     "latency_ms", "usage_status", "estimated_cost_cny",
   ],
@@ -219,7 +219,9 @@ const FIELD_LABELS = Object.freeze({
   provider_id: "Provider ID",
   provider_code: "Provider",
   model_id: "模型 ID",
+  model_name: "模型",
   internal_model_id: "内部模型 ID",
+  provider_name: "模型服务",
   candidate_role: "候选角色",
   configured_priority: "配置优先级",
   rank: "排名",
@@ -355,6 +357,7 @@ function renderQueryForm(state, i18n) {
         <span>request_id</span>
         <input
           name="requestId"
+          aria-label="调用编号"
           value="${escapeAttribute(requestId ?? "")}"
           maxlength="128"
           pattern="[A-Za-z0-9_.:-]{1,128}"

@@ -36,8 +36,6 @@ const ACTION_OPTIONS = [
   "cost_anomaly.dismissed",
   "cost_anomaly.temporary_rate_limit_applied",
   "cost_anomaly.temporary_rate_limit_released",
-  "error_map.created",
-  "error_map.updated",
   "audit.exported",
 ];
 
@@ -60,9 +58,62 @@ const OBJECT_TYPE_OPTIONS = [
   "cache_affinity",
   "finops_adjustment",
   "cost_anomaly",
-  "provider_error_map",
   "audit_export",
 ];
+
+const ACTION_LABELS = Object.freeze({
+  "provider.created": "模型服务 · 已创建",
+  "provider.updated": "模型服务 · 已更新",
+  "provider_key.created": "模型服务凭据 · 已创建",
+  "provider_key.updated": "模型服务凭据 · 已更新",
+  "virtual_key.created": "组织 KEY · 已创建",
+  "virtual_key.updated": "组织 KEY · 已更新",
+  "budget_rule.created": "预算规则 · 已创建",
+  "budget_rule.updated": "预算规则 · 已更新",
+  "dlp_rule.created": "内容安全规则 · 已创建",
+  "dlp_rule.updated": "内容安全规则 · 已更新",
+  "webhook_delivery.replayed": "通知 · 已重试",
+  "webhook_dead_letter.archived": "通知记录 · 已归档",
+  "webhook_endpoint.secret_rotated": "通知地址 · 凭据已更新",
+  "usage_export.requested": "用量导出 · 已申请",
+  "usage_export.downloaded": "用量导出 · 已下载",
+  "policy.created": "访问策略 · 已创建",
+  "policy.updated": "访问策略 · 已更新",
+  "policy_snapshot.published": "访问策略 · 已发布",
+  "policy_snapshot.rolled_back": "访问策略 · 已回退",
+  "policy.dry_run_executed": "访问策略 · 已试运行",
+  "routing_policy.created": "路由规则 · 已创建",
+  "routing_policy.updated": "路由规则 · 已更新",
+  "model_quality_score.updated": "模型质量记录 · 已更新",
+  "cache_affinity.created": "缓存偏好 · 已创建",
+  "cache_affinity.updated": "缓存偏好 · 已更新",
+  "finops.adjustment_created": "账务调整 · 已创建",
+  "cost_anomaly.acknowledged": "成本异常 · 已确认",
+  "cost_anomaly.dismissed": "成本异常 · 已忽略",
+  "cost_anomaly.temporary_rate_limit_applied": "成本异常 · 已启用临时限流",
+  "cost_anomaly.temporary_rate_limit_released": "成本异常 · 已解除临时限流",
+  "audit.exported": "审计记录 · 已导出",
+});
+const OBJECT_LABELS = Object.freeze({
+  provider: "模型服务",
+  provider_key: "模型服务凭据",
+  virtual_key: "组织 KEY",
+  budget_rule: "预算规则",
+  dlp_rule: "内容安全规则",
+  webhook_delivery: "通知记录",
+  webhook_dead_letter: "失败通知记录",
+  webhook_endpoint: "通知地址",
+  usage_export_job: "用量导出",
+  policy: "访问策略",
+  policy_snapshot: "访问策略版本",
+  policy_explanation: "访问策略说明",
+  routing_policy: "路由规则",
+  model_quality_score: "模型质量记录",
+  cache_affinity: "缓存偏好",
+  finops_adjustment: "账务调整",
+  cost_anomaly: "成本异常",
+  audit_export: "审计导出",
+});
 
 /**
  * 从认证上下文生成 PAGE-084 导出使用的完整身份快照。
@@ -176,7 +227,7 @@ function renderLoadingState() {
 }
 
 /**
- * 统一错误态必须同时展示安全错误码和 request_id，管理员可据此关联控制面日志。
+ * 统一错误态只展示可行动的提示，后台日志保留完整定位信息。
  */
 function renderErrorState(state, canExport) {
   return `
@@ -185,8 +236,7 @@ function renderErrorState(state, canExport) {
     ${renderAuditExportFeedback(state.exportState)}
     <div class="empty-state error-state" role="alert">
       <strong>${escapeHtml(state.message ?? "审计日志读取失败")}</strong>
-      <span>code: <code class="audit-full-id">${escapeHtml(state.code ?? "audit_log.query_failed")}</code></span>
-      <span>request_id: <code class="audit-full-id">${escapeHtml(state.requestId ?? "-")}</code></span>
+      <span>请稍后重试；如果问题持续，请联系管理员。</span>
     </div>
   `;
 }
@@ -213,8 +263,7 @@ function renderHeading(visibleCount, total, exportState = {}, canExport = false)
 
 /**
  * 渲染导出专属 aria-live 反馈。
- * 成功只展示已校验的 export ID、SHA-256、行数和 request_id；失败只展示固定 code/request_id，
- * 不渲染异常 message、CSV、响应头、筛选或 Blob 内容。
+ * 成功只展示导出完成和行数；内部导出编号、摘要和请求号不进入用户界面。
  */
 function renderAuditExportFeedback(exportState = {}) {
   const status = exportState?.status ?? "idle";
@@ -224,20 +273,17 @@ function renderAuditExportFeedback(exportState = {}) {
   if (status === "completed") {
     return `
       <div class="audit-export-feedback status-completed" data-audit-export-feedback role="status" aria-live="polite">
-        <span>导出 ID: <code>${escapeHtml(exportState.auditExportId ?? "-")}</code></span>
-        <span>SHA-256: <code>${escapeHtml(exportState.contentSha256 ?? "-")}</code></span>
         <span>行数: <code>${escapeHtml(exportState.rowCount ?? 0)}</code></span>
-        <span>request_id: <code>${escapeHtml(exportState.requestId ?? "-")}</code></span>
+        <span>导出已准备完成</span>
       </div>
     `;
   }
-  // 错误反馈只呈现白名单 code/request_id，绝不把服务端 message、响应头或 CSV 内容回显到 DOM。
+  // 错误反馈只呈现固定提示，绝不把服务端内部编号回显到 DOM。
   if (status === "error") {
     return `
       <div class="audit-export-feedback status-error" data-audit-export-feedback role="alert" aria-live="polite">
         <strong>审计 CSV 导出失败</strong>
-        <span>code: <code>${escapeHtml(exportState.code ?? "audit_export.unavailable")}</code></span>
-        <span>request_id: <code>${escapeHtml(exportState.requestId ?? "-")}</code></span>
+        <span>请稍后重试；如果问题持续，请联系管理员。</span>
       </div>
     `;
   }
@@ -253,11 +299,10 @@ function renderFilterForm(filters) {
     <form class="audit-log-filter-form" id="audit-log-filter-form">
       <label><span>开始时间</span><input type="datetime-local" name="createdFrom" value="${escapeAttribute(toDateTimeLocal(filters.createdFrom))}" /></label>
       <label><span>结束时间</span><input type="datetime-local" name="createdTo" value="${escapeAttribute(toDateTimeLocal(filters.createdTo))}" /></label>
-      <label><span>动作</span><select name="action">${renderOptions(ACTION_OPTIONS, filters.action)}</select></label>
-      <label><span>对象类型</span><select name="objectType">${renderOptions(OBJECT_TYPE_OPTIONS, filters.objectType)}</select></label>
-      <label><span>操作者 ID</span><input name="actorUserId" value="${escapeAttribute(filters.actorUserId ?? "")}" placeholder="user_xxx" /></label>
-      <label><span>对象 ID</span><input name="objectId" value="${escapeAttribute(filters.objectId ?? "")}" placeholder="provider_xxx" /></label>
-      <label><span>request_id</span><input name="requestId" value="${escapeAttribute(filters.requestId ?? "")}" placeholder="req_xxx" /></label>
+      <label><span>动作</span><select name="action">${renderOptions(ACTION_OPTIONS, filters.action, ACTION_LABELS)}</select></label>
+      <label><span>对象类型</span><select name="objectType">${renderOptions(OBJECT_TYPE_OPTIONS, filters.objectType, OBJECT_LABELS)}</select></label>
+      <label><span>操作者</span><input name="actorUserId" value="${escapeAttribute(filters.actorUserId ?? "")}" placeholder="账号或邮箱" /></label>
+      <label><span>对象</span><input name="objectId" value="${escapeAttribute(filters.objectId ?? "")}" placeholder="模型服务、模型或成员" /></label>
       <div class="audit-log-filter-actions">
         <button type="submit">查询</button>
         <button type="button" id="audit-log-filter-reset">重置</button>
@@ -274,7 +319,7 @@ function renderAuditTable(logs) {
     <div class="audit-log-table" role="table" aria-label="当前租户管理操作审计日志">
       <div class="audit-log-row audit-log-head" role="row">
         <span>时间</span><span>操作者</span><span>动作</span><span>对象</span>
-        <span>变更字段</span><span>来源 IP</span><span>request_id</span><span>摘要</span>
+        <span>变更字段</span><span>摘要</span>
       </div>
       ${logs.length ? logs.map(renderAuditRow).join("") : renderEmptyRow()}
     </div>
@@ -282,37 +327,24 @@ function renderAuditTable(logs) {
 }
 
 /**
- * 单条记录只展示后端安全 DTO。所有长 ID 使用 overflow-wrap 完整换行，不以省略号隐藏
- * request_id、对象 ID、操作者 ID 或 trace_id 等关键定位信息。
+ * 单条记录只展示管理员需要的业务事实；对象、操作者和请求定位 ID 保留在状态层。
  */
 function renderAuditRow(item) {
-  const objectLabel = item.object_name ? `${item.object_type} / ${item.object_name}` : item.object_type;
   return `
     <article class="audit-log-row" role="row">
       <span data-label="时间" class="audit-cell-value"><time datetime="${escapeAttribute(item.created_at)}">${escapeHtml(formatDateTime(item.created_at))}</time></span>
-      <span data-label="操作者" class="audit-cell-value">
-        <span class="audit-actor"><strong>${escapeHtml(item.actor_email ?? "-")}</strong><code class="audit-full-id">${escapeHtml(item.actor_user_id ?? "-")}</code></span>
-      </span>
-      <span data-label="动作" class="audit-cell-value"><code class="audit-full-id">${escapeHtml(item.action ?? "-")}</code></span>
+      <span data-label="操作者" class="audit-cell-value"><strong>${escapeHtml(item.actor_email ?? "管理员")}</strong></span>
+      <span data-label="动作" class="audit-cell-value">${escapeHtml(ACTION_LABELS[item.action] ?? "已完成管理操作")}</span>
       <span data-label="对象" class="audit-cell-value">
-        <span class="audit-object"><strong>${escapeHtml(objectLabel ?? "-")}</strong><code class="audit-full-id">${escapeHtml(item.object_id ?? "-")}</code></span>
+        <span class="audit-object"><strong>${escapeHtml(`${OBJECT_LABELS[item.object_type] ?? "对象"}${item.object_name ? ` / ${item.object_name}` : ""}`)}</strong></span>
       </span>
       <span data-label="变更字段" class="audit-cell-value"><span class="audit-changed-fields">${renderChangedFields(item.changed_fields)}</span></span>
-      <span data-label="来源 IP" class="audit-cell-value"><code class="audit-full-id">${escapeHtml(item.client_ip ?? "-")}</code></span>
-      <span data-label="request_id" class="audit-cell-value">
-        <span class="audit-request-id"><code class="audit-full-id">${escapeHtml(item.request_id ?? "-")}</code><button type="button" class="audit-copy-button" data-copy-audit-id="${escapeAttribute(item.request_id ?? "")}" title="复制 request_id" aria-label="复制 request_id">⧉</button></span>
-      </span>
       <details data-label="摘要" class="audit-log-summary">
         <summary>展开摘要</summary>
         <div class="audit-summary-grid">
           ${renderSummaryBlock("变更前", item.before_summary)}
           ${renderSummaryBlock("变更后", item.after_summary)}
         </div>
-        <dl class="audit-meta-grid">
-          ${renderPair("audit_log_id", item.audit_log_id)}
-          ${renderPair("trace_id", item.trace_id)}
-          ${renderPair("User-Agent", item.user_agent ?? "-")}
-        </dl>
       </details>
     </article>
   `;
@@ -354,30 +386,24 @@ function renderSummaryBlock(title, summary) {
 }
 
 /**
- * 详情元数据统一使用完整换行值，保证超长 trace_id 和 User-Agent 不造成横向溢出。
- */
-function renderPair(label, value) {
-  return `<dt>${escapeHtml(label)}</dt><dd class="audit-full-id">${escapeHtml(value ?? "-")}</dd>`;
-}
-
-/**
  * changed_fields 只显示字段名；空数组表示后端记录异常时采用短横线兜底。
  */
 function renderChangedFields(fields) {
   if (!Array.isArray(fields) || fields.length === 0) {
     return "-";
   }
-  return fields.map((field) => `<code>${escapeHtml(field)}</code>`).join("");
+  const labels = { status: "状态", name: "名称", role: "职责", amount: "金额", limit: "限制", configuration: "配置" };
+  return fields.map((field) => `<span>${escapeHtml(labels[field] ?? "已更新")}</span>`).join("、");
 }
 
 /**
  * 动作和对象类型使用已知稳定枚举，避免自由输入造成拼写错误；空选项表示不过滤。
  */
-function renderOptions(options, selectedValue) {
+function renderOptions(options, selectedValue, labels = {}) {
   return ["", ...options]
     .map((value) => {
       const selected = value === (selectedValue ?? "") ? " selected" : "";
-      return `<option value="${escapeAttribute(value)}"${selected}>${escapeHtml(value || "全部")}</option>`;
+      return `<option value="${escapeAttribute(value)}"${selected}>${escapeHtml(value ? labels[value] ?? "其他操作" : "全部")}</option>`;
     })
     .join("");
 }

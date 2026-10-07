@@ -12,12 +12,18 @@ import {
 import { renderCacheAffinityRow } from "./cacheAffinityControls.js";
 
 // 四种模式是 PATCH 的唯一合法值；未知服务端值只展示，绝不能被表单再次提交。
-const ROUTING_MODES = Object.freeze(["fixed", "cost_first", "availability_first", "quality_cost"]);
-const ROUTING_MODE_LABELS = Object.freeze({
+export const ROUTING_MODES = Object.freeze(["fixed", "cost_first", "availability_first", "quality_cost"]);
+export const ROUTING_MODE_LABELS = Object.freeze({
   fixed: "固定",
   cost_first: "成本优先",
   availability_first: "可用性优先",
-  quality_cost: "质量成本",
+  quality_cost: "质量、成本与延迟",
+});
+export const ROUTING_MODE_DESCRIPTIONS = Object.freeze({
+  fixed: "请求开始时按你设置的顺序选择；请求出错后，可按故障切换尝试下一候选。",
+  cost_first: "请求开始时按已配置价格自动选择；请求出错后，可按故障切换尝试下一候选。",
+  availability_first: "请求开始时优先选择当前可用模型；请求出错后，可按故障切换尝试下一候选。",
+  quality_cost: "请求开始时综合质量、成本和响应速度自动选择；请求出错后，可按故障切换尝试下一候选。",
 });
 // 休眠默认配置与后端迁移一致；旧模式不发送这些字段，重新启用 quality_cost 时必须显式确认。
 const DEFAULT_QUALITY_COST_CONFIG = Object.freeze({
@@ -496,16 +502,15 @@ export function renderRoutingPolicyPanel(state, authContext) {
     <div class="routing-policy-heading">
       <div>
         <h2 id="routing-policies-title">路由策略</h2>
-        <p>ModelAlias 当前主备候选与初始路由模式。</p>
       </div>
       <span>${escapeHtml(rows.length)} 条策略</span>
     </div>
     ${renderRefreshError(state.refreshError)}
     <div class="routing-policy-table" role="table" aria-label="当前租户路由策略">
       <div class="routing-policy-row routing-policy-head${canWrite ? "" : " routing-policy-readonly-row"}" role="row">
-        <span>别名 / Environment</span>
-        <span>配置候选</span>
-        <span>当前模式 / 版本</span>
+        <span>模型别名 / 运行环境</span>
+        <span>参与选择的模型</span>
+        <span>选择方式 / 版本</span>
         <span>更新时间</span>
         ${canWrite ? "<span>操作</span>" : ""}
       </div>
@@ -523,18 +528,19 @@ function renderRoutingPolicyRow(row, canWrite, cacheAffinityRow) {
   const updatedAt = alias.routing_policy?.updated_at ?? alias.updated_at;
   return `
     <div class="routing-policy-row${canWrite ? "" : " routing-policy-readonly-row"}${row.busy ? " is-busy" : ""}${row.conflicted ? " is-conflicted" : ""}" role="row" data-routing-policy-row="${escapeAttribute(row.modelAliasId)}">
-      <span class="routing-policy-identity" data-label="别名 / Environment">
+      <span class="routing-policy-identity" data-label="模型别名 / 运行环境">
         <strong>${escapeHtml(alias.alias ?? row.modelAliasId)}</strong>
         <em>${escapeHtml(alias.environment_name ?? alias.environment ?? "-")}</em>
       </span>
-      <span class="routing-policy-candidates" data-label="配置候选">
+      <span class="routing-policy-candidates" data-label="参与选择的模型">
         ${renderConfiguredCandidates(alias)}
       </span>
-      <span class="routing-policy-current" data-label="当前模式 / 版本">
+      <span class="routing-policy-current" data-label="选择方式 / 版本">
         <strong>${escapeHtml(modeLabel(policy.mode))}</strong>
-        <em>${policy.version == null ? "兼容 fixed / 策略缺失" : `v${escapeHtml(policy.version)}`}</em>
+        <em>${escapeHtml(modeDescription(policy.mode))}</em>
+        <small class="routing-policy-version">${policy.version == null ? "尚未保存策略" : `配置版本 v${escapeHtml(policy.version)}`}</small>
         ${policy.mode === "quality_cost" ? renderQualityCostSummary(policy.qualityCostConfig) : ""}
-        ${sideVersion != null && sideVersion !== row.basePolicyVersion ? `<small>服务器已有 v${escapeHtml(sideVersion)}</small>` : ""}
+        ${sideVersion != null && sideVersion !== row.basePolicyVersion ? `<small class="routing-policy-side-version">服务器已有 v${escapeHtml(sideVersion)}</small>` : ""}
       </span>
       <time data-label="更新时间" datetime="${escapeAttribute(updatedAt ?? "")}">${escapeHtml(formatDateTime(updatedAt))}</time>
       ${canWrite ? `<span class="routing-policy-action" data-label="操作">${renderRoutingPolicyEditor(row)}</span>` : ""}
@@ -556,9 +562,9 @@ function renderRoutingPolicyEditor(row) {
   return `
     <form data-routing-policy-form data-model-alias-id="${escapeAttribute(row.modelAliasId)}" aria-busy="${row.busy ? "true" : "false"}">
       <fieldset class="routing-mode-segments" ${row.busy || row.conflicted ? "disabled" : ""}>
-        <legend>初始路由模式</legend>
+        <legend>选择方式</legend>
         ${ROUTING_MODES.map((mode) => `
-          <label>
+          <label title="${escapeAttribute(modeDescription(mode))}">
             <input type="radio" name="routingMode" value="${escapeAttribute(mode)}" ${row.draftMode === mode ? "checked" : ""} />
             <span>${escapeHtml(modeLabel(mode))}</span>
           </label>
@@ -574,41 +580,18 @@ function renderRoutingPolicyEditor(row) {
   `;
 }
 
-/**
- * 渲染 quality_cost 的五字段编辑器和精确权重合计。
- * 输入展示使用百分比，data/state/API 始终使用整数 bps，避免浏览器浮点累计误差。
- */
+/** 渲染 quality_cost 的内部配置载荷；组织用户只需选择模式，不暴露评分调参。 */
 function renderQualityCostEditor(row) {
   const config = row.draftQualityCostConfig ?? {};
-  const total = qualityCostWeightTotal(config);
-  const valid = isRoutingQualityCostConfigValid(config);
-  const disabled = row.busy || row.conflicted ? "disabled" : "";
   return `
     <div class="routing-quality-cost-config" data-routing-quality-config ${row.draftMode === "quality_cost" ? "" : "hidden"}>
-      <div class="routing-quality-cost-grid">
-        ${renderQualityPercentInput("质量权重", "qualityWeightPercent", config.quality_weight_bps, disabled, "0.01")}
-        ${renderQualityPercentInput("成本权重", "costWeightPercent", config.cost_weight_bps, disabled, "0")}
-        ${renderQualityPercentInput("延迟权重", "latencyWeightPercent", config.latency_weight_bps, disabled, "0")}
-        ${renderQualityPercentInput("质量门槛", "qualityFloorPercent", config.quality_floor_bps, disabled, "0.01")}
-        <label>
-          <span>最小样本数</span>
-          <input name="minimumSampleCount" type="number" inputmode="numeric" min="1" max="10000" step="1" value="${escapeAttribute(integerInputValue(config.minimum_sample_count))}" ${disabled} />
-        </label>
-      </div>
-      <output class="routing-quality-weight-total ${valid ? "is-valid" : "is-invalid"}" data-routing-quality-total>
-        权重合计：${escapeHtml(total == null ? "输入不完整" : formatBps(total))}
-      </output>
+      <input type="hidden" name="qualityWeightPercent" value="${escapeAttribute(bpsInputValue(config.quality_weight_bps))}" />
+      <input type="hidden" name="costWeightPercent" value="${escapeAttribute(bpsInputValue(config.cost_weight_bps))}" />
+      <input type="hidden" name="latencyWeightPercent" value="${escapeAttribute(bpsInputValue(config.latency_weight_bps))}" />
+      <input type="hidden" name="qualityFloorPercent" value="${escapeAttribute(bpsInputValue(config.quality_floor_bps))}" />
+      <input type="hidden" name="minimumSampleCount" value="${escapeAttribute(integerInputValue(config.minimum_sample_count))}" />
+      <p class="routing-quality-cost-note">系统自动综合质量、成本和响应速度排序。</p>
     </div>
-  `;
-}
-
-/** 渲染一个百分比输入；空值保留为空，不能用 0 掩盖损坏或尚未完成的草稿。 */
-function renderQualityPercentInput(label, name, bps, disabled, minimum) {
-  return `
-    <label>
-      <span>${escapeHtml(label)}（%）</span>
-      <input name="${escapeAttribute(name)}" type="number" inputmode="decimal" min="${escapeAttribute(minimum)}" max="100" step="0.01" value="${escapeAttribute(bpsInputValue(bps))}" ${disabled} />
-    </label>
   `;
 }
 
@@ -617,12 +600,7 @@ function renderQualityCostSummary(config) {
   if (!isRoutingQualityCostConfigValid(config)) {
     return `<small>质量成本配置不可用</small>`;
   }
-  return `
-    <small class="routing-quality-cost-summary">
-      质量 ${escapeHtml(formatBps(config.quality_weight_bps))} / 成本 ${escapeHtml(formatBps(config.cost_weight_bps))} / 延迟 ${escapeHtml(formatBps(config.latency_weight_bps))}
-      · 门槛 ${escapeHtml(formatBps(config.quality_floor_bps))} · 样本 ${escapeHtml(config.minimum_sample_count)}
-    </small>
-  `;
+  return `<small class="routing-quality-cost-summary">系统自动综合质量、成本和响应速度</small>`;
 }
 
 /** 候选优先消费后端安全摘要；旧响应缺摘要时只回退到 Alias 现有主备显示字段。 */
@@ -631,41 +609,80 @@ function renderConfiguredCandidates(alias) {
   if (!candidates.length) {
     return `<em>未返回候选摘要</em>`;
   }
-  return candidates.map((candidate) => `
-    <span class="routing-policy-candidate">
-      <small>${escapeHtml(candidateRoleLabel(candidate.role))}</small>
-      <strong>${escapeHtml(candidate.internalModelId)}</strong>
-      <em>${escapeHtml(candidate.providerCode)}</em>
+  const primary = candidates.find((candidate) => candidate.role === "default") ?? candidates[0];
+  const fallbacks = candidates.filter((candidate) => candidate !== primary);
+  const primaryHtml = `
+    <span class="routing-policy-candidate routing-policy-primary-candidate">
+      <small>主模型</small>
+      <strong>${escapeHtml(primary.modelName)}</strong>
+      <em>${escapeHtml(primary.providerName)}</em>
     </span>
-  `).join("");
+  `;
+  if (!fallbacks.length) {
+    return `<div class="routing-policy-candidate-summary">${primaryHtml}<span class="routing-policy-no-fallback">未配置备用模型</span></div>`;
+  }
+  return `
+    <div class="routing-policy-candidate-summary">
+      ${primaryHtml}
+      <details class="routing-policy-fallback-details">
+        <summary>备用模型 ${fallbacks.length} 个</summary>
+        <ol>
+          ${fallbacks.map((candidate) => `
+            <li>
+              <strong>${escapeHtml(candidate.modelName)}</strong>
+              <em>${escapeHtml(candidate.providerName)}</em>
+            </li>
+          `).join("")}
+        </ol>
+      </details>
+    </div>
+  `;
 }
 
-/** 把当前 DTO 的候选白名单字段归一为最多两个展示项，不解析任意 JSON。 */
+/** 把当前 DTO 的候选白名单字段归一为完整有序候选，不解析任意 JSON。 */
 function configuredCandidates(alias) {
   const source = Array.isArray(alias?.routing_candidates)
     ? alias.routing_candidates
     : Array.isArray(alias?.routing_policy?.candidates)
       ? alias.routing_policy.candidates
       : [];
-  const normalized = source.slice(0, 2).map((item, index) => ({
+  const normalized = source.map((item, index) => ({
     role: text(item?.candidate_role ?? item?.role ?? (index === 0 ? "default" : "fallback")),
-    internalModelId: text(item?.internal_model_id ?? item?.model_id ?? "-"),
-    providerCode: text(item?.provider_code ?? item?.provider_id ?? "-"),
+    // display_name 不是必填；内部模型别名和上游模型名仍是可读业务标识，
+    // 只有全部缺失时才显示固定占位，绝不把技术 UUID 当名称。
+    modelName: text(
+      item?.display_name
+      ?? item?.model_name
+      ?? item?.internal_model_id
+      ?? item?.provider_model_id
+      ?? "未命名模型",
+    ),
+    providerName: text(item?.provider_name ?? item?.provider ?? "未命名服务"),
   }));
   if (normalized.length) {
     return normalized;
   }
   const fallback = [{
     role: "default",
-    internalModelId: text(alias?.default_internal_model_id ?? alias?.default_model_id ?? "-"),
-    providerCode: text(alias?.default_provider_code ?? "-"),
+    modelName: text(
+      alias?.default_display_name
+      ?? alias?.default_internal_model_id
+      ?? alias?.default_provider_model_id
+      ?? "未命名模型",
+    ),
+    providerName: text(alias?.default_provider_name ?? "未命名服务"),
   }];
   // 只有服务端明确配置备用目标时才派生第二项，空 fallback 不生成虚构候选。
   if (alias?.fallback_model_id || alias?.fallback_internal_model_id) {
     fallback.push({
       role: "fallback",
-      internalModelId: text(alias?.fallback_internal_model_id ?? alias?.fallback_model_id ?? "-"),
-      providerCode: text(alias?.fallback_provider_code ?? "-"),
+      modelName: text(
+        alias?.fallback_display_name
+        ?? alias?.fallback_internal_model_id
+        ?? alias?.fallback_provider_model_id
+        ?? "未命名模型",
+      ),
+      providerName: text(alias?.fallback_provider_name ?? "未命名服务"),
     });
   }
   return fallback;
@@ -691,7 +708,7 @@ function renderRowFeedback(row) {
 function renderLoading() {
   return `
     <div class="routing-policy-heading">
-      <div><h2 id="routing-policies-title">路由策略</h2><p>正在读取当前租户的 ModelAlias 策略。</p></div>
+      <div><h2 id="routing-policies-title">路由策略</h2><p>正在读取模型别名的路由设置。</p></div>
     </div>
     <div class="empty-state">等待 /model-aliases 响应。</div>
   `;
@@ -718,7 +735,7 @@ function renderRefreshError(error) {
 
 /** 渲染空租户状态。 */
 function renderEmptyRow() {
-  return `<div class="routing-policy-row routing-policy-empty" role="row"><span>当前租户还没有 ModelAlias。</span></div>`;
+  return `<div class="routing-policy-row routing-policy-empty" role="row"><span>当前组织还没有模型别名。</span></div>`;
 }
 
 /** 从 Alias 或 PATCH policy 响应提取有效模式和版本；缺行保持 nullable implicit fixed 合同。 */
@@ -805,12 +822,6 @@ export function routingMinimumSampleCount(value) {
   }
   const count = Number(normalized);
   return isIntegerInRange(count, 1, 10000) ? count : null;
-}
-
-/** 计算三个权重的整数 bps 合计；任一输入不完整时返回 null，绝不以 0 代替。 */
-function qualityCostWeightTotal(config) {
-  const weights = [config?.quality_weight_bps, config?.cost_weight_bps, config?.latency_weight_bps];
-  return weights.every(isNonnegativeSafeInteger) ? weights.reduce((total, value) => total + value, 0) : null;
 }
 
 /** 将 bps 转为百分比输入/展示文本，整数拆分避免 0.1 浮点表示误差。 */
@@ -912,9 +923,13 @@ function modeLabel(mode) {
   return ROUTING_MODE_LABELS[mode] ?? mode ?? "-";
 }
 
+function modeDescription(mode) {
+  return ROUTING_MODE_DESCRIPTIONS[mode] ?? "按当前配置选择候选模型";
+}
+
 /** 将候选角色转换为配置语义，避免把初始 fallback 角色误写成“已触发 Fallback”。 */
 function candidateRoleLabel(role) {
-  return role === "fallback" ? "备用角色" : role === "default" ? "默认角色" : role || "-";
+  return role === "fallback" ? "备用模型" : role === "default" ? "优先模型" : role || "-";
 }
 
 /** 格式化秒级更新时间；空值保持短横线。 */

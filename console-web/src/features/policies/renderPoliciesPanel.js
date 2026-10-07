@@ -343,7 +343,7 @@ function filterPolicies(policies, filters) {
 
 /**
  * 渲染加载或写操作错误。
- * 只展示统一 code/message/request_id；5xx 时旧草稿和同身份缓存列表仍可见但保存必须重新校验。
+ * 只展示可行动的失败文案；5xx 时旧草稿和同身份缓存列表仍可见但保存必须重新校验。
  */
 function renderPolicyStateError(policiesState) {
   const error = policiesState?.actionError ?? (policiesState?.state === "error" ? policiesState : null);
@@ -353,9 +353,8 @@ function renderPolicyStateError(policiesState) {
   }
   return `
     <div class="policy-error" role="alert">
-      <strong>${escapeHtml(error.code ?? "policy.unavailable")}</strong>
-      <span>${escapeHtml(error.message ?? "策略服务暂不可用")}</span>
-      <code>request_id: ${escapeHtml(error.requestId ?? error.request_id ?? "-")}</code>
+      <strong>策略服务暂不可用</strong>
+      <span>${escapeHtml(error.message ?? "请稍后重试")}</span>
     </div>
   `;
 }
@@ -382,7 +381,7 @@ function renderPolicyEditor(editor, activeModels, policiesState) {
       <div class="policy-editor-heading">
         <div>
           <h3 id="policy-editor-title">${editing ? "编辑策略" : "新建策略"}</h3>
-          <span>${editing ? `版本 v${escapeHtml(draft.version ?? "-")}` : "尚未保存"}</span>
+          <span>${editing ? "正在编辑" : "尚未保存"}</span>
         </div>
         <span class="policy-mode">${editing ? "编辑" : "新建"}</span>
       </div>
@@ -443,9 +442,7 @@ function renderPolicyEditor(editor, activeModels, policiesState) {
  */
 function renderModelOptions(activeModels, selectedModelId) {
   const options = activeModels.map((model) => {
-    const label = [model.display_name || model.internal_model_id || model.model_id, model.provider_code]
-      .filter(Boolean)
-      .join(" / ");
+    const label = model.display_name || model.name || "已配置模型";
     return renderOption(model.model_id, label, selectedModelId);
   });
   return [
@@ -472,22 +469,15 @@ function renderValidationResult(validation) {
             ? diagnostics.map((diagnostic) => renderDiagnostic(diagnostic)).join("")
             : "<li>策略草稿不符合受限 DSL 规则。</li>"}
         </ul>
-        <code>request_id: ${escapeHtml(validation.request_id ?? validation.requestId ?? "-")}</code>
       </div>
     `;
   }
   const variables = Array.isArray(validation.variables) ? validation.variables : [];
   return `
     <div class="policy-validation-passed">
-      <div>
-        <strong>校验通过</strong>
-        <span>${escapeHtml(validation.dsl_version ?? "policy-dsl-v1")}</span>
-      </div>
+      <div><strong>校验通过</strong></div>
       <dl>
-        <div><dt>变量</dt><dd>${escapeHtml(variables.join(", ") || "无")}</dd></div>
-        <div><dt>condition_hash</dt><dd><code>${escapeHtml(validation.condition_hash ?? "-")}</code></dd></div>
-        <div><dt>规范表达式</dt><dd><code>${escapeHtml(validation.canonical_expression ?? "-")}</code></dd></div>
-        <div><dt>request_id</dt><dd><code>${escapeHtml(validation.request_id ?? validation.requestId ?? "-")}</code></dd></div>
+        <div><dt>使用条件</dt><dd>${escapeHtml(variables.join(", ") || "未使用额外条件")}</dd></div>
       </dl>
     </div>
   `;
@@ -498,13 +488,8 @@ function renderValidationResult(validation) {
  * 位置信息只展示整数区间，message 作为普通文本处理，不能拼成 HTML 或 title 属性。
  */
 function renderDiagnostic(diagnostic) {
-  const start = Number.isInteger(diagnostic?.start) ? diagnostic.start : null;
-  const end = Number.isInteger(diagnostic?.end) ? diagnostic.end : null;
-  const location = start !== null && end !== null ? ` [${start}, ${end})` : "";
   return `
     <li>
-      <code>${escapeHtml(diagnostic?.code ?? "policy.expression_invalid")}</code>
-      <span>${escapeHtml(diagnostic?.field ?? "rule.condition_expr")}${escapeHtml(location)}</span>
       <p>${escapeHtml(diagnostic?.message ?? "策略表达式无效")}</p>
     </li>
   `;
@@ -546,7 +531,7 @@ function renderPolicyList(policies, activeModels, disabled, canWrite) {
     <div class="policy-table" role="table" aria-label="当前租户策略列表">
       <div class="policy-row policy-row-head" role="row">
         <span>优先级 / 名称</span>
-        <span>状态 / 版本</span>
+        <span>状态</span>
         <span>条件</span>
         <span>动作</span>
         <span>更新时间</span>
@@ -574,11 +559,10 @@ function renderPolicyRow(policy, activeModels, disabled, canWrite) {
     <div class="policy-row" role="row">
       <span data-label="优先级 / 名称" class="policy-row-name">
         <strong>${escapeHtml(policy?.priority ?? "-")} · ${escapeHtml(policy?.name ?? "-")}</strong>
-        <em>${escapeHtml(policy?.description || policy?.policy_id || "-")}</em>
+        <em>${escapeHtml(policy?.description || "未填写说明")}</em>
       </span>
-      <span data-label="状态 / 版本">
+      <span data-label="状态">
         <mark class="policy-status policy-status-${status}">${escapeHtml(STATUS_LABELS[status])}</mark>
-        <small>v${escapeHtml(policy?.version ?? "-")}</small>
       </span>
       <span data-label="条件" class="policy-condition"><code>${escapeHtml(rule.condition_expr ?? "-")}</code></span>
       <span data-label="动作" class="policy-action-summary">
@@ -632,7 +616,7 @@ function policyAction(policy) {
 function policyModelLabel(activeModels, targetModelId) {
   const model = activeModels.find((item) => item.model_id === targetModelId);
   return model
-    ? [model.display_name || model.internal_model_id || model.model_id, model.provider_code].filter(Boolean).join(" / ")
+    ? (model.display_name || model.name || "已配置模型")
     : "目标当前不可用";
 }
 

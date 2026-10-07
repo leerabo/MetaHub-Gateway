@@ -24,11 +24,9 @@ export function renderModelPricePanel(state, modelsState, authContext) {
   if (!state) {
     return renderShell(`<div class="empty-state">正在读取模型价格时间线。</div>`);
   }
-  // 价格读取错误必须保留统一 request_id，方便从控制面日志定位失败原因。
   if (state.state === "error") {
-    // 读取失败时保留 request_id，便于管理员关联控制面日志排查迁移或权限问题。
     return renderShell(
-      `<div class="empty-state error-state">${escapeHtml(state.message)} request_id: ${escapeHtml(state.requestId ?? "-")}</div>`,
+      `<div class="empty-state error-state">${escapeHtml(state.message ?? "模型价格暂不可用，请稍后重试")}</div>`,
     );
   }
   const plans = state.price_plans ?? [];
@@ -46,8 +44,8 @@ export function renderModelPricePanel(state, modelsState, authContext) {
     ${renderFilterForm(state.filters, models)}
     <div class="model-price-table" role="table" aria-label="模型价格时间线">
       <div class="model-price-row model-price-head" role="row">
-        <span>模型</span><span>状态</span><span>输入 / 1K</span><span>输出 / 1K</span>
-        <span>币种</span><span>版本</span><span>生效时间</span><span>结束时间</span>
+        <span>模型</span><span>状态</span><span>输入 / 百万 Token</span><span>输出 / 百万 Token</span><span>缓存命中 / 百万 Token</span>
+        <span>币种</span><span>生效时间</span><span>结束时间</span>
       </div>
       ${plans.length ? plans.map(renderPlanRow).join("") : `<div class="model-price-empty">暂无价格计划</div>`}
     </div>
@@ -70,12 +68,13 @@ function renderShell(body) {
 function renderCreateForm(models, feedback) {
   return `
     <form id="create-model-price-form" class="model-price-create-form">
-      <label><span>模型</span><select name="modelId" required>${renderModelOptions(models)}</select></label>
-      <label><span>输入 / 1K</span><input name="inputPricePer1k" inputmode="decimal" required value="0" /></label>
-      <label><span>输出 / 1K</span><input name="outputPricePer1k" inputmode="decimal" required value="0" /></label>
-      <label><span>币种</span><select name="currency"><option value="CNY">CNY</option><option value="USD">USD</option></select></label>
-      <label><span>生效时间</span><input name="effectiveFrom" type="datetime-local" step="1" required /></label>
-      <label><span>版本</span><input name="priceSchemaVersion" maxlength="80" placeholder="留空自动生成" /></label>
+      <label><span>模型</span><select name="modelId" aria-label="模型" required>${renderModelOptions(models)}</select></label>
+      <label><span>输入 / 百万 Token</span><input name="inputPricePer1k" aria-label="输入 / 百万 Token" inputmode="decimal" required value="0" /></label>
+      <label><span>输出 / 百万 Token</span><input name="outputPricePer1k" aria-label="输出 / 百万 Token" inputmode="decimal" required value="0" /></label>
+      <label><span>缓存命中 / 百万 Token</span><input name="cachePricePer1k" aria-label="缓存命中 / 百万 Token" inputmode="decimal" required value="0" /></label>
+      <label><span>币种</span><select name="currency" aria-label="币种"><option value="CNY">CNY</option><option value="USD">USD</option></select></label>
+      <label><span>生效时间</span><input name="effectiveFrom" aria-label="生效时间" type="datetime-local" step="1" required /></label>
+      <input name="priceSchemaVersion" type="hidden" value="" />
       <button type="submit" ${models.length ? "" : "disabled"}>新增价格</button>
       <span class="model-price-feedback" role="status">${escapeHtml(feedback ?? "")}</span>
     </form>
@@ -88,8 +87,8 @@ function renderCreateForm(models, feedback) {
 function renderFilterForm(filters = {}, models) {
   return `
     <form id="model-price-filter-form" class="model-price-filter-form">
-      <label><span>模型</span><select name="modelId"><option value="">全部模型</option>${renderModelOptions(models, filters.modelId)}</select></label>
-      <label><span>状态</span><select name="effectiveStatus">
+      <label><span>模型</span><select name="modelId" aria-label="模型"><option value="">全部模型</option>${renderModelOptions(models, filters.modelId)}</select></label>
+      <label><span>状态</span><select name="effectiveStatus" aria-label="状态">
         ${renderStatusOption("all", "全部", filters.effectiveStatus)}
         ${renderStatusOption("current", "当前生效", filters.effectiveStatus)}
         ${renderStatusOption("scheduled", "待生效", filters.effectiveStatus)}
@@ -102,21 +101,26 @@ function renderFilterForm(filters = {}, models) {
 }
 
 /**
- * 渲染单条价格计划，所有模型名称、版本和时间文本都经过 HTML 转义。
+ * 渲染单条价格计划，只显示用户需要比较的价格和有效期。
  */
 function renderPlanRow(plan) {
   return `
     <div class="model-price-row" role="row">
-      <span><strong>${escapeHtml(plan.display_name ?? plan.internal_model_id)}</strong><small>${escapeHtml(plan.provider_code)}</small></span>
+      <span><strong>${escapeHtml(plan.display_name ?? plan.internal_model_id)}</strong></span>
       <span><mark class="status-mark status-${escapeAttribute(plan.effective_status)}">${escapeHtml(STATUS_LABELS[plan.effective_status] ?? plan.effective_status)}</mark></span>
-      <span>${escapeHtml(plan.input_price_per_1k)}</span>
-      <span>${escapeHtml(plan.output_price_per_1k)}</span>
+      <span>${escapeHtml(toMillionPrice(plan.input_price_per_1k))}</span>
+      <span>${escapeHtml(toMillionPrice(plan.output_price_per_1k))}</span>
+      <span>${escapeHtml(toMillionPrice(plan.cache_price_per_1k))}</span>
       <span>${escapeHtml(plan.currency)}</span>
-      <span>${escapeHtml(plan.price_schema_version)}</span>
       <span>${escapeHtml(formatDateTime(plan.effective_from))}</span>
       <span>${escapeHtml(plan.effective_to ? formatDateTime(plan.effective_to) : "持续有效")}</span>
     </div>
   `;
+}
+
+function toMillionPrice(value) {
+  const number = Number(value);
+  return (Number.isFinite(number) ? number : 0).toFixed(6).replace(/0+$/, "").replace(/\.$/, "") || "0";
 }
 
 /**
@@ -136,11 +140,11 @@ function renderStatusOption(value, label, selected) {
 }
 
 /**
- * 渲染操作错误和后端 request_id，避免仅显示模糊失败提示。
+ * 渲染操作错误，只显示下一步可执行的提示。
  */
 function renderActionError(error) {
   if (!error) return "";
-  return `<div class="model-price-action-error" role="alert">${escapeHtml(error.message ?? "模型价格操作失败")} request_id: ${escapeHtml(error.requestId ?? "-")}</div>`;
+  return `<div class="model-price-action-error" role="alert">${escapeHtml(error.message ?? "模型价格操作失败，请稍后重试")}</div>`;
 }
 
 /**

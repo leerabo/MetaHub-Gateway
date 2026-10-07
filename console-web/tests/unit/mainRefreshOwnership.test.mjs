@@ -116,6 +116,9 @@ test("active-page dispatcher does not preload unrelated navigation data", async 
   assert.match(providers, /loadProvidersState/);
   assert.doesNotMatch(providers, /loadModelsState|loadUsageState|loadProjectState/);
 
+  const models = pageCase("models", "response-cache");
+  assert.match(models, /loadProvidersState\(\{ includeKeys: false \}\)/u);
+
   const usage = pageCase("usage", "workspace-subscription");
   assert.match(usage, /loadUsageState/);
   assert.doesNotMatch(usage, /loadProvidersState|loadProjectState|loadVirtualKeysState/);
@@ -290,12 +293,13 @@ test("active-page hydration preserves interactive sidebar DOM and refreshes hand
   assert.match(dispatcher, /preserveConsoleSidebar = false/);
   assert.match(dispatcher, /renderDeveloperStart\(app, \{[\s\S]*preserveConsoleSidebar,[\s\S]*\.\.\.state,/);
   assert.match(renderSource, /renderConsoleContentPreservingSidebar\(container, shellHtml, activeItem\.id\)/);
-  assert.match(renderSource, /currentTopbar\.replaceWith\(nextTopbar\);[\s\S]*currentMain\.replaceWith\(nextMain\);/);
+  assert.match(renderSource, /Keep its DOM identity[\s\S]*currentMain\.replaceWith\(nextMain\);/);
+  assert.doesNotMatch(renderSource, /currentTopbar\.replaceWith\(nextTopbar\)/);
   assert.doesNotMatch(renderSource, /currentSidebar\.replaceWith/);
   assert.match(binder, /navigationButton\.onclick = async/);
   assert.match(binder, /groupToggle\.onclick =/);
   assert.match(binder, /sidebarToggle\.onclick = async/);
-  assert.match(binder, /\.console-home-return, \.console-flow-next, \.console-flow-related, \.workspace-recovery-action/);
+  assert.match(binder, /\.console-home-return, \.console-flow-next, \.console-flow-related/);
   assert.match(binder, /if \(event.ctrlKey \|\| event.metaKey \|\| event.shiftKey \|\| event.altKey\) return/);
 });
 
@@ -311,6 +315,50 @@ test("sidebar groups use one persisted accordion expansion", async () => {
   assert.match(toggle, /catch \(error\)[\s\S]*expandedConsoleGroupKey = previous/);
   assert.match(toggle, /applyExpandedConsoleGroup\(previous\)/);
   assert.doesNotMatch(toggle, /localStorage|sessionStorage|persistExpandedConsoleGroupKey/);
+});
+
+test("developer-center expands from projected developer routes", async () => {
+  const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
+  const toggleSource = sourceSection(source, "async function toggleConsoleSidebarGroup", "function applyExpandedConsoleGroup");
+  const session = { context: { active: true } };
+  const scope = {
+    authSession: session,
+    refreshSequence: 1,
+    sidebarGroupSequence: 0,
+    sidebarGroupPending: false,
+    expandedConsoleGroupKey: "gateway",
+    hasWorkspaceConsoleSession: (value) => value === session,
+    sameWorkspaceConsoleSession: (left, right) => left === right,
+    workspaceConsoleSessionFromShell: () => session,
+    applyExpandedConsoleGroup: (key) => { scope.expandedConsoleGroupKey = key; },
+    workspaceNavigationController: {
+      snapshot: () => ({ navigation: { groups: [] }, advancedTools: null }),
+      savePreference: async () => ({
+        navigation: { preference: { expanded_group_code: "developer-center" } },
+      }),
+    },
+    projectWorkspaceNavigationForConsole: (navigation) => navigation,
+    handleConsoleWorkspaceContextInvalidation() {},
+    renderConsoleSidebarPreferenceError() {},
+  };
+  const toggle = runInNewContext(`${toggleSource}\ntoggleConsoleSidebarGroup;`, scope);
+  await toggle({
+    dataset: { sidebarGroupToggle: "developer-center" },
+    closest: () => ({ querySelector: () => ({}) }),
+    getAttribute: () => "false",
+  }, {
+    workspaceNavigationContract: true,
+    navigation: {
+      groups: [],
+      navigation_items: [{
+        group_code: "developer-center",
+        sidebar_visible: true,
+        disabled: false,
+      }],
+    },
+    workspaceContext: { role: "developer" },
+  });
+  assert.equal(scope.expandedConsoleGroupKey, "developer-center");
 });
 
 test("task links reveal their authorized destination group while hydration preserves manual exploration", async () => {
