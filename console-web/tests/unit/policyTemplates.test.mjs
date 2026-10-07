@@ -494,6 +494,68 @@ test("policy template state renders incompatible preview without write credentia
   assert.doesNotMatch(html, /preview_nonce|impact_hash|candidateEtag/);
 });
 
+test("policy template page treats catalog bindings as an unchecked form, not a user error", () => {
+  const state = createPolicyTemplatePageState();
+  state.syncOwner(pageOwner());
+  const list = state.beginCatalog();
+  const items = catalog({
+    compatibility: {
+      status: "unbound",
+      reason_codes: ["bindings_required"],
+      warning_codes: [],
+      can_apply: false,
+      requires_permissions: ["policy_template.apply"],
+    },
+  });
+  assert.equal(state.acceptCatalog(list, { policy_templates: items, total: 5 }), true);
+  const html = renderPolicyTemplates(state.snapshot());
+  assert.match(html, /要应用到哪个项目？/);
+  assert.match(html, /value="project_a"\s+selected/);
+  assert.match(html, /2\. 检查能否使用/);
+  assert.match(html, /检查不会修改配置/);
+  assert.doesNotMatch(html, /请选择模板要求的绑定|待绑定/);
+  assert.doesNotMatch(html, /policy-template-compatibility__reason/);
+  assert.doesNotMatch(html, /novalidate/);
+});
+
+test("policy template check lists both missing model and first publication with separate routes", () => {
+  const state = createPolicyTemplatePageState();
+  state.syncOwner(pageOwner());
+  const list = state.beginCatalog();
+  state.acceptCatalog(list, { policy_templates: catalog(), total: 5 });
+  const preview = state.beginPreview();
+  const payload = incompatiblePayload();
+  payload.policy_templates[0].compatibility.reason_codes = [
+    "eligible_low_cost_model_required",
+    "snapshot_baseline_required",
+  ];
+  assert.equal(state.acceptPreview(preview, payload), true);
+  const html = renderPolicyTemplates(state.snapshot());
+  assert.match(html, /没有可用于低成本模式的模型/);
+  assert.match(html, /支持对话、向量和流式调用/);
+  assert.match(html, /国产云、本地或自管模型服务/);
+  assert.match(html, /data-policy-template-remediation="models"/);
+  assert.match(html, /data-policy-template-remediation="providers"/);
+  assert.match(html, /还没有可回退的上线版本/);
+  assert.match(html, /可以发布空版本/);
+  assert.match(html, /data-policy-template-remediation="policy-snapshots"/);
+  assert.match(html, /policy-template-catalog__item is-active[\s\S]*?暂不能应用/);
+  assert.doesNotMatch(html, /data-policy-template-action="confirm"|请选择模板要求的绑定/);
+});
+
+test("budget scenario validates its required amount before checking", () => {
+  const state = createPolicyTemplatePageState();
+  state.syncOwner(pageOwner());
+  const list = state.beginCatalog();
+  state.acceptCatalog(list, { policy_templates: catalog(), total: 5 });
+  assert.equal(state.selectTemplate("ptpl_budget_burst_guard"), true);
+  const html = renderPolicyTemplates(state.snapshot());
+  assert.match(html, /预算低于多少元时阻止请求？/);
+  assert.match(html, /pattern="\(\?:0\|\[1-9\]/);
+  assert.match(html, /\\\.\[0-9\]\{1,6\}/);
+  assert.match(html, /name="threshold_cny"[\s\S]*?required/);
+});
+
 test("policy template state rejects incompatible response carrying CAS credentials", () => {
   const state = createPolicyTemplatePageState();
   state.syncOwner(pageOwner());
@@ -645,8 +707,8 @@ test("policy template renderer hides unauthorized DOM and never renders nonce or
   const preview = state.beginPreview();
   state.acceptPreview(preview, previewPayload());
   const html = renderPolicyTemplates(state.snapshot());
-  assert.match(html, /选场景，预览后应用/);
-  assert.match(html, /预览对现有规则的影响，再确认应用/);
+  assert.match(html, /按场景设置规则/);
+  assert.match(html, /检查不会修改配置/);
   assert.match(html, /低成本模式/);
   assert.match(html, /应用模板/);
   assert.match(html, /本次模板/);

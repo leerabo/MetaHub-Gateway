@@ -25902,6 +25902,21 @@ h3 {
   border-bottom: 1px solid var(--line);
 }
 
+.policy-template-bindings__heading {
+  grid-column: 1 / -1;
+}
+
+.policy-template-bindings__heading strong {
+  font-size: 14px;
+}
+
+.policy-template-bindings__heading p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .policy-template-bindings .field,
 .policy-template-confirm .field {
   min-width: 0;
@@ -26023,13 +26038,49 @@ h3 {
   justify-content: flex-end;
 }
 
+.policy-template-prerequisites {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 25px;
+}
+
+.policy-template-prerequisites__item {
+  min-width: 0;
+  padding: 11px 12px;
+  border-left: 3px solid var(--danger);
+  background: #fff7f7;
+}
+
+.policy-template-prerequisites__item strong {
+  font-size: 13px;
+}
+
+.policy-template-prerequisites__item p {
+  margin: 5px 0 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.policy-template-prerequisites__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 9px;
+}
+
 .policy-template-impact--empty {
-  min-height: 190px;
-  place-items: center;
-  border: 1px dashed #b9c3cf;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
   border-radius: 4px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.policy-template-impact--empty strong {
+  color: var(--text);
 }
 
 /* PAGE-095 关键命令使用固定遮罩和内部滚动，避免长资源 ID 撑宽移动端文档或遮住确认操作。 */

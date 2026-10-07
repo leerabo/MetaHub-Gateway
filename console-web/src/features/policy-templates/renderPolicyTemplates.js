@@ -5,10 +5,10 @@
 
 // 兼容性状态仅负责展示后端裁决，不在浏览器侧据此补权限或推导可应用结论。
 const STATUS_LABELS = Object.freeze({
-  unbound: "待绑定",
+  unbound: "待检查",
   ready: "可应用",
   ready_with_warnings: "可应用，有提醒",
-  incompatible: "不可应用",
+  incompatible: "暂不能应用",
 });
 // 动作标签只映射后端固定枚举，未知动作保持原值以暴露协议不兼容而非静默误导。
 const ACTION_LABELS = Object.freeze({
@@ -32,8 +32,8 @@ export function renderPolicyTemplates(state = {}) {
     <section class="policy-template-page" data-policy-template-page aria-labelledby="policy-template-title">
       <header class="policy-template-page__header">
         <div>
-          <h2 id="policy-template-title">选场景，预览后应用</h2>
-          <p>这里包含预算控制、模型路由和数据保护等场景。选择模板与适用项目，预览对现有规则的影响，再确认应用。应用会直接创建上线版本，由网关同步生效。</p>
+          <h2 id="policy-template-title">按场景设置规则</h2>
+          <p>先选场景，确认要应用的项目，再检查能否使用。检查不会修改配置；确认应用后会创建上线版本，由网关同步生效。</p>
         </div>
         <button class="button button--secondary policy-template-page__refresh" type="button"
           data-policy-template-action="refresh"
@@ -61,7 +61,7 @@ function renderWorkspace(state, selected) {
   return `
     <div class="policy-template-workspace">
       <nav class="policy-template-catalog" aria-label="策略模板目录">
-        ${state.templates.map((item) => renderCatalogItem(item, state.selectedTemplateId)).join("")}
+        ${state.templates.map((item) => renderCatalogItem(item, state.selectedTemplateId, state.preview)).join("")}
       </nav>
       <div class="policy-template-detail">
         ${selected ? renderSelectedTemplate(state, selected) : ""}
@@ -71,22 +71,23 @@ function renderWorkspace(state, selected) {
 }
 
 /** 渲染单条目录项；button 保持键盘和触屏原生语义。 */
-function renderCatalogItem(template, selectedTemplateId) {
+function renderCatalogItem(template, selectedTemplateId, preview) {
   const active = template.policyTemplateId === selectedTemplateId;
+  const status = active && preview ? preview.template.compatibility.status : template.compatibility.status;
   return `
     <button class="policy-template-catalog__item${active ? " is-active" : ""}" type="button"
       data-policy-template-select="${escapeAttribute(template.policyTemplateId)}"
       aria-current="${active ? "page" : "false"}">
       <span class="policy-template-catalog__name">${escapeHtml(template.name)}</span>
-      <span class="status-pill status-pill--${escapeAttribute(statusTone(template.compatibility.status))}">
-        ${escapeHtml(STATUS_LABELS[template.compatibility.status] ?? "状态未知")}
+      <span class="status-pill status-pill--${escapeAttribute(statusTone(status))}">
+        ${escapeHtml(STATUS_LABELS[status] ?? "状态未知")}
       </span>
       <span class="policy-template-catalog__description">${escapeHtml(template.description)}</span>
     </button>
   `;
 }
 
-/** 渲染当前模板的绑定表单、兼容性摘要与精确预览。 */
+/** 渲染当前模板的适用范围与精确检查。目录的 unbound 仅表示尚未请求精确检查。 */
 function renderSelectedTemplate(state, template) {
   return `
     <header class="policy-template-detail__header">
@@ -101,18 +102,21 @@ function renderSelectedTemplate(state, template) {
         <p>${escapeHtml(template.description)}</p>
       </div>
     </header>
-    <form class="policy-template-bindings" data-policy-template-bindings novalidate>
+    <form class="policy-template-bindings" data-policy-template-bindings>
+      <div class="policy-template-bindings__heading">
+        <strong>1. 确认应用范围</strong>
+        <p>在这里确认项目等条件。有可选项目时会默认选中第一个，可按需更改；某些场景还需填写模型别名或金额。</p>
+      </div>
       ${renderProjectBinding(state, template)}
       ${renderAliasBinding(state, template)}
       ${renderThresholdBinding(state, template)}
       <div class="policy-template-bindings__actions">
         <button class="button button--primary" type="submit"
           ${state.loadingPreview || state.applying ? "disabled" : ""}>
-          ${state.loadingPreview ? "正在预览" : "影响预览"}
+          ${state.loadingPreview ? "正在检查" : state.preview ? "重新检查" : "2. 检查能否使用"}
         </button>
       </div>
     </form>
-    ${renderCompatibility(template.compatibility)}
     ${state.preview ? renderPreviewResult(state) : renderPreviewPlaceholder()}
   `;
 }
@@ -122,7 +126,7 @@ function renderProjectBinding(state, template) {
   if (!template.requiredBindings.includes("project_id")) return "";
   return `
     <label class="field">
-      <span>项目</span>
+      <span>要应用到哪个项目？</span>
       <select name="project_id" data-policy-template-binding="project_id" required
         ${state.applying ? "disabled" : ""}>
         <option value="">请选择项目</option>
@@ -142,7 +146,7 @@ function renderAliasBinding(state, template) {
   if (!template.requiredBindings.includes("model_alias_id")) return "";
   return `
     <label class="field">
-      <span>模型别名</span>
+      <span>允许使用哪个模型别名？</span>
       <select name="model_alias_id" data-policy-template-binding="model_alias_id" required
         ${state.applying ? "disabled" : ""}>
         <option value="">请选择模型别名</option>
@@ -162,9 +166,11 @@ function renderThresholdBinding(state, template) {
   if (!template.requiredBindings.includes("threshold_cny")) return "";
   return `
     <label class="field">
-      <span>预算阈值（CNY）</span>
+      <span>预算低于多少元时阻止请求？</span>
       <input type="text" name="threshold_cny" data-policy-template-binding="threshold_cny"
         inputmode="decimal" autocomplete="off" maxlength="32" required
+        pattern="(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,6})?"
+        title="请输入不超过 12 位整数、最多 6 位小数的人民币金额"
         value="${escapeAttribute(state.bindings.threshold_cny ?? "")}"
         ${state.applying ? "disabled" : ""}>
     </label>
@@ -200,19 +206,19 @@ function renderImpact(state) {
   const preview = state.preview;
   const impact = preview.impact;
   const canApply = state.canApplyPermission && preview.template.compatibility.canApply;
-  const remediation = remediationFor(preview.template.compatibility.reasonCodes);
+  const blockedReasons = preview.template.compatibility.reasonCodes;
   return `
     <section class="policy-template-impact" aria-labelledby="policy-template-impact-title">
       <header class="policy-template-impact__header">
         <div>
-          <h4 id="policy-template-impact-title">影响预览</h4>
-          <p>${escapeHtml(String(impact.before_policy_count))} 条 → ${escapeHtml(String(impact.after_policy_count))} 条策略</p>
+          <h4 id="policy-template-impact-title">检查结果</h4>
+          <p>应用后规则数量：${escapeHtml(String(impact.before_policy_count))} → ${escapeHtml(String(impact.after_policy_count))}</p>
         </div>
         <span class="status-pill status-pill--${escapeAttribute(statusTone(preview.template.compatibility.status))}">
           ${escapeHtml(STATUS_LABELS[preview.template.compatibility.status] ?? "状态未知")}
         </span>
       </header>
-      ${renderCompatibility(preview.template.compatibility)}
+      ${blockedReasons.length ? renderPrerequisites(blockedReasons) : renderCompatibility(preview.template.compatibility)}
       <div class="policy-template-impact__table-wrap">
         <table class="data-table policy-template-impact__table">
           <thead><tr><th>顺序</th><th>策略</th><th>优先级</th><th>动作</th><th>影响</th></tr></thead>
@@ -242,12 +248,9 @@ function renderImpact(state) {
       <div class="policy-template-impact__actions">
         ${canApply
           ? `<button class="button button--danger" type="button" data-policy-template-action="confirm">应用模板</button>`
-          : remediation
-            ? `<button class="button button--secondary" type="button"
-                data-policy-template-remediation="${escapeAttribute(remediation.target)}">
-                ${escapeHtml(remediation.label)}
-              </button>`
-            : `<span class="policy-template-impact__readonly">当前权限或适配状态不允许应用</span>`}
+          : !blockedReasons.length
+            ? `<span class="policy-template-impact__readonly">当前权限不允许应用，请联系空间管理员</span>`
+            : ""}
       </div>
     </section>
   `;
@@ -256,38 +259,79 @@ function renderImpact(state) {
 /**
  * 渲染无法构造影响图的阻断态。
  *
- * 后端此时刻意不签发 nonce/CAS；页面只展示稳定原因，并把修复按钮限制为后端已授权的现有导航。
+ * 后端此时刻意不签发 nonce/CAS；页面只展示稳定原因，修复按钮只指向固定的现有导航。
  */
 function renderIncompatiblePreview(compatibility) {
-  const remediation = remediationFor(compatibility.reasonCodes);
   return `
     <section class="policy-template-impact policy-template-impact--incompatible"
       aria-labelledby="policy-template-impact-title">
       <header class="policy-template-impact__header">
         <div>
-          <h4 id="policy-template-impact-title">影响预览</h4>
-          <p>当前依赖条件不足，未生成可应用计划</p>
+          <h4 id="policy-template-impact-title">检查结果</h4>
+          <p>还不能应用这个场景，请先完成下面的准备工作，再返回重新检查。</p>
         </div>
-        <span class="status-pill status-pill--danger">不可应用</span>
+        <span class="status-pill status-pill--danger">暂不能应用</span>
       </header>
-      ${renderCompatibility(compatibility)}
-      <div class="policy-template-impact__actions">
-        ${remediation
-          ? `<button class="button button--secondary" type="button"
-              data-policy-template-remediation="${escapeAttribute(remediation.target)}">
-              ${escapeHtml(remediation.label)}
-            </button>`
-          : `<span class="policy-template-impact__readonly">修复依赖后重新预览</span>`}
-      </div>
+      ${renderPrerequisites(compatibility.reasonCodes)}
     </section>
   `;
 }
 
-/** 尚未精确预览时保留稳定高度，避免表单交互导致布局跳动。 */
+/** 一次列出所有阻断项，避免多个前置条件只露出一个跳转按钮。 */
+function renderPrerequisites(reasonCodes) {
+  const codes = [...new Set(Array.isArray(reasonCodes) ? reasonCodes : [])];
+  if (!codes.length) return '<p class="policy-template-impact__readonly">请刷新后重新检查；若仍不可用，请联系空间管理员。</p>';
+  return `
+    <ol class="policy-template-prerequisites">
+      ${codes.map((code) => {
+        const guidance = prerequisiteGuidance(code);
+        const fallbackAction = remediationFor([code]);
+        const actions = guidance?.actions ?? (fallbackAction ? [fallbackAction] : []);
+        return `
+          <li class="policy-template-prerequisites__item">
+            <strong>${escapeHtml(guidance?.title ?? reasonLabel(code))}</strong>
+            ${guidance?.detail ? `<p>${escapeHtml(guidance.detail)}</p>` : ""}
+            ${actions.length ? `<div class="policy-template-prerequisites__actions">
+              ${actions.map(({ target, label }) => `<button class="button button--secondary" type="button"
+                data-policy-template-remediation="${escapeAttribute(target)}">${escapeHtml(label)}</button>`).join("")}
+            </div>` : ""}
+          </li>
+        `;
+      }).join("")}
+    </ol>
+  `;
+}
+
+function prerequisiteGuidance(code) {
+  if (code === "eligible_low_cost_model_required") {
+    return {
+      title: "没有可用于低成本模式的模型",
+      detail: "低成本模式只会选择国产云、本地或自管模型服务。请检查模型已启用，支持对话、向量和流式调用，有有效的人民币价格，且服务连接和所需密钥可用。",
+      actions: [
+        { target: "models", label: "查看模型目录" },
+        { target: "providers", label: "查看模型服务" },
+      ],
+    };
+  }
+  if (code === "snapshot_baseline_required") {
+    return {
+      title: "还没有可回退的上线版本",
+      detail: "到“上线与版本”填写变更原因，先发布当前规则；如果还没有规则，可以发布空版本。之后再回到这里检查。",
+      actions: [{ target: "policy-snapshots", label: "去发布首个版本" }],
+    };
+  }
+  if (code === "bindings_required") {
+    return { title: "请先填写上方的应用范围", detail: "确认项目等必填项后，再点击“检查能否使用”。", actions: [] };
+  }
+  return null;
+}
+
+/** 尚未检查时说明下一步，不再显示空白的大预览框。 */
 function renderPreviewPlaceholder() {
   return `
-    <section class="policy-template-impact policy-template-impact--empty" aria-label="影响预览">
-      <span>尚无影响预览</span>
+    <section class="policy-template-impact policy-template-impact--empty" aria-label="检查提示">
+      <strong>下一步：检查能否使用</strong>
+      <span>检查后会在这里说明是否可应用、需要补齐什么，以及应用会改变哪些规则。</span>
     </section>
   `;
 }
@@ -402,8 +446,8 @@ function shadowingLabel(value) {
 /** 原因码转为紧凑中文；未知固定码仍可供支持人员定位。 */
 function reasonLabel(code) {
   const labels = {
-    bindings_required: "请选择模板要求的绑定",
-    snapshot_baseline_required: "需要先发布策略基线",
+    bindings_required: "请先填写上方的应用范围",
+    snapshot_baseline_required: "还没有可回退的上线版本",
     missing_project: "项目不可用",
     missing_model_alias: "模型别名不可用",
     no_eligible_model: "暂无合格模型",
