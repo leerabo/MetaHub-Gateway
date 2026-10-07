@@ -63,7 +63,7 @@ export function renderVirtualKeyPanel(virtualKeysState, authContext, projectStat
     <div class="panel-heading virtual-keys-heading">
       <div>
         <h2 id="virtual-keys-title">${keyTitle}</h2>
-        ${canManageWorkspace ? `<p class="virtual-key-admin-hint">员工创建自己的 KEY；管理员在这里指定项目和应用。</p>` : ""}
+        <p class="virtual-key-admin-hint">${canManageWorkspace ? "员工创建自己的 KEY；管理员分配应用后，KEY 才能用于调用。" : "KEY 需管理员分配应用后才能使用；未分配时创建的 KEY 保持禁用。"}</p>
       </div>
       <span class="virtual-keys-count">${keys.length} 把 KEY</span>
       ${canWrite ? `<button type="button" data-open-virtual-key-dialog${personalKeyExists ? ` disabled title="${keyCopy(i18n, "请先删除自己的现有 KEY，再创建新的", "Delete your current key before creating a new one")}"` : ""}>${createKeyLabel}</button>` : ""}
@@ -98,6 +98,7 @@ function renderVirtualKeyDialog(state, defaultEnvironment, i18n) {
         ${renderActionError(state.actionError)}
         ${state.created?.plainValue ? renderOneTimeSecret(state.created, false, i18n) : `
           <form class="create-virtual-key-form" id="create-virtual-key-form">
+            <p>创建后须由管理员分配应用，KEY 才能用于调用。</p>
             <label><span>${keyCopy(i18n, "名称（可选）", "Name (optional)")}</span>
               <input name="name" maxlength="80" value="" placeholder="${keyCopy(i18n, "例如：开发用 KEY", "Example: development key")}" />
             </label>
@@ -128,7 +129,7 @@ function renderOneTimeSecret(created, organizationKey = false, i18n = null) {
       <div>
         <strong>${created.operation === "rotated" ? keyCopy(i18n, "KEY 已轮换", "Key rotated") : keyCopy(i18n, "KEY 已创建", "Key created")} · ${keyCopy(i18n, "只显示一次", "shown once")}</strong>
         <p class="one-time-secret-owner">${systemKey ? keyCopy(i18n, "绑定对象", "Bound to") : keyCopy(i18n, "KEY 归属", "Key owner")}：${escapeHtml(owner)}${created.keyName ? ` · ${escapeHtml(created.keyName)}` : ""}</p>
-        <p>${keyCopy(i18n, "仅显示一次，请复制保存。", "Shown once. Copy and save it now.")}</p>
+        <p>${keyCopy(i18n, "仅显示一次，请复制保存。管理员分配应用后才能使用。", "Shown once. Copy and save it now. An administrator must assign an application before use.")}</p>
       </div>
       <code>${escapeHtml(created.plainValue)}</code>
       <div class="virtual-key-actions">
@@ -185,10 +186,10 @@ function renderVirtualKeyRow(key, canManageKeys, personalOnly, i18n = null, proj
         ${key.consumer_id ? `<strong>${keyCopy(i18n, "历史成员关联", "Former member link")}</strong><em>${key.consumer_status === "active" ? keyCopy(i18n, "使用者已启用", "Consumer active") : keyCopy(i18n, "使用者已停用", "Consumer disabled")}</em>` : ""}
         ${key.project_id ? `<strong>${escapeHtml(key.project_name ?? keyCopy(i18n, "已关联项目", "Linked project"))}</strong>` : ""}
         ${key.application_id ? `<em>${escapeHtml(key.application_name ?? keyCopy(i18n, "已关联应用", "Linked application"))}</em>` : ""}
-        ${!key.consumer_id && !key.project_id && !key.application_id ? `<em>${personalOnly ? keyCopy(i18n, "本人", "Personal") : keyCopy(i18n, "当前组织", "Current organization")}</em>` : ""}
+        ${!key.consumer_id && !key.project_id && !key.application_id ? `<em>${personalOnly ? keyCopy(i18n, "本人 · 待分配应用", "Personal · application pending") : keyCopy(i18n, "当前组织 · 待分配应用", "Organization · application pending")}</em>` : ""}
         ${!personalOnly && canManageKeys && projects.length ? `<button type="button" class="virtual-key-binding-open" data-open-virtual-key-binding-dialog="${escapeAttribute(key.virtual_key_id)}">调整归属</button>` : ""}
       </span>
-      <span><span class="virtual-key-field-label">${keyCopy(i18n, "状态", "Status")}</span><mark class="status-mark status-${escapeHtml(key.status)}">${escapeHtml(statusLabel)}</mark>${unassigned ? `<em class="virtual-key-governed-state">${keyCopy(i18n, "加入项目和应用后启用", "Enabled after project and application assignment")}</em>` : awaitingActivation ? `<em class="virtual-key-governed-state">${keyCopy(i18n, "请重新保存归属", "Save the assignment again")}</em>` : key.status === "disabled" && key.disabled_reason === "project_inactive" ? `<em class="virtual-key-governed-state">${keyCopy(i18n, "项目或应用已暂停", "Project or application paused")}</em>` : key.status === "disabled" && key.disabled_reason === "manual" ? `<em class="virtual-key-governed-state">${keyCopy(i18n, "无法调用", "Cannot be used")}</em>` : ""}</span>
+      <span><span class="virtual-key-field-label">${keyCopy(i18n, "状态", "Status")}</span><mark class="status-mark status-${escapeHtml(key.status)}">${escapeHtml(statusLabel)}</mark>${unassigned ? `<em class="virtual-key-governed-state">${keyCopy(i18n, "管理员分配应用后启用", "Enabled after administrator assigns an application")}</em>` : awaitingActivation ? `<em class="virtual-key-governed-state">${keyCopy(i18n, "请重新保存归属", "Save the assignment again")}</em>` : key.status === "disabled" && key.disabled_reason === "project_inactive" ? `<em class="virtual-key-governed-state">${keyCopy(i18n, "项目或应用已暂停", "Project or application paused")}</em>` : key.status === "disabled" && key.disabled_reason === "manual" ? `<em class="virtual-key-governed-state">${keyCopy(i18n, "无法调用", "Cannot be used")}</em>` : ""}</span>
       <span><span class="virtual-key-field-label">${keyCopy(i18n, "最近使用", "Last used")}</span>${key.last_used_at ? escapeHtml(formatDateTime(key.last_used_at)) : keyCopy(i18n, "尚未使用", "Not used yet")}</span>
       <div class="virtual-key-limits-cell">
         ${renderLimitSummary(key.rate_limit_rule, i18n)}

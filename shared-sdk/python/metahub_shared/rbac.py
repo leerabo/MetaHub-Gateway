@@ -757,6 +757,9 @@ _VIEWER = {
 _FINANCE = {
     "console.basic.read",
     "dashboard.read",
+    "environment.read",
+    "virtual_key.read",
+    "virtual_key.write",
     "model.read",
     "model_price.read",
     "model_price.write",
@@ -787,6 +790,9 @@ _FINANCE = {
 _SECURITY = {
     "console.basic.read",
     "dashboard.read",
+    "environment.read",
+    "virtual_key.read",
+    "virtual_key.write",
     "provider_error_map.read",
     "provider_error_map.write",
     "model.read",

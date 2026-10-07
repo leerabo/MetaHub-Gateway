@@ -60,6 +60,7 @@ def authenticate_virtual_key(config: AppConfig, authorization: str | None) -> Ga
               e.status AS environment_status,
               binding.workspace_id,
               vk.project_id, vk.application_id,
+              p.status AS project_status, a.status AS application_status,
               kc.consumer_id, consumer.status AS consumer_status,
               vk.status, t.status AS tenant_status
             FROM virtual_keys vk
@@ -74,12 +75,16 @@ def authenticate_virtual_key(config: AppConfig, authorization: str | None) -> Ga
               ON e.tenant_id=vk.tenant_id
              AND (e.environment_id=vk.environment_id
                   OR (vk.environment_id IS NULL AND e.code=vk.environment))
+            LEFT JOIN projects p ON p.tenant_id=vk.tenant_id AND p.project_id=vk.project_id
+            LEFT JOIN applications a ON a.tenant_id=vk.tenant_id AND a.application_id=vk.application_id
+              AND a.project_id=vk.project_id
             WHERE vk.key_hash=?
             """,
             (hash_secret(token),),
         ).fetchone()
         # 租户判断决定数据隔离边界，不能跨租户复用或返回对象。
-        if not row or row["status"] != "active" or row["tenant_status"] != "active":
+        if (not row or row["status"] != "active" or row["tenant_status"] != "active"
+                or row["project_status"] != "active" or row["application_status"] != "active"):
             # 关键异常统一映射为业务错误码，避免底层实现细节穿透到 API 响应。
             raise ApiError("gateway.auth_invalid")
         if row["consumer_id"] is not None and row["consumer_status"] != "active":

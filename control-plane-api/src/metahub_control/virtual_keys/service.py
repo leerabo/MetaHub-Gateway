@@ -525,14 +525,11 @@ def create_virtual_key(
             now = _to_db_time(_utcnow())
             plain_value = _generate_virtual_key(environment_binding.code)
             virtual_key_id = str(uuid4())
-            # A personal key is usable only after the member has an active
-            # application in an active project. An unassigned key reserves
-            # the single-key slot but cannot authenticate at the gateway.
+            # A personal key becomes usable only after the administrator assigns
+            # an active application in an active project.
             key_status = "active" if project_id is not None and application_id is not None else "disabled"
             disabled_reason = "manual"
-            if project_id is None or application_id is None:
-                disabled_reason = "manual"
-            elif personal_project_status and personal_project_status != "active":
+            if personal_project_status and personal_project_status != "active":
                 key_status = "disabled"
                 disabled_reason = "project_inactive"
             try:
@@ -753,6 +750,7 @@ def update_virtual_key(
                 connection,
                 context.user.tenant_id,
                 target_project_id if binding_fields else before.project_id,
+                target_application_id if binding_fields else before.application_id,
             )
         now = _to_db_time(_utcnow())
         set_clauses = [f"{column}=?" for column in updates]
@@ -1308,16 +1306,19 @@ def _ensure_virtual_key_project_active(
     connection: sqlite3.Connection,
     tenant_id: str,
     project_id: str | None,
+    application_id: str | None,
 ) -> None:
-    """Prevent reactivating a key while its project is disabled or archived."""
+    """Only an administrator-assigned active application can make a key usable."""
 
-    if not project_id:
-        return
+    if not project_id or not application_id:
+        raise ApiError("virtual_key.project_binding_invalid")
     row = connection.execute(
-        "SELECT status FROM projects WHERE tenant_id=? AND project_id=?",
-        (tenant_id, project_id),
+        "SELECT p.status AS project_status, a.status AS application_status "
+        "FROM projects p JOIN applications a ON a.tenant_id=p.tenant_id "
+        "AND a.project_id=p.project_id WHERE p.tenant_id=? AND p.project_id=? AND a.application_id=?",
+        (tenant_id, project_id, application_id),
     ).fetchone()
-    if row is None or row["status"] != "active":
+    if row is None or row["project_status"] != "active" or row["application_status"] != "active":
         raise ApiError("virtual_key.project_binding_invalid")
 
 

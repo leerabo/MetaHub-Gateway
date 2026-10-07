@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from metahub_gateway.routing.models import resolve_model_route
@@ -46,6 +48,49 @@ def _session_context(config, tenant_id: str, request_id: str) -> RequestLogConte
         request_model="default-chat",
         resolved_model=route.model_alias,
     )
+
+
+@pytest.mark.parametrize("second_failure, expected", [(False, True), (True, False)])
+def test_stream_terminal_retries_one_integrity_failure_before_fallback(
+    monkeypatch: pytest.MonkeyPatch, second_failure: bool, expected: bool,
+) -> None:
+    """A transient audit constraint must not silently discard the next route candidate."""
+
+    class Connection:
+        def __init__(self, fail: bool) -> None:
+            self.fail = fail
+            self.closed = False
+
+        def execute(self, sql, _params=()):
+            if sql.lstrip().startswith("UPDATE stream_sessions"):
+                if self.fail:
+                    raise sqlite3.IntegrityError("temporary audit conflict")
+                return SimpleNamespace(rowcount=1)
+            return SimpleNamespace(rowcount=0)
+
+        def rollback(self):
+            pass
+
+        def commit(self):
+            pass
+
+        def close(self):
+            self.closed = True
+
+    connections = [Connection(True), Connection(second_failure)]
+    monkeypatch.setattr(stream_sessions, "connect_database", lambda _url: connections.pop(0))
+    session = stream_sessions.StreamSession(
+        stream_session_id="str_test", tenant_id="tenant", request_id="req_test", trace_id="trc_test",
+        model_id="model", provider_id="provider", provider_code="provider", inter_token_timeout_ms=1000,
+        started_at=datetime.now(UTC),
+    )
+    assert safe_finish_stream_session(
+        SimpleNamespace(database_url="sqlite:///unused"), session,
+        status="upstream_failed", error_code="gateway.upstream_auth_failed",
+        quality_observation_eligible=False,
+    ) is expected
+    assert session.status == ("upstream_failed" if expected else "starting")
+    assert connections == []
 
 
 def test_stream_session_lifecycle_persists_counts_and_terminal_state(

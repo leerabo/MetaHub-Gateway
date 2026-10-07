@@ -14,10 +14,10 @@ const DEFAULT_SIDEBAR_GROUPS_BY_ROLE = Object.freeze({
   // Personal usage is part of the developer workspace; the route allowlist
   // below still excludes every organization-level finance page.
   developer: new Set(["gateway", "finance", "system", "developer-center"]),
-  security_admin: new Set(["governance", "system"]),
-  finance_admin: new Set(["finance", "system"]),
-  legal_admin: new Set(["workspace", "governance"]),
-  auditor: new Set(["governance", "system"]),
+  security_admin: new Set(["gateway", "finance", "governance", "system"]),
+  finance_admin: new Set(["gateway", "finance", "system"]),
+  legal_admin: new Set(["workspace", "gateway", "finance", "governance"]),
+  auditor: new Set(["gateway", "finance", "governance", "system"]),
   // viewer is the current employee/member role. Its authorized deep links
   // remain available, but the default surface is the single access task.
   viewer: new Set(["home", "gateway", "finance"]),

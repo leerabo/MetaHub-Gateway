@@ -478,7 +478,7 @@ async def test_viewer_self_service_key_and_personal_usage_scope(
 ) -> None:
     """组织成员可以自助管理本人 KEY 和用量，不会看到管理员 KEY 或组织账单。"""
 
-    prepare_database(monkeypatch, tmp_path, fake_upstream)
+    database_url = prepare_database(monkeypatch, tmp_path, fake_upstream)
     app = build_control_app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://control") as client:
         admin_token = await login(client, "admin@metahub.local", ADMIN_PASSWORD)
@@ -492,6 +492,11 @@ async def test_viewer_self_service_key_and_personal_usage_scope(
             "/virtual-keys",
             headers={"Authorization": f"Bearer {admin_token}"},
             json={"name": "another admin key", "environment": "dev"},
+        )
+        activate_unassigned_key = await client.patch(
+            f"/virtual-keys/{admin_key.json()['virtual_key']['virtual_key_id']}",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"status": "active"},
         )
         deleted_admin_key = await client.delete(
             f"/virtual-keys/{admin_key.json()['virtual_key']['virtual_key_id']}",
@@ -548,6 +553,9 @@ async def test_viewer_self_service_key_and_personal_usage_scope(
         )
 
     assert admin_key.status_code == 201, admin_key.text
+    assert admin_key.json()["virtual_key"]["status"] == "disabled"
+    assert activate_unassigned_key.status_code == 422
+    assert activate_unassigned_key.json()["code"] == "virtual_key.project_binding_invalid"
     assert second_admin_key.status_code == 409
     assert second_admin_key.json()["code"] == "virtual_key.personal_limit_reached"
     assert deleted_admin_key.status_code == 200

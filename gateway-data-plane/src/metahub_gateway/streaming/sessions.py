@@ -217,6 +217,7 @@ def safe_finish_stream_session(
     error: NormalizedProviderError | None = None,
     output_safety_scan: PreparedOutputSafetyScan | None = None,
     output_safety_terminal: OutputSafetyTerminalState | None = None,
+    _integrity_retry: bool = False,
 ) -> bool:
     """幂等提交流终态，失败时只记录安全 warning 并返回 False。
 
@@ -436,6 +437,24 @@ def safe_finish_stream_session(
     except (DbError, sqlite3.Error, OutputSafetyStoreError, ValueError) as exc:
         if connection is not None:
             connection.rollback()
+        if isinstance(exc, sqlite3.IntegrityError) and not _integrity_retry:
+            # A concurrent audit trigger can reject one terminal transaction.
+            # Retry the same owner facts once in a fresh transaction; no new
+            # provider request is allowed until this terminal commit succeeds.
+            if connection is not None:
+                connection.close()
+                connection = None
+            return safe_finish_stream_session(
+                config,
+                session,
+                status=status,
+                error_code=error_code,
+                quality_observation_eligible=quality_observation_eligible,
+                error=error,
+                output_safety_scan=output_safety_scan,
+                output_safety_terminal=output_safety_terminal,
+                _integrity_retry=True,
+            )
         _log_session_write_failure(session, "stream_session.finish_failed", exc)
         return False
     finally:

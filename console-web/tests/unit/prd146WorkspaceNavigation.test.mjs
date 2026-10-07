@@ -792,7 +792,7 @@ test("role-aware sidebar renders every authorized item without deferred controls
   const profiles = {
     admin: ["home", "workspace", "gateway", "finance", "governance", "system"],
     developer: ["gateway", "finance", "developer-center"],
-    finance_admin: ["finance", "system"],
+    finance_admin: ["gateway", "finance", "system"],
     viewer: ["home", "gateway", "finance"],
   };
   const activeRoutes = {

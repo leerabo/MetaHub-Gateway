@@ -1669,7 +1669,22 @@ body:has(.console-shell) {
 }
 
 .workspace-task-home > :is(.workspace-task-heading, .workspace-navigation-heading, .workspace-task-summary,
-  .workspace-next-step-card) { grid-column: 1 / -1; }
+  .workspace-next-step-card, .workspace-admin-workbench, .workspace-admin-workbench-disclosure,
+  .workspace-other-tasks, .workspace-personal-access) { grid-column: 1 / -1; min-width: 0; }
+.workspace-personal-access {
+  display: flex; align-items: center; justify-content: space-between; gap: 20px;
+  padding: 18px 20px; background: #edf7f3; border: 1px solid #c9e6db;
+}
+.workspace-personal-access strong { font-size: 18px; }
+.workspace-personal-access p { margin: 5px 0 0; color: var(--text-secondary); }
+.workspace-personal-access > div:last-child { display: flex; gap: 10px; flex-wrap: wrap; }
+.workspace-personal-access button { padding: 9px 15px; border: 1px solid #087c70; border-radius: 5px; background: #087c70; color: white; font: inherit; font-weight: 700; cursor: pointer; }
+.usage-own-section { margin-top: 30px; padding-top: 24px; border-top: 1px solid var(--workspace-line, #d9e2dd); }
+.usage-own-section > .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.usage-own-section > .panel-heading h3 { margin: 0; }
+.workspace-task-home > .workspace-admin-workbench > .workspace-admin-domain-grid:has(> :only-child) {
+  grid-template-columns: minmax(0, 1fr);
+}
 .workspace-task-list { display: grid; gap: 0; }
 .workspace-task-row { padding: 18px 0; border-bottom-color: var(--line); }
 .workspace-task-row h4 { color: var(--text-strong); font-size: 15px; }
@@ -1700,6 +1715,7 @@ body:has(.console-shell) {
   .role-dashboard-card,
   .role-dashboard-card:first-child { grid-column: span 12; }
   .workspace-task-home { grid-template-columns: minmax(0, 1fr); }
+  .workspace-personal-access { align-items: stretch; flex-direction: column; }
 }
 
 /* Final cascade for the v3 page architecture. Keep this block last so the

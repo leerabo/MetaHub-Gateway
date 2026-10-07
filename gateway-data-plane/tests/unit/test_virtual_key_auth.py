@@ -59,7 +59,7 @@ def test_virtual_key_auth_closes_connection_on_success_and_rejection(
     monkeypatch.setenv("METAHUB_DATABASE_URL", database_url)
     monkeypatch.setenv("METAHUB_SEED_VIRTUAL_KEY", VIRTUAL_KEY)
     apply_migrations(database_url)
-    apply_seed_data(database_url)
+    seed = apply_seed_data(database_url)
     config = load_app_config("gateway-data-plane")
     opened: list[_TrackingConnection] = []
 
@@ -71,11 +71,35 @@ def test_virtual_key_auth_closes_connection_on_success_and_rejection(
         return tracked
 
     monkeypatch.setattr(virtual_key_auth, "_connect", tracking_connect)
+    with pytest.raises(ApiError) as unassigned:
+        virtual_key_auth.authenticate_virtual_key(config, f"Bearer {VIRTUAL_KEY}")
+    assert unassigned.value.code == "gateway.auth_invalid"
+    connection = connect_database(database_url)
+    try:
+        now = "2026-10-07T00:00:00Z"
+        connection.execute(
+            "INSERT INTO projects(project_id,tenant_id,project_code,name,status,created_at,updated_at) "
+            "VALUES('project_auth_bound',?,'auth-bound','Auth bound','active',?,?)",
+            (seed.tenant_id, now, now),
+        )
+        connection.execute(
+            "INSERT INTO applications(application_id,tenant_id,project_id,application_code,name,status,created_at,updated_at) "
+            "VALUES('application_auth_bound',?,'project_auth_bound','auth-bound','Auth bound','active',?,?)",
+            (seed.tenant_id, now, now),
+        )
+        connection.execute(
+            "UPDATE virtual_keys SET project_id='project_auth_bound', application_id='application_auth_bound' "
+            "WHERE tenant_id=?",
+            (seed.tenant_id,),
+        )
+        connection.commit()
+    finally:
+        connection.close()
     context = virtual_key_auth.authenticate_virtual_key(config, f"Bearer {VIRTUAL_KEY}")
     with pytest.raises(ApiError) as rejected:
         virtual_key_auth.authenticate_virtual_key(config, "Bearer invalid-prd049-key")
 
     assert context.tenant_id
     assert rejected.value.code == "gateway.auth_invalid"
-    assert len(opened) == 2
+    assert len(opened) == 3
     assert all(connection.closed for connection in opened)

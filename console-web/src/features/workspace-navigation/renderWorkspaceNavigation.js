@@ -140,7 +140,10 @@ export function renderWorkspaceTaskHome(state, i18n, options = {}) {
     ? `<p class="workspace-navigation-state">${escapeHtml(t(i18n, "workspace.no_tasks", "当前职责没有待处理任务。"))}</p>`
     : '<div class="workspace-task-list">' + tasks.map((task) => renderTask(task, false, i18n)).join("") + "</div>";
   const roleSummary = isFinance
-    ? renderWorkDomains(tasks, i18n, FINANCE_WORK_DOMAINS, "workspace.finance_workbench.title", "财务工作台", "workspace.finance_workbench.scope", "例外优先")
+    ? '<div class="workspace-personal-access"><div><strong>我的接入</strong><p>创建本人 KEY，查看自己的调用记录与 Token 用量。KEY 需管理员分配应用后才能使用。</p></div>'
+      + '<div><button type="button" data-workspace-task-route="workspace.gateway.virtual-keys">我的 KEY</button>'
+      + '<button type="button" data-workspace-task-route="workspace.finance.usage">我的用量</button></div></div>'
+      + renderWorkDomains(tasks, i18n, FINANCE_WORK_DOMAINS, "workspace.finance_workbench.title", "财务工作台", "workspace.finance_workbench.scope", "例外优先")
       + `<details class="workspace-other-tasks"><summary>${escapeHtml(t(i18n, "workspace.finance_details", "查看财务任务明细"))}</summary>${content}</details>`
     : '<div class="workspace-task-list">' + visibleTasks.map((task) => renderTask(task, false, i18n)).join("") + "</div>";
   return '<section class="workspace-task-home" aria-labelledby="workspace-task-home-title">'

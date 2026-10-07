@@ -394,6 +394,7 @@ import {
   triggerUsageCsvDownload,
   getUsageSummary,
   getPersonalUsageSummary,
+  listPersonalUsageRecords,
 } from "../lib/usage.js";
 import {
   createFinOpsAdjustment,
@@ -16534,16 +16535,34 @@ async function loadProjectState() {
  */
 async function loadUsageState() {
   const filters = { ...usageFilters };
-  const permissions = hasPermission(authSession.context, PERMISSIONS.BILLING_USAGE_READ)
+  const organizationUsage = hasPermission(authSession.context, PERMISSIONS.BILLING_USAGE_READ);
+  const personalUsage = hasPermission(authSession.context, PERMISSIONS.VIRTUAL_KEY_READ);
+  const permissions = organizationUsage
     ? [PERMISSIONS.BILLING_USAGE_READ]
     : [PERMISSIONS.VIRTUAL_KEY_READ];
   return loadResourceState("usage", permissions,
-    (options) => hasPermission(authSession.context, PERMISSIONS.BILLING_USAGE_READ)
-      ? getUsageSummary({ ...options, ...filters })
-      : getPersonalUsageSummary({ ...options, startDate: filters.startDate, endDate: filters.endDate }),
-    (result) => hasPermission(authSession.context, PERMISSIONS.BILLING_USAGE_READ)
-      ? ({ state: "ok", summary: result, dimension: usageDimension, filters, actionError: usageActionError, exportState: usageExportState })
-      : ({ state: "ok", personalSummary: result, filters, actionError: usageActionError }));
+    async (options) => {
+      const own = personalUsage
+        ? Promise.all([
+          getPersonalUsageSummary({ ...options, startDate: filters.startDate, endDate: filters.endDate }),
+          listPersonalUsageRecords({ ...options, startDate: filters.startDate, endDate: filters.endDate }),
+        ])
+        : Promise.resolve(null);
+      if (!organizationUsage) {
+        const [personalSummary, personalRecords] = await own;
+        return { personalSummary, personalRecords };
+      }
+      const [summary, personal] = await Promise.all([
+        getUsageSummary({ ...options, ...filters }), own.catch(() => null),
+      ]);
+      return {
+        summary, personalSummary: personal?.[0] ?? null, personalRecords: personal?.[1] ?? null,
+        personalUsageError: personalUsage && !personal,
+      };
+    },
+    (result) => organizationUsage
+      ? ({ state: "ok", ...result, dimension: usageDimension, filters, actionError: usageActionError, exportState: usageExportState })
+      : ({ state: "ok", ...result, filters, actionError: usageActionError }));
 }
 
 /**

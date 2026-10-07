@@ -64,6 +64,7 @@ export function renderUsagePanel(usageState, authContext, budgetState) {
     ${renderTotals(summary.totals)}
     ${renderBudgetOverview(budgetState)}
     ${renderSummaryTables(summary, usageState.dimension ?? "overview")}
+    ${hasPermission(authContext, PERMISSIONS.VIRTUAL_KEY_READ) ? renderOwnUsage(usageState) : ""}
   `;
 }
 
@@ -94,8 +95,32 @@ function renderPersonalUsagePanel(usageState) {
       <div><strong>${escapeHtml(totals.total_tokens ?? 0)}</strong><span>总令牌</span></div>
     </section>
     ${days.length ? `<section class="usage-personal-days"><h3>每日用量</h3><div class="usage-record-table" role="table"><div class="usage-record-row usage-record-head" role="row"><span>日期</span><span>请求次数</span><span>输入 Token</span><span>输出 Token</span><span>总 Token</span></div>${days.map((item) => `<div class="usage-record-row" role="row"><time>${escapeHtml(item.day)}</time><span>${escapeHtml(item.request_count)}</span><span>${escapeHtml(item.input_tokens)}</span><span>${escapeHtml(item.output_tokens)}</span><span>${escapeHtml(item.total_tokens)}</span></div>`).join("")}</div></section>` : ""}
+    ${renderPersonalRecords(usageState.personalRecords)}
     <p class="usage-detail-handoff">需要查看单次调用、失败原因或路由尝试时，请到“治理 → 调用记录”。</p>
   `;
+}
+
+function renderOwnUsage(usageState) {
+  if (usageState.personalUsageError) {
+    return '<section class="usage-own-section" role="status"><h3>我的用量</h3><p>个人用量暂不可用，请稍后刷新。</p></section>';
+  }
+  const totals = usageState.personalSummary?.totals ?? {};
+  return `<section class="usage-own-section" aria-labelledby="usage-own-title">
+    <div class="panel-heading"><div><h3 id="usage-own-title">我的用量</h3><p>本人通过个人 KEY 发起的调用</p></div><span class="usage-scope-label">个人</span></div>
+    <div class="usage-total-grid" aria-label="个人令牌汇总">
+      <div><strong>${escapeHtml(totals.request_count ?? 0)}</strong><span>请求次数</span></div>
+      <div><strong>${escapeHtml(totals.input_tokens ?? 0)}</strong><span>输入 Token</span></div>
+      <div><strong>${escapeHtml(totals.output_tokens ?? 0)}</strong><span>输出 Token</span></div>
+      <div><strong>${escapeHtml(totals.total_tokens ?? 0)}</strong><span>总 Token</span></div>
+    </div>${renderPersonalRecords(usageState.personalRecords)}
+  </section>`;
+}
+
+function renderPersonalRecords(result) {
+  const records = result?.usage_records ?? [];
+  return `<section class="usage-personal-days"><h3>最近调用记录</h3>
+    ${records.length ? `<div class="usage-record-table" role="table"><div class="usage-record-row usage-record-head" role="row"><span>时间</span><span>模型</span><span>输入 Token</span><span>输出 Token</span><span>总 Token</span></div>${records.map((item) => `<div class="usage-record-row" role="row"><time>${escapeHtml(item.created_at)}</time><span>${escapeHtml(item.request_model ?? item.resolved_model ?? item.model_id ?? "-")}</span><span>${escapeHtml(item.input_tokens)}</span><span>${escapeHtml(item.output_tokens)}</span><span>${escapeHtml(item.total_tokens)}</span></div>`).join("")}</div>` : '<p class="empty-state">暂无个人调用记录</p>'}
+  </section>`;
 }
 
 /**

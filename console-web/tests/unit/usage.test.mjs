@@ -675,6 +675,27 @@ test("usage panel renders totals records and estimated label for authorized role
   assert.doesNotMatch(html, /virtual_key_id|provider_id|environment_id|project_id|application_id/u);
 });
 
+test("finance usage includes only the signed-in member's key records beside organization totals", () => {
+  const html = renderUsagePanel(
+    {
+      state: "ok",
+      summary: summaryPayload,
+      personalSummary: { totals: { request_count: 1, input_tokens: 12, output_tokens: 8, total_tokens: 20 } },
+      personalRecords: { usage_records: [{
+        request_id: "req_personal", created_at: "2026-10-07T10:00:00Z", request_model: "mechx",
+        input_tokens: 12, output_tokens: 8, total_tokens: 20,
+      }] },
+    },
+    withPermissionSnapshot({ user: { role: "finance_admin" } },
+      [PERMISSIONS.BILLING_USAGE_READ, PERMISSIONS.VIRTUAL_KEY_READ]),
+  );
+  assert.match(html, /组织汇总/);
+  assert.match(html, /我的用量/);
+  assert.match(html, /最近调用记录/);
+  assert.match(html, /mechx/);
+  assert.doesNotMatch(html, /req_personal/);
+});
+
 test("usage hides consumer ids when the directory name is unavailable", () => {
   const html = renderUsagePanel(
     {
@@ -830,7 +851,7 @@ test("usage dimension switch stays local and exposes one summary view at a time"
   assert.match(mainSource, /const usageDimensionSelect = document\.querySelector\("#usage-dimension"\)/);
   assert.match(mainSource, /usageDimensionSelect\?\.addEventListener\("change"/);
   assert.match(mainSource, /view\.hidden = view\.dataset\.usageDimension !== usageDimension/);
-  assert.match(mainSource, /summary: result, dimension: usageDimension/);
+  assert.match(mainSource, /summary, personalSummary: personal\?\.\[0\][\s\S]*?dimension: usageDimension/);
   assert.doesNotMatch(mainSource, /listUsageRecords\(/);
 });
 
