@@ -1898,10 +1898,14 @@ function scopeDisplayName(item) {
  * 格式化 ISO 时间字符串，避免表格中出现过长的小数秒。
  */
 function formatDateTime(value) {
-  if (!value) {
-    return "-";
-  }
-  return String(value).replace("T", " ").replace(/\.\d+Z?$/, "Z");
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hourCycle: "h23", timeZoneName: "shortOffset",
+  }).format(date);
 }
 
 /**

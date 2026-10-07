@@ -19,8 +19,10 @@ const UPDATE_ID = `iup_${"2".repeat(32)}`;
 const WORKSPACE_ID = `wsp_${"3".repeat(32)}`;
 
 test("public status timestamps render in Chinese without incompatible Intl options", async () => {
-  const { formatTime } = await import("../../src/features/public-status/main.js");
+  const { formatTime, isPublicStatusStale } = await import("../../src/features/public-status/main.js");
   assert.match(formatTime(NOW), /2026/u);
+  assert.equal(isPublicStatusStale(NOW, Date.parse("2026-08-25T08:15:00Z")), false);
+  assert.equal(isPublicStatusStale(NOW, Date.parse("2026-08-25T08:15:01Z")), true);
 });
 
 test("public status client rejects extensions and omits credentials", async () => {
@@ -31,15 +33,21 @@ test("public status client rejects extensions and omits credentials", async () =
       calls.push({ url: String(url), options });
       return jsonResponse(publicResponse());
     };
-    assert.equal((await getPublicStatus({ statusApiUrl: STATUS_URL })).generation, 3);
+    assert.equal((await getPublicStatus({ statusApiUrl: STATUS_URL, now: () => Date.parse(NOW) })).generation, 3);
     assert.equal(calls[0].url, `${STATUS_URL}/public/status`);
     assert.equal(calls[0].options.credentials, "omit");
     assert.equal("Authorization" in calls[0].options.headers, false);
 
     globalThis.fetch = async () => jsonResponse({ ...publicResponse(), tenant_id: "private" });
     await assert.rejects(
-      getPublicStatus({ statusApiUrl: STATUS_URL }),
+      getPublicStatus({ statusApiUrl: STATUS_URL, now: () => Date.parse(NOW) }),
       (error) => error.code === "status.response_invalid",
+    );
+
+    globalThis.fetch = async () => jsonResponse(publicResponse());
+    await assert.rejects(
+      getPublicStatus({ statusApiUrl: STATUS_URL, now: () => Date.parse("2026-08-25T09:00:00Z") }),
+      (error) => error.code === "status.snapshot_expired",
     );
 
     globalThis.fetch = async (url, options) => {

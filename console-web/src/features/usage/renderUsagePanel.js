@@ -282,8 +282,8 @@ function renderTotals(totals = {}) {
   return `
     <div class="usage-total-grid" aria-label="用量总览">
       ${renderMetric("请求数", totals.request_count ?? 0, "条")}
-      ${renderMetric("总令牌", totals.total_tokens ?? 0, "条")}
-      ${renderMetric("缓存令牌", totals.cache_tokens ?? 0, "条")}
+      ${renderMetric("总令牌", totals.total_tokens ?? 0, "Token")}
+      ${renderMetric("缓存令牌", totals.cache_tokens ?? 0, "Token")}
       ${renderMetric("成本 CNY", formatCost(totals.cost_cny, "CNY"), "")}
       ${renderMetric("成本 USD", formatCost(totals.cost_usd, "USD"), "")}
       ${renderMetric("估算记录", totals.estimated_records ?? 0, `真实 ${totals.real_usage_records ?? 0}`)}

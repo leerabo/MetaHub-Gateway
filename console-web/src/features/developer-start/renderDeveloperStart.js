@@ -401,9 +401,11 @@ function renderActiveContent(activeItemId, options, statuses) {
     case "policy-snapshots":
       // 快照发布页只消费后端 admin-only 导航；发布、回滚、双 CAS 和 tenant 隔离仍由 Control API 强制执行。
       return renderPolicySnapshotsSection(options.policySnapshotsState, options.authContext);
-    case "policy-templates":
+    case "policy-templates": {
       // PAGE-095 只消费当前授权 owner 的安全投影；真实复合权限、租户和双 CAS 由 Control API 逐请求复核。
-      return `<div class="policy-template-shell">${renderPolicyTemplateLibrary(options.policyTemplateLibraryState)}</div>`;
+      const html = renderPolicyTemplateLibrary(options.policyTemplateLibraryState);
+      return html ? `<div class="policy-template-shell">${html}</div>` : "";
+    }
     case "dlp-rules":
       // DLP 页面只做前端内容调度，规则读写、正则安全和 tenant_id 边界必须由后端校验。
       return renderDlpSection(options.dlpState, options.authContext);

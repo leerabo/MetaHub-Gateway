@@ -14,7 +14,7 @@ export class PublicStatusError extends Error {
   }
 }
 
-export async function getPublicStatus({ statusApiUrl, signal } = {}) {
+export async function getPublicStatus({ statusApiUrl, signal, now = Date.now } = {}) {
   const response = await fetch(apiUrl(statusApiUrl, "/public/status"), {
     method: "GET",
     headers: { Accept: "application/json" },
@@ -26,6 +26,7 @@ export async function getPublicStatus({ statusApiUrl, signal } = {}) {
   const value = await readJson(response);
   if (!response.ok) throw new PublicStatusError(value.code, response.status);
   if (!validStatus(value)) throw new PublicStatusError("status.response_invalid", 502);
+  if (Date.parse(value.expires_at) <= now()) throw new PublicStatusError("status.snapshot_expired", 503);
   return value;
 }
 

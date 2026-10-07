@@ -4575,6 +4575,15 @@ function bindAuthenticatedEvents(consoleShellState) {
   createModelForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (createModelForm.dataset.setupUnconfirmed === "true") return;
+    const initialData = new FormData(createModelForm);
+    const enteredPrices = ["inputPricePerMillion", "outputPricePerMillion", "cachePricePerMillion"]
+      .map((name) => Number(initialData.get(name) ?? 0));
+    if (enteredPrices.every((price) => price === 0) && initialData.get("unpricedConfirmed") !== "on") {
+      const feedback = createModelForm.querySelector("[data-model-setup-feedback]");
+      if (feedback) feedback.textContent = "请先确认未配置价格或零价格模型的实际用量。";
+      createModelForm.querySelector('[name="unpricedConfirmed"]')?.focus();
+      return;
+    }
     const operation = resourcePageLifecycle.beginMutation(modelCreateBinding);
     if (!operation) return;
     const data = new FormData(createModelForm);

@@ -21,8 +21,16 @@ test("leaves Chinese default and user data untouched", () => {
 test("keeps the Chinese surface free of legacy English renderer literals", () => {
   const html = '<h2>Model catalog</h2><span>Model routing</span><label>Status</label><span>cost rates</span><span>Prompt 模板</span><code data-model="Model catalog">Acme Model catalog</code>';
   const localized = localizeConsoleStaticHtml(html, createI18n("zh-CN"));
-  assert.equal(localized, '<h2>模型目录</h2><span>模型路由</span><label>状态</label><span>成本率</span><span>提示词模板</span><code data-model="Model catalog">Acme 模型目录</code>');
+  assert.equal(localized, '<h2>模型目录</h2><span>模型路由</span><label>状态</label><span>成本率</span><span>提示词模板</span><code data-model="Model catalog">Acme Model catalog</code>');
   assert.match(localized, /data-model="Model catalog"/u);
+});
+
+test("Chinese translation preserves model IDs, provider names, and diagnostic field names", () => {
+  const html = '<span>kimi-k2.7-code</span><span>QA Fake Endpoint</span><pre>{"status":"Updated","prompt":"code"}</pre><label>Status</label>';
+  assert.equal(
+    localizeConsoleStaticHtml(html, createI18n("zh-CN")),
+    '<span>kimi-k2.7-code</span><span>QA Fake Endpoint</span><pre>{"status":"Updated","prompt":"code"}</pre><label>状态</label>',
+  );
 });
 
 test("covers asynchronous support and private gateway panel labels", () => {

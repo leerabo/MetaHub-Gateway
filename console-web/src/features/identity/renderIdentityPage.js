@@ -161,7 +161,7 @@ export function renderIdentityRegistrationPage(container, options = {}) {
             ${registrationPassword("confirmPassword", "确认密码")}
           </label>
           <label class="identity-consent">
-            <input name="consent" type="checkbox" required />
+            <input name="consent" type="checkbox" required ${options.consent ? "checked" : ""} />
             <span>我已阅读并同意<a href="privacy.html" target="_blank" rel="noopener">隐私条款</a></span>
           </label>
           ${options.policy?.human_verification ? `<label><span>图形验证码</span><span class="identity-captcha-control">
@@ -223,7 +223,8 @@ export function renderIdentityResetRequestPage(container, options = {}) {
             <input name="email" type="email" autocomplete="username" inputmode="email" value="${escapeAttribute(options.email ?? "")}" required autofocus />
           </label>
           ${renderError(options.error)}
-          <button class="identity-primary" type="submit">发送验证码</button>
+          <p class="identity-setup-status" role="status" data-reset-delivery-status>${options.checking ? "正在检查邮箱验证服务…" : options.unavailable ? "邮箱验证服务尚未配置，请联系平台管理员。" : ""}</p>
+          <button class="identity-primary" type="submit" ${options.checking || options.unavailable ? "disabled" : ""}>发送验证码</button>
           <div class="identity-access-actions is-single">
             <button type="button" data-identity-action="show-login">返回登录</button>
           </div>

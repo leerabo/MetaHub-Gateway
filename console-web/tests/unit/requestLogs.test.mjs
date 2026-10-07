@@ -477,7 +477,8 @@ test("renderRequestLogPanel shows logs and details without leaking sensitive sam
   assert.match(html, /deepseek-chat/);
   assert.match(html, /账务核心/);
   assert.match(html, /账务 API/);
-  assert.match(html, /2026-07-08 09:00:00Z/);
+  assert.match(html, /GMT[+-]?\d/u);
+  assert.doesNotMatch(html, />2026-07-08 09:00:00Z</u);
   assert.match(html, /0.123456 CNY/);
   assert.match(html, /data-request-log-detail="req_prd016_success"/);
   assert.match(html, /request-log-detail-dialog/);

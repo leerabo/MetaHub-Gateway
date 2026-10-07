@@ -18,6 +18,9 @@ button, input { font: inherit; }
 .status-operational { color: #18794e; border-left-color: #18794e; }
 .status-degraded_performance, .status-maintenance { color: #8a5a00; border-left-color: #c28100; }
 .status-partial_outage, .status-major_outage { color: #b42318; border-left-color: #b42318; }
+.status-unknown { color: #59625e; border-left-color: #818b85; }
+.status-stale-note { flex-basis: 100%; margin: 0 0 0 32px; color: #59625e; font-size: 14px; }
+.status-summary:has(.status-stale-note) { flex-wrap: wrap; column-gap: 16px; row-gap: 4px; }
 .status-section { padding: 28px 0; border-top: 1px solid #cbd2cf; }
 .status-section h2 { margin: 0 0 18px; color: #242b28; font-size: 18px; line-height: 1.3; letter-spacing: 0; }
 .status-component-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 32px; margin: 0; padding: 0; list-style: none; }

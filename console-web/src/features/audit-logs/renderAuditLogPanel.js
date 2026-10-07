@@ -382,7 +382,7 @@ function renderPager(state) {
  * 只能作为文本展示，不能注入标签或属性。
  */
 function renderSummaryBlock(title, summary) {
-  return `<section><h3>${escapeHtml(title)}</h3><pre>${escapeHtml(JSON.stringify(summary ?? {}, null, 2))}</pre></section>`;
+  return `<section><h3>${escapeHtml(title)}</h3><pre data-user-content="true">${escapeHtml(JSON.stringify(summary ?? {}, null, 2))}</pre></section>`;
 }
 
 /**

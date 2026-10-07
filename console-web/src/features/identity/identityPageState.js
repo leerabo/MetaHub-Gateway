@@ -335,25 +335,51 @@ export function createIdentityPageController({
     },
     showReset() {
       onPublicViewChange("reset");
-      beginRequest();
+      const ticket = beginRequest();
       scrubSensitiveInputs();
       scrubProtectedState();
       pendingChallenge = null;
       riskChallenge = null;
       riskChallengeIntent = null;
-      renderIdentityResetRequestPage(root);
+      renderIdentityResetRequestPage(root, { checking: typeof api.registrationPolicy === "function" });
+      if (typeof api.registrationPolicy === "function") {
+        void api.registrationPolicy({ signal: ticket.signal }).then((policy) => {
+          if (!isCurrent(ticket)) return;
+          registrationPolicy = policy;
+          const form = root.querySelector?.("[data-identity-reset-request-form]");
+          if (!form) return;
+          const unavailable = policy?.email_delivery_available === false;
+          const status = form.querySelector("[data-reset-delivery-status]");
+          if (status) status.textContent = unavailable
+            ? "邮箱验证服务尚未配置，请联系平台管理员。" : "";
+          const submit = form.querySelector('button[type="submit"]');
+          if (submit) submit.disabled = unavailable;
+        }).catch(() => {
+          if (!isCurrent(ticket)) return;
+          const form = root.querySelector?.("[data-identity-reset-request-form]");
+          const status = form?.querySelector("[data-reset-delivery-status]");
+          if (status) status.textContent = "";
+          const submit = form?.querySelector('button[type="submit"]');
+          if (submit) submit.disabled = false;
+        });
+      }
       return true;
     },
     async registerAccount({ email, displayName, password, confirmPassword, consent, captchaAnswer }) {
       if (registrationBusy && isCurrent(registrationBusy)) return false;
-      if (password !== confirmPassword || consent !== true) {
+      const passwordBytes = new TextEncoder().encode(String(password ?? "")).length;
+      const passwordError = passwordBytes < 8 || passwordBytes > 1024
+        ? "密码长度须为 8 至 1024 字节。"
+        : password !== confirmPassword ? "两次输入的密码不一致。" : "";
+      if (passwordError || consent !== true) {
         scrubSensitiveInputs();
         renderIdentityRegistrationPage(root, {
           email,
           displayName,
+          consent,
           policy: registrationPolicy, captcha: registrationCaptcha,
           error: {
-            message: password !== confirmPassword ? "两次输入的密码不一致。" : "请先同意隐私条款。",
+            message: passwordError || "请先同意隐私条款。",
             requestId: "-",
           },
         });
@@ -401,6 +427,7 @@ export function createIdentityPageController({
         renderIdentityRegistrationPage(root, {
           email,
           displayName,
+          consent,
           policy: registrationPolicy, captcha: registrationCaptcha,
           error: safePageError(error),
         });
@@ -452,6 +479,10 @@ export function createIdentityPageController({
       }
     },
     async requestPasswordReset({ email }) {
+      if (registrationPolicy?.email_delivery_available === false) {
+        renderIdentityResetRequestPage(root, { email, unavailable: true });
+        return false;
+      }
       const ticket = beginRequest();
       renderIdentityResetRequestPage(root, { email });
       try {
@@ -4964,6 +4995,8 @@ function safePageError(error) {
     const messages = {
       "identity.delivery_unavailable": "邮箱验证服务尚未配置，请联系平台管理员。",
       "identity.registration_invalid": "注册信息不完整或格式不正确，请检查后重试。",
+      "identity.password_invalid": "密码长度须为 8 至 1024 字节。",
+      "identity.request_invalid": "注册信息不完整或格式不正确，请检查后重试。",
       "identity.verification_invalid": "验证码错误或已过期，请重新获取。",
       "identity.rate_limited": "操作过于频繁，请稍后重试。",
       "identity.unavailable": "账号服务暂时不可用，请稍后重试。",

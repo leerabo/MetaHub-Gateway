@@ -348,6 +348,7 @@ const ENGLISH_STATIC_TEXT = new Map([
   ["个版本", " version(s)"],
   ["模型服务成本率", "Provider cost rate"],
   ["输入成本", "Input cost"],
+  ["输入价格 / 千 Token", "Input price / 1K tokens"],
   ["输出成本", "Output cost"],
   ["输入 / 1M", "Input / 1M"],
   ["输出 / 1M", "Output / 1M"],
@@ -881,9 +882,6 @@ const CHINESE_STATIC_TEXT = new Map([
   ["Read-only成员", "只读成员"],
 ]);
 
-const SORTED_CHINESE_TEXT = [...CHINESE_STATIC_TEXT.entries()]
-  .sort(([left], [right]) => right.length - left.length);
-
 // A task renderer can split a legacy fallback across inline elements during
 // hydration. Keep the same fixed phrase boundary while allowing those static
 // tags, so a user never sees "Connect a model 模型服务" after a partial redraw.
@@ -911,15 +909,14 @@ function localizeChineseTextNodes(html) {
   return html.replace(/>([^<>]+)</g, (match, text) => {
     const trimmed = text.trim();
     if (!trimmed) return match;
-    const localized = SORTED_CHINESE_TEXT.reduce((result, [source, target]) => {
-      // Short generic labels are only replaced when they occupy the complete
-      // text node; longer phrases may be embedded in a static mixed fragment.
-      if (source.length < 8 && result.trim() !== source && !result.includes(`${source}:`)) {
-        return result;
-      }
-      return result.replaceAll(source, target);
-    }, text);
-    return localized === text ? match : `>${localized}<`;
+    // A text node can contain a model ID, provider name, or diagnostic JSON.
+    // Only translate complete known UI labels; substring replacement corrupts
+    // values such as "kimi-k2.7-code" and "QA Fake Endpoint".
+    const localized = CHINESE_STATIC_TEXT.get(trimmed);
+    if (!localized) return match;
+    const leading = text.slice(0, text.length - text.trimStart().length);
+    const trailing = text.slice(text.trimEnd().length);
+    return `>${leading}${localized}${trailing}<`;
   });
 }
 

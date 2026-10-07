@@ -123,6 +123,7 @@ function renderHeading(state = {}, i18n) {
     <div class="panel-heading role-permission-heading">
       <div>
         <h2 id="role-permission-title">${translate(i18n, "rbac.title", "角色权限")}</h2>
+        <p class="role-permission-scope">${translate(i18n, "rbac.scope", "这里管理六个基础角色。法务管理员和审计员属于组织成员职责，不在此矩阵编辑。")}</p>
       </div>
       ${state.catalogRevision
         ? `<span class="status-mark status-active">${translate(i18n, "rbac.catalog_revision", "权限目录")}</span>`

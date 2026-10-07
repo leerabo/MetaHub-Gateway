@@ -49,6 +49,13 @@ export function renderConsoleShell({
   // the complete content boundary once so Chinese users never see mixed
   // labels while user data, URLs, and backend identifiers remain untouched.
   const localizedContentHtml = localizeConsoleStaticHtml(contentHtml, i18n);
+  const pageContentHtml = localizedContentHtml?.trim()
+    ? localizedContentHtml
+    : ["quota-buckets", "policy-templates", "session-risks"].includes(
+      consoleShellState?.activeNavigationItemId,
+    )
+      ? '<div class="console-page-unavailable" role="status">当前功能暂不可用，请稍后重试或联系组织管理员。</div>'
+      : localizedContentHtml;
   const roleCode = consoleShellState?.navigation?.role_code
     ?? consoleShellState?.workspaceContext?.role
     ?? authContext?.workspace?.role;
@@ -116,7 +123,7 @@ export function renderConsoleShell({
         </div>
         ${renderShellMessage(consoleShellState, i18n)}
         <div class="console-page-body">
-          ${localizedContentHtml}
+          ${pageContentHtml}
         </div>
       </main>
     </section>

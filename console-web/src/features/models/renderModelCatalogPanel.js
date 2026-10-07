@@ -135,6 +135,10 @@ function renderCreateModelForm(providersState, feedback, authContext) {
         <input name="description" maxlength="240" placeholder="例如：默认聊天模型" />
       </label>
       </div></details>
+      <label class="model-unpriced-confirmation">
+        <input name="unpricedConfirmed" type="checkbox" />
+        <span>如暂不配置价格或使用零价格，我已确认模型调用仍会产生实际用量。</span>
+      </label>
       <div class="model-actions">
         <button type="submit" ${providers.length ? "" : "disabled"}>创建模型</button>
         <span class="model-feedback" data-model-setup-feedback role="status">${escapeHtml(feedback ?? "")}</span>

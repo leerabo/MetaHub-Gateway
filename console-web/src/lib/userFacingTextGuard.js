@@ -23,6 +23,9 @@ const DYNAMIC_ATTRIBUTE_NAMES = ["data-label", "aria-label", "title", "placehold
 const DYNAMIC_CONTENT_SELECTOR = [
   "[data-user-content='true']",
   ".user-identity", ".provider-name", ".model-name",
+  ".provider-identity strong", ".provider-url", ".request-log-model",
+  ".request-log-row [data-label='模型服务']", "time[datetime]",
+  ".status-updated", ".status-event-meta",
   ".enterprise-chat-message-body", ".enterprise-chat-draft",
   "[data-dynamic-value='true']",
 ].join(",");
@@ -145,6 +148,10 @@ function sanitizeTextNode(node, locale = "zh-CN") {
   const parent = node.parentElement;
   if (!parent || isTechnicalElement(parent)) return;
   let value = String(node.nodeValue ?? "");
+  // Product data and JSON examples are escaped by their renderers. Rewriting
+  // them here changes stable identifiers and audit field names.
+  if (parent.closest?.(DYNAMIC_CONTENT_SELECTOR)
+    || /^[A-Za-z0-9][A-Za-z0-9_.:-]*[-_.][A-Za-z0-9_.:-]+$/u.test(value.trim())) return;
   const original = value;
   value = value.replace(INTERNAL_VALUE_PATTERN, "");
   value = value.replace(ERROR_CODE_PATTERN, "");
@@ -199,7 +206,7 @@ function isTechnicalElement(element) {
   // <pre> or data-technical-content block. Only editable/user-authored text
   // and executable document nodes bypass the guard.
   return ["TEXTAREA", "SCRIPT", "STYLE"].includes(element.tagName)
-    || Boolean(element.closest?.("textarea, script, style"));
+    || Boolean(element.closest?.(`textarea, script, style, ${DYNAMIC_CONTENT_SELECTOR}`));
 }
 
 function isFallbackStructure(element) {

@@ -60,26 +60,29 @@ export async function mount(target, options = {}) {
 }
 
 function statusView(value) {
+  const stale = isPublicStatusStale(value.updated_at);
   const shell = element("div", "status-shell");
   const header = element("header", "status-header");
   const brand = element("a", "status-brand", "MetaHub");
   brand.href = "./";
   const updated = element("p", "status-updated", `更新于 ${formatTime(value.updated_at)}`);
   header.append(brand, updated);
-  const summary = element("section", `status-summary status-${value.overall_status}`);
+  const summary = element("section", `status-summary status-${stale ? "unknown" : value.overall_status}`);
   summary.setAttribute("aria-labelledby", "overall-status-title");
   const marker = element("span", "status-summary-marker");
   marker.setAttribute("aria-hidden", "true");
-  const heading = element("h1", "", statusLabel(value.overall_status));
+  const heading = element("h1", "", stale ? "状态待核实" : statusLabel(value.overall_status));
   heading.id = "overall-status-title";
   summary.append(marker, heading);
+  if (stale) summary.append(element("p", "status-stale-note", "最近状态已超过 15 分钟，不能据此判断当前服务是否可用。"));
   const componentSection = section("服务组件", "status-components");
   const componentList = element("ul", "status-component-list");
   for (const component of value.components) {
     const item = element("li", "status-component");
     item.append(
       element("span", "status-component-name", component.name),
-      element("span", `status-pill status-${component.status}`, statusLabel(component.status)),
+      element("span", `status-pill status-${stale ? "unknown" : component.status}`,
+        stale ? "待核实" : statusLabel(component.status)),
     );
     componentList.append(item);
   }
@@ -117,6 +120,11 @@ function statusView(value) {
   }
   shell.append(header, summary, componentSection, incidentSection, maintenanceSection, subscriptionSection);
   return shell;
+}
+
+export function isPublicStatusStale(updatedAt, now = Date.now()) {
+  return !Number.isFinite(Date.parse(updatedAt))
+    || now - Date.parse(updatedAt) > 15 * 60 * 1000;
 }
 
 function incidentView(incident) {
