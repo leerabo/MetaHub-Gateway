@@ -1646,7 +1646,7 @@ def require_policy_template_reader(
     """
 
     # 模板目录是独立治理资源，只校验专用读权限，不能因用户拥有其他 Policy 权限而旁路放行。
-    return _require_request_permissions(request, authorization, ("policy_template.read",))
+    return require_workspace_or_legacy_permissions("policy_template.read")(request, authorization)
 
 
 def require_policy_template_applier(
@@ -1660,7 +1660,7 @@ def require_policy_template_applier(
     """
 
     # 入口先拒绝无模板应用权的请求；租户归属与复合领域权限仍由事务内服务校验负责。
-    return _require_request_permissions(request, authorization, ("policy_template.apply",))
+    return require_workspace_or_legacy_permissions("policy_template.apply")(request, authorization)
 
 
 def require_permission_matrix_manager(

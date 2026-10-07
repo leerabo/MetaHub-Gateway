@@ -237,7 +237,7 @@ test("policy snapshot renderer shows drift and only permits the previous version
 
   assert.match(html, /当前 v3/);
   assert.match(html, /v3 &lt;- 回滚 v1/);
-  assert.match(html, /回滚内容与候选不同/);
+  assert.match(html, /待发布内容.*与回滚版本不同/);
   assert.match(html, /下一次发布会重新上线当前候选内容/);
   assert.match(html, /data-policy-snapshot-rollback-open="psnap_v2"/);
   assert.doesNotMatch(html, /data-policy-snapshot-rollback-open="psnap_v1"/);
@@ -272,6 +272,29 @@ test("policy snapshot renderer fails closed for invalid candidate and missing pu
   assert.doesNotMatch(invalid, /<strong>v0<|>v0</);
   assert.equal(renderPolicySnapshotsPanel({ state: "ok" }, { user: { role: "developer" } }), "");
   assert.equal(renderPolicySnapshotsPanel({ state: "ok" }, { user: { role: "viewer" } }), "");
+});
+
+test("first release explains the next action without an empty history table", () => {
+  const html = renderPolicySnapshotsPanel({
+    state: "ok",
+    current_snapshot: null,
+    candidate_status: "valid",
+    candidate_policy_count: 0,
+    candidate_content_hash: "a".repeat(64),
+    candidate_matches_current: false,
+    headEtag: '"0"',
+    candidateEtag: `"${"a".repeat(64)}"`,
+    total: 0,
+    policy_snapshots: [],
+    publishReason: "",
+    operationStatus: "idle",
+  }, publisherContext);
+  assert.match(html, /在安全策略中配置并启用策略/);
+  assert.match(html, /若要使用策略模板，可发布空版本建立基线/);
+  assert.match(html, /发布空版本/);
+  assert.match(html, /首次发布后，版本、原因和操作人会显示在这里/);
+  assert.doesNotMatch(html, /policy-snapshot-row-head|policy-snapshot-pager/);
+  assert.doesNotMatch(html, /<h2[^>]*>策略发布<\/h2>/);
 });
 
 test("unknown write result locks the original operation and always exposes an abandon control", () => {

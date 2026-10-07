@@ -32,12 +32,12 @@ export function renderPolicyTemplates(state = {}) {
     <section class="policy-template-page" data-policy-template-page aria-labelledby="policy-template-title">
       <header class="policy-template-page__header">
         <div>
-          <p class="eyebrow">PAGE-095</p>
-          <h2 id="policy-template-title">行业与场景策略模板</h2>
+          <h2 id="policy-template-title">从现成模板创建策略</h2>
+          <p>选择一个场景，指定适用项目，先预览对现有策略的影响，再确认应用。应用后会创建新版本，由网关同步生效。</p>
         </div>
-        <button class="icon-button policy-template-page__refresh" type="button"
-          data-policy-template-action="refresh" title="刷新模板" aria-label="刷新模板"
-          ${state.loadingCatalog || state.applying ? "disabled" : ""}>↻</button>
+        <button class="button button--secondary policy-template-page__refresh" type="button"
+          data-policy-template-action="refresh"
+          ${state.loadingCatalog || state.applying ? "disabled" : ""}>重新加载</button>
       </header>
       ${renderFeedback(state)}
       ${state.loadingCatalog && !state.templates?.length
@@ -53,7 +53,8 @@ function renderWorkspace(state, selected) {
   if (!Array.isArray(state.templates) || state.templates.length === 0) {
     return `
       <div class="empty-state policy-template-page__empty">
-        <strong>暂无可用模板</strong>
+        <strong>${state.pageError ? "模板未加载" : "暂无可用模板"}</strong>
+        <p>${state.pageError ? "请检查服务状态后点击“重新加载”。" : "模板准备好后，会在这里显示可选场景。"}</p>
       </div>
     `;
   }
@@ -365,7 +366,7 @@ function renderFeedback(state) {
           <div><dt>Snapshot</dt><dd><code>${escapeHtml(state.result.snapshotId)}</code> · v${escapeHtml(String(state.result.snapshotVersion))}</dd></div>
         </dl>
         <button class="button button--secondary" type="button" data-policy-template-action="open-snapshot"
-          data-snapshot-id="${escapeAttribute(state.result.snapshotId)}">查看策略快照</button>
+          data-snapshot-id="${escapeAttribute(state.result.snapshotId)}">查看发布版本</button>
       </div>
     `;
   }
@@ -433,7 +434,7 @@ function reasonLabel(code) {
 function remediationFor(reasonCodes) {
   const codes = new Set(Array.isArray(reasonCodes) ? reasonCodes : []);
   const choices = [
-    ["snapshot_baseline_required", "policy-snapshots", "前往策略快照"],
+    ["snapshot_baseline_required", "policy-snapshots", "前往策略发布"],
     ["active_environment_required", "environments", "前往环境管理"],
     ["environment_limit_exceeded", "environments", "前往环境管理"],
     ["provider_adapter_required", "providers", "前往 Provider 管理"],

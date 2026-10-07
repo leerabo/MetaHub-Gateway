@@ -218,6 +218,37 @@ test("policy template client uses exact preview query and no tenant fields", asy
   assert.equal(result.candidateEtag, `"${HASH}"`);
 });
 
+test("policy template requests use the Workspace cookie and CSRF transport", async () => {
+  const previousDocument = globalThis.document;
+  const calls = [];
+  globalThis.document = { cookie: "__Host-metahub-workspace-csrf=csrf-test" };
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return response({ policy_templates: [], total: 5, request_id: options.headers["X-Request-ID"] });
+  };
+  try {
+    await listPolicyTemplates({
+      controlApiUrl: "http://control.local", authentication: "workspace",
+      requestId: "console_policy_template_list_workspace",
+    });
+    await applyPolicyTemplate({
+      controlApiUrl: "http://control.local", authentication: "workspace",
+      policyTemplateId: TEMPLATE_ID, templateVersion: 1,
+      previewNonce: HASH, previewAsOf: "2026-08-03T02:00:00Z", impactHash: HASH,
+      bindings: { project_id: "project_a" }, reason: "应用模板",
+      headEtag: '"7"', candidateEtag: `"${HASH}"`,
+      requestId: "console_policy_template_apply_workspace",
+    });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].options.credentials, "include");
+    assert.equal(calls[1].options.credentials, "include");
+    assert.equal(calls[0].options.headers.Authorization, undefined);
+    assert.equal(calls[1].options.headers["X-CSRF-Token"], "csrf-test");
+  } finally {
+    globalThis.document = previousDocument;
+  }
+});
+
 test("policy template apply sends only frozen payload and both strong CAS headers", async () => {
   let call;
   globalThis.fetch = async (url, options = {}) => {
@@ -405,7 +436,7 @@ test("policy template confirmation and success render complete public facts", ()
   assert.match(html, new RegExp(APPLICATION_ID));
   assert.match(html, new RegExp(RESULT_SNAPSHOT_ID));
   assert.match(html, /Snapshot[\s\S]*v8/);
-  assert.match(html, /查看策略快照/);
+  assert.match(html, /查看发布版本/);
 });
 
 test("policy template confirmation stays bounded and wraps identifiers on mobile", async () => {
@@ -614,7 +645,8 @@ test("policy template renderer hides unauthorized DOM and never renders nonce or
   const preview = state.beginPreview();
   state.acceptPreview(preview, previewPayload());
   const html = renderPolicyTemplates(state.snapshot());
-  assert.match(html, /行业与场景策略模板/);
+  assert.match(html, /从现成模板创建策略/);
+  assert.match(html, /先预览对现有策略的影响，再确认应用/);
   assert.match(html, /低成本模式/);
   assert.match(html, /应用模板/);
   assert.match(html, /本次模板/);

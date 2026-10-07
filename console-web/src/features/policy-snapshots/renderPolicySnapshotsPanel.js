@@ -231,12 +231,10 @@ function normalizeOperationDescriptor(descriptor) {
 function renderLoadingState() {
   return `
     <div class="policy-snapshot-heading">
-      <div>
-        <h2 id="policy-snapshots-title">策略发布</h2>
-        <p>正在读取当前版本和发布记录。</p>
-      </div>
+      <h2 id="policy-snapshots-title">上线步骤</h2>
+      <p>正在读取待发布策略和线上版本。</p>
     </div>
-    <div class="policy-snapshot-empty" role="status">加载中</div>
+    <div class="policy-snapshot-empty" role="status">加载中…</div>
   `;
 }
 
@@ -244,27 +242,23 @@ function renderLoadingState() {
 function renderFatalError(state) {
   return `
     <div class="policy-snapshot-heading">
-      <div>
-        <h2 id="policy-snapshots-title">策略发布</h2>
-        <p>当前版本和历史暂不可用。</p>
-      </div>
+      <h2 id="policy-snapshots-title">上线步骤</h2>
+      <p>待发布策略和线上版本暂不可用，请稍后重试。</p>
     </div>
     ${renderError(state)}
   `;
 }
 
-/** 渲染页头和历史总数；数量来自当前租户后端分页响应。 */
-function renderHeading(state, current) {
-  const versionLabel = current ? `当前 v${current.snapshot_version}` : "尚未发布";
+/** 说明配置与发布的先后顺序；页面主标题由外层控制台提供。 */
+function renderHeading() {
   return `
     <div class="policy-snapshot-heading">
-      <div>
-        <h2 id="policy-snapshots-title">策略发布</h2>
-      </div>
-      <div class="policy-snapshot-heading-meta">
-        <strong>${escapeHtml(versionLabel)}</strong>
-        <span>${escapeHtml(state.total ?? 0)} 个历史版本</span>
-      </div>
+      <h2 id="policy-snapshots-title">上线步骤</h2>
+      <ol class="policy-snapshot-steps">
+        <li><a href="#workspace.governance.policies">在安全策略中配置并启用策略</a></li>
+        <li>核对下面的待发布内容与线上版本</li>
+        <li>填写变更原因，发布后等待网关拉取</li>
+      </ol>
     </div>
   `;
 }
@@ -274,11 +268,8 @@ function renderCurrentSnapshot(current) {
   if (!current) {
     return `
       <section class="policy-snapshot-current" aria-labelledby="policy-snapshot-current-title">
-        <div>
-          <h3 id="policy-snapshot-current-title">当前线上版本</h3>
-          <strong>尚未发布</strong>
-        </div>
-        <p>尚未向网关发布策略。</p>
+        <h3 id="policy-snapshot-current-title">线上版本</h3>
+        <p><strong>尚未发布</strong> · 网关还没有此空间的策略版本。</p>
       </section>
     `;
   }
@@ -287,8 +278,8 @@ function renderCurrentSnapshot(current) {
     <section class="policy-snapshot-current" aria-labelledby="policy-snapshot-current-title">
       <div class="policy-snapshot-current-title">
         <div>
-          <h3 id="policy-snapshot-current-title">当前线上版本</h3>
-          <strong>v${escapeHtml(current.snapshot_version)}</strong>
+          <h3 id="policy-snapshot-current-title">线上版本</h3>
+          <strong>当前 v${escapeHtml(current.snapshot_version)}</strong>
         </div>
         <span class="snapshot-operation snapshot-operation-${escapeAttribute(current.operation)}">${escapeHtml(operation)}</span>
       </div>
@@ -300,10 +291,10 @@ function renderCurrentSnapshot(current) {
         ${renderPair("变更原因", current.change_reason)}
         ${renderPair("版本来源", versionSourceLabel(current))}
       </dl>
-      <div class="policy-snapshot-hash-line">
-        <span>内容校验值</span>
+      <details class="policy-snapshot-hash-line">
+        <summary>查看内容校验值</summary>
         <code>${escapeHtml(current.content_hash ?? "-")}</code>
-      </div>
+      </details>
     </section>
   `;
 }
@@ -315,36 +306,39 @@ function renderCurrentSnapshot(current) {
 function renderCandidateSummary(state, current) {
   const invalid = state.candidate_status !== "valid";
   const matches = state.candidate_matches_current === true;
-  let title = "候选可发布";
-  let message = `当前有 ${state.candidate_policy_count ?? 0} 条策略待发布，网关将在发布后同步。`;
+  const count = state.candidate_policy_count ?? 0;
+  let status = "可以发布";
+  let message = `已启用 ${count} 条策略；发布后网关将在下一轮轮询中拉取新版本。`;
   let tone = "changed";
   if (invalid) {
-    title = "候选无效";
+    status = "候选无效";
     message = "策略校验失败，请在安全策略中修正后再发布。";
     tone = "invalid";
   } else if (matches) {
-    title = "候选与线上一致";
+    status = "与线上一致";
     message = "当前配置与已发布版本一致，无需重复发布。";
     tone = "matched";
   } else if (current?.operation === "rollback") {
-    title = "回滚内容与候选不同";
+    status = "与回滚版本不同";
     message = "回滚没有改动待发布策略。下一次发布会重新上线当前候选内容。";
     tone = "warning";
-  } else if (!current) {
-    title = "等待首次发布";
-    message = state.candidate_policy_count > 0
-      ? `已有 ${state.candidate_policy_count} 条启用的策略待发布。`
-      : "当前没有启用的策略，本次将发布空策略版本。";
+  } else if (count === 0) {
+    status = "0 条已启用策略";
+    message = current?.policy_count > 0
+      ? "发布后线上策略会被清空。请先确认这是预期结果。"
+      : "可先在安全策略中启用策略；若要使用策略模板，可发布空版本建立基线。";
+    tone = "warning";
   }
   return `
     <section class="policy-snapshot-candidate candidate-${escapeAttribute(tone)}" aria-labelledby="policy-snapshot-candidate-title">
       <div>
-        <h3 id="policy-snapshot-candidate-title">${escapeHtml(title)}</h3>
+        <h3 id="policy-snapshot-candidate-title">待发布内容 <span class="policy-snapshot-candidate-status">${escapeHtml(status)}</span></h3>
         <p>${escapeHtml(message)}</p>
+        ${invalid || count === 0 ? '<a href="#workspace.governance.policies">打开安全策略</a>' : ""}
       </div>
       <div class="policy-snapshot-candidate-meta">
-        <span>${escapeHtml(state.candidate_policy_count ?? "-")} 条策略</span>
-        <code>${escapeHtml(shortHash(state.candidate_content_hash))}</code>
+        <strong>${escapeHtml(count)} 条策略</strong>
+        ${state.candidate_content_hash ? `<details><summary>校验值</summary><code>${escapeHtml(shortHash(state.candidate_content_hash))}</code></details>` : ""}
       </div>
     </section>
   `;
@@ -365,8 +359,8 @@ function renderPublishForm(state) {
     <section class="policy-snapshot-publish" aria-labelledby="policy-snapshot-publish-title">
       <div class="policy-snapshot-section-heading">
         <div>
-          <h3 id="policy-snapshot-publish-title">发布候选</h3>
-          <p>发布后仍需确认网关已同步。</p>
+          <h3 id="policy-snapshot-publish-title">填写原因并发布</h3>
+          <p>发布会生成新版本。网关在下一轮轮询后使用该版本，请在调用记录中核对实际效果。</p>
         </div>
         ${pending ? `<span class="policy-snapshot-pending">结果待确认，重试将复用 ${escapeHtml(state.pendingOperation.requestId)}</span>` : ""}
       </div>
@@ -376,7 +370,7 @@ function renderPublishForm(state) {
           <textarea name="reason" rows="3" maxlength="256" placeholder="说明本次上线目的、验证结论或变更单号" ${busy ? "disabled" : pending ? "readonly" : ""}>${escapeHtml(reason)}</textarea>
         </label>
         <div class="policy-snapshot-form-actions">
-          <button type="submit" data-policy-snapshot-publish ${disabled ? "disabled" : ""}>${busy ? "发布中" : pending ? "重试发布" : "发布候选"}</button>
+          <button type="submit" data-policy-snapshot-publish ${disabled ? "disabled" : ""}>${busy ? "发布中" : pending ? "重试发布" : state.candidate_policy_count === 0 ? "发布空版本" : "发布到网关"}</button>
         </div>
       </form>
     </section>
@@ -385,14 +379,15 @@ function renderPublishForm(state) {
 
 /** 渲染历史表格和分页；桌面是表格，中窄屏由 data-label 转为逐行键值布局。 */
 function renderHistory(state, history, current) {
+  const empty = history.length === 0 && Number(state.total ?? 0) === 0;
   return `
     <section class="policy-snapshot-history" aria-labelledby="policy-snapshot-history-title">
       <div class="policy-snapshot-section-heading">
         <div>
-          <h3 id="policy-snapshot-history-title">发布记录</h3>
+          <h3 id="policy-snapshot-history-title">发布记录${empty ? "" : `（${escapeHtml(state.total ?? 0)}）`}</h3>
         </div>
       </div>
-      <div class="policy-snapshot-table" role="table" aria-label="当前租户策略快照历史">
+      ${empty ? '<p class="policy-snapshot-history-empty">首次发布后，版本、原因和操作人会显示在这里。</p>' : `<div class="policy-snapshot-table" role="table" aria-label="当前租户策略快照历史">
         <div class="policy-snapshot-row policy-snapshot-row-head" role="row">
           <span>版本</span>
           <span>来源</span>
@@ -403,7 +398,7 @@ function renderHistory(state, history, current) {
         </div>
         ${history.length ? history.map((item) => renderHistoryRow(item, state, current)).join("") : renderEmptyHistory()}
       </div>
-      ${renderHistoryPager(state)}
+      ${renderHistoryPager(state)}`}
     </section>
   `;
 }

@@ -11590,33 +11590,19 @@ async function rejectPromptTemplateRead(ticket, error, _consoleShellState) {
   }
 }
 
-/**
- * 构造 PAGE-095 当前完整 owner。
- *
- * read/apply 身份分别冻结；Token 仅供当前调用栈使用，不进入状态 snapshot、DOM 或日志。
- */
+/** 构造 PAGE-095 当前 Workspace owner；读写权限分别冻结在状态机内。 */
 function policyTemplateLibraryOwner(consoleShellState, generation = refreshSequence) {
-  const item = consoleShellState?.navigation?.navigation_items?.find((candidate) => (
-    candidate?.id === "policy-templates"
-    && candidate?.target_section === "policy-templates"
-    && candidate?.visible !== false
-    && candidate?.disabled !== true
-  ));
-  const readIdentity = policyTemplateReadIdentitySnapshot(authSession.context);
-  if (
-    consoleShellState?.state !== "ok"
-    || consoleShellState?.activeNavigationItemId !== "policy-templates"
-    || !item
-    || !readIdentity
-    || !authSession.token
-    || !Number.isSafeInteger(generation)
-  ) return null;
+  const page = workspaceResourcePageOwner(authSession, consoleShellState, {
+    navigationId: "policy-templates", permissions: [PERMISSIONS.POLICY_TEMPLATE_READ],
+    hash: readActiveNavigationHash(),
+  });
+  if (!page || generation !== refreshSequence || !Number.isSafeInteger(generation)) return null;
   return Object.freeze({
-    readIdentity,
-    applyIdentity: policyTemplateApplyIdentitySnapshot(authSession.context),
+    readIdentity: page.key,
+    applyIdentity: hasPermission(authSession.context, PERMISSIONS.POLICY_TEMPLATE_APPLY)
+      ? `${page.key}:apply` : "",
     navigation: "policy-templates",
     refreshGeneration: generation,
-    token: authSession.token,
   });
 }
 
@@ -11635,7 +11621,7 @@ async function loadPolicyTemplateLibraryState(consoleShellState, refreshId) {
   try {
     const result = await listPolicyTemplateLibrary({
       controlApiUrl,
-      token: owner.token,
+      authentication: "workspace",
       signal: ticket.signal,
       requestId: ticket.requestId,
     });
@@ -11656,7 +11642,7 @@ async function refreshPolicyTemplateLibrary(consoleShellState) {
   try {
     const result = await listPolicyTemplateLibrary({
       controlApiUrl,
-      token: owner.token,
+      authentication: "workspace",
       signal: ticket.signal,
       requestId: ticket.requestId,
     });
@@ -11677,7 +11663,7 @@ async function previewPolicyTemplateLibrary(consoleShellState) {
   try {
     const result = await listPolicyTemplateLibrary({
       controlApiUrl,
-      token: owner.token,
+      authentication: "workspace",
       templateId: ticket.policyTemplateId,
       bindings: ticket.bindings,
       signal: ticket.signal,
@@ -11700,7 +11686,7 @@ async function submitPolicyTemplateLibrary(consoleShellState) {
   try {
     const result = await applyPolicyTemplate({
       controlApiUrl,
-      token: owner.token,
+      authentication: "workspace",
       policyTemplateId: ticket.policyTemplateId,
       templateVersion: ticket.templateVersion,
       previewNonce: ticket.previewNonce,
@@ -11725,7 +11711,7 @@ async function rejectPolicyTemplateLibrary(lane, ticket, error) {
   if (error?.name === "AbortError") return;
   const accepted = policyTemplateLibraryPageState.reject(lane, ticket, error);
   if (!accepted) return;
-  // 当前请求确认 401 后必须销毁整个 Session，不能让旧 Token 继续访问其他租户接口。
+  // 当前请求确认 401 后必须销毁整个 Session，不能继续使用旧 Workspace 身份。
   if (Number(error?.status) === 401) {
     clearAuthSession();
     authSession = { token: null, context: null };

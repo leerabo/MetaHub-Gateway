@@ -5,6 +5,7 @@ const WRITES = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const PROTECTED_HEADERS = ["authorization", "proxy-authorization", "cookie", "x-csrf-token"];
 const HEADER_NAMES = Object.freeze({
   accept: "Accept", authorization: "Authorization", "content-type": "Content-Type",
+  "if-match": "If-Match", "if-policy-candidate-match": "If-Policy-Candidate-Match",
   "x-csrf-token": "X-CSRF-Token", "x-request-id": "X-Request-ID", "x-trace-id": "X-Trace-ID",
 });
 

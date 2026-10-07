@@ -1,4 +1,5 @@
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 /**
  * PAGE-095 行业/场景策略模板库的严格 Control API 客户端。
@@ -20,6 +21,7 @@ let requestSequence = 0;
 /** 读取固定五模板目录；提供 templateId 时同时请求精确影响预览。 */
 export async function listPolicyTemplates({
   controlApiUrl,
+  authentication,
   token,
   templateId = "",
   bindings = null,
@@ -45,7 +47,8 @@ export async function listPolicyTemplates({
     throw clientError("policy_template.query_invalid", "策略模板查询条件无效", 422, requestId);
   }
   return policyTemplateRequest(url.toString(), {
-    headers: authorizationHeaders(token),
+    authentication,
+    token,
     signal,
   }, requestId);
 }
@@ -58,6 +61,7 @@ export async function listPolicyTemplates({
  */
 export async function applyPolicyTemplate({
   controlApiUrl,
+  authentication,
   token,
   policyTemplateId,
   templateVersion,
@@ -102,8 +106,9 @@ export async function applyPolicyTemplate({
     `${controlApiUrl}/policy-templates/${encodeURIComponent(templateId)}/apply`,
     {
       method: "POST",
+      authentication,
+      token,
       headers: {
-        ...authorizationHeaders(token),
         "Content-Type": "application/json",
         "If-Match": headEtag,
         "If-Policy-Candidate-Match": candidateEtag,
@@ -157,10 +162,8 @@ function normalizeBindings(value) {
 async function policyTemplateRequest(url, options, requestId) {
   let response;
   try {
-    response = await fetch(url, {
+    response = await authenticatedResourceFetch(url, {
       ...options,
-      cache: "no-store",
-      credentials: "omit",
       headers: {
         "X-Request-ID": requestId,
         ...(options?.headers ?? {}),
@@ -203,11 +206,6 @@ async function policyTemplateRequest(url, options, requestId) {
       SAFE_CANDIDATE_ETAG,
     ),
   };
-}
-
-/** 构造认证头；Session Token 只在当前 fetch 调用栈使用。 */
-function authorizationHeaders(token) {
-  return { Authorization: `Bearer ${token}` };
 }
 
 /** 校验模板路径，非法输入在出网前失败，避免路径穿透。 */

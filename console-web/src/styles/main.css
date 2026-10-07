@@ -11016,12 +11016,42 @@ h3 {
 }
 
 .policy-snapshot-heading {
-  align-items: flex-start;
-  margin-bottom: 16px;
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
 }
 
-.policy-snapshot-heading > div:first-child,
-.policy-snapshot-heading-meta,
+.policy-snapshot-heading h2 {
+  margin: 0;
+  font-size: 16px;
+  color: #172033;
+}
+
+.policy-snapshot-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 28px;
+  margin: 0;
+  padding-left: 20px;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.policy-snapshot-steps a,
+.policy-snapshot-candidate a {
+  color: #0f766e;
+  font-weight: 700;
+  text-underline-offset: 3px;
+}
+
+.policy-snapshot-history-empty {
+  margin: 0;
+  padding: 12px 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
 .policy-snapshot-section-heading > div,
 .policy-snapshot-current-title > div,
 .policy-snapshot-candidate > div:first-child {
@@ -11040,18 +11070,6 @@ h3 {
   color: #5d6b7c;
   font-size: 13px;
   line-height: 1.55;
-}
-
-.policy-snapshot-heading-meta {
-  flex: 0 0 auto;
-  justify-items: end;
-  color: #64748b;
-  font-size: 12px;
-}
-
-.policy-snapshot-heading-meta strong {
-  color: #0f172a;
-  font-size: 14px;
 }
 
 .policy-snapshot-current,
@@ -11074,7 +11092,7 @@ h3 {
 
 .policy-snapshot-current-title > div > strong {
   color: #0f766e;
-  font-size: 26px;
+  font-size: 20px;
   letter-spacing: 0;
 }
 
@@ -11124,13 +11142,20 @@ h3 {
 }
 
 .policy-snapshot-hash-line {
-  display: grid;
-  grid-template-columns: 86px minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-  min-width: 0;
+  margin-top: 8px;
   color: #64748b;
   font-size: 12px;
+}
+
+.policy-snapshot-hash-line summary,
+.policy-snapshot-candidate-meta summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.policy-snapshot-hash-line code {
+  display: block;
+  margin-top: 6px;
 }
 
 .policy-snapshot-hash-line code,
@@ -11170,6 +11195,21 @@ h3 {
   align-items: flex-end;
   color: #475569;
   font-size: 12px;
+}
+
+.policy-snapshot-candidate-status {
+  margin-left: 6px;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.candidate-warning .policy-snapshot-candidate-status {
+  color: #92400e;
+}
+
+.candidate-invalid .policy-snapshot-candidate-status {
+  color: #b42318;
 }
 
 .policy-snapshot-section-heading {
@@ -25652,11 +25692,22 @@ h3 {
   min-width: 0;
 }
 
+.policy-template-page__header h2 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+.policy-template-page__header p {
+  max-width: 850px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .policy-template-page__refresh {
-  width: 38px;
-  height: 38px;
-  flex: 0 0 38px;
-  font-size: 20px;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .policy-template-result {
@@ -26060,6 +26111,17 @@ h3 {
 
 .policy-template-page__empty {
   min-height: 280px;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.policy-template-page__empty p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 @media (max-width: 980px) {
