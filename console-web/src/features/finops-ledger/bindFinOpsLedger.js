@@ -1,3 +1,5 @@
+import { renderFinOpsDetailPanel } from "./renderFinOpsLedger.js";
+
 /**
  * 模块职责：绑定 PAGE-074/075 的 DOM 交互并把用户意图交给主应用状态机。
  * 安全边界：本模块不保存 Token、tenant_id、幂等键或服务端 cursor；表单只读取允许的
@@ -34,7 +36,14 @@ export function bindFinOpsLedgerInteractions(handlers, root = document) {
   for (const button of root.querySelectorAll("[data-finops-entry-id]")) {
     button.addEventListener("click", async () => {
       if (!isCurrent()) return;
-      await handlers.onSelectEntry?.(button.dataset.finopsEntryId);
+      const entry = await handlers.onSelectEntry?.(button.dataset.finopsEntryId);
+      if (!entry || !isCurrent()) return;
+      const panel = button.closest(".finops-ledger-panel");
+      if (!panel) return;
+      panel.querySelector("#finops-detail-dialog")?.remove();
+      panel.insertAdjacentHTML("beforeend", renderFinOpsDetailPanel(entry));
+      markSelectedEntry(root, button);
+      openDetailDialog(panel.querySelector("#finops-detail-dialog"), button, handlers, isCurrent);
     });
   }
   for (const button of root.querySelectorAll("[data-finops-reverse-entry-id]")) {
@@ -49,20 +58,9 @@ export function bindFinOpsLedgerInteractions(handlers, root = document) {
       await handlers.onOpenRequest?.(button.dataset.finopsRequestId);
     });
   }
-  root.querySelector("#finops-close-detail")?.addEventListener("click", async () => {
-    if (!isCurrent()) return;
-    await handlers.onCloseDetail?.();
-  });
   const detailDialog = root.querySelector("#finops-detail-dialog");
-  detailDialog?.addEventListener("cancel", (event) => {
-    event.preventDefault();
-    if (isCurrent()) void handlers.onCloseDetail?.();
-  });
-  if (detailDialog?.open && typeof detailDialog.showModal === "function") {
-    detailDialog.close();
-    detailDialog.showModal();
-    detailDialog.querySelector("#finops-close-detail")?.focus();
-  }
+  if (detailDialog) openDetailDialog(detailDialog,
+    root.querySelector('[data-finops-entry-id][aria-pressed="true"]'), handlers, isCurrent);
   root.querySelector("#finops-open-adjustment")?.addEventListener("click", async () => {
     if (!isCurrent()) return;
     await handlers.onOpenAdjustment?.(null);
@@ -105,6 +103,40 @@ export function bindFinOpsLedgerInteractions(handlers, root = document) {
     // 对话框重绘后把焦点移入第一个可编辑字段；关闭后的触发器焦点由主应用回调恢复。
     dialog.querySelector("select:not([disabled]), input:not([disabled]), textarea:not([disabled])")?.focus();
   }
+}
+
+function markSelectedEntry(root, selectedButton) {
+  for (const button of root.querySelectorAll("[data-finops-entry-id]")) {
+    const selected = button === selectedButton;
+    button.setAttribute("aria-pressed", String(selected));
+    button.closest("[data-finops-ledger-row]")?.classList.toggle("is-selected", selected);
+  }
+}
+
+function openDetailDialog(dialog, trigger, handlers, isCurrent) {
+  if (!dialog) return;
+  let closing = false;
+  const close = async () => {
+    if (closing || !isCurrent()) return;
+    closing = true;
+    await handlers.onCloseDetail?.();
+    dialog.close?.();
+    dialog.remove();
+    if (trigger?.isConnected) {
+      markSelectedEntry(trigger.closest(".finops-ledger-panel"), null);
+      trigger.focus();
+    }
+  };
+  dialog.querySelector("#finops-close-detail")?.addEventListener("click", close);
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    void close();
+  });
+  if (typeof dialog.showModal === "function") {
+    if (dialog.open) dialog.close();
+    dialog.showModal();
+  }
+  dialog.querySelector("#finops-close-detail")?.focus();
 }
 
 /**

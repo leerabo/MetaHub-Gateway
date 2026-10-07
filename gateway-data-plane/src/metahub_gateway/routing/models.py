@@ -22,6 +22,7 @@ from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.routing_policy import (
     MAX_ROUTING_CANDIDATES,
+    REASON_STANDBY,
     QualityCostConfig,
     RoutingCandidateInput,
     RoutingPriceFact,
@@ -36,6 +37,7 @@ from metahub_shared.runtime.workspace_fx import resolve_workspace_fx_rate
 
 from metahub_gateway.cache_affinity.models import CacheAffinityRouteContext
 from metahub_gateway.pricing import resolve_workspace_cost_rate
+from metahub_gateway.routing.cooldown import RouteKey, route_cooldowns, scoped_tenant
 
 logger = logging.getLogger("metahub.gateway.routing")
 
@@ -655,6 +657,14 @@ def _resolve_persisted_alias_route_plan(
                 tuple(item.model_id for item in eligible),
             ),
         )
+        deferred_model_ids: tuple[str, ...] = ()
+        probe_key: RouteKey | None = None
+        if request_id:
+            selection, deferred_model_ids, probe_key = _apply_route_cooldowns(
+                selection,
+                tenant_id=scoped_tenant(config.database_url, tenant_id),
+                request_id=request_id,
+            )
         cache_affinity_context: CacheAffinityRouteContext | None = None
         cache_affinity_summary: dict[str, object] | None = None
         # 只有带完整服务端追踪身份的真实请求才能创建租户内 route reservation 事实。
@@ -674,6 +684,8 @@ def _resolve_persisted_alias_route_plan(
                     base_selection=selection,
                     candidate_rows=candidate_rows,
                     as_of=as_of,
+                    deferred_model_ids=deferred_model_ids,
+                    recovery_probe_model_id=probe_key[1] if probe_key else None,
                 )
                 selection = affinity_facts.selection
                 cache_affinity_context = affinity_facts.context
@@ -682,28 +694,36 @@ def _resolve_persisted_alias_route_plan(
             # 这里不得降级到旧路由，否则客户端会在无 Selection 审计的情况下调用 Provider。
             except (sqlite3.Error, ValueError, TypeError) as exc:
                 # 有效配置的 reservation 无法原子冻结时必须停在 Provider 前，不能静默走旧路由。
+                if probe_key is not None:
+                    route_cooldowns.abandoned(probe_key, request_id)
                 raise ApiError("gateway.cache_affinity_unavailable") from exc
-        return _finalize_persisted_alias_plan(
-            config,
-            connection,
-            tenant_id=tenant_id,
-            alias_policy=alias_policy,
-            routing_policy_id=routing_policy_id,
-            routing_policy_version=routing_policy_version,
-            routing_mode=routing_mode,
-            selection=selection,
-            candidate_rows=candidate_rows,
-            cache_affinity_context=cache_affinity_context,
-            cache_affinity_summary=cache_affinity_summary,
-            requested_model=model_alias.strip(),
-            environment=normalized_environment,
-            environment_id=resolved_environment_id,
-            request_id=request_id,
-            trace_id=trace_id,
-            virtual_key_id=virtual_key_id,
-            project_id=project_id,
-            as_of=as_of,
-        )
+        try:
+            return _finalize_persisted_alias_plan(
+                config,
+                connection,
+                tenant_id=tenant_id,
+                alias_policy=alias_policy,
+                routing_policy_id=routing_policy_id,
+                routing_policy_version=routing_policy_version,
+                routing_mode=routing_mode,
+                selection=selection,
+                candidate_rows=candidate_rows,
+                cache_affinity_context=cache_affinity_context,
+                cache_affinity_summary=cache_affinity_summary,
+                cooldown_deferred_model_ids=deferred_model_ids,
+                requested_model=model_alias.strip(),
+                environment=normalized_environment,
+                environment_id=resolved_environment_id,
+                request_id=request_id,
+                trace_id=trace_id,
+                virtual_key_id=virtual_key_id,
+                project_id=project_id,
+                as_of=as_of,
+            )
+        except BaseException:
+            if probe_key is not None:
+                route_cooldowns.abandoned(probe_key, request_id)
+            raise
     # 已分类领域错误已具有稳定码，必须原样交给统一响应层。
     except ApiError:
         connection.rollback()
@@ -738,6 +758,52 @@ def _resolve_persisted_alias_route_plan(
         raise ApiError("gateway.routing_snapshot_invalid") from exc
     finally:
         connection.close()
+
+
+def _apply_route_cooldowns(
+    selection: RoutingSelectionResult, *, tenant_id: str, request_id: str
+) -> tuple[RoutingSelectionResult, tuple[str, ...], RouteKey | None]:
+    """Move recently failed eligible routes behind healthy candidates before persisting."""
+
+    ranked = sorted(
+        (item for item in selection.candidate_results if item.rank is not None),
+        key=lambda item: item.rank or 0,
+    )
+    if not ranked:
+        return selection, (), None
+    keys = tuple(
+        (tenant_id, item.candidate.model_id, item.candidate.provider_id or "")
+        for item in ranked
+    )
+    ordered, probe_key, deferred = route_cooldowns.order(keys, request_id)
+    if ordered == keys:
+        return selection, tuple(key[1] for key in deferred), probe_key
+    rank_by_model = {key[1]: rank for rank, key in enumerate(ordered, start=1)}
+    selected_model_id = ordered[0][1]
+    results = tuple(
+        replace(
+            item,
+            rank=rank_by_model[item.candidate.model_id],
+            status="selected" if item.candidate.model_id == selected_model_id else "standby",
+            reason_code=(
+                selection.selection_reason
+                if item.candidate.model_id == selected_model_id
+                else REASON_STANDBY
+            ),
+        ) if item.rank is not None else item
+        for item in selection.candidate_results
+    )
+    deferred_ids = tuple(key[1] for key in deferred)
+    return (
+        replace(
+            selection,
+            selected_model_id=selected_model_id,
+            selected_provider_id=ordered[0][2],
+            candidate_results=results,
+        ),
+        deferred_ids,
+        probe_key,
+    )
 
 
 def _routing_request_token_estimate(
@@ -1043,6 +1109,7 @@ def _finalize_persisted_alias_plan(
     candidate_rows: dict[str, sqlite3.Row],
     cache_affinity_context: CacheAffinityRouteContext | None,
     cache_affinity_summary: dict[str, object] | None,
+    cooldown_deferred_model_ids: tuple[str, ...],
     requested_model: str,
     environment: str,
     environment_id: str,
@@ -1156,6 +1223,7 @@ def _finalize_persisted_alias_plan(
                 route=route,
                 event_id=event_id,
                 cache_affinity_summary=cache_affinity_summary,
+                cooldown_deferred_model_ids=cooldown_deferred_model_ids,
                 as_of=as_of,
             )
             connection.commit()
@@ -1251,11 +1319,11 @@ def _load_frozen_runtime_fallback(
     selected = next(item for item in selection.candidate_results if item.status == "selected")
     if selected is None:
         return (), None, None, ()
-    standby_items = [
+    standby_items = sorted((
         item
         for item in selection.candidate_results
-        if item.status == "standby" and item.candidate.candidate_role == "fallback"
-    ]
+        if item.status == "standby"
+    ), key=lambda item: item.rank or 0)
     if not standby_items:
         return (), None, None, ()
     policy = connection.execute(
@@ -1311,6 +1379,7 @@ def _persist_policy_routing_facts(
     route: GatewayRoute | None,
     event_id: str | None,
     cache_affinity_summary: dict[str, object] | None,
+    cooldown_deferred_model_ids: tuple[str, ...],
     as_of: datetime,
 ) -> None:
     """在调用方事务内写一条 Decision 和完整候选集合事实。"""
@@ -1349,6 +1418,8 @@ def _persist_policy_routing_facts(
     }
     if cache_affinity_summary is not None:
         summary["cache_affinity"] = cache_affinity_summary
+    if cooldown_deferred_model_ids:
+        summary["cooldown_deferred_model_ids"] = cooldown_deferred_model_ids
     if routing_mode == "fixed":
         # fixed 是迁移兼容模式，成功和失败均保留 PRD-015/035 已公开的决策原因码。
         decision_reason = route.routing_reason if route is not None else "alias.no_active_model"

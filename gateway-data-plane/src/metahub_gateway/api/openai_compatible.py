@@ -146,6 +146,7 @@ from metahub_gateway.routing.attempts import (
     log_fallback_triggered,
     safe_complete_routing_attempt,
 )
+from metahub_gateway.routing.cooldown import route_cooldowns, scoped_tenant
 from metahub_gateway.routing.models import (
     GatewayRoute,
     GatewayRoutePlan,
@@ -2165,6 +2166,7 @@ async def _non_stream_response_with_fallback(
             first_response = await first_adapter.send_non_stream(first_request)
     # 当前 Task 被取消时网络请求可能已经发出；必须先终结 attempt/Selection，再原样传播取消。
     except asyncio.CancelledError as caught:
+        _observe_route_inconclusive(config, initial, base_context.request_id)
         if experiment_guard is not None:
             experiment_guard.mark_local_failure()
         interrupted_error = _local_interruption_attempt_error(_REQUEST_CANCELLATION_ERROR_CODE)
@@ -2208,6 +2210,7 @@ async def _non_stream_response_with_fallback(
     # 首次调用任何业务错误都先落 attempt 终态，再决定是否满足受控 Fallback 条件。
     except Exception as caught:
         exc = _normalized_provider_exception(caught)
+        _observe_route_failure(config, initial, exc, base_context.request_id, first_started)
         first_error = _attempt_error(exc)
         if experiment_guard is not None:
             experiment_guard.mark_provider_error(
@@ -2299,6 +2302,7 @@ async def _non_stream_response_with_fallback(
             )
             raise
 
+    _observe_route_success(config, initial, first_started)
     safe_complete_routing_attempt(
         config,
         first_attempt,
@@ -2414,6 +2418,7 @@ async def _execute_fallback_attempt(
         response = await adapter.send_non_stream(provider_request)
     # 备用调用取消与主调用一样先收口；两次请求都可能已到上游，预算采用冻结估算上界。
     except asyncio.CancelledError as caught:
+        _observe_route_inconclusive(config, fallback, base_context.request_id)
         interrupted_error = _local_interruption_attempt_error(_REQUEST_CANCELLATION_ERROR_CODE)
         usage_exposure_possible = _local_usage_exposure_possible(provider_request)
         safe_complete_routing_attempt(
@@ -2456,6 +2461,7 @@ async def _execute_fallback_attempt(
     # 当前备用模型失败后，只有受控上游故障且仍有候选时才继续；客户端尚未收到正文。
     except Exception as caught:
         exc = _normalized_provider_exception(caught)
+        _observe_route_failure(config, fallback, exc, base_context.request_id, attempt_started)
         attempt_error = _attempt_error(exc)
         quality_eligible = is_quality_observation_eligible_error(attempt_error)
         usage_exposure_possible = _local_usage_exposure_possible(provider_request)
@@ -2528,6 +2534,7 @@ async def _execute_fallback_attempt(
         )
         _raise_normalized_provider_exception(exc, caught)
 
+    _observe_route_success(config, fallback, attempt_started)
     safe_complete_routing_attempt(
         config,
         attempt,
@@ -3167,6 +3174,58 @@ def _should_fallback(plan: GatewayRoutePlan, exc: ApiError) -> bool:
     return condition is not None and condition in plan.fallback_conditions
 
 
+def _route_cooldown_key(config: AppConfig, route: GatewayRoute) -> tuple[str, str, str]:
+    return (
+        scoped_tenant(getattr(config, "database_url", None), route.tenant_id),
+        route.model_id,
+        route.provider_id,
+    )
+
+
+def _observe_route_success(
+    config: AppConfig, route: GatewayRoute | None, attempt_started: float
+) -> None:
+    if route is not None:
+        route_cooldowns.succeeded(
+            _route_cooldown_key(config, route), attempt_started=attempt_started
+        )
+
+
+def _observe_route_inconclusive(
+    config: AppConfig, route: GatewayRoute | None, request_id: str
+) -> None:
+    if route is not None:
+        route_cooldowns.inconclusive(_route_cooldown_key(config, route), request_id)
+
+
+def _observe_route_failure(
+    config: AppConfig, route: GatewayRoute | None, error: ApiError,
+    request_id: str, attempt_started: float,
+) -> None:
+    if route is None:
+        return
+    if not isinstance(error, UpstreamApiError):
+        _observe_route_inconclusive(config, route, request_id)
+        return
+    fact = error.normalized_error
+    if fact.transport_kind == "local_configuration":
+        _observe_route_inconclusive(config, route, request_id)
+        return
+    if fact.error_category in {"auth_failed", "quota_exceeded"}:
+        base_seconds = 300
+    elif fact.error_category in {"timeout", "rate_limited", "upstream_5xx"} or (
+        fact.code == "gateway.upstream_unavailable" and fact.transport_kind == "network"
+    ):
+        base_seconds = 30
+    else:
+        _observe_route_inconclusive(config, route, request_id)
+        return
+    route_cooldowns.failed(
+        _route_cooldown_key(config, route), request_id=request_id,
+        base_seconds=base_seconds, attempt_started=attempt_started,
+    )
+
+
 def _attempt_error(exc: ApiError) -> NormalizedProviderError:
     """把本地错误和上游错误统一成只含白名单元数据的 attempt 终态。"""
 
@@ -3794,6 +3853,7 @@ async def _stream_response(
             inter_token_timeout_ms=int(timeout_seconds * 1000),
         )
     except asyncio.CancelledError as exc:
+        _observe_route_inconclusive(config, route, context.request_id)
         finish_local_attempt(
             succeeded=False,
             error=_local_interruption_attempt_error("gateway.stream_session_unavailable"),
@@ -3808,6 +3868,7 @@ async def _stream_response(
         )
         raise
     except ApiError as caught:
+        _observe_route_inconclusive(config, route, context.request_id)
         finish_local_attempt(
             succeeded=False,
             error=_local_interruption_attempt_error("gateway.stream_session_unavailable"),
@@ -3856,6 +3917,7 @@ async def _stream_response(
         )
         raise
     except Exception as caught:
+        _observe_route_inconclusive(config, route, context.request_id)
         finish_local_attempt(
             succeeded=False,
             error=_local_interruption_attempt_error("gateway.stream_session_unavailable"),
@@ -3927,6 +3989,7 @@ async def _stream_response(
             upstream_response = await adapter.send_stream(provider_request)
     # 握手尚未返回 StreamingResponse，取消必须把 starting 会话写成固定本地失败并释放 Selection。
     except asyncio.CancelledError as exc:
+        _observe_route_inconclusive(config, route, session_context.request_id)
         if experiment_guard is not None:
             experiment_guard.mark_local_failure()
         output_terminal = _stream_not_applicable_terminal(output_safety_scan)
@@ -3974,6 +4037,7 @@ async def _stream_response(
         raise
     # Adapter 已归一化的握手错误必须先结束会话，再交给统一 JSON 异常处理器。
     except ApiError as exc:
+        _observe_route_failure(config, route, exc, session_context.request_id, started)
         # 握手尚未返回任何客户端字节时可以安全切换到下一个候选。先把当前会话、当前
         # attempt 和 Provider 错误事实落成终态，再创建新的 StreamSession；这样不会
         # 复用带有主模型 owner 的输出安全扫描，也不会留下未闭合的主调用记录。
@@ -4104,6 +4168,7 @@ async def _stream_response(
         )
         raise
     except Exception as exc:
+        _observe_route_inconclusive(config, route, session_context.request_id)
         if experiment_guard is not None:
             experiment_guard.mark_local_failure()
         # Adapter 未归一化异常没有可信上游归因，必须使用本地处理码并排除质量统计。
@@ -4619,6 +4684,26 @@ async def _stream_response(
                         status = "failed"
                         error_code = LOCAL_STREAM_PROCESSING_ERROR_CODE
                         deferred_experiment_error = True
+                    if stream_status == "completed":
+                        _observe_route_success(config, route, started)
+                    elif stream_status == "timed_out" and error_code == (
+                        "gateway.upstream_stream_timeout"
+                    ):
+                        if route is not None:
+                            route_cooldowns.failed(
+                                _route_cooldown_key(config, route),
+                                request_id=session_context.request_id,
+                                attempt_started=started,
+                            )
+                    elif stream_status == "upstream_failed" and upstream_read_failed:
+                        if route is not None:
+                            route_cooldowns.failed(
+                                _route_cooldown_key(config, route),
+                                request_id=session_context.request_id,
+                                attempt_started=started,
+                            )
+                    else:
+                        _observe_route_inconclusive(config, route, session_context.request_id)
                     if stream_status in {
                         "completed",
                         "output_blocked",

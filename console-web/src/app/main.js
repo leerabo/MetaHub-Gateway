@@ -10301,13 +10301,13 @@ function bindFinOpsInteractions(consoleShellState) {
     // 详情 ID 必须存在于当前页，状态机拒绝 DOM 手工注入的其他 ID。
     async onSelectEntry(entryId) {
       if (finOpsPageState.selectEntry(entryId)) {
-        await refresh();
+        return finOpsPageState.snapshot().selectedEntry;
       }
+      return null;
     },
     // 关闭详情不会改变筛选和 cursor，方便管理员继续逐条核对。
     async onCloseDetail() {
       finOpsPageState.closeDetail();
-      await refresh();
     },
     // Request Logs 跳转先配置当前身份 owner，再走统一后端导航切换；手写 DOM ID 仍不能跨租户读取。
     async onOpenRequest(requestId) {

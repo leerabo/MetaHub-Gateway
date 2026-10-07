@@ -493,6 +493,29 @@ async def test_stream_read_exception_returns_standard_sse_error_and_partial_usag
 
 
 @pytest.mark.anyio
+async def test_partial_stream_without_done_returns_error_not_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _install_state_spies(monkeypatch)
+    stream = _ScriptedStream(
+        [(0, b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n')]
+    )
+    request = replace(_provider_request(), stream_termination_marker="[DONE]")
+    response = await api_module._stream_response(
+        _config(), _context("req-no-done"), _Adapter(stream), request,
+        time.perf_counter(), None, client_request=_ClientRequest(),
+    )
+
+    chunks = await _consume(response)
+    assert len(chunks) == 2
+    assert b"partial" in chunks[0]
+    assert chunks[1].startswith(b"event: error\n")
+    assert b"gateway.upstream_unavailable" in chunks[1]
+    assert all(b"[DONE]" not in chunk for chunk in chunks)
+    assert state["request_logs"][0][1]["status"] == "failed"
+
+
+@pytest.mark.anyio
 async def test_stream_generator_close_records_client_disconnect_and_safe_partial_usage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

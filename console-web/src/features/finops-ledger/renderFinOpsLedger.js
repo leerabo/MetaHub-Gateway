@@ -83,7 +83,7 @@ export function renderFinOpsLedger(finOpsState, authContext) {
     <div class="finops-workspace">
       ${renderLedgerTable(entries, selectedEntry?.finops_ledger_entry_id, canWrite)}
     </div>
-    ${selectedEntry ? renderDetailPanel(selectedEntry) : ""}
+    ${selectedEntry ? renderFinOpsDetailPanel(selectedEntry) : ""}
     ${renderPager(finOpsState)}
     ${canWrite ? renderAdjustmentDialog(finOpsState.dialog) : ""}
   `;
@@ -245,7 +245,7 @@ function renderEmptyRow() {
 /**
  * 渲染 PAGE-075 详情区域；未选择分录时显示稳定占位，不自动选第一行。
  */
-function renderDetailPanel(entry) {
+export function renderFinOpsDetailPanel(entry) {
   const legacyWarning = entry.price_evidence_status === "legacy_amount_only"
     ? `<div class="finops-evidence-warning" role="note">仅历史金额证据，不可按单价重算。</div>`
     : "";

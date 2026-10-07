@@ -48,6 +48,8 @@ def prepare_cache_affinity_route(
     base_selection: RoutingSelectionResult,
     candidate_rows: dict[str, sqlite3.Row],
     as_of: datetime,
+    deferred_model_ids: tuple[str, ...] = (),
+    recovery_probe_model_id: str | None = None,
 ) -> CacheAffinityRouteFacts:
     """读取 Alias 配置、应用 endpoint 偏好并提交前构造 reservation。
 
@@ -119,17 +121,20 @@ def prepare_cache_affinity_route(
         endpoint_revisions=endpoint_revisions,
     )
     ttl_seconds = int(config_row["ttl_seconds"])
-    preferred = _choose_endpoint_preference(
-        config,
-        connection,
-        scope_row=scope_row,
-        binding_rows=binding_rows,
-        selection=base_selection,
-        candidate_rows=candidate_rows,
-        endpoint_revisions=endpoint_revisions,
-        ttl_seconds=ttl_seconds,
-        as_of=as_of,
-    )
+    preferred = None
+    if recovery_probe_model_id != base_selection.selected_model_id:
+        preferred = _choose_endpoint_preference(
+            config,
+            connection,
+            scope_row=scope_row,
+            binding_rows=binding_rows,
+            selection=base_selection,
+            candidate_rows=candidate_rows,
+            endpoint_revisions=endpoint_revisions,
+            ttl_seconds=ttl_seconds,
+            as_of=as_of,
+            deferred_model_ids=deferred_model_ids,
+        )
     outcome: CacheAffinityPreferenceOutcome | None = None
     final_selection = base_selection
     if preferred is not None and base_selection.routing_mode != "fixed":
@@ -329,6 +334,7 @@ def _choose_endpoint_preference(
     endpoint_revisions: dict[str, str],
     ttl_seconds: int,
     as_of: datetime,
+    deferred_model_ids: tuple[str, ...] = (),
 ) -> tuple[str, str, str] | None:
     """按 pointer、warm 时间和 pending 活动顺序选择一个兼容 endpoint 偏好。"""
 
@@ -339,6 +345,12 @@ def _choose_endpoint_preference(
         for item in selection.candidate_results
         if item.status in {"selected", "standby"} and item.rank is not None
     }
+    # A failed endpoint must not regain first place through an older warm binding.
+    if any(model_id not in deferred_model_ids for model_id in eligible):
+        eligible = {
+            model_id: candidate for model_id, candidate in eligible.items()
+            if model_id not in deferred_model_ids
+        }
     assessed: list[tuple[sqlite3.Row, str]] = []
     for binding in binding_rows:
         model_id = str(binding["model_endpoint_id"])
