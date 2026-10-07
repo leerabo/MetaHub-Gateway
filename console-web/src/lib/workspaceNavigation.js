@@ -95,9 +95,9 @@ const ROUTE_ROWS = [
   ["workspace.finance.disputes", "billing-disputes", "primary", "finance"],
   ["workspace.finance.budgets", "budgets", "primary", "finance"],
   ["workspace.finance.anomalies", "cost-anomalies", "primary", "finance"],
+  ["workspace.governance.policy-templates", "policy-templates", "primary", "governance"],
   ["workspace.governance.policies", "policies", "primary", "governance"],
   ["workspace.governance.policy-releases", "policy-snapshots", "primary", "governance"],
-  ["workspace.governance.policy-templates", "policy-templates", "primary", "governance"],
   ["workspace.governance.dlp", "dlp-rules", "primary", "governance"],
   ["workspace.governance.session-risks", "session-risks", "primary", "governance"],
   ["workspace.governance.output-safety", "output-safety", "primary", "governance"],
@@ -589,6 +589,9 @@ export function projectWorkspaceNavigationForConsole(
 
 function routeAvailableForCurrentPermissions(routeCode, grantedPermissions) {
   if (WORKSPACE_ROUTE_REGISTRY[routeCode]?.placement === "platform_internal") return false;
+  if (routeCode === "workspace.governance.policy-releases") {
+    return grantedPermissions.has("policy.publish");
+  }
   if (routeCode === "workspace.finance.usage") {
     return grantedPermissions.has("billing.usage.read") || grantedPermissions.has("virtual_key.read");
   }
@@ -626,6 +629,11 @@ function visibleInDefaultSidebar(routeCode, roleCode) {
 function projectItem(route, source, sidebarVisible) {
   const entry = WORKSPACE_ROUTE_REGISTRY[route];
   if (!entry) invalidResponse();
+  const policyOrder = {
+    "workspace.governance.policy-templates": 89,
+    "workspace.governance.policies": 90,
+    "workspace.governance.policy-releases": 92,
+  };
   return deepFreeze({
     id: entry.sourceId,
     route_code: route,
@@ -641,7 +649,7 @@ function projectItem(route, source, sidebarVisible) {
     visible: true,
     disabled: false,
     sidebar_visible: sidebarVisible,
-    order: source?.order ?? 900,
+    order: policyOrder[route] ?? source?.order ?? 900,
   });
 }
 

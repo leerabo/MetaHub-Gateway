@@ -28,7 +28,14 @@ const ACTION_LABELS = {
  * 从认证上下文提取策略页身份。
  * tenant/user 用于草稿隔离，role 用于身份变化清理；缺少任一关键值时不得创建可复用作用域。
  */
-export function policyIdentityFromAuthContext(authContext) {
+export function policyIdentityFromAuthContext(authContext, workspaceOwner = null) {
+  if (workspaceOwner?.workspaceId && workspaceOwner?.globalSessionId && workspaceOwner?.role) {
+    return normalizePolicyIdentity({
+      tenantId: workspaceOwner.workspaceId,
+      userId: workspaceOwner.globalSessionId,
+      role: workspaceOwner.role,
+    });
+  }
   return normalizePolicyIdentity({
     tenantId: authContext?.user?.tenant_id ?? authContext?.tenant?.tenant_id,
     userId: authContext?.user?.user_id ?? authContext?.user?.email,
@@ -92,6 +99,7 @@ export function policyDraftFromPolicy(policy) {
 export function createEmptyPolicyScope() {
   return {
     selectedPolicyId: null,
+    open: false,
     draft: createEmptyPolicyDraft(),
     dirty: false,
     validation: null,
@@ -278,22 +286,27 @@ export function renderPoliciesPanel(policiesState, modelsState, authContext) {
   const filters = policiesState?.filters ?? { status: "all", action: "all" };
   const visiblePolicies = filterPolicies(policies, filters);
   const saving = editor.operationStatus === "saving";
+  const editorOpen = canWrite && Boolean(editor.open || editor.selectedPolicyId || editor.dirty || editor.validation);
 
   return `
     <div class="policy-heading">
       <div>
-        <h2 id="policies-title">策略管理</h2>
-        <p>校验并维护当前租户的受限策略草稿。</p>
+        <h2 id="policies-title">规则概览</h2>
+        <p>需要按环境、项目、模型或预算设置特殊处理时，在这里编写规则。保存后还需在“上线与版本”发布，网关才会使用。</p>
       </div>
       <div class="policy-heading-actions">
         <span>${visiblePolicies.length} / ${policies.length} 条</span>
-        ${canWrite ? `<button id="policy-new" type="button" ${saving ? "disabled" : ""}>新建策略</button>` : ""}
+        ${canWrite ? `<button id="policy-new" type="button" ${saving ? "disabled" : ""}>新建自定义规则</button>` : ""}
       </div>
     </div>
+    <div class="policy-paths" aria-label="选择策略配置方式">
+      ${hasPermission(authContext, PERMISSIONS.POLICY_TEMPLATE_READ) ? '<div><strong>常见场景</strong><p>预算、路由、数据保护等，可先选场景模板，预览影响后直接应用。</p><a href="#workspace.governance.policy-templates">查看场景模板</a></div>' : ""}
+      <div><strong>特殊条件</strong><p>模板不适用时，在本页写自定义规则；保存草稿后再发布。</p>${hasPermission(authContext, PERMISSIONS.POLICY_PUBLISH) ? '<a href="#workspace.governance.policy-releases">查看上线与版本</a>' : ""}</div>
+    </div>
     ${renderPolicyStateError(policiesState)}
-    ${canWrite ? renderPolicyEditor(editor, activeModels, policiesState) : ""}
-    ${renderPolicyFilters(filters, saving)}
-    ${renderPolicyList(visiblePolicies, activeModels, saving, canWrite)}
+    ${editorOpen ? renderPolicyEditor(editor, activeModels, policiesState) : ""}
+    ${policies.length ? renderPolicyFilters(filters, saving) : ""}
+    ${policies.length ? renderPolicyList(visiblePolicies, activeModels, saving, canWrite) : editorOpen ? "" : '<p class="policy-list-empty">尚无自定义规则。可以直接使用场景模板，也可以新建规则。</p>'}
   `;
 }
 
@@ -380,14 +393,14 @@ function renderPolicyEditor(editor, activeModels, policiesState) {
     <section class="policy-editor" aria-labelledby="policy-editor-title">
       <div class="policy-editor-heading">
         <div>
-          <h3 id="policy-editor-title">${editing ? "编辑策略" : "新建策略"}</h3>
-          <span>${editing ? "正在编辑" : "尚未保存"}</span>
+          <h3 id="policy-editor-title">${editing ? "编辑自定义规则" : "新建自定义规则"}</h3>
+          <span>规则保存后不会立即生效；请到“上线与版本”发布。</span>
         </div>
-        <span class="policy-mode">${editing ? "编辑" : "新建"}</span>
+        <button class="policy-editor-cancel" id="policy-cancel" type="button" ${saving ? "disabled" : ""}>取消编辑</button>
       </div>
       <form id="policy-editor-form">
         <label>
-          <span>名称</span>
+          <span>规则名称</span>
           <input name="name" maxlength="80" required value="${escapeAttribute(draft.name)}" ${fieldDisabled} />
         </label>
         <label>
@@ -397,22 +410,24 @@ function renderPolicyEditor(editor, activeModels, policiesState) {
           </select>
         </label>
         <label>
-          <span>优先级</span>
+          <span>执行顺序（数字越小越靠前）</span>
           <input name="priority" type="number" min="1" max="10000" step="1" required value="${escapeAttribute(draft.priority)}" ${fieldDisabled} />
         </label>
         <label class="policy-description-field">
-          <span>描述</span>
+          <span>用途说明（可选）</span>
           <textarea name="description" maxlength="500" rows="2" ${fieldDisabled}>${escapeHtml(draft.description)}</textarea>
         </label>
         <label class="policy-condition-field">
-          <span>条件表达式</span>
+          <span>什么情况下执行？</span>
           <textarea name="conditionExpr" maxlength="1024" rows="5" spellcheck="false" required placeholder='env == "prod" and budget_remaining &lt; 100' ${fieldDisabled}>${escapeHtml(draft.conditionExpr)}</textarea>
         </label>
-        <div class="policy-variable-hint" aria-label="可用策略变量">
-          ${POLICY_VARIABLES.map((variable) => `<code>${escapeHtml(variable)}</code>`).join("")}
+        <p class="policy-condition-help">条件成立时才执行下面的动作。例如 <code>env == "prod"</code> 表示仅生产环境；<code>and</code> 表示两个条件都要满足。复杂场景建议先用模板。</p>
+        <div class="policy-variable-hint" aria-label="可插入的条件变量">
+          <span>点击插入变量：</span>
+          ${POLICY_VARIABLES.map((variable) => `<button type="button" data-policy-variable="${escapeAttribute(variable)}" aria-label="插入变量 ${escapeAttribute(variable)}"><code class="notranslate" translate="no">${escapeHtml(variable)}</code></button>`).join("")}
         </div>
         <label>
-          <span>动作</span>
+          <span>条件成立后执行</span>
           <select name="actionType" ${fieldDisabled}>
             ${POLICY_ACTIONS.map((action) => renderOption(action, ACTION_LABELS[action], draft.actionType)).join("")}
           </select>
@@ -424,8 +439,8 @@ function renderPolicyEditor(editor, activeModels, policiesState) {
           </select>
         </label>
         <div class="policy-editor-actions">
-          <button data-policy-validate type="button" ${busy ? "disabled" : ""}>校验</button>
-          <button data-policy-save type="submit" ${editor.canSave && !busy ? "" : "disabled"}>保存</button>
+          <button data-policy-validate type="button" ${busy ? "disabled" : ""}>1. 校验规则</button>
+          <button data-policy-save type="submit" ${editor.canSave && !busy ? "" : "disabled"}>2. 保存草稿</button>
           <span class="policy-feedback" role="status">${escapeHtml(feedback)}</span>
         </div>
       </form>

@@ -255,7 +255,7 @@ function renderHeading() {
     <div class="policy-snapshot-heading">
       <h2 id="policy-snapshots-title">上线步骤</h2>
       <ol class="policy-snapshot-steps">
-        <li><a href="#workspace.governance.policies">在安全策略中配置并启用策略</a></li>
+        <li><a href="#workspace.governance.policies">在自定义规则中配置并启用规则</a></li>
         <li>核对下面的待发布内容与线上版本</li>
         <li>填写变更原因，发布后等待网关拉取</li>
       </ol>
@@ -312,7 +312,7 @@ function renderCandidateSummary(state, current) {
   let tone = "changed";
   if (invalid) {
     status = "候选无效";
-    message = "策略校验失败，请在安全策略中修正后再发布。";
+    message = "规则校验失败，请在自定义规则中修正后再发布。";
     tone = "invalid";
   } else if (matches) {
     status = "与线上一致";
@@ -326,7 +326,7 @@ function renderCandidateSummary(state, current) {
     status = "0 条已启用策略";
     message = current?.policy_count > 0
       ? "发布后线上策略会被清空。请先确认这是预期结果。"
-      : "可先在安全策略中启用策略；若要使用策略模板，可发布空版本建立基线。";
+      : "可先在自定义规则中启用规则；若要使用场景模板，可发布空版本建立基线。";
     tone = "warning";
   }
   return `
@@ -334,7 +334,7 @@ function renderCandidateSummary(state, current) {
       <div>
         <h3 id="policy-snapshot-candidate-title">待发布内容 <span class="policy-snapshot-candidate-status">${escapeHtml(status)}</span></h3>
         <p>${escapeHtml(message)}</p>
-        ${invalid || count === 0 ? '<a href="#workspace.governance.policies">打开安全策略</a>' : ""}
+        ${invalid || count === 0 ? '<a href="#workspace.governance.policies">打开自定义规则</a>' : ""}
       </div>
       <div class="policy-snapshot-candidate-meta">
         <strong>${escapeHtml(count)} 条策略</strong>

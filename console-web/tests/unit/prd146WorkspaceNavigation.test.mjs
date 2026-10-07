@@ -258,6 +258,32 @@ test("platform internal routes are never Workspace sidebar or direct-link target
   assert.equal(projected.navigation_items.some((item) => item.id === "admin-assistant"), false);
 });
 
+test("governance navigation presents templates before rules and reserves publishing for publishers", () => {
+  const payload = navigationPayload();
+  const governance = payload.groups.find((group) => group.group_code === "governance");
+  governance.items.push(
+    item("workspace.governance.policy-releases", "primary", 92),
+    item("workspace.governance.policy-templates", "primary", 93),
+  );
+  const navigation = normalizeWorkspaceNavigation(payload);
+  const reader = { permission_codes: ["policy.read", "policy_template.read"] };
+  assert.equal(resolveWorkspaceNavigationRoute(navigation, "workspace.governance.policy-releases",
+    { authorization: reader }).rejected, true);
+  const limited = projectWorkspaceNavigationForConsole(
+    navigation, "workspace.home.overview", null, reader, "owner",
+  );
+  assert.equal(limited.navigation_items.some((entry) => entry.id === "policy-snapshots"), false);
+  const publisher = projectWorkspaceNavigationForConsole(
+    navigation, "workspace.home.overview", null,
+    { permission_codes: [...reader.permission_codes, "policy.publish"] }, "owner",
+  );
+  const policyItems = publisher.navigation_items
+    .filter((entry) => ["policy-templates", "policies", "policy-snapshots"].includes(entry.id))
+    .sort((left, right) => left.order - right.order)
+    .map((entry) => entry.id);
+  assert.deepEqual(policyItems, ["policy-templates", "policies", "policy-snapshots"]);
+});
+
 test("PRD-146 store supersedes lane tickets and changes route without losing navigation", () => {
   const store = createWorkspaceNavigationStore({
     createIdempotencyKey: () => "preference:test-key",

@@ -1602,7 +1602,7 @@ def require_policy_reader(
     """要求当前用户可读取治理策略和版本摘要。"""
 
     # 当前后端 permission 快照是唯一授权依据，禁止按角色名或前端可见性补权。
-    return _require_request_permissions(request, authorization, ("policy.read",))
+    return require_workspace_or_legacy_permissions("policy.read")(request, authorization)
 
 
 def require_policy_writer(
@@ -1612,7 +1612,7 @@ def require_policy_writer(
     """要求当前用户可创建和更新治理策略。"""
 
     # 当前后端 permission 快照是唯一授权依据，禁止按角色名或前端可见性补权。
-    return _require_request_permissions(request, authorization, ("policy.write",))
+    return require_workspace_or_legacy_permissions("policy.write")(request, authorization)
 
 
 def require_policy_simulator(
@@ -1622,7 +1622,7 @@ def require_policy_simulator(
     """要求当前用户具备执行无副作用策略模拟的独立后端权限。"""
 
     # 当前后端 permission 快照是唯一授权依据，禁止按角色名或前端可见性补权。
-    return _require_request_permissions(request, authorization, ("policy.simulate",))
+    return require_workspace_or_legacy_permissions("policy.simulate")(request, authorization)
 
 
 def require_policy_publisher(

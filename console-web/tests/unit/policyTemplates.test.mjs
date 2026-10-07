@@ -548,7 +548,7 @@ test("policy template state renders incompatible impact order without apply", ()
   const html = renderPolicyTemplates(snapshot);
   assert.match(html, /现有策略会阻断或绕过模板效果/);
   assert.match(html, /pol_333333…333333/);
-  assert.match(html, /前往策略管理/);
+  assert.match(html, /前往自定义规则/);
   assert.doesNotMatch(html, /data-policy-template-action="confirm"/);
 });
 
@@ -645,8 +645,8 @@ test("policy template renderer hides unauthorized DOM and never renders nonce or
   const preview = state.beginPreview();
   state.acceptPreview(preview, previewPayload());
   const html = renderPolicyTemplates(state.snapshot());
-  assert.match(html, /从现成模板创建策略/);
-  assert.match(html, /先预览对现有策略的影响，再确认应用/);
+  assert.match(html, /选场景，预览后应用/);
+  assert.match(html, /预览对现有规则的影响，再确认应用/);
   assert.match(html, /低成本模式/);
   assert.match(html, /应用模板/);
   assert.match(html, /本次模板/);

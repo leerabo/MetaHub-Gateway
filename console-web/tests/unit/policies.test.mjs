@@ -8,6 +8,7 @@ import {
   createEmptyPolicyScope,
   createPolicyDraftMemory,
   createPolicyRequestLifecycle,
+  policyIdentityFromAuthContext,
   policyDraftFromPolicy,
   policyDraftSnapshot,
   renderPoliciesPanel,
@@ -172,6 +173,37 @@ test("policy client sends nested safe payloads and If-Match without tenant or co
   }
 });
 
+test("policy client uses Workspace cookies and CSRF for reads and writes", async () => {
+  const previousDocument = globalThis.document;
+  const calls = [];
+  globalThis.document = { cookie: "__Host-metahub-workspace-csrf=csrf_test_value" };
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      status: 200,
+      headers: { get() { return null; } },
+      async json() { return { policies: [], valid: true }; },
+    };
+  };
+  try {
+    await listPolicies({ controlApiUrl: "http://control.local", authentication: "workspace" });
+    await validatePolicy({
+      controlApiUrl: "http://control.local", authentication: "workspace",
+      conditionExpr: 'env == "prod"', actionType: "deny",
+    });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].options.credentials, "include");
+    assert.equal(calls[0].options.headers.Authorization, undefined);
+    assert.equal(calls[0].options.headers["X-CSRF-Token"], undefined);
+    assert.equal(calls[1].options.credentials, "include");
+    assert.equal(calls[1].options.headers.Authorization, undefined);
+    assert.equal(calls[1].options.headers["X-CSRF-Token"], "csrf_test_value");
+  } finally {
+    globalThis.document = previousDocument;
+  }
+});
+
 test("policy client maps unified errors without reflecting DSL source", async () => {
   globalThis.fetch = async () => ({
     ok: false,
@@ -248,7 +280,7 @@ test("policy panel renders admin editor active models and escaped dynamic values
   assert.doesNotMatch(html, /Disabled Model/);
   assert.match(html, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
   assert.match(html, /&lt;\/textarea&gt;&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
-  assert.match(html, /&lt;script&gt;canonical&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /canonical_expression|&lt;script&gt;canonical&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>/);
   assert.doesNotMatch(html, /tenant_must_not_render/);
   assert.match(html, /data-policy-save type="submit" >/);
@@ -287,9 +319,8 @@ test("policy diagnostics and all non-admin renders remain safe", () => {
     policyWriterContext,
   );
 
-  assert.match(html, /policy.expression_invalid/);
   assert.match(html, /&lt;svg onload=alert\(1\)&gt;/);
-  assert.match(html, /req_&lt;\/code&gt;&lt;script&gt;/);
+  assert.doesNotMatch(html, /req_&lt;\/code&gt;&lt;script&gt;|rule\.condition_expr/);
   assert.match(html, /data-policy-save type="submit" disabled/);
   const readOnly = renderPoliciesPanel(
     { state: "ok", policies: [policy], filters: { status: "all", action: "all" } },
@@ -300,6 +331,29 @@ test("policy diagnostics and all non-admin renders remain safe", () => {
   assert.doesNotMatch(readOnly, /policy-editor-form|data-policy-edit|policy-new/);
   assert.equal(renderPoliciesPanel({ state: "ok", policies: [policy] }, null, { user: { role: "developer" } }), "");
   assert.equal(renderPoliciesPanel({ state: "ok", policies: [policy] }, null, { user: { role: "viewer" } }), "");
+});
+
+test("policy overview keeps the advanced editor closed until the user starts a rule", () => {
+  const base = { state: "ok", policies: [], filters: { status: "all", action: "all" } };
+  const overview = renderPoliciesPanel({ ...base, editor: createEmptyPolicyScope() }, null, policyWriterContext);
+  assert.match(overview, /新建自定义规则/);
+  assert.match(overview, /尚无自定义规则/);
+  assert.doesNotMatch(overview, /id="policy-editor-form"/);
+  const started = renderPoliciesPanel({ ...base, editor: { ...createEmptyPolicyScope(), open: true } }, null, policyWriterContext);
+  assert.match(started, /id="policy-editor-form"/);
+  assert.doesNotMatch(started, /尚无自定义规则/);
+  assert.match(started, /1\. 校验规则/);
+  assert.match(started, /2\. 保存草稿/);
+  assert.match(started, /data-policy-variable="tenant"/);
+  assert.match(started, /data-policy-variable="project"/);
+});
+
+test("Workspace owner supplies isolated rule editor identity", () => {
+  const identity = policyIdentityFromAuthContext(
+    { permission_codes: [PERMISSIONS.POLICY_READ] },
+    { workspaceId: "wsp_test", globalSessionId: "session_test", role: "owner" },
+  );
+  assert.deepEqual(identity, { tenantId: "wsp_test", userId: "session_test", role: "owner" });
 });
 
 test("policy draft memory retains same identity refresh and clears tenant user or role changes", () => {

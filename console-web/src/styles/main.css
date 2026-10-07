@@ -17886,6 +17886,28 @@ h3 {
   margin-bottom: 16px;
 }
 
+.policy-paths {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.policy-paths > div {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #d6e4df;
+  border-radius: 10px;
+  background: #f5faf8;
+}
+
+.policy-paths > div:only-child { grid-column: 1 / -1; }
+
+.policy-paths strong { display: block; color: #173b34; }
+.policy-paths p { margin: 6px 0 10px; color: #53645e; line-height: 1.5; }
+.policy-paths a { color: #087265; font-weight: 700; }
+.policy-list-empty { padding: 20px 0; color: #53645e; }
+
 .policy-heading > div:first-child,
 .policy-editor-heading > div {
   display: grid;
@@ -17903,6 +17925,7 @@ h3 {
 }
 
 .policy-heading-actions button,
+.policy-editor-cancel,
 .policy-editor-actions button,
 .policy-filters button,
 .policy-row button {
@@ -17928,8 +17951,16 @@ h3 {
   color: #ffffff;
 }
 
+.policy-editor-actions button[data-policy-save]:disabled {
+  border-color: #d9e0ea;
+  background: #eef2f6;
+  color: #8793a3;
+}
+
 .policy-heading-actions button:hover,
 .policy-heading-actions button:focus-visible,
+.policy-editor-cancel:hover,
+.policy-editor-cancel:focus-visible,
 .policy-editor-actions button:hover,
 .policy-editor-actions button:focus-visible,
 .policy-filters button:hover,
@@ -17942,6 +17973,7 @@ h3 {
 }
 
 .policy-heading-actions button:disabled,
+.policy-editor-cancel:disabled,
 .policy-editor-actions button:disabled,
 .policy-filters button:disabled,
 .policy-row button:disabled {
@@ -18046,6 +18078,7 @@ h3 {
 
 .policy-description-field,
 .policy-condition-field,
+.policy-condition-help,
 .policy-variable-hint,
 .policy-editor-actions {
   grid-column: 1 / -1;
@@ -18058,15 +18091,29 @@ h3 {
   min-width: 0;
 }
 
-.policy-variable-hint code {
+.policy-condition-help {
+  margin: -4px 0 0;
+  color: #53645e;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.policy-condition-help code { color: #205e53; }
+
+.policy-variable-hint button {
   max-width: 100%;
   padding: 3px 6px;
   border: 1px solid #d9e0ea;
   border-radius: 4px;
   background: #f8fafc;
   color: #334155;
+  cursor: pointer;
+  font: inherit;
   overflow-wrap: anywhere;
 }
+
+.policy-variable-hint button:hover,
+.policy-variable-hint button:focus-visible { border-color: #0f766e; outline: 2px solid #ccfbf1; }
 
 .policy-route-target[hidden] {
   display: none;
@@ -18272,6 +18319,7 @@ h3 {
 
   .policy-description-field,
   .policy-condition-field,
+  .policy-condition-help,
   .policy-variable-hint,
   .policy-editor-actions {
     grid-column: 1 / -1;
@@ -18279,6 +18327,8 @@ h3 {
 }
 
 @media (max-width: 720px) {
+  .policy-paths { grid-template-columns: minmax(0, 1fr); }
+
   .policy-heading,
   .policy-heading-actions,
   .policy-editor-heading,

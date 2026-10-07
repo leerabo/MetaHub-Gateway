@@ -14072,7 +14072,7 @@ function clearPolicySnapshotSessionState() {
  * 请求前后均核对 refresh、tenant/user/role、hash 与 active navigation，旧响应不得提交到模块态或 DOM。
  */
 async function loadPoliciesState(consoleShellState, refreshId, modelsState) {
-  const requestIdentityObject = policyIdentityFromAuthContext(authSession.context);
+  const requestIdentityObject = policyIdentityFromAuthContext(authSession.context, authSession.owner);
   const requestIdentity = policyIdentitySnapshot(requestIdentityObject);
   const hashNavigation = readActiveNavigationHash();
   if (!shouldLoadPolicies({
@@ -14094,12 +14094,13 @@ async function loadPoliciesState(consoleShellState, refreshId, modelsState) {
   try {
     const state = await listPolicies({
       controlApiUrl,
+      authentication: authSession.authentication,
       token: authSession.token,
       status: "all",
       scanScope: dlpScanScopeFilter,
       signal: controller.signal,
     });
-    const currentIdentity = policyIdentitySnapshot(policyIdentityFromAuthContext(authSession.context));
+    const currentIdentity = policyIdentitySnapshot(policyIdentityFromAuthContext(authSession.context, authSession.owner));
     const currentHashNavigation = readActiveNavigationHash();
     if (
       policyListController !== controller
@@ -14206,7 +14207,7 @@ function buildPoliciesRenderState() {
   if (!policyListState) {
     return null;
   }
-  const identity = policyIdentityFromAuthContext(authSession.context);
+  const identity = policyIdentityFromAuthContext(authSession.context, authSession.owner);
   const scope = policyDraftMemory.enter(identity) ?? createEmptyPolicyScope();
   const currentSnapshot = policyDraftSnapshot(scope.draft, { selectedPolicyId: scope.selectedPolicyId });
   const validation = scope.validation?.snapshot === currentSnapshot
@@ -14256,7 +14257,7 @@ function renderPolicyPanelFromMemory() {
  * 每轮全页或局部渲染后只绑定当前新 DOM，权限和租户事实仍由后端 API 再次验证。
  */
 function bindPolicyInteractions(consoleShellState) {
-  const identity = policyIdentityFromAuthContext(authSession.context);
+  const identity = policyIdentityFromAuthContext(authSession.context, authSession.owner);
   if (
     !hasPermission(authSession.context, PERMISSIONS.POLICY_READ)
     || consoleShellState?.activeNavigationItemId !== "policies"
@@ -14283,6 +14284,17 @@ function bindPolicyInteractions(consoleShellState) {
 
   document.querySelector("#policy-new")?.addEventListener("click", () => {
     policyRequestLifecycle.invalidate();
+    policyDraftMemory.write(identity, { ...createEmptyPolicyScope(), open: true });
+    policyOperationStatus = "idle";
+    policyActionError = null;
+    policyFeedback = "";
+    renderPolicyPanelFromMemory();
+  });
+
+  document.querySelector("#policy-cancel")?.addEventListener("click", () => {
+    const current = policyDraftMemory.read(identity);
+    if (current?.dirty && !window.confirm("放弃当前尚未保存的修改？")) return;
+    policyRequestLifecycle.invalidate();
     policyDraftMemory.write(identity, createEmptyPolicyScope());
     policyOperationStatus = "idle";
     policyActionError = null;
@@ -14301,6 +14313,16 @@ function bindPolicyInteractions(consoleShellState) {
   });
 
   const editorForm = document.querySelector("#policy-editor-form");
+  for (const variableButton of editorForm?.querySelectorAll("[data-policy-variable]") ?? []) {
+    variableButton.addEventListener("click", () => {
+      const field = editorForm.querySelector('[name="conditionExpr"]');
+      const variable = variableButton.dataset.policyVariable;
+      if (!field || !["tenant", "env", "project", "model", "data_class", "budget_remaining"].includes(variable)) return;
+      field.setRangeText(variable, field.selectionStart, field.selectionEnd, "end");
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      field.focus();
+    });
+  }
   editorForm?.addEventListener("input", () => {
     synchronizePolicyDraftFromForm(editorForm, identity);
     syncPolicyEditorDomAfterInput(editorForm);
@@ -14333,6 +14355,7 @@ function selectPolicyForEditing(identity, policyId) {
   policyRequestLifecycle.invalidate();
   policyDraftMemory.write(identity, {
     selectedPolicyId: selected.policy_id,
+    open: true,
     draft: policyDraftFromPolicy(selected),
     dirty: false,
     validation: null,
@@ -14456,6 +14479,7 @@ async function validateCurrentPolicy(form, identity) {
   try {
     const result = await validatePolicy({
       controlApiUrl,
+      authentication: authSession.authentication,
       token: authSession.token,
       conditionExpr: scope.draft.conditionExpr,
       actionType: scope.draft.actionType,
@@ -14467,7 +14491,7 @@ async function validateCurrentPolicy(form, identity) {
       return;
     }
     policyRequestLifecycle.finish(operation);
-    const current = policyDraftMemory.read(policyIdentityFromAuthContext(authSession.context));
+    const current = policyDraftMemory.read(policyIdentityFromAuthContext(authSession.context, authSession.owner));
     policyDraftMemory.write(identity, {
       ...current,
       validation: { snapshot, result },
@@ -14535,6 +14559,7 @@ async function saveCurrentPolicy(form, identity) {
     const result = scope.selectedPolicyId
       ? await updatePolicy({
         controlApiUrl,
+        authentication: authSession.authentication,
         token: authSession.token,
         policyId: scope.selectedPolicyId,
         version: scope.draft.version,
@@ -14543,6 +14568,7 @@ async function saveCurrentPolicy(form, identity) {
       })
       : await createPolicy({
         controlApiUrl,
+        authentication: authSession.authentication,
         token: authSession.token,
         ...arguments_,
         signal: operation.signal,
@@ -14608,7 +14634,7 @@ function isCurrentPolicyOperation(operation) {
   if (!hasPermission(authSession.context, PERMISSIONS.POLICY_WRITE)) {
     return false;
   }
-  const identity = policyIdentityFromAuthContext(authSession.context);
+  const identity = policyIdentityFromAuthContext(authSession.context, authSession.owner);
   const scope = policyDraftMemory.read(identity);
   const snapshot = scope
     ? policyDraftSnapshot(scope.draft, { selectedPolicyId: scope.selectedPolicyId })
@@ -14652,7 +14678,7 @@ async function handlePolicyOperationError(error, { clearValidation = false } = {
     await refresh();
     return;
   }
-  const identity = policyIdentityFromAuthContext(authSession.context);
+  const identity = policyIdentityFromAuthContext(authSession.context, authSession.owner);
   const scope = policyDraftMemory.read(identity);
   if (scope && clearValidation) {
     policyDraftMemory.write(identity, { ...scope, validation: null, dirty: true });

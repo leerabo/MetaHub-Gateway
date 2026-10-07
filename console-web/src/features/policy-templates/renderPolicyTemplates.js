@@ -32,8 +32,8 @@ export function renderPolicyTemplates(state = {}) {
     <section class="policy-template-page" data-policy-template-page aria-labelledby="policy-template-title">
       <header class="policy-template-page__header">
         <div>
-          <h2 id="policy-template-title">从现成模板创建策略</h2>
-          <p>选择一个场景，指定适用项目，先预览对现有策略的影响，再确认应用。应用后会创建新版本，由网关同步生效。</p>
+          <h2 id="policy-template-title">选场景，预览后应用</h2>
+          <p>这里包含预算控制、模型路由和数据保护等场景。选择模板与适用项目，预览对现有规则的影响，再确认应用。应用会直接创建上线版本，由网关同步生效。</p>
         </div>
         <button class="button button--secondary policy-template-page__refresh" type="button"
           data-policy-template-action="refresh"
@@ -434,7 +434,7 @@ function reasonLabel(code) {
 function remediationFor(reasonCodes) {
   const codes = new Set(Array.isArray(reasonCodes) ? reasonCodes : []);
   const choices = [
-    ["snapshot_baseline_required", "policy-snapshots", "前往策略发布"],
+    ["snapshot_baseline_required", "policy-snapshots", "前往上线与版本"],
     ["active_environment_required", "environments", "前往环境管理"],
     ["environment_limit_exceeded", "environments", "前往环境管理"],
     ["provider_adapter_required", "providers", "前往 Provider 管理"],
@@ -447,9 +447,9 @@ function remediationFor(reasonCodes) {
     ["active_virtual_key_required", "virtual-keys", "前往 Virtual Key"],
     ["budget_coverage_required", "budgets", "前往预算中心"],
     ["policy_mask_runtime_required", "system-status", "前往系统状态"],
-    ["policy_quota_exceeded", "policies", "前往策略管理"],
-    ["policy_shadowing_conflict", "policies", "前往策略管理"],
-    ["active_template_application_exists", "policies", "前往策略管理"],
+    ["policy_quota_exceeded", "policies", "前往自定义规则"],
+    ["policy_shadowing_conflict", "policies", "前往自定义规则"],
+    ["active_template_application_exists", "policies", "前往自定义规则"],
   ];
   const match = choices.find(([code]) => codes.has(code));
   return match ? { target: match[1], label: match[2] } : null;

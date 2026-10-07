@@ -4,6 +4,7 @@
  */
 
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 /**
  * 查询当前认证租户的策略列表。
@@ -11,12 +12,13 @@ import { AuthApiError } from "./auth.js";
  * 参数中的 status/action 只用于受限枚举筛选；signal 用于离页或刷新时取消旧请求。
  * 返回后端策略数组及 request_id/trace_id，真实租户隔离和 admin 权限由控制面执行。
  */
-export async function listPolicies({ controlApiUrl, token, status = "all", action, signal }) {
+export async function listPolicies({ controlApiUrl, authentication, token, status = "all", action, signal }) {
   const url = new URL(`${controlApiUrl}/policies`);
   setOptionalParam(url, "status", status);
   setOptionalParam(url, "action", action === "all" ? undefined : action);
   return policyRequest(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
+    authentication,
+    token,
     signal,
   });
 }
@@ -29,6 +31,7 @@ export async function listPolicies({ controlApiUrl, token, status = "all", actio
  */
 export async function validatePolicy({
   controlApiUrl,
+  authentication,
   token,
   conditionExpr,
   actionType,
@@ -44,9 +47,10 @@ export async function validatePolicy({
     payload.context = context;
   }
   return policyRequest(`${controlApiUrl}/policies/validate`, {
+    authentication,
+    token,
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -61,6 +65,7 @@ export async function validatePolicy({
  */
 export async function createPolicy({
   controlApiUrl,
+  authentication,
   token,
   name,
   description,
@@ -72,9 +77,10 @@ export async function createPolicy({
   signal,
 }) {
   return policyRequest(`${controlApiUrl}/policies`, {
+    authentication,
+    token,
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(buildPolicyPayload({
@@ -97,6 +103,7 @@ export async function createPolicy({
  */
 export async function updatePolicy({
   controlApiUrl,
+  authentication,
   token,
   policyId,
   version,
@@ -110,9 +117,10 @@ export async function updatePolicy({
   signal,
 }) {
   return policyRequest(`${controlApiUrl}/policies/${encodeURIComponent(policyId)}`, {
+    authentication,
+    token,
     method: "PATCH",
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
       "If-Match": `"${String(version)}"`,
     },
@@ -182,9 +190,8 @@ function setOptionalParam(url, name, value) {
  * 错误只保留后端安全 message、code 和链路标识，不拼接草稿正文、AST 或底层异常。
  */
 async function policyRequest(url, options = {}) {
-  const response = await fetch(url, {
+  const response = await authenticatedResourceFetch(url, {
     ...options,
-    cache: "no-store",
     headers: {
       "X-Request-ID": createPolicyRequestId(),
       ...(options.headers ?? {}),
