@@ -270,7 +270,7 @@ test("PRD-052 reads a key-qualified scope chain without sending tenant_id", asyn
   assert.doesNotMatch(calls.join(" "), /tenant_id=/);
 });
 
-test("PRD-052 budget center renders aggregate summaries and ledger-reservation split", () => {
+test("PRD-052 budget center keeps one rule list and contextual employee decision", () => {
   const html = renderBudgetPanel(
     {
       state: "ok",
@@ -302,17 +302,14 @@ test("PRD-052 budget center renders aggregate summaries and ledger-reservation s
     },
   );
 
-  assert.match(html, /调用成本预算/);
-  assert.match(html, /运行环境摘要/);
-  assert.match(html, /这次调用会受到哪些预算限制/);
-  assert.match(html, /有效动作/);
+  assert.match(html, /模型调用成本上限/);
+  assert.doesNotMatch(html, /运行环境摘要|组织预算概览/);
+  assert.match(html, /所选凭证适用的预算/);
+  assert.match(html, /当前调用阻断/);
   assert.match(html, /Project A 日预算/);
-  assert.match(html, /正式入账/);
-  assert.match(html, /预留/);
-  assert.match(html, /72.000000/);
-  assert.match(html, /8.000000/);
-  assert.match(html, /bb_project_a/);
-  assert.match(html, /data-budget-block-id="bb_project_a"/);
+  assert.match(html, /已用 80.000000/);
+  assert.match(html, /当前已阻断调用/);
+  assert.doesNotMatch(html, /bb_project_a/);
   assert.doesNotMatch(html, /<em>bsc_/);
   assert.match(html, /data-budget-scope-option="project"/);
   assert.match(html, /data-budget-scope-option="virtual_key"/);

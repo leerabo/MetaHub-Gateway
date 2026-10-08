@@ -59,6 +59,7 @@ ALLOWED_BUDGET_RULE_BODY_FIELDS = frozenset(
         "name",
         "daily_budget_cny",
         "budget_period",
+        "activation_at_utc",
         "warning_threshold_percent",
         "exhausted_action",
         "status",

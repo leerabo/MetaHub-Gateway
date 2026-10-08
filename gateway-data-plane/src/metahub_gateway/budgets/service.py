@@ -720,6 +720,7 @@ def _load_budget_rules(
         WHERE tenant_id=?
           AND environment_id=?
           AND status='active'
+          AND (activation_at_utc IS NULL OR activation_at_utc<=?)
           AND (
             scope_type='tenant'
             OR (scope_type='project' AND scope_id=?)
@@ -733,7 +734,7 @@ def _load_budget_rules(
           ELSE 3
         END
         """,
-        (tenant_id, environment_id, project_id, application_id, virtual_key_id),
+        (tenant_id, environment_id, _to_db_time(_utcnow()), project_id, application_id, virtual_key_id),
     ).fetchall()
     return [
         BudgetRule(
@@ -747,6 +748,7 @@ def _load_budget_rules(
             exhausted_action=row["exhausted_action"],
             budget_period=row["budget_period"] if "budget_period" in row.keys() else "day",
             effective_from_utc=row["effective_from_utc"] if "effective_from_utc" in row.keys() else None,
+            activation_at_utc=row["activation_at_utc"] if "activation_at_utc" in row.keys() else None,
         )
         for row in rows
     ]
@@ -1523,9 +1525,10 @@ def _budget_window(now: datetime | None = None, *, period: str = "day") -> tuple
 
 
 def _rule_effective_start(rule: BudgetRule, calendar_start: str) -> str:
-    """新规则首个不完整周期从保存瞬间算起，以后回归自然周期。"""
+    """首个周期从启用或可信价格起点算起，以后回归自然周期。"""
 
-    return max(calendar_start, rule.effective_from_utc) if rule.effective_from_utc else calendar_start
+    return max(calendar_start, rule.effective_from_utc or calendar_start,
+               rule.activation_at_utc or calendar_start)
 
 
 def _decimal_value(value: object) -> Decimal:

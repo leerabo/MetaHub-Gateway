@@ -1408,11 +1408,15 @@ def _create_budget_holds(
     ).fetchall()
     reserved_micros = _money_micros(reserved)
     for rule in rules:
+        if "activation_at_utc" in rule.keys() and rule["activation_at_utc"] and created.isoformat().replace("+00:00", "Z") < str(rule["activation_at_utc"]):
+            continue
         try:
             period = rule["budget_period"] if "budget_period" in rule.keys() else "day"
             _same_day, period_start, period_end = _budget_window(created, period=period)
             if "effective_from_utc" in rule.keys() and rule["effective_from_utc"]:
                 period_start = max(period_start, str(rule["effective_from_utc"]))
+            if "activation_at_utc" in rule.keys() and rule["activation_at_utc"]:
+                period_start = max(period_start, str(rule["activation_at_utc"]))
             amounts = load_budget_spend_amounts(
                 connection,
                 tenant_id=tenant_id,

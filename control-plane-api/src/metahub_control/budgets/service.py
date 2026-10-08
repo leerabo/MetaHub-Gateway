@@ -75,7 +75,7 @@ MONEY_QUANT = Decimal("0.000001")
 VALID_SCOPE_TYPES = {"tenant", "virtual_key", "project", "application"}
 VALID_ACTIONS = {"alert_only", "block"}
 VALID_STATUSES = {"active", "disabled"}
-EDITABLE_FIELDS = {"name", "daily_budget_cny", "budget_period", "warning_threshold_percent", "exhausted_action", "status"}
+EDITABLE_FIELDS = {"name", "daily_budget_cny", "budget_period", "activation_at_utc", "warning_threshold_percent", "exhausted_action", "status"}
 CONFLICT_POLICY = "all_applicable_caps_deny_wins_v1"
 
 
@@ -143,7 +143,7 @@ def list_budget_people(
         people: list[BudgetPersonInfo] = []
         for row in rows:
             keys: list[BudgetPersonKeyInfo] = []
-            spend: dict[str, str] = {}
+            spend: dict[str, str | None] = {}
             if selected_id:
                 key_rows = connection.execute(
                     """
@@ -187,13 +187,14 @@ def list_budget_people(
 
 def _person_posted_spend(
     connection: sqlite3.Connection, tenant_id: str, user_id: str
-) -> dict[str, str]:
+) -> dict[str, str | None]:
     """按凭证的持久创建者聚合员工正式入账成本，已删除凭证也计入历史。"""
 
     now = _utcnow()
     starts = {period: _budget_window(now, period=period)[1] for period in ("day", "month", "year")}
     end = _budget_window(now, period="year")[2]
     totals = {period: 0 for period in starts}
+    unavailable: set[str] = set()
     rows = connection.execute(
         """
         SELECT fle.created_at, fle.normalized_cny_micros,
@@ -211,19 +212,21 @@ def _person_posted_spend(
     )
     for row in rows:
         amount = row["normalized_cny_micros"]
-        if (
+        invalid = (
             type(amount) is not int or amount < 0 or amount > MAX_BUDGET_CNY_MICROS
             or row["cny_normalization_status"] != "normalized"
             or row["price_evidence_status"] not in ("priced", "legacy_amount_only")
-        ):
-            raise BudgetSpendUnavailableError("budget_person.spend_unavailable")
+        )
         for period, start in starts.items():
             if row["created_at"] >= start:
+                if invalid:
+                    unavailable.add(period)
+                    continue
                 totals[period] += amount
                 if totals[period] > MAX_BUDGET_CNY_MICROS:
-                    raise BudgetSpendUnavailableError("budget_person.spend_unavailable")
+                    unavailable.add(period)
     return {
-        period: _money_text(Decimal(total) / Decimal(MICROS_PER_CNY))
+        period: None if period in unavailable else _money_text(Decimal(total) / Decimal(MICROS_PER_CNY))
         for period, total in totals.items()
     }
 
@@ -455,14 +458,15 @@ def _write_budget_rule(
                 INSERT INTO budget_rules(
                   budget_rule_id, tenant_id, environment_id, scope_type, scope_id, name,
                   daily_budget_cny, budget_period, warning_threshold_percent, exhausted_threshold_percent,
-                  exhausted_action, status, created_by, updated_by, created_at, updated_at
+                  exhausted_action, status, created_by, updated_by, created_at, updated_at,
+                  activation_at_utc
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values,
             )
         else:
-            updates, values = _update_rule_values(payload, provided)
+            updates, values = _update_rule_values(payload, provided, now)
             updates.extend(["updated_by=?", "updated_at=?"])
             values.extend(
                 [
@@ -495,9 +499,9 @@ def _write_budget_rule(
         if row is None:
             # 写后回读缺失表示事务事实不完整，必须回滚且禁止产生成功副作用。
             raise ApiError("budget.status_unavailable")
-        if existing is None:
+        if existing is None or ("activation_at_utc" in provided and row["activation_at_utc"] is None):
             row = _set_partial_period_start_if_needed(connection, row, now)
-        else:
+        if existing is not None:
             released_blocks, release_reason = _reconcile_blocks_after_rule_update(
                 connection,
                 context,
@@ -709,10 +713,12 @@ def get_budget_status(
             application_id=application_id,
         )
         budget_date, _start, _end = _budget_window()
-        clauses = ["br.tenant_id=?", "br.environment_id=?", "br.status='active'"]
+        clauses = ["br.tenant_id=?", "br.environment_id=?", "br.status='active'",
+                   "(br.activation_at_utc IS NULL OR br.activation_at_utc<=?)"]
         params: list[object] = [
             context.user.tenant_id,
             binding.environment.environment_id,
+            _to_db_time(_utcnow()),
         ]
         scoped_conditions: list[str] = ["br.scope_type='tenant'"]
         if binding.project_id:
@@ -782,6 +788,7 @@ def _budget_audit_summary(row: sqlite3.Row) -> dict[str, object]:
         "daily_budget_cny": _money_text(_decimal_value(row["daily_budget_cny"])),
         "budget_period": _row_budget_period(row),
         "effective_from_utc": row["effective_from_utc"] if "effective_from_utc" in row.keys() else None,
+        "activation_at_utc": row["activation_at_utc"] if "activation_at_utc" in row.keys() else None,
         "warning_threshold_percent": int(row["warning_threshold_percent"]),
         "exhausted_action": row["exhausted_action"],
         "status": row["status"],
@@ -1169,12 +1176,14 @@ def _new_rule_values(
         context.user.user_id,
         now,
         now,
+        _normalize_activation_at(payload.activation_at_utc, now) if "activation_at_utc" in provided else None,
     )
 
 
 def _update_rule_values(
     payload: UpdateBudgetRuleRequest,
     provided: set[str],
+    now: str,
 ) -> tuple[list[str], list[object]]:
     """构造预算规则更新 SQL 片段，集中校验金额、阈值、策略和状态。"""
 
@@ -1189,6 +1198,9 @@ def _update_rule_values(
     if "budget_period" in provided:
         updates.append("budget_period=?")
         values.append(payload.budget_period or "day")
+    if "activation_at_utc" in provided:
+        updates.append("activation_at_utc=?")
+        values.append(_normalize_activation_at(payload.activation_at_utc, now))
     if "warning_threshold_percent" in provided:
         updates.append("warning_threshold_percent=?")
         values.append(_normalize_warning_threshold(payload.warning_threshold_percent))
@@ -1294,6 +1306,19 @@ def _normalize_status(value: object | None) -> str:
     return status
 
 
+def _normalize_activation_at(value: datetime | None, now: str) -> str | None:
+    """空值表示立即生效；指定时间必须带时区且在当前时刻之后。"""
+
+    if value is None:
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ApiError("budget.rule_invalid")
+    normalized = _to_db_time(value.astimezone(UTC))
+    if normalized <= now:
+        raise ApiError("budget.rule_invalid")
+    return normalized
+
+
 def _normalize_optional_text(value: object | None) -> str | None:
     """归一化可选字符串，空字符串统一视为 None。"""
 
@@ -1350,6 +1375,7 @@ def _budget_rule_info(connection: sqlite3.Connection, row: sqlite3.Row) -> Budge
         daily_budget_cny=_money_text(_decimal_value(row["daily_budget_cny"])),
         budget_period=_row_budget_period(row),
         effective_from_utc=_parse_db_time(row["effective_from_utc"]) if "effective_from_utc" in row.keys() and row["effective_from_utc"] else None,
+        activation_at_utc=_parse_db_time(row["activation_at_utc"]) if "activation_at_utc" in row.keys() and row["activation_at_utc"] else None,
         warning_threshold_percent=int(row["warning_threshold_percent"]),
         exhausted_threshold_percent=int(row["exhausted_threshold_percent"]),
         exhausted_action=row["exhausted_action"],
@@ -1375,6 +1401,29 @@ def _budget_status_info(
 
     period = _row_budget_period(row)
     budget_date, start_utc, end_utc = _budget_window(period=period)
+    budget_micros = _database_money_micros(row["daily_budget_cny"], allow_zero=False)
+    if _rule_is_scheduled(row):
+        budget_scope = scope or _budget_scope_info(connection, row)
+        return BudgetStatusInfo(
+            budget_rule_id=row["budget_rule_id"],
+            environment_id=row["environment_id"],
+            environment=row["environment"],
+            environment_name=row["environment_name"],
+            scope_type=row["scope_type"],
+            scope_id=row["scope_id"],
+            scope_label=budget_scope.scope_label,
+            budget_scope=budget_scope,
+            budget_date=budget_date,
+            budget_period=period,
+            effective_from_utc=_parse_db_time(row["effective_from_utc"]) if row["effective_from_utc"] else None,
+            activation_at_utc=_parse_db_time(row["activation_at_utc"]),
+            ledger_spent_cny="0", reserved_cny="0", effective_spend_cny="0",
+            effective_remaining_cny=_micros_text(budget_micros), spent_cny="0",
+            estimated_remaining_cny=_micros_text(budget_micros),
+            budget_cny=_micros_text(budget_micros), usage_percent=0,
+            status="scheduled", exhausted_action=row["exhausted_action"],
+            next_action="allow",
+        )
     start_utc = _rule_effective_start(row, start_utc)
     amounts = load_budget_spend_amounts(
         connection,
@@ -1388,7 +1437,6 @@ def _budget_status_info(
         start_utc=start_utc,
         end_utc=end_utc,
     )
-    budget_micros = _database_money_micros(row["daily_budget_cny"], allow_zero=False)
     percent = _usage_percent_micros(amounts.effective_cny_micros, budget_micros)
     block = _active_block(connection, row, budget_date)
     if block is not None:
@@ -1421,6 +1469,7 @@ def _budget_status_info(
         budget_date=budget_date,
         budget_period=period,
         effective_from_utc=_parse_db_time(row["effective_from_utc"]) if "effective_from_utc" in row.keys() and row["effective_from_utc"] else None,
+        activation_at_utc=_parse_db_time(row["activation_at_utc"]) if "activation_at_utc" in row.keys() and row["activation_at_utc"] else None,
         ledger_spent_cny=_micros_text(amounts.posted_cny_micros),
         reserved_cny=_micros_text(amounts.reserved_cny_micros),
         effective_spend_cny=_micros_text(amounts.effective_cny_micros),
@@ -1722,6 +1771,11 @@ def _reconcile_blocks_after_rule_update(
             request_id=request_id,
             trace_id=trace_id,
         ), "rule_disabled"
+    if "activation_at_utc" in provided and _rule_is_scheduled(row):
+        return _release_rule_blocks(
+            connection, context, row, reason="rule_scheduled",
+            request_id=request_id, trace_id=trace_id,
+        ), "rule_scheduled"
     if "exhausted_action" in provided and row["exhausted_action"] == "alert_only":
         return _release_rule_blocks(
             connection,
@@ -1834,7 +1888,13 @@ def _rule_effective_start(row: sqlite3.Row, calendar_start: str) -> str:
     """首个不完整周期从规则启用时起算，后续自然周期自动恢复完整窗口。"""
 
     start = row["effective_from_utc"] if "effective_from_utc" in row.keys() else None
-    return max(calendar_start, str(start)) if start else calendar_start
+    activation = row["activation_at_utc"] if "activation_at_utc" in row.keys() else None
+    return max(calendar_start, str(start or calendar_start), str(activation or calendar_start))
+
+
+def _rule_is_scheduled(row: sqlite3.Row) -> bool:
+    activation = row["activation_at_utc"] if "activation_at_utc" in row.keys() else None
+    return bool(activation and str(activation) > _to_db_time(_utcnow()))
 
 
 def _budget_window(now: datetime | None = None, *, period: str = "day") -> tuple[str, str, str]:

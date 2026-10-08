@@ -28189,3 +28189,53 @@ body:has(.policy-editor-backdrop) {
   .request-log-detail-actions button { flex: 1 1 0; }
   .request-log-detail-grid { grid-template-columns: 110px minmax(0, 1fr); }
 }
+
+/* Budget management: one rule list, with editing kept in a focused dialog. */
+.budget-page-intro { margin: 0 0 14px; color: #60746b; line-height: 1.5; }
+.budget-page-intro a { margin-left: 3px; color: #087d69; font-weight: 700; }
+.budget-add-button {
+  margin: 4px 0 18px;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 8px;
+  background: #087d69;
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.budget-rule-dialog {
+  width: min(780px, calc(100vw - 32px));
+  max-height: min(88vh, 900px);
+  padding: 24px;
+  border: 1px solid #c9d8d0;
+  border-radius: 14px;
+  box-shadow: 0 24px 80px #12352b33;
+  color: #173c31;
+}
+.budget-rule-dialog::backdrop { background: #102a24a8; }
+.budget-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.budget-dialog-header h3 { margin: 0; }
+.budget-dialog-header button { border: 1px solid #c9d8d0; border-radius: 7px; padding: 7px 12px; background: #fff; cursor: pointer; }
+.budget-rule-dialog > p { color: #60746b; line-height: 1.5; }
+.budget-rule-dialog .budget-rule-form { grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; padding: 0; border: 0; background: transparent; }
+.budget-rule-dialog .budget-actions { border-top: 1px solid #d8e4de; padding-top: 16px; }
+.budget-rules-section { margin: 4px 0 28px; }
+.budget-rules-heading { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.budget-rules-heading h3 { margin: 0; }
+.budget-rules-heading p { margin: 0; color: #60746b; }
+.budget-rules-section .budget-rule-row { grid-template-columns: minmax(180px, 1.5fr) minmax(150px, 1fr) minmax(180px, 1.15fr) minmax(120px, .8fr); gap: 18px; padding: 15px 18px; }
+.budget-rules-section .budget-rule-row > span { display: grid; gap: 4px; }
+.budget-rules-section .budget-rule-row small { color: #60746b; font-size: 12px; line-height: 1.4; }
+.budget-rule-action button { justify-self: start; margin-top: 3px; padding: 5px 10px; border: 1px solid #91b9aa; border-radius: 6px; color: #086d5d; background: #fff; font: inherit; cursor: pointer; }
+.budget-applicable-list { display: grid; gap: 6px; margin: 12px 0 0; padding: 0; list-style: none; }
+.budget-applicable-list li { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; border: 1px solid #d8e4de; border-radius: 7px; padding: 10px 14px; background: #fff; }
+@media (max-width: 1000px) {
+  .budget-rules-section .budget-rule-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .budget-rules-section .budget-rule-head { display: none; }
+}
+@media (max-width: 620px) {
+  .budget-rule-dialog { padding: 16px; }
+  .budget-rule-dialog .budget-rule-form,
+  .budget-rules-section .budget-rule-row { grid-template-columns: minmax(0, 1fr); }
+}

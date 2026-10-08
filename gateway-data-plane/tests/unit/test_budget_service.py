@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
+from metahub_gateway.budgets import service as budget_service
 from metahub_gateway.budgets.models import BudgetDecision, BudgetRule, EstimatedRequestCost
 from metahub_gateway.budgets.service import (
     _budget_window,
@@ -68,6 +69,30 @@ def test_budget_partial_first_month_returns_to_calendar_window_next_month() -> N
     november_start = _budget_window(datetime(2026, 11, 2, 4, tzinfo=UTC), period="month")[1]
     assert _rule_effective_start(rule, october_start) == "2026-10-08T03:00:00Z"
     assert _rule_effective_start(rule, november_start) == november_start
+
+
+def test_gateway_ignores_scheduled_rule_until_activation(monkeypatch) -> None:
+    monkeypatch.setattr(budget_service, "_utcnow", lambda: datetime(2026, 10, 8, 4, tzinfo=UTC))
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.executescript("""
+      CREATE TABLE budget_rules(
+        budget_rule_id TEXT, tenant_id TEXT, environment_id TEXT, scope_type TEXT,
+        scope_id TEXT, daily_budget_cny TEXT, warning_threshold_percent INTEGER,
+        exhausted_action TEXT, budget_period TEXT, effective_from_utc TEXT,
+        activation_at_utc TEXT, status TEXT
+      );
+      INSERT INTO budget_rules VALUES
+        ('future','t','e','tenant','t','100',80,'block','month',NULL,'2026-10-08T05:00:00Z','active');
+    """)
+    try:
+        assert budget_service._load_budget_rules(connection, "t", "e", "k", None, None) == []
+        monkeypatch.setattr(budget_service, "_utcnow", lambda: datetime(2026, 10, 8, 6, tzinfo=UTC))
+        rules = budget_service._load_budget_rules(connection, "t", "e", "k", None, None)
+        assert [rule.budget_rule_id for rule in rules] == ["future"]
+        assert _rule_effective_start(rules[0], "2026-09-30T16:00:00Z") == "2026-10-08T05:00:00Z"
+    finally:
+        connection.close()
 
 
 def test_apply_budget_decision_enriches_request_log_context() -> None:

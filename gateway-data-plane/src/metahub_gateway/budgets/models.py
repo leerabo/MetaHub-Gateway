@@ -29,6 +29,7 @@ class BudgetRule:
     environment_id: str = ""
     budget_period: str = "day"
     effective_from_utc: str | None = None
+    activation_at_utc: str | None = None
 
 
 @dataclass(frozen=True)

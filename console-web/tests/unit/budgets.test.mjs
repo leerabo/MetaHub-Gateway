@@ -193,7 +193,7 @@ test("budgets client returns structured errors", async () => {
   );
 });
 
-test("renderBudgetPanel shows status cards rules and admin form", () => {
+test("renderBudgetPanel puts one rule list before employee lookup and opens an editor dialog", () => {
   const html = renderBudgetPanel(
     {
       state: "ok",
@@ -207,17 +207,13 @@ test("renderBudgetPanel shows status cards rules and admin form", () => {
   );
 
   assert.match(html, /budget-rule-form/);
-  assert.match(html, /<details class="budget-create-disclosure">/);
-  assert.match(html, /新增或修改成本预算/);
+  assert.match(html, /<dialog class="budget-rule-dialog"/);
+  assert.match(html, /data-budget-open-form/);
   assert.match(html, /预算周期/);
+  assert.match(html, /启用时间/);
   assert.match(html, /生产 Key 日预算/);
   assert.match(html, /达到告警/);
-  assert.match(html, /82%/);
-  assert.match(html, /请求已阻断/);
-  assert.match(html, /bb_1/);
-  assert.match(html, /data-budget-block-id="bb_1"/);
-  assert.doesNotMatch(html, /<code>bb_1<\/code>/);
-  assert.match(html, /data-budget-mode-rule-id="br_1"/);
+  assert.match(html, /data-budget-edit-rule-id="br_1"/);
   assert.match(html, /预算已保存/);
   assert.match(html, /项目 · 账务核心/);
   assert.match(html, /应用 · 账务 API/);
@@ -225,9 +221,11 @@ test("renderBudgetPanel shows status cards rules and admin form", () => {
   assert.doesNotMatch(html, /id="budget-scope-chain-key"/);
   assert.doesNotMatch(html, /mhv_prod_\*\*\*\*/);
   assert.doesNotMatch(html, /tenant_id/);
+  assert.ok(html.indexOf("已设置的预算") < html.indexOf("查询员工用量"));
+  assert.doesNotMatch(html, /运行环境摘要|组织预算概览/);
 });
 
-test("renderBudgetPanel shows separate daily and monthly limits with partial start", () => {
+test("renderBudgetPanel shows separate daily and monthly rules and unknown employee spend", () => {
   const daily = { ...budgetRulesPayload.budget_rules[0].today_status, budget_period: "day" };
   const monthly = {
     ...daily,
@@ -241,7 +239,15 @@ test("renderBudgetPanel shows separate daily and monthly limits with partial sta
   };
   const html = renderBudgetPanel({
     state: "ok",
-    rules: { budget_rules: [budgetRulesPayload.budget_rules[0]] },
+    rules: { budget_rules: [budgetRulesPayload.budget_rules[0], {
+      ...budgetRulesPayload.budget_rules[0], budget_rule_id: "br_month",
+      name: "生产 Key 月预算", budget_period: "month", daily_budget_cny: "500",
+      effective_from_utc: "2026-07-09T09:00:00Z", today_status: monthly,
+    }] },
+    selectedPerson: { user_id: "u", display_name: "测试员工", email: "test@example.com",
+      keys: [{ virtual_key_id: "vk_1", name: "生产 Key" }],
+      spent_day_cny: "0", spent_month_cny: null, spent_year_cny: null },
+    selectedVirtualKeyId: "vk_1",
     status: {
       budget_date: "2026-07-09",
       statuses: [daily, monthly],
@@ -252,10 +258,12 @@ test("renderBudgetPanel shows separate daily and monthly limits with partial sta
       },
     },
   }, budgetWriterContext(), virtualKeysState, projectState);
-  assert.match(html, /调用 KEY · 生产 Key · 每日/);
-  assert.match(html, /调用 KEY · 生产 Key · 每月/);
-  assert.match(html, /此前价格无法确认的调用未计入此规则/);
-  assert.equal((html.match(/class="budget-chain-card"/g) ?? []).length, 2);
+  assert.match(html, /每日 100 CNY/);
+  assert.match(html, /每月 500 CNY/);
+  assert.match(html, /本周期计费从/);
+  assert.match(html, /无法核实/);
+  assert.match(html, /所选凭证适用的预算/);
+  assert.equal((html.match(/data-budget-rule-id=/g) ?? []).length, 2);
 });
 
 test("renderBudgetPanel is read only after write revocation and hidden without read permission", () => {

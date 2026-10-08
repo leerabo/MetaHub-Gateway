@@ -64,6 +64,7 @@ export async function updateBudgetRule({
   name,
   dailyBudgetCny,
   budgetPeriod,
+  activationAtUtc,
   warningThresholdPercent,
   exhaustedAction,
   status,
@@ -79,6 +80,7 @@ export async function updateBudgetRule({
     name,
     dailyBudgetCny,
     budgetPeriod,
+    activationAtUtc,
     warningThresholdPercent,
     exhaustedAction,
     status,
@@ -101,6 +103,7 @@ async function writeBudgetRule({
   name,
   dailyBudgetCny,
   budgetPeriod,
+  activationAtUtc,
   warningThresholdPercent,
   exhaustedAction,
   status,
@@ -112,10 +115,12 @@ async function writeBudgetRule({
     name,
     daily_budget_cny: dailyBudgetCny,
     budget_period: budgetPeriod,
+    activation_at_utc: activationAtUtc,
     warning_threshold_percent: warningThresholdPercent,
     exhausted_action: exhaustedAction,
     status,
   });
+  if (activationAtUtc === null) payload.activation_at_utc = null;
   return budgetRequest(`${controlApiUrl}/budgets`, {
     method,
     token, authentication, signal,

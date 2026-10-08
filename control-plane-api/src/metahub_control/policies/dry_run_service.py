@@ -1623,18 +1623,15 @@ def _load_budget_rule_facts(
           *
         FROM budget_rules
         WHERE tenant_id=? AND environment_id=? AND status='active'
+          AND (activation_at_utc IS NULL OR activation_at_utc<=?)
           AND (
             (scope_type='tenant' AND scope_id=?)
             OR (scope_type='project' AND scope_id=?)
           )
         ORDER BY CASE scope_type WHEN 'tenant' THEN 0 ELSE 1 END
-        LIMIT 3
         """,
-        (tenant_id, environment_id, tenant_id, project_id),
+        (tenant_id, environment_id, _to_db_time(now), tenant_id, project_id),
     ).fetchall()
-    # tenant/project 各至多一条；超出两条表示唯一约束或 scope 归属已经损坏。
-    if len(rows) > 2:
-        raise ValueError("budget rule set exceeded")
     budget_date, _day_start, _day_end = _budget_window(now)
     facts: list[BudgetRuleFact] = []
     for row in rows:
@@ -1642,6 +1639,8 @@ def _load_budget_rule_facts(
         _same_day, start_utc, end_utc = _budget_window(now, period=period)
         if "effective_from_utc" in row.keys() and row["effective_from_utc"]:
             start_utc = max(start_utc, str(row["effective_from_utc"]))
+        if "activation_at_utc" in row.keys() and row["activation_at_utc"]:
+            start_utc = max(start_utc, str(row["activation_at_utc"]))
         scope_type = str(row["scope_type"])
         scope_id = str(row["scope_id"])
         # 共享汇总器同时校验 tenant、Environment、scope、上海业务日和正式账本证据；

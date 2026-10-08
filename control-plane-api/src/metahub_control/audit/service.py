@@ -397,6 +397,7 @@ SUMMARY_FIELDS: dict[str, frozenset[str]] = {
             "daily_budget_cny",
             "budget_period",
             "effective_from_utc",
+            "activation_at_utc",
             "warning_threshold_percent",
             "exhausted_action",
             "status",

@@ -2336,10 +2336,11 @@ def _plan_budget_guard(
                    exhausted_action,status,updated_at
             FROM budget_rules
             WHERE tenant_id=? AND environment_id=? AND status='active'
+              AND (activation_at_utc IS NULL OR activation_at_utc<=?)
               AND ({clauses})
             ORDER BY budget_rule_id
             """,
-            tuple(params),
+            tuple([*params[:2], _utcnow().isoformat().replace("+00:00", "Z"), *params[2:]]),
         ).fetchall()
         if not rules:
             raise _NotApplicable("budget_coverage_required")

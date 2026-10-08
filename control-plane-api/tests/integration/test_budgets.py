@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -303,6 +303,35 @@ async def test_budget_calendar_periods_and_employee_search(
     assert [person["email"] for person in searched.json()["people"]] == ["finance@example.com"]
     assert all_people.status_code == 200, all_people.text
     assert all_people.json()["total"] >= 4
+
+
+@pytest.mark.anyio
+async def test_budget_future_activation_waits_then_counts_from_activation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """A scheduled cap is visible to admins but cannot constrain calls before its start."""
+
+    prepare_database(monkeypatch, tmp_path)
+    app = build_control_app()
+    activation_at = budget_service._utcnow() + timedelta(days=1)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://control") as client:
+        token = await login(client, "admin@metahub.local", ADMIN_PASSWORD)
+        headers = {"Authorization": f"Bearer {token}"}
+        scheduled = await client.post("/budgets", headers=headers, json={
+            "scope_type": "tenant", "budget_period": "month", "daily_budget_cny": "200",
+            "activation_at_utc": activation_at.isoformat().replace("+00:00", "Z"), "exhausted_action": "block",
+        })
+        assert scheduled.status_code == 201, scheduled.text
+        assert scheduled.json()["budget_rule"]["today_status"]["status"] == "scheduled"
+        before = await client.get("/budget-status", headers=headers)
+        assert before.status_code == 200, before.text
+        assert before.json()["statuses"] == []
+        monkeypatch.setattr(budget_service, "_utcnow", lambda: activation_at + timedelta(hours=1))
+        after = await client.get("/budget-status", headers=headers)
+        assert after.status_code == 200, after.text
+        assert len(after.json()["statuses"]) == 1
+        assert after.json()["statuses"][0]["spent_cny"] == "0"
+        assert after.json()["statuses"][0]["status"] == "ok"
 
 
 @pytest.mark.anyio

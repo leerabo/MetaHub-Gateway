@@ -5117,6 +5117,17 @@ function bindAuthenticatedEvents(consoleShellState) {
   const budgetScopeTypeControl = budgetRuleForm?.querySelector("[name='scopeType']");
   const budgetScopeIdControl = budgetRuleForm?.querySelector("[name='scopeId']");
   const budgetEnvironmentControl = budgetRuleForm?.querySelector("[name='environmentId']");
+  const budgetActivationMode = budgetRuleForm?.querySelector("[name='activationMode']");
+  const budgetActivationLocal = budgetRuleForm?.querySelector("[name='activationLocal']");
+
+  function syncBudgetActivationInput() {
+    if (!budgetActivationLocal) return;
+    const scheduled = budgetActivationMode?.value === "scheduled";
+    budgetActivationLocal.disabled = !scheduled;
+    budgetActivationLocal.required = scheduled;
+  }
+  budgetActivationMode?.addEventListener("change", syncBudgetActivationInput);
+  syncBudgetActivationInput();
 
   /**
    * 让 Scope ID 选项与所选层级保持一致，避免把 Project ID 误发为 Key scope。
@@ -5164,6 +5175,45 @@ function bindAuthenticatedEvents(consoleShellState) {
   budgetScopeIdControl?.addEventListener("change", syncBudgetScopeOptions);
   syncBudgetScopeOptions();
 
+  const budgetDialog = document.querySelector("#budget-rule-dialog");
+  document.querySelector("[data-budget-open-form]")?.addEventListener("click", () => {
+    if (!resourcePageLifecycle.isBindingCurrent(budgetRuleBinding) || !budgetRuleForm) return;
+    budgetRuleForm.reset();
+    const keep = budgetActivationMode?.querySelector("[value='keep']");
+    if (keep) { keep.hidden = true; keep.disabled = true; }
+    syncBudgetScopeOptions();
+    syncBudgetActivationInput();
+    budgetDialog?.showModal();
+  });
+  document.querySelector("[data-budget-close-form]")?.addEventListener("click", () => budgetDialog?.close());
+
+  document.querySelectorAll("[data-budget-edit-rule-id]").forEach((button) => {
+    const binding = bindResourceElement(button,
+      [PERMISSIONS.BILLING_BUDGET_READ, PERMISSIONS.BILLING_BUDGET_WRITE], "budgets");
+    button.addEventListener("click", () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding) || !budgetRuleForm) return;
+      const rule = budgetRulesSnapshot.find((item) => item.budget_rule_id === button.dataset.budgetEditRuleId);
+      if (!rule) return;
+      budgetRuleForm.elements.environmentId.value = rule.environment_id;
+      budgetRuleForm.elements.scopeType.value = rule.scope_type;
+      syncBudgetScopeOptions();
+      budgetRuleForm.elements.scopeId.value = rule.scope_type === "tenant" ? "" : rule.scope_id;
+      budgetRuleForm.elements.environmentId.value = rule.environment_id;
+      budgetRuleForm.elements.name.value = rule.name;
+      budgetRuleForm.elements.budgetPeriod.value = rule.budget_period ?? "day";
+      budgetRuleForm.elements.dailyBudgetCny.value = rule.daily_budget_cny;
+      budgetRuleForm.elements.warningThresholdPercent.value = rule.warning_threshold_percent;
+      budgetRuleForm.elements.exhaustedAction.value = rule.exhausted_action;
+      budgetRuleForm.elements.status.value = rule.status;
+      const keep = budgetActivationMode?.querySelector("[value='keep']");
+      if (keep) { keep.hidden = false; keep.disabled = false; }
+      if (budgetActivationMode) budgetActivationMode.value = "keep";
+      if (budgetActivationLocal) budgetActivationLocal.value = "";
+      syncBudgetActivationInput();
+      budgetDialog?.showModal();
+    });
+  });
+
   budgetRuleForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const ticket = resourcePageLifecycle.beginMutation(budgetRuleBinding);
@@ -5179,12 +5229,16 @@ function bindAuthenticatedEvents(consoleShellState) {
     const scopeId = scopeType === "tenant" ? "" : String(data.get("scopeId") ?? "");
     const environmentId = String(data.get("environmentId") ?? "");
     const budgetPeriod = String(data.get("budgetPeriod") ?? "day");
+    const activationMode = String(data.get("activationMode") ?? "immediate");
     const exists = budgetRuleAlreadyExists(environmentId, scopeType, scopeId, budgetPeriod);
     const writeRule = exists ? updateBudgetRule : createBudgetRule;
     button.disabled = true;
     budgetActionError = null;
     budgetFeedback = exists ? "预算更新中" : "预算创建中";
     try {
+      const activationAtUtc = activationMode === "scheduled"
+        ? shanghaiBudgetTimeToUtc(String(data.get("activationLocal") ?? ""))
+        : activationMode === "keep" ? undefined : null;
       const saved = await resourceMutationRequest(ticket, writeRule, {
         controlApiUrl,
         scopeType,
@@ -5193,6 +5247,7 @@ function bindAuthenticatedEvents(consoleShellState) {
         name: String(data.get("name") ?? ""),
         dailyBudgetCny: String(data.get("dailyBudgetCny") ?? ""),
         budgetPeriod,
+        activationAtUtc,
         warningThresholdPercent: optionalNumber(data.get("warningThresholdPercent"), 80),
         exhaustedAction: String(data.get("exhaustedAction") ?? "alert_only"),
         status: String(data.get("status") ?? "active"),
@@ -5200,9 +5255,11 @@ function bindAuthenticatedEvents(consoleShellState) {
       if (!isCurrentBudgetMutation(operation)) {
         return;
       }
-      budgetFeedback = saved?.budget_rule?.effective_from_utc
-        ? "预算已保存；本周期从保存时起算，之前价格未知的调用不计入本规则"
-        : exists ? "预算已更新" : "预算已创建";
+      budgetFeedback = saved?.budget_rule?.today_status?.status === "scheduled"
+        ? "预算已保存，将在设定时间启用"
+        : saved?.budget_rule?.effective_from_utc
+          ? "预算已保存；本周期从标明的时间起算，之前价格未知的调用不计入本规则"
+          : exists ? "预算已更新" : "预算已创建";
       budgetMutationLifecycle.finish(operation);
       await refreshResourceMutation(ticket);
     } catch (error) {
@@ -17777,14 +17834,20 @@ async function loadBudgetState(virtualKeysState, consoleShellState, refreshId) {
       if (!keys.some((key) => key.virtual_key_id === selectedBudgetVirtualKeyId)) {
         selectedBudgetVirtualKeyId = keys[0]?.virtual_key_id ?? "";
       }
-      const status = await getBudgetStatus({
-        ...options, virtualKeyId: selectedBudgetVirtualKeyId || undefined,
-      });
-      return { rules, people, selectedPerson, status, selectedVirtualKeyId: selectedBudgetVirtualKeyId };
+      let status = null;
+      let statusError = null;
+      try {
+        status = await getBudgetStatus({
+          ...options, virtualKeyId: selectedBudgetVirtualKeyId || undefined,
+        });
+      } catch (error) {
+        statusError = { message: error.message, requestId: error.requestId ?? null };
+      }
+      return { rules, people, selectedPerson, status, statusError, selectedVirtualKeyId: selectedBudgetVirtualKeyId };
     },
-    ({ rules, people, selectedPerson, status, selectedVirtualKeyId }) => {
+    ({ rules, people, selectedPerson, status, statusError, selectedVirtualKeyId }) => {
       budgetRulesSnapshot = rules.budget_rules ?? [];
-      return { state: "ok", rules, people, selectedPerson, status, selectedVirtualKeyId,
+      return { state: "ok", rules, people, selectedPerson, status, statusError, selectedVirtualKeyId,
         peopleSearch: budgetPeopleSearch, peopleOffset: budgetPeopleOffset,
         actionError: budgetActionError, feedback: budgetFeedback };
     },
@@ -19039,6 +19102,18 @@ function bindOutputSafetyDetailInteractions(consoleShellState) {
     consoleShellState,
     panel,
   );
+}
+
+/** 将管理员输入的上海本地时间转换成明确的 UTC，避免依赖浏览器系统时区。 */
+function shanghaiBudgetTimeToUtc(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
+  if (!match) throw new Error("请输入有效的启用时间（北京时间）");
+  const [, year, month, day, hour, minute] = match.map(Number);
+  const instant = new Date(Date.UTC(year, month - 1, day, hour - 8, minute));
+  if (!Number.isFinite(instant.getTime()) || instant.getTime() <= Date.now()) {
+    throw new Error("启用时间必须晚于当前时间");
+  }
+  return instant.toISOString();
 }
 
 /** 调用记录详情使用统一对话框，避免把数十个诊断区块插入列表下方。 */
