@@ -244,7 +244,7 @@ function renderImpact(state) {
         </table>
       </div>
       <dl class="policy-template-impact__facts">
-        <div><dt>应用前版本</dt><dd>v${escapeHtml(String(impact.expected_head_version))}，可用于撤销本次应用</dd></div>
+        <div><dt>应用前版本</dt><dd>v${escapeHtml(String(impact.expected_head_version))}，可作为回滚目标</dd></div>
         <div><dt>应用后版本</dt><dd>v${escapeHtml(String(impact.expected_head_version + 1))}</dd></div>
         ${impact.derived_target_model_id
           ? `<div><dt>将使用的模型</dt><dd>${escapeHtml(impact.derived_target_model_name || "已选模型")}</dd></div>`
@@ -266,11 +266,15 @@ function renderImpact(state) {
 
 /** 低成本模板的固定模型策略会先于现有模型路由生效。 */
 function renderRouteNotice(impact) {
+  const modelName = escapeHtml(impact.derived_target_model_name || "本次选中的模型");
+  const previousVersion = escapeHtml(String(impact.expected_head_version));
   return `
     <div class="policy-template-route-notice">
-      <strong>会改变这个项目的模型选择</strong>
-      <p>应用后，命中这条策略的项目对话请求会固定使用 ${escapeHtml(impact.derived_target_model_name || "选中的模型")}。
-        原有模型路由的候选顺序和故障切换不会用于这些请求；其他项目不受影响。</p>
+      <strong>本次选中：${modelName}</strong>
+      <p>此模型按当前价格和可用性选出。应用后，所选项目命中的请求会固定使用它，不会自动跟随价格变化，
+        也不会走原路由的候选模型和故障切换。原路由配置不会删除。</p>
+      <p>要恢复原路由，可在“上线与版本”回滚到 v${previousVersion}；系统会停用本模板创建的规则。
+        若期间改过策略，回滚会先检查冲突。</p>
       <button class="button button--secondary" type="button"
         data-policy-template-remediation="model-aliases">改用模型路由的“成本优先”</button>
     </div>

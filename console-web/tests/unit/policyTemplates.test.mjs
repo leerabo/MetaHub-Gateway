@@ -415,7 +415,9 @@ test("policy template confirmation and success render complete public facts", ()
   assert.match(html, /新增规则[\s\S]*1 条/);
   assert.match(html, /上线版本[\s\S]*v8/);
   assert.match(html, /将使用的模型[\s\S]*glm-5\.3-flash/);
-  assert.match(html, /原有模型路由的候选顺序和故障切换不会用于这些请求/);
+  assert.match(html, /本次选中：glm-5\.3-flash/);
+  assert.match(html, /不会自动跟随价格变化/);
+  assert.match(html, /回滚到 v7；系统会停用本模板创建的规则/);
   assert.doesNotMatch(html, new RegExp(GENERATED_POLICY_ID));
   assert.doesNotMatch(html, new RegExp(PREVIOUS_SNAPSHOT_ID));
 
