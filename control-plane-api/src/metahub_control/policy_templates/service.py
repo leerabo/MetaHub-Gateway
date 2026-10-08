@@ -1898,14 +1898,17 @@ def _plan_low_cost(
     as_of: datetime,
     project_dependency: _Dependency,
 ) -> _SemanticPlan:
-    """选择同一观察时点内完整支持三能力、价格最低且 KeyPool 可用的合格模型。"""
+    """选择支持对话和流式调用、价格最低且 KeyPool 可用的合格模型。"""
 
     rows = connection.execute(
         """
         SELECT
           m.model_id,m.provider_id,m.provider_model_id,m.upstream_model_name,
-          m.capabilities,m.status AS model_status,m.input_price_per_1k,
-          m.output_price_per_1k,m.cache_price_per_1k,m.currency,m.price_schema_version,
+          m.capabilities,m.status AS model_status,
+          CAST(m.input_price_per_1k AS TEXT) AS input_price_per_1k,
+          CAST(m.output_price_per_1k AS TEXT) AS output_price_per_1k,
+          CAST(m.cache_price_per_1k AS TEXT) AS cache_price_per_1k,
+          m.currency,m.price_schema_version,
           p.provider_code,p.provider_type,p.auth_type,p.base_url,
           p.status AS provider_status,p.health_status,p.health_generation,p.health_updated_at
         FROM models m
@@ -1915,8 +1918,6 @@ def _plan_low_cost(
         """,
         (tenant_id,),
     ).fetchall()
-    eligible_provider_models = 0
-    capability_mismatches = 0
     candidates: list[
         tuple[
             Decimal,
@@ -1938,13 +1939,11 @@ def _plan_low_cost(
         if (spec.classification == MIGRATION_PLATFORM
             or spec.classification not in {MODEL_VENDOR_CLOUD, LOCAL_COMPATIBLE, CUSTOMER_MANAGED}):
             continue
-        eligible_provider_models += 1
-        # Policy DSL v1 没有 request kind，固定路由目标必须覆盖 Chat/Embeddings/Stream。
+        # 模板用于低成本对话；向量调用仍由 Gateway 的目标模型能力校验独立拦截。
         if not isinstance(capabilities, dict) or any(
             capabilities.get(name) is not True
-            for name in ("chat", "embeddings", "stream")
+            for name in ("chat", "stream")
         ):
-            capability_mismatches += 1
             continue
         credential_rows = connection.execute(
             """
@@ -1989,8 +1988,11 @@ def _plan_low_cost(
             continue
         price_row = connection.execute(
             """
-             SELECT price_plan_id,input_price_per_1k,output_price_per_1k,
-                    cache_price_per_1k,currency,price_schema_version,effective_from,source
+             SELECT price_plan_id,
+                    CAST(input_price_per_1k AS TEXT) AS input_price_per_1k,
+                    CAST(output_price_per_1k AS TEXT) AS output_price_per_1k,
+                    CAST(cache_price_per_1k AS TEXT) AS cache_price_per_1k,
+                    currency,price_schema_version,effective_from,source
             FROM model_price_plans
             WHERE tenant_id=? AND model_id=? AND currency='CNY'
               AND julianday(effective_from)<=julianday(?)
@@ -2017,7 +2019,9 @@ def _plan_low_cost(
                     },
                 )
             else:
-                # 目录价回退仍必须是带 schema 的 CNY 定点事实，缺版本不能参与成本比较。
+                # SQLite NUMERIC 列会把合法小数返回为 float；上方先 CAST 为数据库
+                # 十进制文本，再用 _stored_money 的定点语法验证，避免全部误判不可用。
+                # 目录价回退仍必须是带 schema 的 CNY 定点事实。
                 if row["currency"] != "CNY" or not row["price_schema_version"]:
                     continue
                 input_price = _stored_money(row["input_price_per_1k"])
@@ -2048,10 +2052,8 @@ def _plan_low_cost(
                 warnings,
             )
         )
-    # 没有完整能力、可用 KeyPool 和可信价格的候选时失败关闭，不选择迁移平台兜底。
+    # 没有对话/流式能力、可用 KeyPool 和可信价格的候选时失败关闭，不选择迁移平台兜底。
     if not candidates:
-        if eligible_provider_models and capability_mismatches == eligible_provider_models:
-            raise _NotApplicable("low_cost_full_capabilities_required")
         raise _NotApplicable("eligible_low_cost_model_required")
     _price, model_id, row, price_row, price_hash, keypool_hash, warnings = min(
         candidates,

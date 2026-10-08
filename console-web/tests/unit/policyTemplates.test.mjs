@@ -526,13 +526,13 @@ test("policy template check lists both missing model and first publication with 
   const preview = state.beginPreview();
   const payload = incompatiblePayload();
   payload.policy_templates[0].compatibility.reason_codes = [
-    "low_cost_full_capabilities_required",
+    "eligible_low_cost_model_required",
     "snapshot_baseline_required",
   ];
   assert.equal(state.acceptPreview(preview, payload), true);
   const html = renderPolicyTemplates(state.snapshot());
-  assert.match(html, /现有模型缺少此模板要求的完整能力/);
-  assert.match(html, /同时支持对话、向量和流式调用/);
+  assert.match(html, /没有可用于低成本模式的模型/);
+  assert.match(html, /无需向量能力/);
   assert.match(html, /成本优先/);
   assert.match(html, /data-policy-template-remediation="models"/);
   assert.match(html, /data-policy-template-remediation="model-aliases"/);

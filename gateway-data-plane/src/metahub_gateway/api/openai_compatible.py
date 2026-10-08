@@ -1356,6 +1356,7 @@ async def _handle_gateway_request(
         if route_plan.policy_selected_event is not None:
             enqueue_runtime_event(request.app.state, route_plan.policy_selected_event)
         request_log_context = _context_for_route(request_log_context, route)
+        _validate_policy_route_embedding_capability(policy_result.decision, request_kind, route)
         _validate_route_capability(request_kind, payload, route)
         route_plan = _filter_fallback_capability(route_plan, request_kind, payload)
         try:
@@ -3844,7 +3845,9 @@ async def _stream_response(
         # 不能让 request_logs 回退到初始上下文的 0。
         routing_attempt_count=max(context.routing_attempt_count or 0, attempt_sequence),
         final_routing_attempt_id=(
-            local_attempt.routing_attempt_id if local_attempt is not None else context.final_routing_attempt_id
+            local_attempt.routing_attempt_id
+            if local_attempt is not None
+            else context.final_routing_attempt_id
         ),
     )
     try:
@@ -3882,7 +3885,9 @@ async def _stream_response(
         ):
             fallback_route = route_plan.fallback_route
             if fallback_route is not None:
-                remaining_routes = route_plan.fallback_routes[1:] if route_plan.fallback_routes else ()
+                remaining_routes = (
+                    route_plan.fallback_routes[1:] if route_plan.fallback_routes else ()
+                )
                 fallback_plan = replace(
                     route_plan,
                     initial_route=fallback_route,
@@ -6014,6 +6019,21 @@ def _validate_route_capability(
         # 已解析模型明确不支持 SSE 时必须在 Provider 前拒绝，并沿用统一流能力错误码，
         # 不能让 Adapter 尝试私有扩展或把不兼容响应伪装成流。
         raise ApiError("gateway.stream_not_supported")
+
+
+def _validate_policy_route_embedding_capability(
+    policy_decision: str,
+    request_kind: str,
+    route: GatewayRoute,
+) -> None:
+    """固定策略路由不推测缺省向量能力，避免低成本对话模型接收向量请求。"""
+
+    if (
+        policy_decision == "route_to"
+        and request_kind == "embeddings"
+        and route.capabilities.get("embeddings") is not True
+    ):
+        raise ApiError("gateway.model_not_found")
 
 
 def _ensure_environment_active(auth_context: GatewayAuthContext) -> None:

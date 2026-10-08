@@ -666,6 +666,14 @@ async def test_all_five_template_planners_apply_real_semantics(
             database_url,
             budget_project_id=projects["budget"],
         )
+        # 基础种子模型在 SQLite 中也有合法小数价格；此用例只比较自建候选的
+        # PricePlan、能力和同价稳定排序，因此先停用无关种子模型。
+        connection = connect_database(database_url)
+        connection.execute(
+            "UPDATE models SET status='disabled' WHERE model_id NOT LIKE 'model_prd068_%'"
+        )
+        connection.commit()
+        connection.close()
         baseline = await _publish_template_baseline(
             client,
             auth,
@@ -1417,11 +1425,6 @@ async def test_template_planners_fail_closed_without_required_dependencies(
         await _publish_template_baseline(client, auth, request_suffix="missing")
         cases = (
             (
-                "ptpl_low_cost_mode",
-                {"project_id": projects["low"]},
-                "low_cost_full_capabilities_required",
-            ),
-            (
                 "ptpl_domestic_models_only",
                 {"project_id": projects["domestic"]},
                 "domestic_alias_coverage_required",
@@ -1446,7 +1449,7 @@ async def test_template_planners_fail_closed_without_required_dependencies(
             assert "ETag" not in response.headers
             assert "X-Policy-Candidate-ETag" not in response.headers
 
-        # 当前组织的国产对话模型可用，不代表固定路由能安全接收向量请求。
+        # 缺少向量能力的对话模型仍可参与低成本模板筛选。
         _seed_template_planner_facts(database_url, budget_project_id=projects["low"])
         connection = connect_database(database_url)
         connection.execute(
@@ -1461,10 +1464,11 @@ async def test_template_planners_fail_closed_without_required_dependencies(
             template_id="ptpl_low_cost_mode",
             bindings={"project_id": projects["low"]},
         )
-        assert "low_cost_full_capabilities_required" in (
+        assert "eligible_low_cost_model_required" not in (
             low_cost_preview["compatibility"]["reason_codes"]
         )
-        assert low_cost_preview["preview_nonce"] is None
+        assert low_cost_preview["compatibility"]["can_apply"] is True
+        assert low_cost_preview["preview_nonce"] is not None
 
         invalid_alias = await client.get(
             "/policy-templates",
