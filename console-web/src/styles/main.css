@@ -26344,6 +26344,32 @@ body:has(.policy-editor-backdrop) {
   background: #fff9ed !important;
 }
 
+.policy-template-route-notice {
+  margin: 12px 0;
+  padding: 12px;
+  border-left: 3px solid var(--warning);
+  background: #fff9ed;
+  line-height: 1.5;
+}
+
+.policy-template-compatibility__warning .button {
+  margin-left: 10px;
+}
+
+.policy-template-route-notice p {
+  margin: 5px 0 10px;
+}
+
+.policy-template-outcome p {
+  line-height: 1.55;
+}
+
+.policy-template-outcome details {
+  margin-top: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .policy-template-confirm textarea {
   min-height: 104px;
   resize: vertical;

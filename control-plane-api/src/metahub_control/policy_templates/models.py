@@ -110,6 +110,7 @@ class PolicyTemplateImpact(BaseModel):
     before_policy_count: int = Field(ge=0, le=200)
     after_policy_count: int = Field(ge=1, le=201)
     derived_target_model_id: str | None = None
+    derived_target_model_name: str | None = None
     allowed_model_alias_names: list[str] = Field(default_factory=list, max_length=20)
     frozen_environment_codes: list[str] = Field(default_factory=list, max_length=20)
     expected_head_version: int = Field(ge=1)

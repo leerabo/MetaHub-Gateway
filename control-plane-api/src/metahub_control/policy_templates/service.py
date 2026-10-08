@@ -51,7 +51,7 @@ from metahub_control.audit import (
     new_audit_log_id,
     record_audit_log,
 )
-from metahub_control.auth import AuthContext, require_transaction_permission
+from metahub_control.auth import AuthContext
 from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 from metahub_control.policies.models import PolicyActionDraft, PolicyInfo
 from metahub_control.policies.service import (
@@ -189,6 +189,7 @@ class _SemanticPlan:
     dependencies: tuple[_Dependency, ...]
     warning_codes: tuple[str, ...] = ()
     derived_target_model_id: str | None = None
+    derived_target_model_name: str | None = None
     allowed_model_alias_names: tuple[str, ...] = ()
     frozen_environment_codes: tuple[str, ...] = ()
 
@@ -411,12 +412,9 @@ def apply_policy_template(
             ):
                 # 同一 request_id 只能由原操作者重放完全相同的命令，防止跨用户借用幂等结果。
                 raise ApiError("policy_template.request_conflict")
-            locked_context = require_transaction_permission(
-                connection,
-                context,
-                "policy_template.apply",
-                unavailable_error_code="policy_template.unavailable",
-            )
+            locked_context = ResourceWriteTransaction(
+                connection, config, context, "policy_template.apply"
+            ).verify()
             # 幂等键只证明历史命令相同，不授予继续读取结果或补派事件的权限；回放必须使用
             # 写锁内实时矩阵同时复核专用 apply 权限和该模板的复合领域权限，撤权后立即失败关闭。
             if not _compound_permission_satisfied(
@@ -452,12 +450,9 @@ def apply_policy_template(
             if consumed_nonce is not None:
                 raise ApiError("policy_template.nonce_conflict")
 
-            locked_context = require_transaction_permission(
-                connection,
-                context,
-                "policy_template.apply",
-                unavailable_error_code="policy_template.unavailable",
-            )
+            locked_context = ResourceWriteTransaction(
+                connection, config, context, "policy_template.apply"
+            ).verify()
             catalog = _load_template_catalog(connection, context.user.tenant_id)
             template_row = next(
                 (row for row in catalog if row["policy_template_id"] == template_id),
@@ -1538,6 +1533,7 @@ def _build_plan(
             before_policy_count=before.policy_count,
             after_policy_count=after.policy_count,
             derived_target_model_id=semantic.derived_target_model_id,
+            derived_target_model_name=semantic.derived_target_model_name,
             allowed_model_alias_names=list(semantic.allowed_model_alias_names),
             frozen_environment_codes=list(semantic.frozen_environment_codes),
             expected_head_version=int(current_row["snapshot_version"]),
@@ -1904,6 +1900,7 @@ def _plan_low_cost(
         """
         SELECT
           m.model_id,m.provider_id,m.provider_model_id,m.upstream_model_name,
+          m.display_name,m.model_alias,
           m.capabilities,m.status AS model_status,
           CAST(m.input_price_per_1k AS TEXT) AS input_price_per_1k,
           CAST(m.output_price_per_1k AS TEXT) AS output_price_per_1k,
@@ -2114,6 +2111,9 @@ def _plan_low_cost(
         dependencies=_sorted_dependencies(dependencies),
         warning_codes=tuple(warnings),
         derived_target_model_id=model_id,
+        derived_target_model_name=str(
+            row["display_name"] or row["model_alias"] or row["upstream_model_name"]
+        ),
     )
 
 

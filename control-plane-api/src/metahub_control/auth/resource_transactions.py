@@ -46,6 +46,7 @@ RESOURCE_PERMISSIONS = frozenset(
         "billing.anomaly.read",
         "billing.anomaly.write",
         "policy.publish",
+        "policy_template.apply",
         "policy.read",
         "request_explanation.read",
         "audit.read",

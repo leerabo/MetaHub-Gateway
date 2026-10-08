@@ -298,6 +298,10 @@ export function createPolicyTemplatePageState({
       return false;
     }
     result = Object.freeze({
+      templateName: preview.template.name,
+      projectName: preview.template.binding_options.projects.find(
+        (item) => item.project_id === preview.template.impact.project_id,
+      )?.name ?? "所选项目",
       applicationId: String(application.application_id ?? ""),
       policyTemplateId: application.policy_template_id,
       generatedPolicyId: String(application.generated_policy_id ?? ""),
@@ -322,6 +326,14 @@ export function createPolicyTemplatePageState({
       preview = null;
       confirmation = null;
     }
+    return true;
+  }
+
+  /** 关闭已明确显示的结果或错误；不恢复已失效的预览凭证。 */
+  function dismissFeedback() {
+    if (lanes.apply.ticket) return false;
+    result = null;
+    pageError = null;
     return true;
   }
 
@@ -440,6 +452,7 @@ export function createPolicyTemplatePageState({
     beginApply,
     acceptApply,
     reject,
+    dismissFeedback,
     snapshot,
     leave,
   });
@@ -541,6 +554,7 @@ function copyImpact(value) {
     rollback_target_snapshot_id: String(value.rollback_target_snapshot_id ?? ""),
     shadowing_policy_ids: safeStringList(value.shadowing_policy_ids, 200),
     derived_target_model_id: safeId(value.derived_target_model_id),
+    derived_target_model_name: safeText(value.derived_target_model_name, 120),
     allowed_model_alias_names: safeStringList(value.allowed_model_alias_names, 20),
     frozen_environment_codes: safeStringList(value.frozen_environment_codes, 20),
   };

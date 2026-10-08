@@ -29,6 +29,7 @@ from metahub_control.virtual_keys import routes as key_routes
 from metahub_control.virtual_keys import service as keys
 from metahub_control.workspace_access import service as workspace_access
 from metahub_control.workspace_access.service import authenticate_workspace_session_as_auth_context
+from metahub_shared.db import connect_database
 from metahub_shared.runtime.errors import ApiError
 from test_prd147_workspace_files import (  # noqa: F401
     WORKSPACE_SESSION,
@@ -63,6 +64,25 @@ def _facts(database):
             ).hexdigest()
             for table in TABLES
         }
+
+
+@pytest.mark.anyio
+async def test_policy_template_apply_rechecks_workspace_session_in_write_transaction(file_subjects):  # noqa: F811
+    app, database, f = file_subjects
+    current = authenticate_workspace_session_as_auth_context(
+        app.state.config, f.source.cookies.get(WORKSPACE_SESSION)
+    )
+    assert "policy_template.apply" in current.permission_codes
+    connection = connect_database(f"sqlite:///{database.as_posix()}")
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        verified = ResourceWriteTransaction(
+            connection, app.state.config, current, "policy_template.apply"
+        ).verify()
+        assert verified.user.user_id == current.user.user_id
+    finally:
+        connection.rollback()
+        connection.close()
 
 
 @pytest.fixture

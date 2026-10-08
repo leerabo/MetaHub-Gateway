@@ -44,6 +44,7 @@ export function renderPolicyTemplates(state = {}) {
         ? renderLoading()
         : renderWorkspace(state, selected)}
       ${renderConfirmation(state)}
+      ${renderOutcomeDialog(state)}
     </section>
   `;
 }
@@ -188,7 +189,13 @@ function renderCompatibility(compatibility) {
         <p class="policy-template-compatibility__reason">${escapeHtml(reasonLabel(code))}</p>
       `).join("")}
       ${warnings.map((code) => `
-        <p class="policy-template-compatibility__warning">${escapeHtml(reasonLabel(code))}</p>
+        <div class="policy-template-compatibility__warning">
+          <span>${escapeHtml(reasonLabel(code))}</span>
+          ${code === "provider_health_unverified"
+            ? `<button class="button button--secondary" type="button"
+                 data-policy-template-remediation="providers">检查模型服务</button>`
+            : ""}
+        </div>
       `).join("")}
     </section>
   `;
@@ -219,6 +226,7 @@ function renderImpact(state) {
         </span>
       </header>
       ${blockedReasons.length ? renderPrerequisites(blockedReasons) : renderCompatibility(preview.template.compatibility)}
+      ${preview.template.templateCode === "low_cost_mode" ? renderRouteNotice(impact) : ""}
       <div class="policy-template-impact__table-wrap">
         <table class="data-table policy-template-impact__table">
           <thead><tr><th>顺序</th><th>策略</th><th>优先级</th><th>动作</th><th>影响</th></tr></thead>
@@ -236,10 +244,10 @@ function renderImpact(state) {
         </table>
       </div>
       <dl class="policy-template-impact__facts">
-        <div><dt>回滚基线</dt><dd>${escapeHtml(shortId(impact.rollback_target_snapshot_id))}</dd></div>
-        <div><dt>目标版本</dt><dd>v${escapeHtml(String(impact.expected_head_version + 1))}</dd></div>
+        <div><dt>应用前版本</dt><dd>v${escapeHtml(String(impact.expected_head_version))}，可用于撤销本次应用</dd></div>
+        <div><dt>应用后版本</dt><dd>v${escapeHtml(String(impact.expected_head_version + 1))}</dd></div>
         ${impact.derived_target_model_id
-          ? `<div><dt>目标模型</dt><dd>${escapeHtml(shortId(impact.derived_target_model_id))}</dd></div>`
+          ? `<div><dt>将使用的模型</dt><dd>${escapeHtml(impact.derived_target_model_name || "已选模型")}</dd></div>`
           : ""}
         ${impact.allowed_model_alias_names?.length
           ? `<div><dt>允许别名</dt><dd>${impact.allowed_model_alias_names.map(escapeHtml).join("、")}</dd></div>`
@@ -253,6 +261,19 @@ function renderImpact(state) {
             : ""}
       </div>
     </section>
+  `;
+}
+
+/** 低成本模板的固定模型策略会先于现有模型路由生效。 */
+function renderRouteNotice(impact) {
+  return `
+    <div class="policy-template-route-notice">
+      <strong>会改变这个项目的模型选择</strong>
+      <p>应用后，命中这条策略的项目对话请求会固定使用 ${escapeHtml(impact.derived_target_model_name || "选中的模型")}。
+        原有模型路由的候选顺序和故障切换不会用于这些请求；其他项目不受影响。</p>
+      <button class="button button--secondary" type="button"
+        data-policy-template-remediation="model-aliases">改用模型路由的“成本优先”</button>
+    </div>
   `;
 }
 
@@ -346,16 +367,14 @@ function renderConfirmation(state) {
     (item) => item.project_id === impact.project_id,
   );
   const warningLabels = template.compatibility.warningCodes.map(reasonLabel);
-  const warningText = warningLabels.length
-    ? `${warningLabels.join("；")}（${impact.shadowing_policy_ids.length} 条现有策略）`
-    : "无";
+  const warningText = warningLabels.length ? warningLabels.join("；") : "无";
   return `
     <div class="modal-backdrop" data-policy-template-modal>
       <section class="modal policy-template-confirm" role="dialog" aria-modal="true"
         aria-labelledby="policy-template-confirm-title">
         <header class="modal__header">
           <div>
-            <p class="eyebrow">关键命令</p>
+            <p class="eyebrow">应用前确认</p>
             <h3 id="policy-template-confirm-title">应用${escapeHtml(template.name)}</h3>
           </div>
           <button class="icon-button" type="button" aria-label="关闭"
@@ -363,15 +382,14 @@ function renderConfirmation(state) {
         </header>
         <dl class="policy-template-confirm__summary">
           <div><dt>适配状态</dt><dd>${escapeHtml(STATUS_LABELS[template.compatibility.status] ?? "状态未知")}</dd></div>
-          <div><dt>受影响 Project</dt><dd>${escapeHtml(project?.name ?? impact.project_id)} <code>${escapeHtml(impact.project_id)}</code></dd></div>
-          <div><dt>生成 Policy</dt><dd><code>${escapeHtml(generatedPolicy?.policy_id ?? "-")}</code></dd></div>
-          <div><dt>动作</dt><dd>${escapeHtml(ACTION_LABELS[generatedPolicy?.action_type] ?? generatedPolicy?.action_type ?? "-")}</dd></div>
-          <div><dt>优先级</dt><dd>${escapeHtml(String(generatedPolicy?.priority ?? "-"))}</dd></div>
-          <div><dt>策略数量</dt><dd>${escapeHtml(String(impact.before_policy_count))} → ${escapeHtml(String(impact.after_policy_count))}</dd></div>
-          <div><dt>新 Snapshot</dt><dd>v${escapeHtml(String(impact.expected_head_version + 1))}</dd></div>
-          <div><dt>回滚目标</dt><dd><code>${escapeHtml(impact.rollback_target_snapshot_id)}</code></dd></div>
-          <div class="policy-template-confirm__warning"><dt>遮蔽提醒</dt><dd>${escapeHtml(warningText)}</dd></div>
+          <div><dt>应用项目</dt><dd>${escapeHtml(project?.name ?? "所选项目")}</dd></div>
+          <div><dt>执行动作</dt><dd>${escapeHtml(ACTION_LABELS[generatedPolicy?.action_type] ?? generatedPolicy?.action_type ?? "-")}</dd></div>
+          <div><dt>新增规则</dt><dd>1 条，应用后共 ${escapeHtml(String(impact.after_policy_count))} 条</dd></div>
+          <div><dt>上线版本</dt><dd>v${escapeHtml(String(impact.expected_head_version + 1))}（可回退到 v${escapeHtml(String(impact.expected_head_version))}）</dd></div>
+          ${impact.derived_target_model_id ? `<div><dt>将使用的模型</dt><dd>${escapeHtml(impact.derived_target_model_name || "已选模型")}</dd></div>` : ""}
+          ${warningLabels.length ? `<div class="policy-template-confirm__warning"><dt>应用提醒</dt><dd>${escapeHtml(warningText)}</dd></div>` : ""}
         </dl>
+        ${template.templateCode === "low_cost_mode" ? renderRouteNotice(impact) : ""}
         <label class="field">
           <span>变更原因</span>
           <textarea name="reason" data-policy-template-reason maxlength="256" rows="4"
@@ -390,9 +408,9 @@ function renderConfirmation(state) {
   `;
 }
 
-/** 渲染统一错误或成功结果；只展示公开 request_id，不展示 hash、nonce 或绑定正文。 */
+/** 目录读取失败显示在页面顶部，其他操作结果由就地对话框明确呈现。 */
 function renderFeedback(state) {
-  if (state.pageError) {
+  if (state.pageError && !state.templates?.length) {
     return `
       <div class="feedback feedback--error" role="alert">
         <strong>${escapeHtml(state.pageError.message)}</strong>
@@ -401,20 +419,44 @@ function renderFeedback(state) {
       </div>
     `;
   }
-  if (state.result) {
-    return `
-      <div class="feedback feedback--success policy-template-result" role="status">
-        <strong>模板已应用</strong>
-        <dl class="policy-template-result__facts">
-          <div><dt>Application ID</dt><dd><code>${escapeHtml(state.result.applicationId)}</code></dd></div>
-          <div><dt>Snapshot</dt><dd><code>${escapeHtml(state.result.snapshotId)}</code> · v${escapeHtml(String(state.result.snapshotVersion))}</dd></div>
-        </dl>
-        <button class="button button--secondary" type="button" data-policy-template-action="open-snapshot"
-          data-snapshot-id="${escapeAttribute(state.result.snapshotId)}">查看发布版本</button>
-      </div>
-    `;
-  }
   return "";
+}
+
+/** 成功或失败都停在用户刚操作的位置，避免只在页面顶部留下看不见的提示。 */
+function renderOutcomeDialog(state) {
+  if (!state.result && !(state.pageError && state.templates?.length)) return "";
+  const success = Boolean(state.result);
+  const title = success ? "模板已应用" : "模板未应用";
+  const error = state.pageError;
+  const message = error?.code === "policy_template.impact_conflict"
+    ? "配置在检查后发生变化。请重新检查，再确认应用。"
+    : error?.code === "policy_template.not_applicable"
+      ? "当前条件已不满足，请重新检查模板的准备项。"
+      : error?.message || "请重新检查后重试。";
+  return `
+    <div class="modal-backdrop" data-policy-template-outcome>
+      <section class="modal policy-template-confirm policy-template-outcome" role="${success ? "dialog" : "alertdialog"}"
+        aria-modal="true" aria-labelledby="policy-template-outcome-title">
+        <header class="modal__header">
+          <h3 id="policy-template-outcome-title">${title}</h3>
+          <button class="icon-button" type="button" aria-label="关闭结果"
+            data-policy-template-action="dismiss-feedback">×</button>
+        </header>
+        ${success
+          ? `<p>已为 ${escapeHtml(state.result.projectName)} 应用“${escapeHtml(state.result.templateName)}”，上线版本为 v${escapeHtml(String(state.result.snapshotVersion))}。</p>
+             <p>规则已保存并发布；网关同步后生效。可在“上线与版本”查看和回退。</p>`
+          : `<p>${escapeHtml(message)}</p>
+             ${error?.suggestion ? `<p>${escapeHtml(error.suggestion)}</p>` : ""}
+             ${error?.requestId && error.requestId !== "-" ? `<details><summary>故障编号</summary><code>${escapeHtml(error.requestId)}</code></details>` : ""}`}
+        <footer class="modal__actions">
+          <button class="button button--secondary" type="button" data-policy-template-action="dismiss-feedback">关闭</button>
+          ${success
+            ? `<button class="button button--primary" type="button" data-policy-template-action="open-snapshot">查看上线版本</button>`
+            : `<button class="button button--primary" type="button" data-policy-template-action="retry-preview">重新检查</button>`}
+        </footer>
+      </section>
+    </div>
+  `;
 }
 
 /** 首次目录读取使用稳定骨架，不以动态文字改变工具区尺寸。 */
@@ -466,6 +508,7 @@ function reasonLabel(code) {
     domestic_alias_limit_exceeded: "国产模型别名数量超过模板上限",
     domestic_provider_required: "模型必须来自允许的中国境内官方或云服务 Provider",
     eligible_low_cost_model_required: "暂无同时满足能力、健康和价格要求的模型",
+    provider_health_unverified: "模型服务尚无有效的健康检查结果；首次调用前请检查连接",
     environment_limit_exceeded: "可用环境数量超过模板上限",
     policy_mask_runtime_required: "Gateway 脱敏运行能力尚未全部就绪",
     provider_adapter_required: "候选 Provider Adapter 当前不可用",

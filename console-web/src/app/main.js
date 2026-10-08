@@ -12003,8 +12003,35 @@ async function rejectPolicyTemplateLibrary(lane, ticket, error) {
   // 权限可能在预览后被撤销，必须整体清除并重新读取后端导航，不能只隐藏 apply 按钮。
   if (Number(error?.status) === 403) {
     clearPolicyTemplateLibrarySessionState();
-    globalThis.queueMicrotask?.(() => { void refresh(); });
+    await refresh();
+    showPolicyTemplatePermissionError();
   }
+}
+
+/** 权限类失败刷新身份后仍需留下明确结果，不能把确认框直接消失当作反馈。 */
+function showPolicyTemplatePermissionError() {
+  document.querySelector("[data-policy-template-permission-error]")?.remove();
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  backdrop.dataset.policyTemplatePermissionError = "";
+  const dialog = document.createElement("section");
+  dialog.className = "modal policy-template-confirm policy-template-outcome";
+  dialog.setAttribute("role", "alertdialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-label", "模板未应用");
+  const title = document.createElement("h3");
+  title.textContent = "模板未应用";
+  const detail = document.createElement("p");
+  detail.textContent = "当前账号没有完成本次操作所需的权限。请重新检查账号权限后再试。";
+  const close = document.createElement("button");
+  close.className = "button button--primary";
+  close.type = "button";
+  close.textContent = "知道了";
+  close.addEventListener("click", () => backdrop.remove());
+  dialog.append(title, detail, close);
+  backdrop.append(dialog);
+  document.body.append(backdrop);
+  close.focus();
 }
 
 /** 局部重绘 PAGE-095，并重新绑定当前 DOM 事件。 */
@@ -12072,6 +12099,16 @@ function bindPolicyTemplateLibraryInteractions(consoleShellState) {
   });
   root.querySelector('[data-policy-template-action="apply"]')?.addEventListener("click", () => {
     void submitPolicyTemplateLibrary(consoleShellState);
+  });
+  for (const button of root.querySelectorAll('[data-policy-template-action="dismiss-feedback"]')) {
+    button.addEventListener("click", () => {
+      if (policyTemplateLibraryPageState.dismissFeedback()) {
+        renderPolicyTemplateLibraryPanel(consoleShellState);
+      }
+    });
+  }
+  root.querySelector('[data-policy-template-action="retry-preview"]')?.addEventListener("click", () => {
+    void previewPolicyTemplateLibrary(consoleShellState);
   });
   root.querySelector('[data-policy-template-action="open-snapshot"]')?.addEventListener("click", () => {
     // 目标仍必须是后端已下发导航；无 policy.read 时按钮查找失败且不会手写 hash。

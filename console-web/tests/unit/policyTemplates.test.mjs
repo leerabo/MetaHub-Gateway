@@ -120,6 +120,7 @@ function previewPayload() {
         before_policy_count: 0,
         after_policy_count: 1,
         derived_target_model_id: "model_a",
+        derived_target_model_name: "glm-5.3-flash",
         allowed_model_alias_names: [],
         frozen_environment_codes: [],
         expected_head_version: 7,
@@ -408,15 +409,15 @@ test("policy template confirmation and success render complete public facts", ()
   assert.equal(state.acceptPreview(preview, previewPayload()), true);
   assert.equal(state.openConfirmation(), true);
   let html = renderPolicyTemplates(state.snapshot());
-  assert.match(html, /受影响 Project/);
+  assert.match(html, /应用项目/);
   assert.match(html, /客户中心/);
-  assert.match(html, new RegExp(GENERATED_POLICY_ID));
-  assert.match(html, /动作[\s\S]*定向路由/);
-  assert.match(html, /优先级[\s\S]*1000/);
-  assert.match(html, /策略数量[\s\S]*0 → 1/);
-  assert.match(html, /新 Snapshot[\s\S]*v8/);
-  assert.match(html, new RegExp(PREVIOUS_SNAPSHOT_ID));
-  assert.match(html, /遮蔽提醒[\s\S]*无/);
+  assert.match(html, /执行动作[\s\S]*定向路由/);
+  assert.match(html, /新增规则[\s\S]*1 条/);
+  assert.match(html, /上线版本[\s\S]*v8/);
+  assert.match(html, /将使用的模型[\s\S]*glm-5\.3-flash/);
+  assert.match(html, /原有模型路由的候选顺序和故障切换不会用于这些请求/);
+  assert.doesNotMatch(html, new RegExp(GENERATED_POLICY_ID));
+  assert.doesNotMatch(html, new RegExp(PREVIOUS_SNAPSHOT_ID));
 
   state.setReason("确认公开影响摘要");
   const apply = state.beginApply();
@@ -433,10 +434,11 @@ test("policy template confirmation and success render complete public facts", ()
     trace_id: "trace_apply_visible",
   }), true);
   html = renderPolicyTemplates(state.snapshot());
-  assert.match(html, new RegExp(APPLICATION_ID));
-  assert.match(html, new RegExp(RESULT_SNAPSHOT_ID));
-  assert.match(html, /Snapshot[\s\S]*v8/);
-  assert.match(html, /查看发布版本/);
+  assert.match(html, /已为 客户中心 应用“低成本模式”/);
+  assert.match(html, /上线版本为 v8/);
+  assert.match(html, /查看上线版本/);
+  assert.doesNotMatch(html, new RegExp(APPLICATION_ID));
+  assert.doesNotMatch(html, new RegExp(RESULT_SNAPSHOT_ID));
 });
 
 test("policy template confirmation stays bounded and wraps identifiers on mobile", async () => {
@@ -470,9 +472,35 @@ test("policy template confirmation keeps server shadowing warning visible", () =
   assert.equal(state.acceptPreview(preview, payload), true);
   assert.equal(state.openConfirmation(), true);
   const html = renderPolicyTemplates(state.snapshot());
-  assert.match(html, /遮蔽提醒/);
+  assert.match(html, /应用提醒/);
   assert.match(html, /现有策略会改变模板效果/);
-  assert.match(html, /1 条现有策略/);
+  assert.doesNotMatch(html, /1 条现有策略/);
+});
+
+test("failed application stays visible beside the action and offers a new check", () => {
+  const state = createPolicyTemplatePageState();
+  state.syncOwner(pageOwner());
+  const list = state.beginCatalog();
+  state.acceptCatalog(list, { policy_templates: catalog(), total: 5 });
+  const preview = state.beginPreview();
+  state.acceptPreview(preview, previewPayload());
+  state.openConfirmation();
+  state.setReason("验证失败提示");
+  const apply = state.beginApply();
+  state.reject("apply", apply, {
+    status: 409,
+    code: "policy_template.impact_conflict",
+    message: "Conflict",
+    requestId: "req_public_1",
+  });
+  const html = renderPolicyTemplates(state.snapshot());
+  assert.match(html, /role="alertdialog"/);
+  assert.match(html, /模板未应用/);
+  assert.match(html, /配置在检查后发生变化/);
+  assert.match(html, /重新检查/);
+  assert.doesNotMatch(html, /data-policy-template-modal/);
+  assert.equal(state.dismissFeedback(), true);
+  assert.doesNotMatch(renderPolicyTemplates(state.snapshot()), /role="alertdialog"/);
 });
 
 test("policy template state renders incompatible preview without write credentials", () => {

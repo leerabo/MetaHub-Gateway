@@ -738,6 +738,7 @@ async def test_all_five_template_planners_apply_real_semantics(
                     preview["impact"]["derived_target_model_id"]
                     == facts["low_cost_model_id"]
                 )
+                assert preview["impact"]["derived_target_model_name"] == "prd068-catalog-winner"
             elif code == "domestic_models_only":
                 assert preview["impact"]["allowed_model_alias_names"] == [
                     "secure-domestic"
