@@ -208,7 +208,8 @@ test("renderBudgetPanel shows status cards rules and admin form", () => {
 
   assert.match(html, /budget-rule-form/);
   assert.match(html, /<details class="budget-create-disclosure">/);
-  assert.match(html, /设置日预算/);
+  assert.match(html, /新增或修改成本预算/);
+  assert.match(html, /预算周期/);
   assert.match(html, /生产 Key 日预算/);
   assert.match(html, /达到告警/);
   assert.match(html, /82%/);
@@ -220,7 +221,8 @@ test("renderBudgetPanel shows status cards rules and admin form", () => {
   assert.match(html, /预算已保存/);
   assert.match(html, /项目 · 账务核心/);
   assert.match(html, /应用 · 账务 API/);
-  assert.match(html, /选择调用 KEY/);
+  assert.match(html, /员工姓名或邮箱/);
+  assert.doesNotMatch(html, /id="budget-scope-chain-key"/);
   assert.doesNotMatch(html, /mhv_prod_\*\*\*\*/);
   assert.doesNotMatch(html, /tenant_id/);
 });

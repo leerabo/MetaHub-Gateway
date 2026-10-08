@@ -52,6 +52,7 @@ def load_budget_spend_amounts(
     scope_id: str,
     budget_rule_id: str,
     budget_date: str,
+    budget_period: str = "day",
     start_utc: str,
     end_utc: str,
 ) -> BudgetSpendAmounts:
@@ -74,6 +75,14 @@ def load_budget_spend_amounts(
         start_utc=start_utc,
         end_utc=end_utc,
     )
+    if budget_period == "day":
+        period_start_date = budget_date
+    elif budget_period == "month":
+        period_start_date = f"{budget_date[:7]}-01"
+    elif budget_period == "year":
+        period_start_date = f"{budget_date[:4]}-01-01"
+    else:
+        raise BudgetSpendUnavailableError("budget_spend.period_invalid")
     posted = _load_posted_usage_cny_micros(
         connection,
         tenant_id=tenant_id,
@@ -89,6 +98,7 @@ def load_budget_spend_amounts(
             tenant_id=tenant_id,
             budget_rule_id=budget_rule_id,
             budget_date=budget_date,
+            period_start_date=period_start_date,
         )
     # 历史 NUMERIC 坏值也属于预算状态不可确认，统一收敛为 Shared 专用失败关闭异常。
     except ValueError as exc:

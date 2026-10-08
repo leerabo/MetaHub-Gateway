@@ -15,6 +15,15 @@ export async function listBudgets({ controlApiUrl, token, authentication, signal
   });
 }
 
+/** 按员工姓名或邮箱在服务端分页查询；选中员工时返回其 KEY 安全元数据。 */
+export async function listBudgetPeople({ controlApiUrl, token, authentication, signal, search, userId, offset = 0 }) {
+  const url = new URL(`${controlApiUrl}/budget-people`);
+  setOptionalParam(url, "search", search);
+  setOptionalParam(url, "user_id", userId);
+  url.searchParams.set("offset", String(offset));
+  return budgetRequest(url.toString(), { token, authentication, signal });
+}
+
 /**
  * 查询租户级和可选 Virtual Key 级的当日预算状态。
  * 该接口用于控制台概览和预算设置页，只返回成本摘要与策略动作，不返回任何 Key 明文。
@@ -54,6 +63,7 @@ export async function updateBudgetRule({
   environmentId,
   name,
   dailyBudgetCny,
+  budgetPeriod,
   warningThresholdPercent,
   exhaustedAction,
   status,
@@ -68,6 +78,7 @@ export async function updateBudgetRule({
     environmentId,
     name,
     dailyBudgetCny,
+    budgetPeriod,
     warningThresholdPercent,
     exhaustedAction,
     status,
@@ -89,6 +100,7 @@ async function writeBudgetRule({
   environmentId,
   name,
   dailyBudgetCny,
+  budgetPeriod,
   warningThresholdPercent,
   exhaustedAction,
   status,
@@ -99,6 +111,7 @@ async function writeBudgetRule({
     environment_id: environmentId,
     name,
     daily_budget_cny: dailyBudgetCny,
+    budget_period: budgetPeriod,
     warning_threshold_percent: warningThresholdPercent,
     exhausted_action: exhaustedAction,
     status,

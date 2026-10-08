@@ -65,6 +65,7 @@ def load_outstanding_reserved_cny_micros(
     tenant_id: str,
     budget_rule_id: str,
     budget_date: str,
+    period_start_date: str | None = None,
 ) -> int:
     """逐行累计尚未结算的预留并返回有界整数微元。
 
@@ -79,7 +80,8 @@ def load_outstanding_reserved_cny_micros(
           ELSE r.reserved_cost_cny
         END AS reserved_cny
         FROM budget_reservations r
-        WHERE r.tenant_id=? AND r.budget_rule_id=? AND r.budget_date=?
+        WHERE r.tenant_id=? AND r.budget_rule_id=?
+          AND r.budget_date>=? AND r.budget_date<=?
           AND (
             r.outstanding_cost_cny IS NOT NULL
             OR NOT EXISTS (
@@ -93,7 +95,7 @@ def load_outstanding_reserved_cny_micros(
           )
         ORDER BY r.budget_reservation_id ASC
         """,
-        (tenant_id, budget_rule_id, budget_date),
+        (tenant_id, budget_rule_id, period_start_date or budget_date, budget_date),
     )
     total = 0
     for row in rows:
@@ -108,11 +110,12 @@ def load_outstanding_reserved_cny_micros(
         hold_rows = connection.execute(
             """
             SELECT remaining_cost_cny FROM batch_budget_holds
-            WHERE tenant_id=? AND budget_rule_id=? AND budget_date=?
+            WHERE tenant_id=? AND budget_rule_id=?
+              AND budget_date>=? AND budget_date<=?
               AND status IN ('active','reconciliation')
             ORDER BY batch_budget_hold_id ASC
             """,
-            (tenant_id, budget_rule_id, budget_date),
+            (tenant_id, budget_rule_id, period_start_date or budget_date, budget_date),
         )
         for row in hold_rows:
             total += _reservation_cny_to_micros(row[0])
@@ -123,11 +126,12 @@ def load_outstanding_reserved_cny_micros(
         allocation_rows = connection.execute(
             """
             SELECT reserved_cost_cny FROM batch_budget_allocations
-            WHERE tenant_id=? AND budget_rule_id=? AND budget_date=?
+            WHERE tenant_id=? AND budget_rule_id=?
+              AND budget_date>=? AND budget_date<=?
               AND status IN ('active','reconciliation')
             ORDER BY batch_budget_allocation_id ASC
             """,
-            (tenant_id, budget_rule_id, budget_date),
+            (tenant_id, budget_rule_id, period_start_date or budget_date, budget_date),
         )
         for row in allocation_rows:
             total += _reservation_cny_to_micros(row[0])

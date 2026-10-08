@@ -24,6 +24,7 @@ export function renderWorkspaceQuota(state, authContext, consoleShellState, i18n
         </div>
         <button type="button" class="workspace-quota-icon-command" data-quota-refresh title="${translate("common.refresh", "刷新")}" aria-label="${translate("common.refresh", "刷新")}"${state.dialog?.open ? " disabled" : ""}>&#8635;</button>
       </header>
+      <p class="workspace-quota-explainer">这里管理组织账户的付费、试用、赠送余额及调整记录。<a href="console.html#workspace.finance.budgets">调用成本预算</a>可查看员工支出，并限制组织、项目、应用或单把调用凭证的模型调用成本。</p>
       ${renderFeedback(state)}
       ${state.state === "loading" ? `<div class="workspace-quota-empty" role="status">${translate("quota.loading", "正在读取额度")}</div>` : ""}
       ${state.state === "error" ? renderError(state.error, translate("quota.unavailable", "额度暂不可用")) : ""}

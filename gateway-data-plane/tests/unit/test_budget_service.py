@@ -39,6 +39,23 @@ def test_budget_window_uses_asia_shanghai_business_day() -> None:
     assert after_end == "2026-07-09T16:00:00Z"
 
 
+def test_budget_window_uses_shanghai_calendar_month_and_year() -> None:
+    """月、年预算在上海自然周期边界重置，包括跨年。"""
+
+    before_new_year = datetime(2025, 12, 31, 15, 59, 59, tzinfo=UTC)
+    after_new_year = datetime(2025, 12, 31, 16, 0, 0, tzinfo=UTC)
+
+    assert _budget_window(before_new_year, period="month") == (
+        "2025-12-31", "2025-11-30T16:00:00Z", "2025-12-31T16:00:00Z",
+    )
+    assert _budget_window(after_new_year, period="month") == (
+        "2026-01-01", "2025-12-31T16:00:00Z", "2026-01-31T16:00:00Z",
+    )
+    assert _budget_window(after_new_year, period="year") == (
+        "2026-01-01", "2025-12-31T16:00:00Z", "2026-12-31T16:00:00Z",
+    )
+
+
 def test_apply_budget_decision_enriches_request_log_context() -> None:
     """日志摘要：预算命中后要把规则、scope、动作和金额写入调用日志上下文。"""
 

@@ -18,6 +18,7 @@ from metahub_control.audit import build_audit_request_meta
 from metahub_control.auth import AuthContext, require_workspace_or_legacy_permissions
 
 from .models import (
+    BudgetPeopleResponse,
     BudgetRuleListResponse,
     BudgetRuleResponse,
     BudgetStatusResponse,
@@ -29,6 +30,7 @@ from .service import (
     create_budget_rule,
     get_budget_status,
     list_budget_rules,
+    list_budget_people,
     update_budget_mode,
     upsert_budget_rule,
 )
@@ -56,6 +58,7 @@ ALLOWED_BUDGET_RULE_BODY_FIELDS = frozenset(
         "environment",
         "name",
         "daily_budget_cny",
+        "budget_period",
         "warning_threshold_percent",
         "exhausted_action",
         "status",
@@ -100,6 +103,33 @@ PayloadModel = TypeVar("PayloadModel", bound=BaseModel)
 
 class _DuplicateJsonKey(ValueError):
     """标记任意层级重复 JSON key，防止不同解析器采用 first/last 不同语义。"""
+
+
+@router.get("/budget-people", response_model=BudgetPeopleResponse)
+def get_budget_people_route(
+    request: Request,
+    response: Response,
+    context: BudgetReader,
+) -> BudgetPeopleResponse:
+    """按姓名或邮箱分页查员工；选定员工后读取其调用凭证安全元数据。"""
+
+    query = _read_query(request, frozenset({"search", "user_id", "offset"}))
+    try:
+        offset = int(query.get("offset", "0"))
+    except ValueError as exc:
+        raise ApiError("budget.rule_invalid") from exc
+    if offset < 0 or offset > 1_000_000:
+        raise ApiError("budget.rule_invalid")
+    response.headers["Cache-Control"] = "no-store"
+    return list_budget_people(
+        request.app.state.config,
+        context,
+        search=query.get("search"),
+        user_id=query.get("user_id"),
+        offset=offset,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
 
 
 @router.get("/budgets", response_model=BudgetRuleListResponse)

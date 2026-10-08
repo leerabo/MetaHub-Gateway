@@ -16,6 +16,8 @@ const ACTION_LABELS = {
   warn: "告警",
 };
 
+const PERIOD_LABELS = { day: "每日", month: "每月", year: "每年" };
+
 // 固定层级标签只负责展示，预算冲突顺序和 deny-wins 结论必须使用后端 aggregate。
 const SCOPE_LABELS = {
   tenant: "租户",
@@ -50,8 +52,8 @@ export function renderBudgetPanel(budgetState, authContext, virtualKeysState, pr
   return `
     <div class="panel-heading budget-heading">
       <div>
-        <h2 id="budgets-title">预算中心</h2>
-        <p>${escapeHtml(statusPayload.budget_date ?? "-")} · 上海业务日</p>
+        <h2 id="budgets-title">调用成本预算</h2>
+        <p>按日、月或年限制模型调用成本。<a href="console.html#workspace.finance.quota">额度管理</a>查看组织账户的付费、试用等余额。</p>
       </div>
       <span class="budget-count">${escapeHtml(rules.length)} 条规则</span>
     </div>
@@ -59,11 +61,11 @@ export function renderBudgetPanel(budgetState, authContext, virtualKeysState, pr
       ${renderActionError(budgetState.actionError)}
       ${renderFeedback(budgetState.feedback)}
     </div>
-    ${renderAggregateBand(aggregate, statusPayload.budget_date, rules.length)}
+    ${renderPeoplePicker(budgetState)}
+    ${renderAggregateBand(aggregate, statusPayload.budget_date, rules.length, budgetState.selectedPerson)}
     ${renderEnvironmentSummaries(summaries)}
-    ${renderScopeChainSelector(virtualKeysState, budgetState.selectedVirtualKeyId)}
-    ${renderScopeChain(statuses, aggregate)}
-    ${canWrite ? renderBudgetForm(virtualKeysState, projectState, environmentState, rules) : renderReadOnlyNotice()}
+    ${renderScopeChain(statuses, aggregate, budgetState.selectedPerson)}
+    ${canWrite ? renderBudgetForm(budgetState.selectedPerson, projectState, environmentState, rules) : renderReadOnlyNotice()}
     ${renderRuleTable(rules, canWrite)}
   `;
 }
@@ -92,6 +94,7 @@ function renderErrorPanel(state) {
     </div>
     <div class="empty-state error-state">
       ${escapeHtml(state.message ?? "预算接口读取失败，请稍后重试")}
+      ${state.requestId ? `<small>请求 ID：${escapeHtml(state.requestId)}</small>` : ""}
     </div>
   `;
 }
@@ -138,10 +141,11 @@ function deriveLegacyAggregate(statuses) {
  * 渲染当前可信 scope chain 的总门禁结论。
  * 前端只展示后端 deny-wins 结果，不根据卡片颜色重新决定是否放行。
  */
-function renderAggregateBand(aggregate, budgetDate, ruleCount) {
+function renderAggregateBand(aggregate, budgetDate, ruleCount, selectedPerson) {
   const limitingScope = aggregate.limiting_scope;
   return `
     <section class="budget-aggregate status-${escapeAttribute(aggregate.aggregate_status ?? "unconfigured")}" aria-label="有效预算约束">
+      <h3 class="budget-aggregate-title">${selectedPerson ? `${escapeHtml(selectedPerson.display_name)}所选调用凭证的预算判断` : "组织预算概览"}</h3>
       <div>
         <span>当前状态</span>
         <strong>${escapeHtml(STATUS_LABELS[aggregate.aggregate_status] ?? aggregate.aggregate_status ?? "未配置")}</strong>
@@ -163,7 +167,7 @@ function renderAggregateBand(aggregate, budgetDate, ruleCount) {
         <strong>${escapeHtml(budgetDate ?? "-")}</strong>
       </div>
       <div>
-        <span>规则数</span>
+        <span>组织规则总数</span>
         <strong>${escapeHtml(ruleCount)}</strong>
       </div>
     </section>
@@ -221,47 +225,59 @@ function renderScopeSummary(item) {
  * 渲染调用 KEY 作用链选择器。
  * 选择值只发送不透明 Key ID；运行环境、项目和应用由后端重新恢复并校验。
  */
-function renderScopeChainSelector(virtualKeysState, selectedVirtualKeyId) {
-  const virtualKeys = virtualKeysState?.virtual_keys ?? [];
-  if (!virtualKeys.length) {
-    return "";
-  }
+function renderPeoplePicker(state) {
+  const people = state.people?.people ?? [];
+  const total = state.people?.total ?? 0;
+  const offset = state.peopleOffset ?? 0;
+  const selected = state.selectedPerson;
   return `
-    <label class="budget-chain-selector">
-      <span>选择调用 KEY</span>
-      <select id="budget-scope-chain-key">
-        ${virtualKeys.map((item) => `
-          <option value="${escapeAttribute(item.virtual_key_id)}" ${item.virtual_key_id === selectedVirtualKeyId ? "selected" : ""}>
-            ${escapeHtml(displayVirtualKeyName(item.name))}
-          </option>
-        `).join("")}
-      </select>
-    </label>
+    <section class="budget-people" aria-label="查找员工预算">
+      <div class="budget-people-heading">
+        <div><h3>查看员工预算</h3><p>按姓名或邮箱查找员工。选中后查看他的调用凭证及适用的组织、项目、应用预算。</p></div>
+        <form id="budget-person-search-form" role="search">
+          <label for="budget-person-search">员工姓名或邮箱</label>
+          <div><input id="budget-person-search" name="search" value="${escapeAttribute(state.peopleSearch ?? "")}" placeholder="输入姓名或邮箱" maxlength="160" />
+          <button type="submit">查找</button></div>
+        </form>
+      </div>
+      <div class="budget-person-results" aria-label="员工查找结果">
+        ${people.map((person) => `<button type="button" data-budget-person-id="${escapeAttribute(person.user_id)}" class="${selected?.user_id === person.user_id ? "is-selected" : ""}">
+          <strong>${escapeHtml(person.display_name)}</strong><span>${escapeHtml(person.email)}</span><small>${escapeHtml(person.key_count)} 个调用凭证</small>
+        </button>`).join("") || "<p>没有找到员工。请核对姓名或邮箱。</p>"}
+      </div>
+      ${total > 20 ? `<div class="budget-person-pagination">
+        <button type="button" data-budget-person-page="-1" ${offset === 0 ? "disabled" : ""}>上一页</button>
+        <span>${escapeHtml(offset + 1)}–${escapeHtml(Math.min(offset + 20, total))} / ${escapeHtml(total)}</span>
+        <button type="button" data-budget-person-page="1" ${offset + 20 >= total ? "disabled" : ""}>下一页</button>
+      </div>` : ""}
+      ${selected ? `<div class="budget-selected-person"><strong>${escapeHtml(selected.display_name)}的调用成本</strong><span>${escapeHtml(selected.email)}</span>
+        <div class="budget-person-spend">
+          <div><small>今日已入账</small><strong>${escapeHtml(selected.spent_day_cny ?? "-")} CNY</strong></div>
+          <div><small>本月已入账</small><strong>${escapeHtml(selected.spent_month_cny ?? "-")} CNY</strong></div>
+          <div><small>本年已入账</small><strong>${escapeHtml(selected.spent_year_cny ?? "-")} CNY</strong></div>
+        </div>
+        <p>这里合计该员工名下所有调用凭证的正式入账成本。预算限制按组织、项目、应用和单把凭证设置；如有多把凭证，请逐一查看其适用限制。</p>
+        ${selected.keys?.length ? `<div class="budget-person-keys">${selected.keys.map((key) => `<button type="button" data-budget-person-key="${escapeAttribute(key.virtual_key_id)}" class="${state.selectedVirtualKeyId === key.virtual_key_id ? "is-selected" : ""}">${escapeHtml(displayVirtualKeyName(key.name))}<small>${escapeHtml(key.environment_name ?? "")}</small></button>`).join("")}</div>` : "<p>此员工当前没有可选调用凭证；历史成本仍计入上方汇总。</p>"}
+      </div>` : "<p class=\"budget-person-hint\">先选择员工；下方暂显示组织层预算概览。</p>"}
+    </section>
   `;
 }
 
 /**
  * 渲染后端返回的可信 scope chain 及正式账本、预留和有效消耗拆分。
  */
-function renderScopeChain(statuses, aggregate) {
+function renderScopeChain(statuses, aggregate, selectedPerson) {
   const scopeChain = aggregate.scope_chain ?? [];
   if (!scopeChain.length) {
-    return `<div class="empty-state budget-empty">当前运行环境尚无可展示的预算作用链。</div>`;
+    return `<div class="empty-state budget-empty">当前运行环境尚无适用预算。</div>`;
   }
   return `
-    <section class="budget-chain-section" aria-label="适用预算作用链">
-      <h3>适用预算作用链</h3>
-      <div class="budget-chain-table" role="table">
-        <div class="budget-chain-row budget-chain-head" role="row">
-          <span>层级</span>
-          <span>状态</span>
-          <span>正式入账</span>
-          <span>预留</span>
-          <span>有效消耗</span>
-          <span>额度 / 剩余</span>
-        </div>
+    <section class="budget-chain-section" aria-label="适用的预算限制">
+      <h3>${selectedPerson ? "这次调用会受到哪些预算限制" : "组织预算限制"}</h3>
+      <p>从组织到调用凭证逐级检查；任一级设置为“耗尽后阻断”且额度已用完，请求就会被阻断。各层金额可能覆盖同一笔调用，不能相加。</p>
+      <ol class="budget-chain-cards">
         ${scopeChain.map((scope) => renderScopeChainRow(scope, statuses)).join("")}
-      </div>
+      </ol>
     </section>
   `;
 }
@@ -274,24 +290,20 @@ function renderScopeChainRow(scope, statuses) {
     status.scope_type === scope.scope_type && status.scope_id === scope.scope_id
   ));
   return `
-    <div class="budget-chain-row" role="row" data-budget-scope-id="${escapeAttribute(scope.budget_scope_id ?? scope.scope_id ?? "")}">
-      <div data-label="层级">
-        <strong>${escapeHtml(scopeDisplayName(scope))}</strong>
-      </div>
-      <div data-label="状态">
+    <li class="budget-chain-card" data-budget-scope-id="${escapeAttribute(scope.budget_scope_id ?? scope.scope_id ?? "")}">
+      <div class="budget-chain-card-heading"><strong>${escapeHtml(SCOPE_LABELS[scope.scope_type] ?? scope.scope_type)} · ${escapeHtml(scopeDisplayName(scope))}</strong>
         <mark class="status-mark status-${escapeAttribute(item?.status ?? "unconfigured")}">
           ${escapeHtml(STATUS_LABELS[item?.status] ?? item?.status ?? "未配置")}
         </mark>
-        ${item ? `<em>${escapeHtml(ACTION_LABELS[item.next_action] ?? item.next_action)}</em>` : ""}
       </div>
-      <div data-label="正式入账">${escapeHtml(item?.ledger_spent_cny ?? item?.spent_cny ?? "-")} CNY</div>
-      <div data-label="预留">${escapeHtml(item?.reserved_cny ?? "-")} CNY</div>
-      <div data-label="有效消耗">${escapeHtml(item?.effective_spend_cny ?? item?.spent_cny ?? "-")} CNY</div>
-      <div data-label="额度 / 剩余">
-        ${escapeHtml(item?.budget_cny ?? "-")} / ${escapeHtml(item?.effective_remaining_cny ?? item?.estimated_remaining_cny ?? "-")} CNY
-        ${item ? renderBlockNotice(item) : ""}
-      </div>
-    </div>
+      ${item ? `<div class="budget-chain-card-values">
+        <span>周期：<strong>${escapeHtml(PERIOD_LABELS[item.budget_period] ?? "每日")}</strong></span>
+        <span>预算：<strong>${escapeHtml(item.budget_cny)} CNY</strong></span>
+        <span>已用：<strong>${escapeHtml(item.effective_spend_cny ?? item.spent_cny)} CNY</strong></span>
+        <span>剩余：<strong>${escapeHtml(item.effective_remaining_cny ?? item.estimated_remaining_cny)} CNY</strong></span>
+      </div><p>已用金额含正式入账 ${escapeHtml(item.ledger_spent_cny ?? item.spent_cny)} CNY 和待结算预留 ${escapeHtml(item.reserved_cny ?? "0")} CNY；本层耗尽后${escapeHtml(item.exhausted_action === "block" ? "阻断" : "仅告警")}。</p>${renderBlockNotice(item)}`
+      : "<p>本层未设预算，不单独限制调用。</p>"}
+    </li>
   `;
 }
 
@@ -341,8 +353,8 @@ function renderBlockNotice(item) {
  * 渲染管理员预算写入表单。
  * 表单同时覆盖租户级和 Virtual Key 级规则，scope_id 只在 Key 预算时提交。
  */
-function renderBudgetForm(virtualKeysState, projectState, environmentState, rules) {
-  const virtualKeys = virtualKeysState?.virtual_keys ?? [];
+function renderBudgetForm(selectedPerson, projectState, environmentState, rules) {
+  const virtualKeys = selectedPerson?.keys ?? [];
   const projects = projectState?.projects ?? [];
   const applications = projectState?.applications ?? [];
   const environments = environmentState?.state === "ok"
@@ -350,8 +362,8 @@ function renderBudgetForm(virtualKeysState, projectState, environmentState, rule
     : [];
   return `
     <details class="budget-create-disclosure">
-      <summary>设置日预算</summary>
-      <p>为组织、项目、应用或调用 KEY 设置每日额度。</p>
+      <summary>新增或修改成本预算</summary>
+      <p>按运行环境和对象设置一个预算周期。员工可能有多把调用凭证；当前单把凭证预算不等于该员工的总额限制，请先在上方查找员工并选择凭证。</p>
       <form class="budget-rule-form" id="budget-rule-form">
       <label>
         <span>环境</span>
@@ -367,7 +379,7 @@ function renderBudgetForm(virtualKeysState, projectState, environmentState, rule
           <option value="tenant">租户</option>
           <option value="project">项目</option>
           <option value="application">应用</option>
-          <option value="virtual_key">调用 KEY</option>
+          <option value="virtual_key" ${virtualKeys.length ? "" : "disabled"}>员工调用凭证</option>
         </select>
       </label>
       <label>
@@ -381,16 +393,20 @@ function renderBudgetForm(virtualKeysState, projectState, environmentState, rule
             .map((item) => `<option value="${escapeAttribute(item.application_id)}" data-budget-scope-option="application" hidden disabled>应用 · ${escapeHtml(item.name)} (${escapeHtml(item.project_name ?? "-")})</option>`)
             .join("")}
           ${virtualKeys
-            .map((item) => `<option value="${escapeAttribute(item.virtual_key_id)}" data-budget-scope-option="virtual_key" data-environment-id="${escapeAttribute(item.environment_id ?? "")}" hidden disabled>调用 KEY · ${escapeHtml(displayVirtualKeyName(item.name))}</option>`)
+            .map((item) => `<option value="${escapeAttribute(item.virtual_key_id)}" data-budget-scope-option="virtual_key" data-environment-id="${escapeAttribute(item.environment_id ?? "")}" hidden disabled>${escapeHtml(selectedPerson.display_name)} · ${escapeHtml(displayVirtualKeyName(item.name))}</option>`)
             .join("")}
         </select>
       </label>
       <label>
         <span>名称</span>
-        <input name="name" placeholder="例如：生产 Key 日预算" />
+        <input name="name" placeholder="例如：研发团队月预算" />
       </label>
       <label>
-        <span>日预算 CNY</span>
+        <span>预算周期</span>
+        <select name="budgetPeriod"><option value="day">每天</option><option value="month">每月</option><option value="year">每年</option></select>
+      </label>
+      <label>
+        <span>预算金额 CNY</span>
         <input name="dailyBudgetCny" inputmode="decimal" placeholder="1000" required />
       </label>
       <label>
@@ -440,10 +456,10 @@ function renderRuleTable(rules, canWrite) {
       <div class="budget-rule-row budget-rule-head" role="row">
         <span>规则</span>
         <span>维度</span>
-        <span>日预算</span>
+        <span>周期预算</span>
         <span>告警</span>
         <span>100% 动作</span>
-        <span>今日状态</span>
+        <span>本周期状态</span>
         <span>更新时间</span>
       </div>
       ${rules.length ? rules.map((item) => renderRuleRow(item, canWrite)).join("") : renderEmptyRuleRow()}
@@ -462,12 +478,12 @@ function renderRuleRow(item, canWrite) {
         <strong>${escapeHtml(item.name)}</strong>
       </span>
       <span class="budget-rule-scope" data-label="维度">${escapeHtml(item.environment_name ?? item.environment ?? "-")} · ${escapeHtml(cleanScopeLabel(item.scope_label ?? item.scope_id))}</span>
-      <span data-label="日预算">${escapeHtml(item.daily_budget_cny)} CNY</span>
+      <span data-label="周期预算">${escapeHtml(PERIOD_LABELS[item.budget_period] ?? "每日")} ${escapeHtml(item.daily_budget_cny)} CNY</span>
       <span data-label="告警">${escapeHtml(item.warning_threshold_percent)}%</span>
       <span class="budget-mode-cell" data-label="100% 动作">
         ${canWrite ? renderModeControl(item) : escapeHtml(ACTION_LABELS[item.exhausted_action] ?? item.exhausted_action)}
       </span>
-      <span data-label="今日状态">
+      <span data-label="本周期状态">
         <mark class="status-mark status-${escapeAttribute(today.status ?? "ok")}">
           ${escapeHtml(STATUS_LABELS[today.status] ?? today.status ?? "-")}
         </mark>
@@ -501,7 +517,7 @@ function renderModeControl(item) {
 function renderEmptyRuleRow() {
   return `
     <div class="budget-rule-row budget-rule-empty" role="row">
-      <span>尚未配置租户、项目或调用 KEY 日预算。</span>
+      <span>尚未配置成本预算。</span>
     </div>
   `;
 }
@@ -516,6 +532,7 @@ function renderActionError(error) {
   return `
     <div class="budget-action-error" role="alert">
       ${escapeHtml(error.message ?? "预算操作失败，请稍后重试")}
+      ${error.requestId ? `<small>请求 ID：${escapeHtml(error.requestId)}</small>` : ""}
     </div>
   `;
 }

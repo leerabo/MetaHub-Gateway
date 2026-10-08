@@ -193,10 +193,12 @@ def enforce_budget_guard(
             ]
             fallback_estimate = _sum_estimates(fallback_estimates)
             estimate = _sum_estimates([initial_estimate, fallback_estimate])
-        budget_date, start_utc, end_utc = _budget_window()
+        window_now = _utcnow()
+        budget_date, _daily_start, _daily_end = _budget_window(window_now)
         decisions: list[BudgetDecision] = []
         created_reservation_rule_ids: set[str] = set()
         for rule in rules:
+            _same_day, start_utc, end_utc = _budget_window(window_now, period=rule.budget_period)
             decision = _evaluate_rule(
                 connection,
                 rule,
@@ -528,17 +530,17 @@ def load_policy_budget_remaining(
         if not rules:
             connection.rollback()
             return None
-        budget_date, start_utc, end_utc = _budget_window()
-        remaining_micros = min(
-            max(
-                0,
-                _cny_to_micros(rule.daily_budget_cny, allow_zero=False)
-                - _load_spend_amounts(
-                    connection, rule, start_utc, end_utc, budget_date
-                ).effective_cny_micros,
-            )
-            for rule in rules
-        )
+        window_now = _utcnow()
+        remaining_by_rule: list[int] = []
+        for rule in rules:
+            budget_date, start_utc, end_utc = _budget_window(window_now, period=rule.budget_period)
+            spent = _load_spend_amounts(
+                connection, rule, start_utc, end_utc, budget_date
+            ).effective_cny_micros
+            remaining_by_rule.append(max(
+                0, _cny_to_micros(rule.daily_budget_cny, allow_zero=False) - spent
+            ))
+        remaining_micros = min(remaining_by_rule)
         connection.rollback()
         return _money_text(_cny_from_micros(remaining_micros))
     # 预算上下文读取失败必须显式失败关闭，不能把异常误解释为没有适用预算规则。
@@ -711,8 +713,7 @@ def _load_budget_rules(
 
     rows = connection.execute(
         """
-        SELECT budget_rule_id, tenant_id, environment_id, scope_type, scope_id, daily_budget_cny,
-               warning_threshold_percent, exhausted_action
+        SELECT *
         FROM budget_rules
         WHERE tenant_id=?
           AND environment_id=?
@@ -742,6 +743,7 @@ def _load_budget_rules(
             daily_budget_cny=_decimal_value(row["daily_budget_cny"]),
             warning_threshold_percent=int(row["warning_threshold_percent"]),
             exhausted_action=row["exhausted_action"],
+            budget_period=row["budget_period"] if "budget_period" in row.keys() else "day",
         )
         for row in rows
     ]
@@ -1029,6 +1031,7 @@ def _load_spend_amounts(
         scope_id=rule.scope_id,
         budget_rule_id=rule.budget_rule_id,
         budget_date=budget_date,
+        budget_period=rule.budget_period,
         start_utc=start_utc,
         end_utc=end_utc,
     )
@@ -1496,14 +1499,24 @@ def _most_severe_decision(decisions: list[BudgetDecision]) -> BudgetDecision | N
     return exhausted or decisions[0]
 
 
-def _budget_window(now: datetime | None = None) -> tuple[str, str, str]:
-    """返回 Asia/Shanghai 业务日和对应 UTC 起止边界。"""
+def _budget_window(now: datetime | None = None, *, period: str = "day") -> tuple[str, str, str]:
+    """返回业务日标识及上海日、自然月或自然年的 UTC 半开区间。"""
 
     current = now or _utcnow()
     local = current.astimezone(SHANGHAI)
-    local_start = datetime(local.year, local.month, local.day, tzinfo=SHANGHAI)
-    local_end = local_start + timedelta(days=1)
-    return local_start.date().isoformat(), _to_db_time(local_start), _to_db_time(local_end)
+    budget_date = local.date().isoformat()
+    if period == "day":
+        local_start = datetime(local.year, local.month, local.day, tzinfo=SHANGHAI)
+        local_end = local_start + timedelta(days=1)
+    elif period == "month":
+        local_start = datetime(local.year, local.month, 1, tzinfo=SHANGHAI)
+        local_end = datetime(local.year + (local.month == 12), local.month % 12 + 1, 1, tzinfo=SHANGHAI)
+    elif period == "year":
+        local_start = datetime(local.year, 1, 1, tzinfo=SHANGHAI)
+        local_end = datetime(local.year + 1, 1, 1, tzinfo=SHANGHAI)
+    else:
+        raise BudgetSpendUnavailableError("budget_period.invalid")
+    return budget_date, _to_db_time(local_start), _to_db_time(local_end)
 
 
 def _decimal_value(value: object) -> Decimal:

@@ -54,7 +54,9 @@ export function renderConsoleShell({
     : ["quota-buckets", "policy-templates", "session-risks"].includes(
       consoleShellState?.activeNavigationItemId,
     )
-      ? '<div class="console-page-unavailable" role="status">当前功能暂不可用，请稍后重试或联系组织管理员。</div>'
+      ? (consoleShellState?.activeNavigationItemId === "quota-buckets"
+        ? '<div class="console-page-unavailable" role="status">组织账户额度暂不可用，请稍后重试。模型调用成本预算可在“预算管理”中查看和设置。</div>'
+        : '<div class="console-page-unavailable" role="status">当前功能暂不可用，请稍后重试或联系组织管理员。</div>')
       : localizedContentHtml;
   const roleCode = consoleShellState?.navigation?.role_code
     ?? consoleShellState?.workspaceContext?.role

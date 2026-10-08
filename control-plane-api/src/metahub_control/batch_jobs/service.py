@@ -1385,7 +1385,7 @@ def _create_budget_holds(
     定义：_create_budget_holds。
     数据访问始终绑定租户并保留审计和失败事实。
     """
-    budget_date, start, end = _budget_window(created)
+    budget_date, _start, _end = _budget_window(created)
     scopes = {
         ("tenant", tenant_id),
         ("project", binding.project_id),
@@ -1409,6 +1409,8 @@ def _create_budget_holds(
     reserved_micros = _money_micros(reserved)
     for rule in rules:
         try:
+            period = rule["budget_period"] if "budget_period" in rule.keys() else "day"
+            _same_day, period_start, period_end = _budget_window(created, period=period)
             amounts = load_budget_spend_amounts(
                 connection,
                 tenant_id=tenant_id,
@@ -1417,8 +1419,9 @@ def _create_budget_holds(
                 scope_id=str(rule["scope_id"]),
                 budget_rule_id=str(rule["budget_rule_id"]),
                 budget_date=budget_date,
-                start_utc=start,
-                end_utc=end,
+                budget_period=period,
+                start_utc=period_start,
+                end_utc=period_end,
             )
             budget_micros = _money_micros(_money(rule["daily_budget_cny"]))
         # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
@@ -2334,15 +2337,26 @@ def _money_micros(value: Decimal) -> int:
     return int(_money(value) * MICROS_PER_CNY)
 
 
-def _budget_window(now: datetime) -> tuple[str, str, str]:
+def _budget_window(now: datetime, *, period: str = "day") -> tuple[str, str, str]:
     """实现批任务业务步骤。
 
     定义：_budget_window。
     数据访问始终绑定租户并保留审计和失败事实。
     """
     local = now.astimezone(_SHANGHAI)
-    start = datetime(local.year, local.month, local.day, tzinfo=_SHANGHAI)
-    return start.date().isoformat(), _db_time(start), _db_time(start + timedelta(days=1))
+    business_day = local.date().isoformat()
+    if period == "day":
+        start = datetime(local.year, local.month, local.day, tzinfo=_SHANGHAI)
+        end = start + timedelta(days=1)
+    elif period == "month":
+        start = datetime(local.year, local.month, 1, tzinfo=_SHANGHAI)
+        end = datetime(local.year + (local.month == 12), local.month % 12 + 1, 1, tzinfo=_SHANGHAI)
+    elif period == "year":
+        start = datetime(local.year, 1, 1, tzinfo=_SHANGHAI)
+        end = datetime(local.year + 1, 1, 1, tzinfo=_SHANGHAI)
+    else:
+        raise ValueError("budget period invalid")
+    return business_day, _db_time(start), _db_time(end)
 
 
 def _b64(value: bytes) -> str:

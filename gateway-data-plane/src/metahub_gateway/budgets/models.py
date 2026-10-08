@@ -27,6 +27,7 @@ class BudgetRule:
     warning_threshold_percent: int
     exhausted_action: str
     environment_id: str = ""
+    budget_period: str = "day"
 
 
 @dataclass(frozen=True)

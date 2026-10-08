@@ -277,6 +277,10 @@ test("PRD-052 budget center renders aggregate summaries and ledger-reservation s
       rules: rulesPayload,
       status: statusPayload,
       selectedVirtualKeyId: "vk_a",
+      selectedPerson: {
+        user_id: "user_a", display_name: "测试员工", email: "user@example.com", key_count: 1,
+        keys: [{ virtual_key_id: "vk_a", name: "生产 Key", environment_id: "env_prod", environment_name: "生产环境" }],
+      },
       feedback: "预算已创建",
     },
     budgetContext(
@@ -298,9 +302,9 @@ test("PRD-052 budget center renders aggregate summaries and ledger-reservation s
     },
   );
 
-  assert.match(html, /预算中心/);
+  assert.match(html, /调用成本预算/);
   assert.match(html, /运行环境摘要/);
-  assert.match(html, /适用预算作用链/);
+  assert.match(html, /这次调用会受到哪些预算限制/);
   assert.match(html, /有效动作/);
   assert.match(html, /Project A 日预算/);
   assert.match(html, /正式入账/);
@@ -312,7 +316,8 @@ test("PRD-052 budget center renders aggregate summaries and ledger-reservation s
   assert.doesNotMatch(html, /<em>bsc_/);
   assert.match(html, /data-budget-scope-option="project"/);
   assert.match(html, /data-budget-scope-option="virtual_key"/);
-  assert.match(html, /id="budget-scope-chain-key"/);
+  assert.match(html, /id="budget-person-search-form"/);
+  assert.match(html, /data-budget-person-key="vk_a"/);
   assert.doesNotMatch(html, /tenant_id/);
 });
 

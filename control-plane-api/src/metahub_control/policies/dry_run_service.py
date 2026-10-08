@@ -1620,8 +1620,7 @@ def _load_budget_rule_facts(
     rows = connection.execute(
         """
         SELECT
-          budget_rule_id, scope_type, scope_id, daily_budget_cny,
-          warning_threshold_percent, exhausted_action
+          *
         FROM budget_rules
         WHERE tenant_id=? AND environment_id=? AND status='active'
           AND (
@@ -1636,9 +1635,11 @@ def _load_budget_rule_facts(
     # tenant/project 各至多一条；超出两条表示唯一约束或 scope 归属已经损坏。
     if len(rows) > 2:
         raise ValueError("budget rule set exceeded")
-    budget_date, start_utc, end_utc = _budget_window(now)
+    budget_date, _day_start, _day_end = _budget_window(now)
     facts: list[BudgetRuleFact] = []
     for row in rows:
+        period = row["budget_period"] if "budget_period" in row.keys() else "day"
+        _same_day, start_utc, end_utc = _budget_window(now, period=period)
         scope_type = str(row["scope_type"])
         scope_id = str(row["scope_id"])
         # 共享汇总器同时校验 tenant、Environment、scope、上海业务日和正式账本证据；
@@ -1651,6 +1652,7 @@ def _load_budget_rule_facts(
             scope_id=scope_id,
             budget_rule_id=str(row["budget_rule_id"]),
             budget_date=budget_date,
+            budget_period=period,
             start_utc=start_utc,
             end_utc=end_utc,
         )
@@ -2499,14 +2501,23 @@ def _validate_chain_id(value: object) -> str:
     return normalized
 
 
-def _budget_window(now: datetime) -> tuple[str, str, str]:
-    """返回 Asia/Shanghai 上游业务日和对应 UTC 半开区间。"""
+def _budget_window(now: datetime, *, period: str = "day") -> tuple[str, str, str]:
+    """返回上海业务日标识和规则所选周期的 UTC 半开区间。"""
 
     local = now.astimezone(SHANGHAI)
-    local_start = datetime(local.year, local.month, local.day, tzinfo=SHANGHAI)
-    local_end = local_start + timedelta(days=1)
+    if period == "day":
+        local_start = datetime(local.year, local.month, local.day, tzinfo=SHANGHAI)
+        local_end = local_start + timedelta(days=1)
+    elif period == "month":
+        local_start = datetime(local.year, local.month, 1, tzinfo=SHANGHAI)
+        local_end = datetime(local.year + (local.month == 12), local.month % 12 + 1, 1, tzinfo=SHANGHAI)
+    elif period == "year":
+        local_start = datetime(local.year, 1, 1, tzinfo=SHANGHAI)
+        local_end = datetime(local.year + 1, 1, 1, tzinfo=SHANGHAI)
+    else:
+        raise ValueError("budget period invalid")
     return (
-        local_start.date().isoformat(),
+        local.date().isoformat(),
         _to_db_time(local_start),
         _to_db_time(local_end),
     )

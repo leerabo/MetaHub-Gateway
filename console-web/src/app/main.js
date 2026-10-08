@@ -304,6 +304,7 @@ import {
   createBudgetRule,
   getBudgetStatus,
   listBudgets,
+  listBudgetPeople,
   updateBudgetMode,
   updateBudgetRule,
 } from "../lib/budgets.js";
@@ -1209,6 +1210,9 @@ let budgetFeedback = "";
 let budgetRulesSnapshot = [];
 // PAGE-076 作用链选择只保存不透明 Key ID；可信 Environment/Project/Application 由后端恢复。
 let selectedBudgetVirtualKeyId = "";
+let budgetPeopleSearch = "";
+let budgetPeopleOffset = 0;
+let selectedBudgetPersonId = "";
 // Budget Mutation 使用独立 owner；后台刷新、导航或身份变化都会使旧回调失效。
 const budgetMutationLifecycle = createBudgetMutationLifecycle();
 let dlpActionError = null;
@@ -2110,10 +2114,10 @@ async function loadAndRenderActiveNavigation({
       await load("costAnomaliesState", () => loadCostAnomaliesState(consoleShellState, refreshId));
       break;
     case "budgets":
-      [state.virtualKeysState, state.projectState, state.environmentState] = await Promise.all([
-        loadVirtualKeysState(), loadProjectState(), loadEnvironmentState(),
+      [state.projectState, state.environmentState] = await Promise.all([
+        loadProjectState(), loadEnvironmentState(),
       ]);
-      state.budgetState = await loadBudgetState(state.virtualKeysState, consoleShellState, refreshId);
+      state.budgetState = await loadBudgetState(null, consoleShellState, refreshId);
       break;
     case "policies":
       [state.modelsState, state.projectState, state.environmentState] = await Promise.all([
@@ -5067,16 +5071,44 @@ function bindAuthenticatedEvents(consoleShellState) {
     });
   }
 
-  const budgetScopeChainKey = document.querySelector("#budget-scope-chain-key");
-  const budgetScopeChainBinding = bindResourceElement(budgetScopeChainKey,
+  const budgetPersonSearchForm = document.querySelector("#budget-person-search-form");
+  const budgetScopeChainBinding = bindResourceElement(budgetPersonSearchForm,
     [PERMISSIONS.BILLING_BUDGET_READ], "budgets");
-  budgetScopeChainKey?.addEventListener("change", async () => {
+  budgetPersonSearchForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
     if (!resourcePageLifecycle.isBindingCurrent(budgetScopeChainBinding)) return;
-    // 只保存不透明 Key ID；后端 GET 会再次恢复并验证完整归属链。
-    selectedBudgetVirtualKeyId = budgetScopeChainKey.value;
+    budgetPeopleSearch = String(new FormData(budgetPersonSearchForm).get("search") ?? "").trim();
+    budgetPeopleOffset = 0;
+    selectedBudgetPersonId = "";
+    selectedBudgetVirtualKeyId = "";
     budgetActionError = null;
     budgetFeedback = "";
     await refresh();
+  });
+  document.querySelectorAll("[data-budget-person-id]").forEach((button) => {
+    const binding = bindResourceElement(button, [PERMISSIONS.BILLING_BUDGET_READ], "budgets");
+    button.addEventListener("click", async () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
+      selectedBudgetPersonId = button.dataset.budgetPersonId;
+      selectedBudgetVirtualKeyId = "";
+      await refresh();
+    });
+  });
+  document.querySelectorAll("[data-budget-person-page]").forEach((button) => {
+    const binding = bindResourceElement(button, [PERMISSIONS.BILLING_BUDGET_READ], "budgets");
+    button.addEventListener("click", async () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
+      budgetPeopleOffset = Math.max(0, budgetPeopleOffset + Number(button.dataset.budgetPersonPage) * 20);
+      await refresh();
+    });
+  });
+  document.querySelectorAll("[data-budget-person-key]").forEach((button) => {
+    const binding = bindResourceElement(button, [PERMISSIONS.BILLING_BUDGET_READ], "budgets");
+    button.addEventListener("click", async () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
+      selectedBudgetVirtualKeyId = button.dataset.budgetPersonKey;
+      await refresh();
+    });
   });
 
   const budgetRuleForm = document.querySelector("#budget-rule-form");
@@ -5159,6 +5191,7 @@ function bindAuthenticatedEvents(consoleShellState) {
         environmentId,
         name: String(data.get("name") ?? ""),
         dailyBudgetCny: String(data.get("dailyBudgetCny") ?? ""),
+        budgetPeriod: String(data.get("budgetPeriod") ?? "day"),
         warningThresholdPercent: optionalNumber(data.get("warningThresholdPercent"), 80),
         exhaustedAction: String(data.get("exhaustedAction") ?? "alert_only"),
         status: String(data.get("status") ?? "active"),
@@ -16958,6 +16991,9 @@ async function loadFileSecurityState(consoleShellState, refreshId) {
 function clearBudgetSessionState() {
   budgetRulesSnapshot = [];
   selectedBudgetVirtualKeyId = "";
+  selectedBudgetPersonId = "";
+  budgetPeopleSearch = "";
+  budgetPeopleOffset = 0;
   budgetActionError = null;
   budgetFeedback = "";
   budgetMutationLifecycle.invalidate();
@@ -17722,20 +17758,30 @@ async function loadBudgetState(virtualKeysState, consoleShellState, refreshId) {
     || !currentEvaluationPageIdentity("budgets", PERMISSIONS.BILLING_BUDGET_READ)) {
     return null;
   }
-  const virtualKeyIds = (virtualKeysState?.virtual_keys ?? []).map((item) => item.virtual_key_id);
-  if (!virtualKeyIds.includes(selectedBudgetVirtualKeyId)) {
-    selectedBudgetVirtualKeyId = virtualKeyIds[0] ?? "";
-  }
-  const scopeChainKeyId = selectedBudgetVirtualKeyId;
   budgetRulesSnapshot = [];
   return loadResourceState("budgets", [PERMISSIONS.BILLING_BUDGET_READ],
-    (options) => Promise.all([
-      listBudgets(options),
-      getBudgetStatus({ ...options, virtualKeyId: scopeChainKeyId || undefined }),
-    ]),
-    ([rules, status]) => {
+    async (options) => {
+      const [rules, people, selected] = await Promise.all([
+        listBudgets(options),
+        listBudgetPeople({ ...options, search: budgetPeopleSearch, offset: budgetPeopleOffset }),
+        selectedBudgetPersonId
+          ? listBudgetPeople({ ...options, userId: selectedBudgetPersonId })
+          : Promise.resolve(null),
+      ]);
+      const selectedPerson = selected?.people?.[0] ?? null;
+      const keys = selectedPerson?.keys ?? [];
+      if (!keys.some((key) => key.virtual_key_id === selectedBudgetVirtualKeyId)) {
+        selectedBudgetVirtualKeyId = keys[0]?.virtual_key_id ?? "";
+      }
+      const status = await getBudgetStatus({
+        ...options, virtualKeyId: selectedBudgetVirtualKeyId || undefined,
+      });
+      return { rules, people, selectedPerson, status, selectedVirtualKeyId: selectedBudgetVirtualKeyId };
+    },
+    ({ rules, people, selectedPerson, status, selectedVirtualKeyId }) => {
       budgetRulesSnapshot = rules.budget_rules ?? [];
-      return { state: "ok", rules, status, selectedVirtualKeyId: scopeChainKeyId,
+      return { state: "ok", rules, people, selectedPerson, status, selectedVirtualKeyId,
+        peopleSearch: budgetPeopleSearch, peopleOffset: budgetPeopleOffset,
         actionError: budgetActionError, feedback: budgetFeedback };
     },
     { actionError: budgetActionError, feedback: budgetFeedback });

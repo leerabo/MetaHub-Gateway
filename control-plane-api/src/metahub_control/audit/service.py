@@ -395,6 +395,7 @@ SUMMARY_FIELDS: dict[str, frozenset[str]] = {
             "scope_id",
             "name",
             "daily_budget_cny",
+            "budget_period",
             "warning_threshold_percent",
             "exhausted_action",
             "status",

@@ -70,6 +70,7 @@ class BudgetStatusInfo(BaseModel):
     scope_label: str
     budget_scope: BudgetScopeInfo
     budget_date: str
+    budget_period: Literal["day", "month", "year"] = "day"
     ledger_spent_cny: str
     reserved_cny: str
     effective_spend_cny: str
@@ -125,6 +126,7 @@ class BudgetRuleInfo(BaseModel):
     budget_scope: BudgetScopeInfo
     name: str
     daily_budget_cny: str
+    budget_period: Literal["day", "month", "year"] = "day"
     warning_threshold_percent: int
     exhausted_threshold_percent: int
     exhausted_action: str
@@ -148,6 +150,31 @@ class BudgetRuleResponse(BaseModel):
     """预算规则写入后的单条响应，供控制台保存后局部刷新使用。"""
 
     budget_rule: BudgetRuleInfo
+    request_id: str
+    trace_id: str
+
+
+class BudgetPersonKeyInfo(BaseModel):
+    virtual_key_id: str
+    name: str
+    environment_id: str | None = None
+    environment_name: str | None = None
+
+
+class BudgetPersonInfo(BaseModel):
+    user_id: str
+    display_name: str
+    email: str
+    key_count: int
+    keys: list[BudgetPersonKeyInfo] = Field(default_factory=list)
+    spent_day_cny: str | None = None
+    spent_month_cny: str | None = None
+    spent_year_cny: str | None = None
+
+
+class BudgetPeopleResponse(BaseModel):
+    people: list[BudgetPersonInfo]
+    total: int
     request_id: str
     trace_id: str
 
@@ -188,6 +215,7 @@ class UpdateBudgetRuleRequest(BaseModel):
     environment: str | None = None
     name: str | None = None
     daily_budget_cny: Any = None
+    budget_period: Literal["day", "month", "year"] | None = None
     warning_threshold_percent: int | None = None
     exhausted_action: str | None = None
     status: str | None = None

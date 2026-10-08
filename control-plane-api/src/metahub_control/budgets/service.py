@@ -49,6 +49,9 @@ from .models import (
     BudgetAggregateInfo,
     BudgetBlockInfo,
     BudgetEnvironmentSummary,
+    BudgetPeopleResponse,
+    BudgetPersonInfo,
+    BudgetPersonKeyInfo,
     BudgetRuleInfo,
     BudgetRuleListResponse,
     BudgetRuleResponse,
@@ -72,7 +75,7 @@ MONEY_QUANT = Decimal("0.000001")
 VALID_SCOPE_TYPES = {"tenant", "virtual_key", "project", "application"}
 VALID_ACTIONS = {"alert_only", "block"}
 VALID_STATUSES = {"active", "disabled"}
-EDITABLE_FIELDS = {"name", "daily_budget_cny", "warning_threshold_percent", "exhausted_action", "status"}
+EDITABLE_FIELDS = {"name", "daily_budget_cny", "budget_period", "warning_threshold_percent", "exhausted_action", "status"}
 CONFLICT_POLICY = "all_applicable_caps_deny_wins_v1"
 
 
@@ -88,6 +91,141 @@ class _ScopeChainBinding:
     project_id: str | None
     application_id: str | None
     virtual_key_id: str | None
+
+
+def list_budget_people(
+    config: AppConfig,
+    context: AuthContext,
+    *,
+    search: str | None,
+    user_id: str | None,
+    offset: int,
+    request_id: str,
+    trace_id: str,
+) -> BudgetPeopleResponse:
+    """预算页的员工目录，服务端分页，不把大量员工或凭证放进下拉框。"""
+
+    term = (search or "").strip().casefold()
+    selected_id = (user_id or "").strip()
+    if len(term) > 160 or len(selected_id) > 100 or (term and selected_id):
+        raise ApiError("budget.rule_invalid")
+    connection = _connect(config)
+    try:
+        _begin_read_transaction(connection)
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "billing.budget.read", read_only=True
+        )
+        context = transaction.verify()
+        clauses = ["u.tenant_id=?", "u.status='active'"]
+        params: list[object] = [context.user.tenant_id]
+        if selected_id:
+            clauses.append("u.user_id=?")
+            params.append(selected_id)
+        elif term:
+            clauses.append("(instr(lower(u.display_name), ?) > 0 OR instr(lower(u.email), ?) > 0)")
+            params.extend([term, term])
+        where = " AND ".join(clauses)
+        total = int(connection.execute(
+            f"SELECT COUNT(*) FROM users u WHERE {where}", params
+        ).fetchone()[0])
+        rows = connection.execute(
+            f"""
+            SELECT u.user_id, u.display_name, u.email,
+                   (SELECT COUNT(*) FROM virtual_keys vk
+                    WHERE vk.tenant_id=u.tenant_id AND vk.created_by=u.user_id
+                      AND vk.deleted_at IS NULL) AS key_count
+            FROM users u WHERE {where}
+            ORDER BY u.display_name ASC, u.email ASC, u.user_id ASC
+            LIMIT 20 OFFSET ?
+            """,
+            [*params, offset],
+        ).fetchall()
+        people: list[BudgetPersonInfo] = []
+        for row in rows:
+            keys: list[BudgetPersonKeyInfo] = []
+            spend: dict[str, str] = {}
+            if selected_id:
+                key_rows = connection.execute(
+                    """
+                    SELECT vk.virtual_key_id, vk.name, vk.environment_id,
+                           e.name AS environment_name
+                    FROM virtual_keys vk
+                    LEFT JOIN environments e
+                      ON e.tenant_id=vk.tenant_id AND e.environment_id=vk.environment_id
+                    WHERE vk.tenant_id=? AND vk.created_by=? AND vk.deleted_at IS NULL
+                    ORDER BY vk.created_at DESC, vk.virtual_key_id ASC
+                    """,
+                    (context.user.tenant_id, selected_id),
+                ).fetchall()
+                keys = [BudgetPersonKeyInfo(**dict(key)) for key in key_rows]
+                spend = _person_posted_spend(connection, context.user.tenant_id, selected_id)
+            people.append(BudgetPersonInfo(
+                user_id=row["user_id"],
+                display_name=row["display_name"],
+                email=row["email"],
+                key_count=int(row["key_count"]),
+                keys=keys,
+                spent_day_cny=spend.get("day"),
+                spent_month_cny=spend.get("month"),
+                spent_year_cny=spend.get("year"),
+            ))
+        result = BudgetPeopleResponse(
+            people=people, total=total, request_id=request_id, trace_id=trace_id
+        )
+        connection.rollback()
+        transaction.begin()
+        return result
+    except ApiError:
+        _rollback_safely(connection)
+        raise
+    except (sqlite3.Error, BudgetSpendUnavailableError) as exc:
+        _rollback_safely(connection)
+        raise ApiError("budget.status_unavailable") from exc
+    finally:
+        connection.close()
+
+
+def _person_posted_spend(
+    connection: sqlite3.Connection, tenant_id: str, user_id: str
+) -> dict[str, str]:
+    """按凭证的持久创建者聚合员工正式入账成本，已删除凭证也计入历史。"""
+
+    now = _utcnow()
+    starts = {period: _budget_window(now, period=period)[1] for period in ("day", "month", "year")}
+    end = _budget_window(now, period="year")[2]
+    totals = {period: 0 for period in starts}
+    rows = connection.execute(
+        """
+        SELECT fle.created_at, fle.normalized_cny_micros,
+               fle.cny_normalization_status, fle.price_evidence_status
+        FROM finops_ledger_entries fle
+        JOIN virtual_keys vk
+          ON vk.tenant_id=fle.tenant_id AND vk.virtual_key_id=fle.virtual_key_id
+        WHERE fle.tenant_id=? AND vk.created_by=?
+          AND fle.created_at>=? AND fle.created_at<?
+          AND fle.entry_type='usage_charge' AND fle.direction='debit'
+          AND fle.status='posted'
+        ORDER BY fle.ledger_sequence ASC
+        """,
+        (tenant_id, user_id, starts["year"], end),
+    )
+    for row in rows:
+        amount = row["normalized_cny_micros"]
+        if (
+            type(amount) is not int or amount < 0 or amount > MAX_BUDGET_CNY_MICROS
+            or row["cny_normalization_status"] != "normalized"
+            or row["price_evidence_status"] not in ("priced", "legacy_amount_only")
+        ):
+            raise BudgetSpendUnavailableError("budget_person.spend_unavailable")
+        for period, start in starts.items():
+            if row["created_at"] >= start:
+                totals[period] += amount
+                if totals[period] > MAX_BUDGET_CNY_MICROS:
+                    raise BudgetSpendUnavailableError("budget_person.spend_unavailable")
+    return {
+        period: _money_text(Decimal(total) / Decimal(MICROS_PER_CNY))
+        for period, total in totals.items()
+    }
 
 
 def list_budget_rules(
@@ -290,6 +428,7 @@ def _write_budget_rule(
             # POST 不具有 upsert 语义，不能让并发或误提交覆盖既有财务规则。
             raise ApiError("budget.rule_conflict")
         previous_budget = _decimal_value(existing["daily_budget_cny"]) if existing is not None else None
+        previous_period = _row_budget_period(existing) if existing is not None else None
         provided = _provided_fields(payload, EDITABLE_FIELDS)
         if not provided:
             # create-only 缺配置与兼容 PATCH 空更新含义不同，必须返回各自稳定错误码。
@@ -313,10 +452,10 @@ def _write_budget_rule(
                 """
                 INSERT INTO budget_rules(
                   budget_rule_id, tenant_id, environment_id, scope_type, scope_id, name,
-                  daily_budget_cny, warning_threshold_percent, exhausted_threshold_percent,
+                  daily_budget_cny, budget_period, warning_threshold_percent, exhausted_threshold_percent,
                   exhausted_action, status, created_by, updated_by, created_at, updated_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values,
             )
@@ -357,6 +496,7 @@ def _write_budget_rule(
             row,
             provided,
             previous_budget=previous_budget,
+            previous_period=previous_period,
             request_id=request_id,
             trace_id=trace_id,
         )
@@ -631,6 +771,7 @@ def _budget_audit_summary(row: sqlite3.Row) -> dict[str, object]:
         "scope_id": row["scope_id"],
         "name": row["name"],
         "daily_budget_cny": _money_text(_decimal_value(row["daily_budget_cny"])),
+        "budget_period": _row_budget_period(row),
         "warning_threshold_percent": int(row["warning_threshold_percent"]),
         "exhausted_action": row["exhausted_action"],
         "status": row["status"],
@@ -981,6 +1122,7 @@ def _new_rule_values(
         scope_id,
         name,
         _money_text(budget),
+        payload.budget_period or "day",
         threshold,
         EXHAUSTED_THRESHOLD,
         action,
@@ -1006,6 +1148,9 @@ def _update_rule_values(
     if "daily_budget_cny" in provided:
         updates.append("daily_budget_cny=?")
         values.append(_money_text(_normalize_money(payload.daily_budget_cny)))
+    if "budget_period" in provided:
+        updates.append("budget_period=?")
+        values.append(payload.budget_period or "day")
     if "warning_threshold_percent" in provided:
         updates.append("warning_threshold_percent=?")
         values.append(_normalize_warning_threshold(payload.warning_threshold_percent))
@@ -1163,6 +1308,7 @@ def _budget_rule_info(connection: sqlite3.Connection, row: sqlite3.Row) -> Budge
         budget_scope=scope,
         name=row["name"],
         daily_budget_cny=_money_text(_decimal_value(row["daily_budget_cny"])),
+        budget_period=_row_budget_period(row),
         warning_threshold_percent=int(row["warning_threshold_percent"]),
         exhausted_threshold_percent=int(row["exhausted_threshold_percent"]),
         exhausted_action=row["exhausted_action"],
@@ -1186,7 +1332,8 @@ def _budget_status_info(
     未定价、未归一或损坏金额由共享 helper 失败关闭，不能按零继续展示。
     """
 
-    budget_date, start_utc, end_utc = _budget_window()
+    period = _row_budget_period(row)
+    budget_date, start_utc, end_utc = _budget_window(period=period)
     amounts = load_budget_spend_amounts(
         connection,
         tenant_id=str(row["tenant_id"]),
@@ -1195,6 +1342,7 @@ def _budget_status_info(
         scope_id=str(row["scope_id"]),
         budget_rule_id=str(row["budget_rule_id"]),
         budget_date=budget_date,
+        budget_period=period,
         start_utc=start_utc,
         end_utc=end_utc,
     )
@@ -1229,6 +1377,7 @@ def _budget_status_info(
         scope_label=budget_scope.scope_label,
         budget_scope=budget_scope,
         budget_date=budget_date,
+        budget_period=period,
         ledger_spent_cny=_micros_text(amounts.posted_cny_micros),
         reserved_cny=_micros_text(amounts.reserved_cny_micros),
         effective_spend_cny=_micros_text(amounts.effective_cny_micros),
@@ -1454,7 +1603,7 @@ def _load_spent_cny(
 ) -> Decimal:
     """兼容阻断恢复调用：只返回正式 Usage Charge 金额，不包含 reservation。"""
 
-    budget_date, _current_start, _current_end = _budget_window()
+    budget_date, _current_start, _current_end = _budget_window(period=_row_budget_period(row))
     amounts = load_budget_spend_amounts(
         connection,
         tenant_id=str(row["tenant_id"]),
@@ -1463,6 +1612,7 @@ def _load_spent_cny(
         scope_id=str(row["scope_id"]),
         budget_rule_id=str(row["budget_rule_id"]),
         budget_date=budget_date,
+        budget_period=_row_budget_period(row),
         start_utc=start_utc,
         end_utc=end_utc,
     )
@@ -1510,6 +1660,7 @@ def _reconcile_blocks_after_rule_update(
     provided: set[str],
     *,
     previous_budget: Decimal | None,
+    previous_period: str | None,
     request_id: str,
     trace_id: str,
 ) -> tuple[list[BudgetBlockRecord], str | None]:
@@ -1536,9 +1687,18 @@ def _reconcile_blocks_after_rule_update(
             request_id=request_id,
             trace_id=trace_id,
         ), "mode_alert_only"
+    if previous_period is not None and _row_budget_period(row) != previous_period:
+        _budget_date, start_utc, end_utc = _budget_window(period=_row_budget_period(row))
+        spent = _load_spent_cny(connection, row, start_utc, end_utc)
+        if spent < _decimal_value(row["daily_budget_cny"]):
+            return _release_rule_blocks(
+                connection, context, row, reason="below_threshold",
+                request_id=request_id, trace_id=trace_id,
+            ), "below_threshold"
+        return [], None
     if "daily_budget_cny" not in provided:
         return [], None
-    _budget_date, start_utc, end_utc = _budget_window()
+    _budget_date, start_utc, end_utc = _budget_window(period=_row_budget_period(row))
     spent = _load_spent_cny(connection, row, start_utc, end_utc)
     updated_budget = _decimal_value(row["daily_budget_cny"])
     # 必须同时满足“额度严格增加”和“高于已入账成本”；同额或降额 Patch 不能伪装成提额解封。
@@ -1615,14 +1775,35 @@ def _scope_label(connection: sqlite3.Connection, tenant_id: str, scope_type: str
     return f"{row['name']} ({row['key_prefix']})"
 
 
-def _budget_window(now: datetime | None = None) -> tuple[str, str, str]:
-    """返回 Asia/Shanghai 业务日和对应 UTC 起止边界，用于日预算统计。"""
+def _row_budget_period(row: sqlite3.Row | None) -> str:
+    """恢复规则周期；旧测试快照没有新列时仍按日预算解释。"""
+
+    if row is None or "budget_period" not in row.keys():
+        return "day"
+    period = row["budget_period"]
+    if period not in {"day", "month", "year"}:
+        raise BudgetSpendUnavailableError("budget_period.invalid")
+    return str(period)
+
+
+def _budget_window(now: datetime | None = None, *, period: str = "day") -> tuple[str, str, str]:
+    """返回业务日标识和所选上海日、自然月或自然年的 UTC 半开区间。"""
 
     current = now or _utcnow()
     local = current.astimezone(SHANGHAI)
-    local_start = datetime(local.year, local.month, local.day, tzinfo=SHANGHAI)
-    local_end = local_start + timedelta(days=1)
-    return local_start.date().isoformat(), _to_db_time(local_start), _to_db_time(local_end)
+    budget_date = local.date().isoformat()
+    if period == "day":
+        local_start = datetime(local.year, local.month, local.day, tzinfo=SHANGHAI)
+        local_end = local_start + timedelta(days=1)
+    elif period == "month":
+        local_start = datetime(local.year, local.month, 1, tzinfo=SHANGHAI)
+        local_end = datetime(local.year + (local.month == 12), local.month % 12 + 1, 1, tzinfo=SHANGHAI)
+    elif period == "year":
+        local_start = datetime(local.year, 1, 1, tzinfo=SHANGHAI)
+        local_end = datetime(local.year + 1, 1, 1, tzinfo=SHANGHAI)
+    else:
+        raise BudgetSpendUnavailableError("budget_period.invalid")
+    return budget_date, _to_db_time(local_start), _to_db_time(local_end)
 
 
 def _usage_percent_micros(spent_micros: int, budget_micros: int) -> float:

@@ -261,6 +261,47 @@ async def test_budget_rule_upsert_status_and_reader_flow(
 
 
 @pytest.mark.anyio
+async def test_budget_calendar_periods_and_employee_search(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """自然月、自然年累积前几日成本；员工目录按服务端姓名搜索。"""
+
+    database_url, tenant_id, virtual_key_id = prepare_database(monkeypatch, tmp_path)
+    connection = connect_database(database_url)
+    _insert_usage(connection, tenant_id, virtual_key_id, "req_prior_day", "2026-07-08T03:00:00Z", 7)
+    _insert_usage(connection, tenant_id, virtual_key_id, "req_prior_month", "2026-06-20T03:00:00Z", 11)
+    connection.commit()
+    connection.close()
+    app = build_control_app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://control") as client:
+        admin_token = await login(client, "admin@metahub.local", ADMIN_PASSWORD)
+        headers = {"Authorization": f"Bearer {admin_token}"}
+        async def set_period(period: str) -> dict:
+            response = await client.patch("/budgets", headers=headers, json={
+                "scope_type": "tenant", "daily_budget_cny": "200", "budget_period": period,
+                "exhausted_action": "alert_only",
+            })
+            assert response.status_code == 200, response.text
+            return response.json()["budget_rule"]
+
+        daily = await set_period("day")
+        monthly = await set_period("month")
+        yearly = await set_period("year")
+        searched = await client.get("/budget-people?search=Finance&offset=0", headers=headers)
+        all_people = await client.get("/budget-people?offset=0", headers=headers)
+
+    assert daily["today_status"]["spent_cny"] == "110"
+    assert monthly["today_status"]["spent_cny"] == "117"
+    assert yearly["today_status"]["spent_cny"] == "128"
+    assert yearly["budget_period"] == "year"
+    assert searched.status_code == 200, searched.text
+    assert [person["email"] for person in searched.json()["people"]] == ["finance@example.com"]
+    assert all_people.status_code == 200, all_people.text
+    assert all_people.json()["total"] >= 4
+
+
+@pytest.mark.anyio
 async def test_budget_permissions_and_validation_errors(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
