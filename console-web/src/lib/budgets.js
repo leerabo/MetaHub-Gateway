@@ -5,11 +5,13 @@ import { authenticatedResourceFetch } from "./resourceAuthentication.js";
  * 查询当前租户可见的预算规则列表。
  * 前端只传 scope/status 筛选条件，不传 tenant_id；租户隔离和角色校验必须由控制面预算 API 完成。
  */
-export async function listBudgets({ controlApiUrl, token, authentication, signal, scopeType, environmentId, status }) {
+export async function listBudgets({ controlApiUrl, token, authentication, signal, scopeType, environmentId, status, offset, limit }) {
   const url = new URL(`${controlApiUrl}/budgets`);
   setOptionalParam(url, "scope_type", scopeType);
   setOptionalParam(url, "environment_id", environmentId);
   setOptionalParam(url, "status", status);
+  if (offset !== undefined) url.searchParams.set("offset", String(offset));
+  if (limit !== undefined) url.searchParams.set("limit", String(limit));
   return budgetRequest(url.toString(), {
     token, authentication, signal,
   });

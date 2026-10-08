@@ -239,6 +239,8 @@ def list_budget_rules(
     environment_id: str | None,
     environment: str | None,
     status: str | None,
+    offset: int = 0,
+    limit: int | None = None,
     request_id: str,
     trace_id: str,
 ) -> BudgetRuleListResponse:
@@ -278,6 +280,12 @@ def list_budget_rules(
             )
             clauses.append("br.environment_id=?")
             params.append(binding.environment_id)
+        where = ' AND '.join(clauses)
+        total = int(connection.execute(
+            f"SELECT COUNT(*) FROM budget_rules br WHERE {where}", params,
+        ).fetchone()[0])
+        paging_sql = " LIMIT ? OFFSET ?" if limit is not None else ""
+        paging_params = [*params, limit, offset] if limit is not None else params
         rows = connection.execute(
             f"""
             SELECT br.*, e.code AS environment, e.name AS environment_name,
@@ -285,19 +293,18 @@ def list_budget_rules(
             FROM budget_rules br
             JOIN environments e
               ON e.tenant_id=br.tenant_id AND e.environment_id=br.environment_id
-            WHERE {' AND '.join(clauses)}
-            ORDER BY e.code ASC,
-                     CASE br.scope_type
-                       WHEN 'tenant' THEN 0 WHEN 'project' THEN 1
-                       WHEN 'application' THEN 2 ELSE 3
-                     END,
-                     br.updated_at DESC, br.name ASC
+            WHERE {where}
+            ORDER BY br.updated_at DESC, br.budget_rule_id DESC
+            {paging_sql}
             """,
-            params,
+            paging_params,
         ).fetchall()
         rules = [_budget_rule_info(connection, row) for row in rows]
         result = BudgetRuleListResponse(
             budget_rules=rules,
+            total=total,
+            offset=offset,
+            page_size=limit,
             environment_summaries=_environment_summaries(rules),
             request_id=request_id,
             trace_id=trace_id,
@@ -1359,6 +1366,12 @@ def _budget_rule_info(connection: sqlite3.Connection, row: sqlite3.Row) -> Budge
     """把规则行转换为含 BudgetScope 和正式账本拆分的控制面 DTO。"""
 
     scope = _budget_scope_info(connection, row)
+    owner = connection.execute(
+        """SELECT u.user_id, u.display_name, u.email FROM virtual_keys vk
+           JOIN users u ON u.tenant_id=vk.tenant_id AND u.user_id=vk.created_by
+           WHERE vk.tenant_id=? AND vk.virtual_key_id=?""",
+        (row["tenant_id"], row["scope_id"]),
+    ).fetchone() if row["scope_type"] == "virtual_key" else None
     status = _budget_status_info(connection, row, scope=scope)
     block = _active_block(connection, row, status.budget_date)
     return BudgetRuleInfo(
@@ -1371,6 +1384,9 @@ def _budget_rule_info(connection: sqlite3.Connection, row: sqlite3.Row) -> Budge
         scope_id=row["scope_id"],
         scope_label=scope.scope_label,
         budget_scope=scope,
+        scope_owner_user_id=owner["user_id"] if owner else None,
+        scope_owner_display_name=owner["display_name"] if owner else None,
+        scope_owner_email=owner["email"] if owner else None,
         name=row["name"],
         daily_budget_cny=_money_text(_decimal_value(row["daily_budget_cny"])),
         budget_period=_row_budget_period(row),

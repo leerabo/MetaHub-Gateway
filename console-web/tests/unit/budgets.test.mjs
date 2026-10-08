@@ -211,6 +211,9 @@ test("renderBudgetPanel puts one rule list before employee lookup and opens an e
   assert.match(html, /data-budget-open-form/);
   assert.match(html, /预算周期/);
   assert.match(html, /启用时间/);
+  assert.match(html, /id="budget-employee-search"/);
+  assert.match(html, /id="budget-employee-selected"/);
+  assert.match(html, /id="budget-dialog-message"/);
   assert.match(html, /生产 Key 日预算/);
   assert.match(html, /达到告警/);
   assert.match(html, /data-budget-edit-rule-id="br_1"/);
@@ -223,6 +226,17 @@ test("renderBudgetPanel puts one rule list before employee lookup and opens an e
   assert.doesNotMatch(html, /tenant_id/);
   assert.ok(html.indexOf("已设置的预算") < html.indexOf("查询员工用量"));
   assert.doesNotMatch(html, /运行环境摘要|组织预算概览/);
+});
+
+test("renderBudgetPanel pages rules and waits for an employee search", () => {
+  const html = renderBudgetPanel({
+    state: "ok", rules: { budget_rules: budgetRulesPayload.budget_rules, total: 37 },
+    ruleOffset: 10, people: { people: [], total: 0 }, peopleSearch: "",
+  }, budgetWriterContext(), virtualKeysState, projectState);
+  assert.match(html, /共 37 条规则，每页最多 10 条/);
+  assert.match(html, /11–20 \/ 37/);
+  assert.match(html, /data-budget-rule-page="1"/);
+  assert.match(html, /输入姓名或邮箱后查找；每页最多显示 20 人/);
 });
 
 test("renderBudgetPanel shows separate daily and monthly rules and unknown employee spend", () => {

@@ -55,8 +55,8 @@ export function renderBudgetPanel(budgetState, authContext, virtualKeysState, pr
       ${renderActionError(budgetState.actionError)}
       ${renderFeedback(budgetState.feedback)}
     </div>
-    ${canWrite ? renderBudgetForm(budgetState.selectedPerson, projectState, environmentState, rules) : renderReadOnlyNotice()}
-    ${renderRuleTable(rules, canWrite)}
+    ${canWrite ? renderBudgetForm(projectState, environmentState) : renderReadOnlyNotice()}
+    ${renderRuleTable(rules, canWrite, rulesPayload.total ?? rules.length, budgetState.ruleOffset ?? 0)}
     ${renderPeoplePicker(budgetState)}
     ${budgetState.selectedPerson ? renderScopeChain(statuses, aggregate, budgetState.selectedPerson, budgetState.statusError) : ""}
   `;
@@ -235,7 +235,7 @@ function renderPeoplePicker(state) {
       <div class="budget-person-results" aria-label="员工查找结果">
         ${people.map((person) => `<button type="button" data-budget-person-id="${escapeAttribute(person.user_id)}" class="${selected?.user_id === person.user_id ? "is-selected" : ""}">
           <strong>${escapeHtml(person.display_name)}</strong><span>${escapeHtml(person.email)}</span><small>${escapeHtml(person.key_count)} 个调用凭证</small>
-        </button>`).join("") || "<p>没有找到员工。请核对姓名或邮箱。</p>"}
+        </button>`).join("") || (state.peopleSearch ? "<p>没有找到员工。请核对姓名或邮箱。</p>" : "<p>输入姓名或邮箱后查找；每页最多显示 20 人。</p>")}
       </div>
       ${total > 20 ? `<div class="budget-person-pagination">
         <button type="button" data-budget-person-page="-1" ${offset === 0 ? "disabled" : ""}>上一页</button>
@@ -350,8 +350,7 @@ function renderBlockNotice(item) {
  * 渲染管理员预算写入表单。
  * 表单同时覆盖租户级和 Virtual Key 级规则，scope_id 只在 Key 预算时提交。
  */
-function renderBudgetForm(selectedPerson, projectState, environmentState, rules) {
-  const virtualKeys = selectedPerson?.keys ?? [];
+function renderBudgetForm(projectState, environmentState) {
   const projects = projectState?.projects ?? [];
   const applications = projectState?.applications ?? [];
   const environments = environmentState?.state === "ok"
@@ -377,7 +376,7 @@ function renderBudgetForm(selectedPerson, projectState, environmentState, rules)
           <option value="tenant">租户</option>
           <option value="project">项目</option>
           <option value="application">应用</option>
-          <option value="virtual_key" ${virtualKeys.length ? "" : "disabled"}>员工调用凭证</option>
+          <option value="virtual_key">员工调用凭证</option>
         </select>
       </label>
       <label>
@@ -390,11 +389,16 @@ function renderBudgetForm(selectedPerson, projectState, environmentState, rules)
           ${applications
             .map((item) => `<option value="${escapeAttribute(item.application_id)}" data-budget-scope-option="application" hidden disabled>应用 · ${escapeHtml(item.name)} (${escapeHtml(item.project_name ?? "-")})</option>`)
             .join("")}
-          ${virtualKeys
-            .map((item) => `<option value="${escapeAttribute(item.virtual_key_id)}" data-budget-scope-option="virtual_key" data-environment-id="${escapeAttribute(item.environment_id ?? "")}" hidden disabled>${escapeHtml(selectedPerson.display_name)} · ${escapeHtml(displayVirtualKeyName(item.name))}</option>`)
-            .join("")}
         </select>
       </label>
+      <div class="budget-employee-picker" id="budget-employee-picker" hidden>
+        <label for="budget-employee-search">搜索员工姓名或邮箱</label>
+        <div class="budget-employee-search-line"><input id="budget-employee-search" type="search" placeholder="输入姓名或邮箱" maxlength="160" autocomplete="off" /><button type="button" data-budget-employee-search>查找</button></div>
+        <div id="budget-employee-results" class="budget-employee-results" aria-live="polite">输入姓名或邮箱后查找员工。</div>
+        <div id="budget-employee-selected" class="budget-employee-selected" hidden></div>
+        <label id="budget-employee-key-wrap" hidden>调用凭证<select id="budget-employee-key"></select></label>
+        <small>员工可以有多把调用凭证；此规则作用于选定的这一把。</small>
+      </div>
       <label>
         <span>预算周期</span>
         <select name="budgetPeriod"><option value="day">每天</option><option value="month">每月</option><option value="year">每年</option></select>
@@ -405,12 +409,14 @@ function renderBudgetForm(selectedPerson, projectState, environmentState, rules)
       </label>
       <label>
         <span>启用时间</span>
-        <select name="activationMode"><option value="immediate">保存后立即启用</option><option value="scheduled">指定时间启用</option><option value="keep" hidden disabled>保持原启用时间</option></select>
+        <select name="activationMode"><option value="immediate">保存后立即启用</option><option value="scheduled">指定时间启用</option><option value="keep" hidden disabled>保持原启用设置</option></select>
       </label>
       <label>
-        <span>北京时间（指定时间启用时填写）</span>
-        <input name="activationLocal" type="datetime-local" disabled />
+        <span>指定启用时间（北京时间）</span>
+        <input name="activationLocal" type="datetime-local" />
+        <small>填写日期和时间会自动切换为定时启用。</small>
       </label>
+      <p class="budget-current-activation" id="budget-current-activation" hidden>当前启用设置</p>
       <label>
         <span>告警阈值 %</span>
         <input name="warningThresholdPercent" type="number" min="1" max="99" value="80" required />
@@ -435,7 +441,7 @@ function renderBudgetForm(selectedPerson, projectState, environmentState, rules)
       </label>
       <div class="budget-actions">
         <button type="submit" ${environments.length ? "" : "disabled"}>保存预算</button>
-        <span>未到启用时间前不会限制调用；无法核实的历史成本不会当作 0。</span>
+        <span class="budget-dialog-message" id="budget-dialog-message" role="status" aria-live="polite">填写完成后点击保存。未到启用时间前不会限制调用。</span>
       </div>
       </form>
     </dialog>
@@ -456,10 +462,10 @@ function renderReadOnlyNotice() {
 /**
  * 渲染预算规则表，展示配置和今日状态的对应关系。
  */
-function renderRuleTable(rules, canWrite) {
+function renderRuleTable(rules, canWrite, total, offset) {
   return `
     <section class="budget-rules-section" aria-label="已设置的预算">
-      <div class="budget-rules-heading"><h3>已设置的预算</h3><p>${escapeHtml(rules.length)} 条规则，按日、月、年分别计算；停用和待启用的规则不会限制调用。</p></div>
+      <div class="budget-rules-heading"><h3>已设置的预算</h3><p>共 ${escapeHtml(total)} 条规则，每页最多 10 条；停用和待启用的规则不会限制调用。</p></div>
     <div class="budget-rule-table" role="table" aria-label="预算规则">
       <div class="budget-rule-row budget-rule-head" role="row">
         <span>适用范围</span>
@@ -469,6 +475,11 @@ function renderRuleTable(rules, canWrite) {
       </div>
       ${rules.length ? rules.map((item) => renderRuleRow(item, canWrite)).join("") : renderEmptyRuleRow()}
     </div>
+    ${total > 10 ? `<div class="budget-rule-pagination">
+      <button type="button" data-budget-rule-page="-1" ${offset === 0 ? "disabled" : ""}>上一页</button>
+      <span>${escapeHtml(offset + 1)}–${escapeHtml(Math.min(offset + 10, total))} / ${escapeHtml(total)}</span>
+      <button type="button" data-budget-rule-page="1" ${offset + 10 >= total ? "disabled" : ""}>下一页</button>
+    </div>` : ""}
     </section>
   `;
 }
@@ -479,14 +490,18 @@ function renderRuleTable(rules, canWrite) {
 function renderRuleRow(item, canWrite) {
   const today = item.today_status ?? {};
   const state = item.status === "disabled" ? "已停用" : STATUS_LABELS[today.status] ?? "正常";
+  const scopeName = item.scope_type === "virtual_key" && item.scope_owner_display_name
+    ? `${item.scope_owner_display_name} · ${item.scope_owner_email ?? ""}`
+    : cleanScopeLabel(item.scope_label ?? item.scope_id);
+  const scopeDetail = `${item.environment_name ?? item.environment ?? "-"} · ${item.name}`;
   const activation = item.activation_at_utc
     ? `${today.status === "scheduled" ? "将于" : "自"} ${formatDateTime(item.activation_at_utc)} 启用（北京时间）`
     : "未设置定时启用";
   return `
     <div class="budget-rule-row" role="row" data-budget-rule-id="${escapeAttribute(item.budget_rule_id)}">
       <span class="budget-rule-name" data-label="适用范围">
-        <strong>${escapeHtml(cleanScopeLabel(item.scope_label ?? item.scope_id))}</strong>
-        <small>${escapeHtml(item.environment_name ?? item.environment ?? "-")} · ${escapeHtml(item.name)}</small>
+        <strong>${escapeHtml(scopeName)}</strong>
+        <small>${escapeHtml(scopeDetail)}</small>
       </span>
       <span class="budget-rule-amount" data-label="预算与使用">
         <strong>${escapeHtml(PERIOD_LABELS[item.budget_period] ?? "每日")} ${escapeHtml(item.daily_budget_cny)} CNY</strong>

@@ -1208,6 +1208,7 @@ let budgetActionError = null;
 let budgetFeedback = "";
 // 预算规则快照只属于当前认证会话，用于选择 create-only POST 或兼容 PATCH，不能跨租户复用。
 let budgetRulesSnapshot = [];
+let budgetRuleOffset = 0;
 // PAGE-076 作用链选择只保存不透明 Key ID；可信 Environment/Project/Application 由后端恢复。
 let selectedBudgetVirtualKeyId = "";
 let budgetPeopleSearch = "";
@@ -5102,6 +5103,14 @@ function bindAuthenticatedEvents(consoleShellState) {
       await refresh();
     });
   });
+  document.querySelectorAll("[data-budget-rule-page]").forEach((button) => {
+    const binding = bindResourceElement(button, [PERMISSIONS.BILLING_BUDGET_READ], "budgets");
+    button.addEventListener("click", async () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
+      budgetRuleOffset = Math.max(0, budgetRuleOffset + Number(button.dataset.budgetRulePage) * 10);
+      await refresh();
+    });
+  });
   document.querySelectorAll("[data-budget-person-key]").forEach((button) => {
     const binding = bindResourceElement(button, [PERMISSIONS.BILLING_BUDGET_READ], "budgets");
     button.addEventListener("click", async () => {
@@ -5119,15 +5128,130 @@ function bindAuthenticatedEvents(consoleShellState) {
   const budgetEnvironmentControl = budgetRuleForm?.querySelector("[name='environmentId']");
   const budgetActivationMode = budgetRuleForm?.querySelector("[name='activationMode']");
   const budgetActivationLocal = budgetRuleForm?.querySelector("[name='activationLocal']");
+  const budgetDialogMessage = budgetRuleForm?.querySelector("#budget-dialog-message");
+  const budgetCurrentActivation = budgetRuleForm?.querySelector("#budget-current-activation");
+  const budgetEmployeePicker = budgetRuleForm?.querySelector("#budget-employee-picker");
+  const budgetEmployeeSearch = budgetRuleForm?.querySelector("#budget-employee-search");
+  const budgetEmployeeResults = budgetRuleForm?.querySelector("#budget-employee-results");
+  const budgetEmployeeSelected = budgetRuleForm?.querySelector("#budget-employee-selected");
+  const budgetEmployeeKeyWrap = budgetRuleForm?.querySelector("#budget-employee-key-wrap");
+  const budgetEmployeeKey = budgetRuleForm?.querySelector("#budget-employee-key");
+  let editingBudgetRule = null;
+  let budgetEmployeeSearchSequence = 0;
+  let budgetEmployeeSearchTimer = null;
+
+  function showBudgetDialogMessage(message, error = false) {
+    if (!budgetDialogMessage) return;
+    budgetDialogMessage.textContent = message;
+    budgetDialogMessage.classList.toggle("is-error", error);
+  }
 
   function syncBudgetActivationInput() {
     if (!budgetActivationLocal) return;
     const scheduled = budgetActivationMode?.value === "scheduled";
-    budgetActivationLocal.disabled = !scheduled;
     budgetActivationLocal.required = scheduled;
   }
   budgetActivationMode?.addEventListener("change", syncBudgetActivationInput);
+  budgetActivationLocal?.addEventListener("input", () => {
+    if (budgetActivationLocal.value && budgetActivationMode) budgetActivationMode.value = "scheduled";
+    syncBudgetActivationInput();
+  });
   syncBudgetActivationInput();
+
+  function chooseBudgetEmployeeKey(keyId) {
+    if (!budgetScopeIdControl || !budgetEmployeeKey) return;
+    budgetEmployeeKey.value = keyId;
+    budgetScopeIdControl.value = keyId;
+    const key = budgetEmployeeKey.selectedOptions[0];
+    if (key?.dataset.environmentId && budgetEnvironmentControl) {
+      budgetEnvironmentControl.value = key.dataset.environmentId;
+    }
+  }
+
+  function showBudgetEmployee(person, keys) {
+    if (!budgetEmployeeSelected || !budgetEmployeeKey || !budgetScopeIdControl) return;
+    budgetEmployeeSelected.hidden = false;
+    budgetEmployeeSelected.replaceChildren();
+    const name = document.createElement("strong");
+    name.textContent = person.display_name;
+    const email = document.createElement("span");
+    email.textContent = person.email;
+    budgetEmployeeSelected.append(name, email);
+    budgetEmployeeKey.replaceChildren();
+    for (const option of [...budgetScopeIdControl.options]) {
+      if (option.dataset.budgetScopeOption === "virtual_key") option.remove();
+    }
+    for (const key of keys) {
+      const label = `${key.name ?? "调用凭证"} · ${key.environment_name ?? ""}`;
+      const visibleOption = new Option(label, key.virtual_key_id);
+      visibleOption.dataset.environmentId = key.environment_id ?? "";
+      budgetEmployeeKey.add(visibleOption);
+      const scopeOption = new Option(label, key.virtual_key_id);
+      scopeOption.dataset.budgetScopeOption = "virtual_key";
+      scopeOption.dataset.environmentId = key.environment_id ?? "";
+      budgetScopeIdControl.add(scopeOption);
+    }
+    budgetEmployeeKeyWrap.hidden = keys.length < 2;
+    if (keys.length) chooseBudgetEmployeeKey(keys[0].virtual_key_id);
+    else {
+      budgetScopeIdControl.value = "";
+      showBudgetDialogMessage("该员工没有可用的调用凭证，暂时无法设置调用预算。", true);
+    }
+  }
+
+  async function searchBudgetEmployees() {
+    if (!budgetEmployeeSearch || !budgetEmployeeResults || !budgetDialog?.open || editingBudgetRule) return;
+    const term = budgetEmployeeSearch.value.trim();
+    const sequence = ++budgetEmployeeSearchSequence;
+    budgetEmployeeResults.replaceChildren();
+    if (!term) { budgetEmployeeResults.textContent = "输入姓名或邮箱后查找员工。"; return; }
+    budgetEmployeeResults.textContent = "查找中…";
+    try {
+      const result = await listBudgetPeople({ controlApiUrl, authentication: "workspace", search: term });
+      if (sequence !== budgetEmployeeSearchSequence || !budgetDialog.open) return;
+      budgetEmployeeResults.replaceChildren();
+      for (const person of result.people ?? []) {
+        const button = document.createElement("button");
+        button.type = "button";
+        const name = document.createElement("strong");
+        name.textContent = person.display_name;
+        const email = document.createElement("span");
+        email.textContent = person.email;
+        button.append(name, email);
+        button.addEventListener("click", async () => {
+          if (!resourcePageLifecycle.isBindingCurrent(budgetRuleBinding)) return;
+          showBudgetDialogMessage("");
+          budgetEmployeeResults.textContent = "读取员工调用凭证…";
+          try {
+            const detail = await listBudgetPeople({ controlApiUrl, authentication: "workspace", userId: person.user_id });
+            if (!budgetDialog.open || sequence !== budgetEmployeeSearchSequence) return;
+            showBudgetEmployee(person, detail.people?.[0]?.keys ?? []);
+            budgetEmployeeResults.replaceChildren();
+          } catch (error) {
+            showBudgetDialogMessage(error.message || "读取员工失败，请重试。", true);
+          }
+        });
+        budgetEmployeeResults.append(button);
+      }
+      if (!(result.people ?? []).length) budgetEmployeeResults.textContent = "没有找到员工。";
+      else if (result.total > 20) budgetEmployeeResults.append(document.createTextNode("仅显示前 20 人，请继续输入姓名或邮箱缩小范围。"));
+    } catch (error) {
+      if (sequence === budgetEmployeeSearchSequence) budgetEmployeeResults.textContent = error.message || "查找失败，请重试。";
+    }
+  }
+  budgetEmployeeSearch?.addEventListener("input", () => {
+    budgetEmployeeSelected.hidden = true;
+    budgetEmployeeKeyWrap.hidden = true;
+    budgetEmployeeKey.replaceChildren();
+    for (const option of [...budgetScopeIdControl.options]) {
+      if (option.dataset.budgetScopeOption === "virtual_key") option.remove();
+    }
+    budgetScopeIdControl.value = "";
+    clearTimeout(budgetEmployeeSearchTimer);
+    budgetEmployeeSearchTimer = setTimeout(searchBudgetEmployees, 250);
+  });
+  budgetRuleForm?.querySelector("[data-budget-employee-search]")?.addEventListener("click", searchBudgetEmployees);
+  budgetEmployeeKey?.addEventListener("change", () => chooseBudgetEmployeeKey(budgetEmployeeKey.value));
 
   /**
    * 让 Scope ID 选项与所选层级保持一致，避免把 Project ID 误发为 Key scope。
@@ -5139,6 +5263,8 @@ function bindAuthenticatedEvents(consoleShellState) {
       return;
     }
     const scopeType = budgetScopeTypeControl.value;
+    budgetEmployeePicker.hidden = scopeType !== "virtual_key";
+    budgetScopeIdControl.closest("label").hidden = scopeType === "virtual_key";
     const options = [...budgetScopeIdControl.options];
     const optionDescriptors = [];
     for (const option of options) {
@@ -5178,7 +5304,24 @@ function bindAuthenticatedEvents(consoleShellState) {
   const budgetDialog = document.querySelector("#budget-rule-dialog");
   document.querySelector("[data-budget-open-form]")?.addEventListener("click", () => {
     if (!resourcePageLifecycle.isBindingCurrent(budgetRuleBinding) || !budgetRuleForm) return;
+    editingBudgetRule = null;
     budgetRuleForm.reset();
+    showBudgetDialogMessage("填写完成后点击保存；未到启用时间前不会限制调用。");
+    budgetCurrentActivation.hidden = true;
+    budgetEnvironmentControl.disabled = false;
+    budgetScopeTypeControl.disabled = false;
+    budgetScopeIdControl.disabled = false;
+    budgetRuleForm.elements.budgetPeriod.disabled = false;
+    budgetEmployeeSearch.disabled = false;
+    budgetEmployeeKey.disabled = false;
+    budgetEmployeeSearch.value = "";
+    budgetEmployeeResults.textContent = "输入姓名或邮箱后查找员工。";
+    budgetEmployeeSelected.hidden = true;
+    budgetEmployeeKeyWrap.hidden = true;
+    budgetEmployeeSearchSequence += 1;
+    for (const option of [...budgetScopeIdControl.options]) {
+      if (option.dataset.budgetScopeOption === "virtual_key") option.remove();
+    }
     const keep = budgetActivationMode?.querySelector("[value='keep']");
     if (keep) { keep.hidden = true; keep.disabled = true; }
     syncBudgetScopeOptions();
@@ -5194,6 +5337,9 @@ function bindAuthenticatedEvents(consoleShellState) {
       if (!resourcePageLifecycle.isBindingCurrent(binding) || !budgetRuleForm) return;
       const rule = budgetRulesSnapshot.find((item) => item.budget_rule_id === button.dataset.budgetEditRuleId);
       if (!rule) return;
+      editingBudgetRule = rule;
+      showBudgetDialogMessage("修改完成后点击保存；未到启用时间前不会限制调用。");
+      budgetRuleForm.reset();
       budgetRuleForm.elements.environmentId.value = rule.environment_id;
       budgetRuleForm.elements.scopeType.value = rule.scope_type;
       syncBudgetScopeOptions();
@@ -5205,15 +5351,44 @@ function bindAuthenticatedEvents(consoleShellState) {
       budgetRuleForm.elements.warningThresholdPercent.value = rule.warning_threshold_percent;
       budgetRuleForm.elements.exhaustedAction.value = rule.exhausted_action;
       budgetRuleForm.elements.status.value = rule.status;
+      budgetEnvironmentControl.disabled = true;
+      budgetScopeTypeControl.disabled = true;
+      budgetScopeIdControl.disabled = true;
+      budgetRuleForm.elements.budgetPeriod.disabled = true;
+      budgetEmployeeSearch.disabled = true;
+      budgetEmployeeKey.disabled = true;
+      if (rule.scope_type === "virtual_key") {
+        showBudgetEmployee({
+          display_name: rule.scope_owner_display_name || rule.scope_label || "员工",
+          email: rule.scope_owner_email || "",
+        }, [{ virtual_key_id: rule.scope_id, name: rule.scope_label, environment_id: rule.environment_id,
+          environment_name: rule.environment_name }]);
+      }
       const keep = budgetActivationMode?.querySelector("[value='keep']");
       if (keep) { keep.hidden = false; keep.disabled = false; }
       if (budgetActivationMode) budgetActivationMode.value = "keep";
-      if (budgetActivationLocal) budgetActivationLocal.value = "";
+      if (budgetActivationLocal) budgetActivationLocal.value = rule.activation_at_utc
+        ? utcToShanghaiBudgetLocal(rule.activation_at_utc) : "";
+      budgetCurrentActivation.hidden = false;
+      budgetCurrentActivation.textContent = rule.activation_at_utc
+        ? `当前启用时间：${new Date(rule.activation_at_utc).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}（北京时间）`
+        : "当前设置：未指定定时启用。";
       syncBudgetActivationInput();
       budgetDialog?.showModal();
     });
   });
 
+  budgetRuleForm?.addEventListener("invalid", (event) => {
+    const label = event.target.closest("label")?.querySelector("span")?.textContent || "必填项";
+    showBudgetDialogMessage(`请检查「${label}」后再保存。`, true);
+  }, true);
+  budgetRuleForm?.querySelector("button[type='submit']")?.addEventListener("click", () => {
+    const invalid = budgetRuleForm.querySelector(":invalid");
+    if (invalid) {
+      const label = invalid.closest("label")?.querySelector("span")?.textContent || "必填项";
+      showBudgetDialogMessage(`请检查「${label}」后再保存。`, true);
+    }
+  });
   budgetRuleForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const ticket = resourcePageLifecycle.beginMutation(budgetRuleBinding);
@@ -5225,21 +5400,24 @@ function bindAuthenticatedEvents(consoleShellState) {
     }
     const button = budgetRuleForm.querySelector("button[type='submit']");
     const data = new FormData(budgetRuleForm);
-    const scopeType = String(data.get("scopeType") ?? "");
-    const scopeId = scopeType === "tenant" ? "" : String(data.get("scopeId") ?? "");
-    const environmentId = String(data.get("environmentId") ?? "");
-    const budgetPeriod = String(data.get("budgetPeriod") ?? "day");
+    const scopeType = editingBudgetRule?.scope_type ?? String(data.get("scopeType") ?? "");
+    const scopeId = editingBudgetRule?.scope_id ?? (scopeType === "tenant" ? "" : String(data.get("scopeId") ?? ""));
+    const environmentId = editingBudgetRule?.environment_id ?? String(data.get("environmentId") ?? "");
+    const budgetPeriod = editingBudgetRule?.budget_period ?? String(data.get("budgetPeriod") ?? "day");
     const activationMode = String(data.get("activationMode") ?? "immediate");
-    const exists = budgetRuleAlreadyExists(environmentId, scopeType, scopeId, budgetPeriod);
+    const exists = Boolean(editingBudgetRule);
     const writeRule = exists ? updateBudgetRule : createBudgetRule;
     button.disabled = true;
     budgetActionError = null;
     budgetFeedback = exists ? "预算更新中" : "预算创建中";
+    showBudgetDialogMessage("正在保存预算…");
+    let saved = null;
     try {
+      if (scopeType === "virtual_key" && !scopeId) throw new Error("请先搜索并选择有调用凭证的员工。");
       const activationAtUtc = activationMode === "scheduled"
         ? shanghaiBudgetTimeToUtc(String(data.get("activationLocal") ?? ""))
         : activationMode === "keep" ? undefined : null;
-      const saved = await resourceMutationRequest(ticket, writeRule, {
+      saved = await resourceMutationRequest(ticket, writeRule, {
         controlApiUrl,
         scopeType,
         scopeId,
@@ -5252,27 +5430,25 @@ function bindAuthenticatedEvents(consoleShellState) {
         exhaustedAction: String(data.get("exhaustedAction") ?? "alert_only"),
         status: String(data.get("status") ?? "active"),
       });
-      if (!isCurrentBudgetMutation(operation)) {
-        return;
-      }
-      budgetFeedback = saved?.budget_rule?.today_status?.status === "scheduled"
-        ? "预算已保存，将在设定时间启用"
-        : saved?.budget_rule?.effective_from_utc
-          ? "预算已保存；本周期从标明的时间起算，之前价格未知的调用不计入本规则"
-          : exists ? "预算已更新" : "预算已创建";
-      budgetMutationLifecycle.finish(operation);
-      await refreshResourceMutation(ticket);
+      if (!isCurrentBudgetMutation(operation)) return;
     } catch (error) {
       if (!isCurrentBudgetMutation(operation) || handleResourceMutationError(ticket, error)) return;
-      // 409 必须保留后端 code/message/request_id，并通过 refresh 获取并发创建后的最新规则。
       budgetActionError = error;
       budgetFeedback = error instanceof AuthApiError && error.status === 409 ? "预算规则已变化" : "预算保存失败";
-      budgetMutationLifecycle.finish(operation);
-      await refreshResourceMutation(ticket);
+      showBudgetDialogMessage(`${error.message || "保存失败"}${error.requestId ? `（请求 ID：${error.requestId}）` : ""}`, true);
+      return;
     } finally {
+      button.disabled = false;
       budgetMutationLifecycle.finish(operation);
       resourcePageLifecycle.finishMutation(ticket);
     }
+    budgetFeedback = saved?.budget_rule?.activation_at_utc
+      ? `预算已保存，启用时间：${new Date(saved.budget_rule.activation_at_utc).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}（北京时间）`
+      : exists ? "预算已更新并立即生效" : "预算已创建并立即生效";
+    budgetRuleOffset = 0;
+    budgetDialog?.close();
+    try { await refresh(); }
+    catch { budgetFeedback = "预算已保存，列表刷新失败，请手动刷新页面。"; }
   });
   document.querySelectorAll("[data-budget-mode-rule-id]").forEach((control) => {
     const binding = bindResourceElement(control,
@@ -17050,6 +17226,7 @@ async function loadFileSecurityState(consoleShellState, refreshId) {
  */
 function clearBudgetSessionState() {
   budgetRulesSnapshot = [];
+  budgetRuleOffset = 0;
   selectedBudgetVirtualKeyId = "";
   selectedBudgetPersonId = "";
   budgetPeopleSearch = "";
@@ -17823,8 +18000,10 @@ async function loadBudgetState(virtualKeysState, consoleShellState, refreshId) {
   return loadResourceState("budgets", [PERMISSIONS.BILLING_BUDGET_READ],
     async (options) => {
       const [rules, people, selected] = await Promise.all([
-        listBudgets(options),
-        listBudgetPeople({ ...options, search: budgetPeopleSearch, offset: budgetPeopleOffset }),
+        listBudgets({ ...options, offset: budgetRuleOffset, limit: 10 }),
+        budgetPeopleSearch
+          ? listBudgetPeople({ ...options, search: budgetPeopleSearch, offset: budgetPeopleOffset })
+          : Promise.resolve({ people: [], total: 0 }),
         selectedBudgetPersonId
           ? listBudgetPeople({ ...options, userId: selectedBudgetPersonId })
           : Promise.resolve(null),
@@ -17849,6 +18028,7 @@ async function loadBudgetState(virtualKeysState, consoleShellState, refreshId) {
       budgetRulesSnapshot = rules.budget_rules ?? [];
       return { state: "ok", rules, people, selectedPerson, status, statusError, selectedVirtualKeyId,
         peopleSearch: budgetPeopleSearch, peopleOffset: budgetPeopleOffset,
+        ruleOffset: budgetRuleOffset,
         actionError: budgetActionError, feedback: budgetFeedback };
     },
     { actionError: budgetActionError, feedback: budgetFeedback });
@@ -19110,10 +19290,21 @@ function shanghaiBudgetTimeToUtc(value) {
   if (!match) throw new Error("请输入有效的启用时间（北京时间）");
   const [, year, month, day, hour, minute] = match.map(Number);
   const instant = new Date(Date.UTC(year, month - 1, day, hour - 8, minute));
+  const local = new Date(instant.getTime() + 8 * 60 * 60 * 1000);
+  if (local.getUTCFullYear() !== year || local.getUTCMonth() + 1 !== month
+    || local.getUTCDate() !== day || local.getUTCHours() !== hour || local.getUTCMinutes() !== minute) {
+    throw new Error("请输入有效的启用日期和时间");
+  }
   if (!Number.isFinite(instant.getTime()) || instant.getTime() <= Date.now()) {
     throw new Error("启用时间必须晚于当前时间");
   }
   return instant.toISOString();
+}
+
+function utcToShanghaiBudgetLocal(value) {
+  const instant = new Date(value);
+  if (!Number.isFinite(instant.getTime())) return "";
+  return new Date(instant.getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 16);
 }
 
 /** 调用记录详情使用统一对话框，避免把数十个诊断区块插入列表下方。 */

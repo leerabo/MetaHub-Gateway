@@ -28220,6 +28220,23 @@ body:has(.policy-editor-backdrop) {
 .budget-rule-dialog > p { color: #60746b; line-height: 1.5; }
 .budget-rule-dialog .budget-rule-form { grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; padding: 0; border: 0; background: transparent; }
 .budget-rule-dialog .budget-actions { border-top: 1px solid #d8e4de; padding-top: 16px; }
+.budget-employee-picker, .budget-current-activation, .budget-dialog-message { grid-column: 1 / -1; }
+.budget-rule-form label[hidden], .budget-employee-picker[hidden], .budget-employee-selected[hidden],
+#budget-employee-key-wrap[hidden], .budget-current-activation[hidden] { display: none !important; }
+.budget-employee-picker:not([hidden]) { display: grid; gap: 8px; padding: 12px; border: 1px solid #d8e4de; border-radius: 8px; background: #f7fbf9; }
+.budget-employee-search-line { display: flex; gap: 8px; }
+.budget-employee-search-line input { flex: 1; min-width: 0; }
+.budget-employee-search-line button, .budget-employee-results button { border: 1px solid #9dbeb1; border-radius: 6px; padding: 7px 11px; background: #fff; color: #125c4b; cursor: pointer; }
+.budget-employee-results:not(:empty) { max-height: 180px; overflow: auto; }
+.budget-employee-results button { display: flex; justify-content: space-between; gap: 10px; width: 100%; margin-top: 5px; text-align: left; }
+.budget-employee-selected:not([hidden]) { display: grid; gap: 2px; padding: 8px; border-radius: 6px; background: #e5f5ee; }
+.budget-employee-picker small, .budget-rule-dialog label small { display: block; color: #60746b; font-size: 12px; }
+.budget-current-activation { margin: 0; color: #526f62; }
+.budget-dialog-message { margin: 0; font-weight: 700; }
+.budget-dialog-message.is-error { color: #a72d2d; }
+.budget-rule-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 12px; }
+.budget-rule-pagination button { padding: 7px 12px; }
+.budget-rule-pagination button:disabled { opacity: .5; cursor: default; }
 .budget-rules-section { margin: 4px 0 28px; }
 .budget-rules-heading { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
 .budget-rules-heading h3 { margin: 0; }

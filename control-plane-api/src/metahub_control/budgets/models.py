@@ -126,6 +126,9 @@ class BudgetRuleInfo(BaseModel):
     scope_id: str
     scope_label: str
     budget_scope: BudgetScopeInfo
+    scope_owner_user_id: str | None = None
+    scope_owner_display_name: str | None = None
+    scope_owner_email: str | None = None
     name: str
     daily_budget_cny: str
     budget_period: Literal["day", "month", "year"] = "day"
@@ -145,6 +148,9 @@ class BudgetRuleListResponse(BaseModel):
     """预算规则列表响应，统一携带 Environment 摘要和调用链标识。"""
 
     budget_rules: list[BudgetRuleInfo]
+    total: int = 0
+    offset: int = 0
+    page_size: int | None = None
     environment_summaries: list[BudgetEnvironmentSummary] = Field(default_factory=list)
     request_id: str
     trace_id: str

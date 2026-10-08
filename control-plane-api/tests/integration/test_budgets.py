@@ -289,6 +289,7 @@ async def test_budget_calendar_periods_and_employee_search(
         monthly = await set_period("month")
         yearly = await set_period("year")
         listed = await client.get("/budgets", headers=headers)
+        paged = await client.get("/budgets?limit=2&offset=1", headers=headers)
         searched = await client.get("/budget-people?search=Finance&offset=0", headers=headers)
         all_people = await client.get("/budget-people?offset=0", headers=headers)
 
@@ -297,6 +298,10 @@ async def test_budget_calendar_periods_and_employee_search(
     assert yearly["today_status"]["spent_cny"] == "128"
     assert yearly["budget_period"] == "year"
     assert listed.status_code == 200, listed.text
+    assert paged.status_code == 200, paged.text
+    assert paged.json()["total"] == 3
+    assert paged.json()["offset"] == 1
+    assert len(paged.json()["budget_rules"]) == 2
     assert {rule["budget_period"] for rule in listed.json()["budget_rules"]} == {"day", "month", "year"}
     assert len({rule["budget_rule_id"] for rule in listed.json()["budget_rules"]}) == 3
     assert searched.status_code == 200, searched.text
@@ -323,10 +328,20 @@ async def test_budget_future_activation_waits_then_counts_from_activation(
         })
         assert scheduled.status_code == 201, scheduled.text
         assert scheduled.json()["budget_rule"]["today_status"]["status"] == "scheduled"
+        revised_activation = activation_at + timedelta(days=2)
+        revised = await client.patch("/budgets", headers=headers, json={
+            "scope_type": "tenant", "budget_period": "month",
+            "activation_at_utc": revised_activation.isoformat().replace("+00:00", "Z"),
+        })
+        assert revised.status_code == 200, revised.text
+        assert revised.json()["budget_rule"]["activation_at_utc"] == revised_activation.isoformat().replace("+00:00", "Z")
+        listed = await client.get("/budgets", headers=headers)
+        assert listed.status_code == 200
+        assert listed.json()["budget_rules"][0]["activation_at_utc"] == revised_activation.isoformat().replace("+00:00", "Z")
         before = await client.get("/budget-status", headers=headers)
         assert before.status_code == 200, before.text
         assert before.json()["statuses"] == []
-        monkeypatch.setattr(budget_service, "_utcnow", lambda: activation_at + timedelta(hours=1))
+        monkeypatch.setattr(budget_service, "_utcnow", lambda: revised_activation + timedelta(hours=1))
         after = await client.get("/budget-status", headers=headers)
         assert after.status_code == 200, after.text
         assert len(after.json()["statuses"]) == 1

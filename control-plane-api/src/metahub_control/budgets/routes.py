@@ -45,7 +45,7 @@ BudgetWriter = Annotated[
 
 # 预算查询和写请求采用显式白名单与硬上限，避免未知字段进入 SQL、审计或内存消耗面。
 ALLOWED_BUDGET_LIST_QUERY_FIELDS = frozenset(
-    {"scope_type", "environment_id", "environment", "status"}
+    {"scope_type", "environment_id", "environment", "status", "offset", "limit"}
 )
 ALLOWED_BUDGET_STATUS_QUERY_FIELDS = frozenset(
     {"virtual_key_id", "environment_id", "project_id", "application_id"}
@@ -142,6 +142,13 @@ def get_budgets_route(
     """读取当前租户预算规则与同快照今日状态。"""
 
     query = _read_query(request, ALLOWED_BUDGET_LIST_QUERY_FIELDS)
+    try:
+        offset = int(query.get("offset", "0"))
+        limit = int(query["limit"]) if "limit" in query else None
+    except ValueError as exc:
+        raise ApiError("budget.rule_invalid") from exc
+    if offset < 0 or offset > 1_000_000 or (limit is not None and not 1 <= limit <= 100):
+        raise ApiError("budget.rule_invalid")
     response.headers["Cache-Control"] = "no-store"
     return list_budget_rules(
         request.app.state.config,
@@ -150,6 +157,8 @@ def get_budgets_route(
         environment_id=query.get("environment_id"),
         environment=query.get("environment"),
         status=query.get("status"),
+        offset=offset,
+        limit=limit,
         request_id=_request_id(request),
         trace_id=_trace_id(request),
     )

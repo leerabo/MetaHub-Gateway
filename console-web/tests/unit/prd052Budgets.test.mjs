@@ -312,7 +312,7 @@ test("PRD-052 budget center keeps one rule list and contextual employee decision
   assert.doesNotMatch(html, /bb_project_a/);
   assert.doesNotMatch(html, /<em>bsc_/);
   assert.match(html, /data-budget-scope-option="project"/);
-  assert.match(html, /data-budget-scope-option="virtual_key"/);
+  assert.match(html, /id="budget-employee-search"/);
   assert.match(html, /id="budget-person-search-form"/);
   assert.match(html, /data-budget-person-key="vk_a"/);
   assert.doesNotMatch(html, /tenant_id/);
