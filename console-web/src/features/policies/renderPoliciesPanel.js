@@ -307,17 +307,17 @@ export function renderPoliciesPanel(policiesState, modelsState, authContext, res
   return `
     <div class="policy-heading">
       <div>
-        <h2 id="policies-title">规则概览</h2>
-        <p>需要按环境、项目、模型或预算设置特殊处理时，在这里编写规则。保存后还需在“上线与版本”发布，网关才会使用。</p>
+        <h2 id="policies-title">已配置的规则</h2>
+        <p>在这里设置特殊条件并保存。规则发布后才会在网关生效。</p>
       </div>
       <div class="policy-heading-actions">
         <span>${visiblePolicies.length} / ${policies.length} 条</span>
         ${canWrite ? `<button id="policy-new" type="button" ${saving ? "disabled" : ""}>新建自定义规则</button>` : ""}
       </div>
     </div>
-    <div class="policy-paths" aria-label="选择策略配置方式">
-      ${hasPermission(authContext, PERMISSIONS.POLICY_TEMPLATE_READ) ? '<div><strong>常见场景</strong><p>预算、路由、数据保护等，可先选场景模板，预览影响后直接应用。</p><a href="#workspace.governance.policy-templates">查看场景模板</a></div>' : ""}
-      <div><strong>特殊条件</strong><p>模板不适用时，在本页写自定义规则；保存草稿后再发布。</p>${hasPermission(authContext, PERMISSIONS.POLICY_PUBLISH) ? '<a href="#workspace.governance.policy-releases">查看上线与版本</a>' : ""}</div>
+    <div class="policy-paths" aria-label="规则操作入口">
+      ${hasPermission(authContext, PERMISSIONS.POLICY_TEMPLATE_READ) ? '<a href="#workspace.governance.policy-templates">从场景模板设置</a>' : ""}
+      ${hasPermission(authContext, PERMISSIONS.POLICY_PUBLISH) ? '<a href="#workspace.governance.policy-releases">查看待发布内容与版本</a>' : ""}
     </div>
     ${editorOpen ? "" : renderPolicyStateError(policiesState)}
     ${!editorOpen && policiesState?.feedback ? `<p class="policy-save-feedback" role="status">${escapeHtml(policiesState.feedback)}</p>` : ""}

@@ -5,6 +5,10 @@
 const ENGLISH_STATIC_TEXT = new Map([
   ["自定义规则", "Custom rules"],
   ["规则概览", "Rules overview"],
+  ["已配置的规则", "Configured rules"],
+  ["在这里设置特殊条件并保存。规则发布后才会在网关生效。", "Set special conditions here and save. Rules take effect at the gateway after publishing."],
+  ["从场景模板设置", "Set up from a scenario"],
+  ["查看待发布内容与版本", "View pending changes and versions"],
   ["上线与版本", "Publish & versions"],
   ["场景模板", "Scenario templates"],
   ["需要按环境、项目、模型或预算设置特殊处理时，在这里编写规则。保存后还需在“上线与版本”发布，网关才会使用。", "Write a rule here for special conditions involving environments, projects, models, or budgets. Save the draft, then publish it for the gateway to use."],
@@ -69,6 +73,12 @@ const ENGLISH_STATIC_TEXT = new Map([
   ["待检查", "Not checked"],
   ["还不能应用这个场景，请先完成下面的准备工作，再返回重新检查。", "This scenario cannot be applied yet. Complete the steps below, then return and check again."],
   ["没有可用于低成本模式的模型", "No model is eligible for low-cost mode"],
+  ["现有模型缺少此模板要求的完整能力", "Existing models lack the capabilities this template requires"],
+  ["这里的低成本模板会把项目请求固定转到同一个模型，因此该模型须同时支持对话、向量和流式调用。国产模型也可能只支持其中一部分。若主要想降低对话费用，可在模型路由中使用“成本优先”，无需使用这个模板。", "This template routes all project requests to one model, so that model must support chat, embeddings, and streaming. A domestic model may support only some of these. For lower chat costs, use Cost first in model routing instead."],
+  ["这个模板要求模型同时支持对话、向量和流式调用，并有有效的人民币价格及可用服务凭据。国产属性本身不能证明满足这些条件。若只想优化对话费用，可改用模型路由的“成本优先”。", "This template needs chat, embeddings, and streaming, a valid CNY price, and usable provider credentials. Being a domestic model alone does not meet those requirements. For chat costs, use Cost first in model routing."],
+  ["查看模型能力", "View model capabilities"],
+  ["设置成本优先路由", "Set Cost first routing"],
+  ["模型缺少对话、向量或流式能力", "Model lacks chat, embeddings, or streaming"],
   ["低成本模式只会选择国产云、本地或自管模型服务。请检查模型已启用，支持对话、向量和流式调用，有有效的人民币价格，且服务连接和所需密钥可用。", "Low-cost mode only uses domestic cloud, local, or self-managed model providers. Check that the model is enabled, supports chat, embeddings, and streaming, has a valid CNY price, and that its provider and required keys are usable."],
   ["查看模型目录", "View model catalog"],
   ["查看模型服务", "View model providers"],
@@ -86,6 +96,13 @@ const ENGLISH_STATIC_TEXT = new Map([
   ["规则校验失败，请在自定义规则中修正后再发布。", "Rule validation failed. Fix the custom rule before publishing."],
   ["可先在自定义规则中启用规则；若要使用场景模板，可发布空版本建立基线。", "Enable a custom rule first; to use scenario templates, publish an empty version to create a baseline."],
   ["打开自定义规则", "Open Custom rules"],
+  ["规则上线", "Publish rules"],
+  ["规则保存后，核对待发布内容并发布到网关。", "After saving rules, review pending changes and publish them to the gateway."],
+  ["管理自定义规则", "Manage custom rules"],
+  ["上线后将清空规则", "Publishing will clear live rules"],
+  ["目前没有启用的规则。可先添加规则；若要使用场景模板，可发布空版本作为起点。", "No rules are enabled yet. Add a rule first, or publish an empty version as the starting point for scenario templates."],
+  ["发布新版本", "Publish a new version"],
+  ["填写原因后发布；网关同步完成后，可在调用记录中核对效果。", "Enter a reason and publish. After the gateway syncs, verify the result in call records."],
   // Keep the provider engineering and local-model pages coherent when an
   // account uses English. These complete phrases must precede generic token
   // replacements such as 模型服务 and 正在读取.

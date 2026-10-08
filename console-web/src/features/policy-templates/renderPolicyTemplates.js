@@ -303,13 +303,23 @@ function renderPrerequisites(reasonCodes) {
 }
 
 function prerequisiteGuidance(code) {
+  if (code === "low_cost_full_capabilities_required") {
+    return {
+      title: "现有模型缺少此模板要求的完整能力",
+      detail: "这里的低成本模板会把项目请求固定转到同一个模型，因此该模型须同时支持对话、向量和流式调用。国产模型也可能只支持其中一部分。若主要想降低对话费用，可在模型路由中使用“成本优先”，无需使用这个模板。",
+      actions: [
+        { target: "models", label: "查看模型能力" },
+        { target: "model-aliases", label: "设置成本优先路由" },
+      ],
+    };
+  }
   if (code === "eligible_low_cost_model_required") {
     return {
       title: "没有可用于低成本模式的模型",
-      detail: "低成本模式只会选择国产云、本地或自管模型服务。请检查模型已启用，支持对话、向量和流式调用，有有效的人民币价格，且服务连接和所需密钥可用。",
+      detail: "这个模板要求模型同时支持对话、向量和流式调用，并有有效的人民币价格及可用服务凭据。国产属性本身不能证明满足这些条件。若只想优化对话费用，可改用模型路由的“成本优先”。",
       actions: [
-        { target: "models", label: "查看模型目录" },
-        { target: "providers", label: "查看模型服务" },
+        { target: "models", label: "查看模型能力" },
+        { target: "model-aliases", label: "设置成本优先路由" },
       ],
     };
   }
@@ -466,6 +476,7 @@ function reasonLabel(code) {
     domestic_alias_limit_exceeded: "国产模型别名数量超过模板上限",
     domestic_provider_required: "模型必须来自允许的中国境内官方或云服务 Provider",
     eligible_low_cost_model_required: "暂无同时满足能力、健康和价格要求的模型",
+    low_cost_full_capabilities_required: "模型缺少对话、向量或流式能力",
     environment_limit_exceeded: "可用环境数量超过模板上限",
     policy_mask_runtime_required: "Gateway 脱敏运行能力尚未全部就绪",
     provider_adapter_required: "候选 Provider Adapter 当前不可用",
@@ -485,6 +496,7 @@ function remediationFor(reasonCodes) {
     ["domestic_provider_required", "providers", "前往 Provider 管理"],
     ["active_model_required", "models", "前往模型目录"],
     ["eligible_low_cost_model_required", "models", "前往模型目录"],
+    ["low_cost_full_capabilities_required", "models", "查看模型能力"],
     ["domestic_alias_coverage_required", "model-aliases", "前往模型别名"],
     ["domestic_alias_limit_exceeded", "model-aliases", "前往模型别名"],
     ["domestic_expression_limit_exceeded", "model-aliases", "前往模型别名"],

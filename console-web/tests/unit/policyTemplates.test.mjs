@@ -526,16 +526,16 @@ test("policy template check lists both missing model and first publication with 
   const preview = state.beginPreview();
   const payload = incompatiblePayload();
   payload.policy_templates[0].compatibility.reason_codes = [
-    "eligible_low_cost_model_required",
+    "low_cost_full_capabilities_required",
     "snapshot_baseline_required",
   ];
   assert.equal(state.acceptPreview(preview, payload), true);
   const html = renderPolicyTemplates(state.snapshot());
-  assert.match(html, /没有可用于低成本模式的模型/);
-  assert.match(html, /支持对话、向量和流式调用/);
-  assert.match(html, /国产云、本地或自管模型服务/);
+  assert.match(html, /现有模型缺少此模板要求的完整能力/);
+  assert.match(html, /同时支持对话、向量和流式调用/);
+  assert.match(html, /成本优先/);
   assert.match(html, /data-policy-template-remediation="models"/);
-  assert.match(html, /data-policy-template-remediation="providers"/);
+  assert.match(html, /data-policy-template-remediation="model-aliases"/);
   assert.match(html, /还没有可回退的上线版本/);
   assert.match(html, /可以发布空版本/);
   assert.match(html, /data-policy-template-remediation="policy-snapshots"/);

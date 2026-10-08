@@ -1403,7 +1403,7 @@ async def test_template_planners_fail_closed_without_required_dependencies(
 ) -> None:
     """适配异常：缺模型、国产覆盖、预算事实或部署 gate 时只返回稳定原因且不签发 CAS。"""
 
-    _prepare_database(monkeypatch, tmp_path)
+    database_url = _prepare_database(monkeypatch, tmp_path)
     async with AsyncClient(
         transport=ASGITransport(app=_build_app()),
         base_url="http://control",
@@ -1419,7 +1419,7 @@ async def test_template_planners_fail_closed_without_required_dependencies(
             (
                 "ptpl_low_cost_mode",
                 {"project_id": projects["low"]},
-                "eligible_low_cost_model_required",
+                "low_cost_full_capabilities_required",
             ),
             (
                 "ptpl_domestic_models_only",
@@ -1445,6 +1445,26 @@ async def test_template_planners_fail_closed_without_required_dependencies(
             assert preview["impact_hash"] is None
             assert "ETag" not in response.headers
             assert "X-Policy-Candidate-ETag" not in response.headers
+
+        # 当前组织的国产对话模型可用，不代表固定路由能安全接收向量请求。
+        _seed_template_planner_facts(database_url, budget_project_id=projects["low"])
+        connection = connect_database(database_url)
+        connection.execute(
+            "UPDATE models SET capabilities=?",
+            (json.dumps({"chat": True, "stream": True}),),
+        )
+        connection.commit()
+        connection.close()
+        _response, low_cost_preview = await _preview_template(
+            client,
+            auth,
+            template_id="ptpl_low_cost_mode",
+            bindings={"project_id": projects["low"]},
+        )
+        assert "low_cost_full_capabilities_required" in (
+            low_cost_preview["compatibility"]["reason_codes"]
+        )
+        assert low_cost_preview["preview_nonce"] is None
 
         invalid_alias = await client.get(
             "/policy-templates",

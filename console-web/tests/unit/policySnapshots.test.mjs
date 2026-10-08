@@ -289,8 +289,9 @@ test("first release explains the next action without an empty history table", ()
     publishReason: "",
     operationStatus: "idle",
   }, publisherContext);
-  assert.match(html, /在自定义规则中配置并启用规则/);
-  assert.match(html, /若要使用场景模板，可发布空版本建立基线/);
+  assert.match(html, /管理自定义规则/);
+  assert.match(html, /若要使用场景模板，可发布空版本作为起点/);
+  assert.doesNotMatch(html, /policy-snapshot-current-title/);
   assert.match(html, /发布空版本/);
   assert.match(html, /首次发布后，版本、原因和操作人会显示在这里/);
   assert.doesNotMatch(html, /policy-snapshot-row-head|policy-snapshot-pager/);

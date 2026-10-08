@@ -1915,6 +1915,8 @@ def _plan_low_cost(
         """,
         (tenant_id,),
     ).fetchall()
+    eligible_provider_models = 0
+    capability_mismatches = 0
     candidates: list[
         tuple[
             Decimal,
@@ -1933,14 +1935,16 @@ def _plan_low_cost(
         # 能力 JSON 或 adapter 分类损坏时只淘汰该候选，不能猜测为可路由上游。
         except (TypeError, json.JSONDecodeError, ProviderAdapterSpecError):
             continue
-        # Policy DSL 没有 request kind，固定路由目标必须覆盖当前开放的 Chat/Embeddings/Stream。
-        if (
-            not isinstance(capabilities, dict)
-            or any(capabilities.get(name) is not True for name in ("chat", "embeddings", "stream"))
-            or spec.classification == MIGRATION_PLATFORM
-            or spec.classification
-            not in {MODEL_VENDOR_CLOUD, LOCAL_COMPATIBLE, CUSTOMER_MANAGED}
+        if (spec.classification == MIGRATION_PLATFORM
+            or spec.classification not in {MODEL_VENDOR_CLOUD, LOCAL_COMPATIBLE, CUSTOMER_MANAGED}):
+            continue
+        eligible_provider_models += 1
+        # Policy DSL v1 没有 request kind，固定路由目标必须覆盖 Chat/Embeddings/Stream。
+        if not isinstance(capabilities, dict) or any(
+            capabilities.get(name) is not True
+            for name in ("chat", "embeddings", "stream")
         ):
+            capability_mismatches += 1
             continue
         credential_rows = connection.execute(
             """
@@ -1985,8 +1989,8 @@ def _plan_low_cost(
             continue
         price_row = connection.execute(
             """
-             SELECT price_plan_id,input_price_per_1k,output_price_per_1k,cache_price_per_1k,currency,
-                   price_schema_version,effective_from,source
+             SELECT price_plan_id,input_price_per_1k,output_price_per_1k,
+                    cache_price_per_1k,currency,price_schema_version,effective_from,source
             FROM model_price_plans
             WHERE tenant_id=? AND model_id=? AND currency='CNY'
               AND julianday(effective_from)<=julianday(?)
@@ -2046,6 +2050,8 @@ def _plan_low_cost(
         )
     # 没有完整能力、可用 KeyPool 和可信价格的候选时失败关闭，不选择迁移平台兜底。
     if not candidates:
+        if eligible_provider_models and capability_mismatches == eligible_provider_models:
+            raise _NotApplicable("low_cost_full_capabilities_required")
         raise _NotApplicable("eligible_low_cost_model_required")
     _price, model_id, row, price_row, price_hash, keypool_hash, warnings = min(
         candidates,

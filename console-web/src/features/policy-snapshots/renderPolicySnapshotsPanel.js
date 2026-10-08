@@ -32,7 +32,7 @@ export function renderPolicySnapshotsPanel(state, authContext) {
   const current = state.current_snapshot ?? null;
   const history = Array.isArray(state.policy_snapshots) ? state.policy_snapshots : [];
   return `
-    ${renderHeading(state, current)}
+    ${renderHeading()}
     ${renderActionFeedback(state)}
     ${renderPendingOperationNotice(state)}
     ${renderCurrentSnapshot(current)}
@@ -231,7 +231,7 @@ function normalizeOperationDescriptor(descriptor) {
 function renderLoadingState() {
   return `
     <div class="policy-snapshot-heading">
-      <h2 id="policy-snapshots-title">上线步骤</h2>
+      <h2 id="policy-snapshots-title">规则上线</h2>
       <p>正在读取待发布策略和线上版本。</p>
     </div>
     <div class="policy-snapshot-empty" role="status">加载中…</div>
@@ -242,23 +242,19 @@ function renderLoadingState() {
 function renderFatalError(state) {
   return `
     <div class="policy-snapshot-heading">
-      <h2 id="policy-snapshots-title">上线步骤</h2>
+      <h2 id="policy-snapshots-title">规则上线</h2>
       <p>待发布策略和线上版本暂不可用，请稍后重试。</p>
     </div>
     ${renderError(state)}
   `;
 }
 
-/** 说明配置与发布的先后顺序；页面主标题由外层控制台提供。 */
+/** 用一行连接规则配置与发布；页面主标题由外层控制台提供。 */
 function renderHeading() {
   return `
     <div class="policy-snapshot-heading">
-      <h2 id="policy-snapshots-title">上线步骤</h2>
-      <ol class="policy-snapshot-steps">
-        <li><a href="#workspace.governance.policies">在自定义规则中配置并启用规则</a></li>
-        <li>核对下面的待发布内容与线上版本</li>
-        <li>填写变更原因，发布后等待网关拉取</li>
-      </ol>
+      <h2 id="policy-snapshots-title">规则上线</h2>
+      <p>规则保存后，核对待发布内容并发布到网关。<a href="#workspace.governance.policies">管理自定义规则</a></p>
     </div>
   `;
 }
@@ -266,12 +262,7 @@ function renderHeading() {
 /** 渲染当前快照摘要；完整 hash 只在 code 节点展示，不进入 URL。 */
 function renderCurrentSnapshot(current) {
   if (!current) {
-    return `
-      <section class="policy-snapshot-current" aria-labelledby="policy-snapshot-current-title">
-        <h3 id="policy-snapshot-current-title">线上版本</h3>
-        <p><strong>尚未发布</strong> · 网关还没有此空间的策略版本。</p>
-      </section>
-    `;
+    return "";
   }
   const operation = operationLabel(current);
   return `
@@ -323,10 +314,10 @@ function renderCandidateSummary(state, current) {
     message = "回滚没有改动待发布策略。下一次发布会重新上线当前候选内容。";
     tone = "warning";
   } else if (count === 0) {
-    status = "0 条已启用策略";
+    status = current ? "上线后将清空规则" : "尚未发布";
     message = current?.policy_count > 0
       ? "发布后线上策略会被清空。请先确认这是预期结果。"
-      : "可先在自定义规则中启用规则；若要使用场景模板，可发布空版本建立基线。";
+      : "目前没有启用的规则。可先添加规则；若要使用场景模板，可发布空版本作为起点。";
     tone = "warning";
   }
   return `
@@ -337,6 +328,7 @@ function renderCandidateSummary(state, current) {
         ${invalid || count === 0 ? '<a href="#workspace.governance.policies">打开自定义规则</a>' : ""}
       </div>
       <div class="policy-snapshot-candidate-meta">
+        ${current ? "" : "<span>线上尚未发布</span>"}
         <strong>${escapeHtml(count)} 条策略</strong>
         ${state.candidate_content_hash ? `<details><summary>校验值</summary><code>${escapeHtml(shortHash(state.candidate_content_hash))}</code></details>` : ""}
       </div>
@@ -359,8 +351,8 @@ function renderPublishForm(state) {
     <section class="policy-snapshot-publish" aria-labelledby="policy-snapshot-publish-title">
       <div class="policy-snapshot-section-heading">
         <div>
-          <h3 id="policy-snapshot-publish-title">填写原因并发布</h3>
-          <p>发布会生成新版本。网关在下一轮轮询后使用该版本，请在调用记录中核对实际效果。</p>
+          <h3 id="policy-snapshot-publish-title">发布新版本</h3>
+          <p>填写原因后发布；网关同步完成后，可在调用记录中核对效果。</p>
         </div>
         ${pending ? `<span class="policy-snapshot-pending">结果待确认，重试将复用 ${escapeHtml(state.pendingOperation.requestId)}</span>` : ""}
       </div>
