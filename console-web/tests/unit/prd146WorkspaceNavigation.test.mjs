@@ -230,14 +230,19 @@ test("PRD-146 canonical registry restores five sources and excludes six retired 
   });
 });
 
-test("platform internal routes are never Workspace sidebar or direct-link targets", () => {
+test("platform internal and incomplete workflows are never Workspace sidebar or direct-link targets", () => {
   assert.equal(WORKSPACE_ROUTE_REGISTRY["workspace.settings.deployments"].placement, "platform_internal");
   assert.equal(WORKSPACE_ROUTE_REGISTRY["workspace.settings.data-management"].placement, "platform_internal");
-  const navigation = normalizeWorkspaceNavigation(navigationPayload());
+  const payload = navigationPayload();
+  payload.groups.find((group) => group.group_code === "home").items.push(
+    item("workspace.home.approvals", "primary", 12),
+  );
+  const navigation = normalizeWorkspaceNavigation(payload);
   for (const routeCode of [
     "workspace.settings.deployments",
     "workspace.settings.data-management",
     "workspace.home.assistant",
+    "workspace.home.approvals",
   ]) {
     assert.deepEqual(
       resolveWorkspaceNavigationRoute(navigation, routeCode),
@@ -256,6 +261,7 @@ test("platform internal routes are never Workspace sidebar or direct-link target
     false,
   );
   assert.equal(projected.navigation_items.some((item) => item.id === "admin-assistant"), false);
+  assert.equal(projected.navigation_items.some((item) => item.id === "approvals"), false);
 });
 
 test("governance navigation presents templates before rules and reserves publishing for publishers", () => {

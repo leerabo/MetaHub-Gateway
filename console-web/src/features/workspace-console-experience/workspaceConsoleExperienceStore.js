@@ -10,6 +10,7 @@ export function createWorkspaceConsoleExperienceStore() {
   let operation = null;
   let status = "idle";
   let overview = null;
+  let overviewPeriod = "month";
   let assistantDraft = "";
   let assistantResponse = null;
   let approvals = null;
@@ -111,6 +112,13 @@ export function createWorkspaceConsoleExperienceStore() {
     return true;
   }
 
+  function setOverviewPeriod(owner, value) {
+    if (view !== "overview" || !ownerMatches(owner) || Date.now() >= expiresAt
+      || !["day", "month", "all"].includes(value)) return false;
+    overviewPeriod = value;
+    return true;
+  }
+
   function setAssistantDraft(owner, value) {
     if (view !== "admin-assistant" || !ownerMatches(owner) || operation
       || typeof value !== "string" || [...value].length > 2000) return false;
@@ -172,6 +180,7 @@ export function createWorkspaceConsoleExperienceStore() {
       view,
       status,
       overview,
+      overviewPeriod,
       assistant: Object.freeze({
         draft: assistantDraft,
         response: assistantResponse,
@@ -199,6 +208,7 @@ export function createWorkspaceConsoleExperienceStore() {
     abort();
     clearVisibleFacts();
     assistantDraft = "";
+    overviewPeriod = "month";
     approvalFilters = { status: "", risk: "", sourceDomain: "" };
     approvalCursor = null;
     approvalNextCursor = null;
@@ -256,6 +266,7 @@ export function createWorkspaceConsoleExperienceStore() {
     accept,
     reject,
     setAssistantDraft,
+    setOverviewPeriod,
     clearAssistant,
     configureApprovals,
     nextApprovals,

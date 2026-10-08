@@ -10521,6 +10521,7 @@ function renderCurrentWorkspaceConsoleExperience() {
     view,
     consoleShellState?.navigation?.role_code,
     currentI18n,
+    { workspaceName: consoleShellState?.workspaceContext?.name },
   );
   hydrateWorkspaceConsoleAssistant(panel, state);
   bindWorkspaceConsoleExperiencePageInteractions(consoleShellState, panel);
@@ -10535,6 +10536,9 @@ function bindWorkspaceConsoleExperiencePageInteractions(
   if (!view) return false;
   workspaceConsoleExperienceShellState = consoleShellState;
   return bindWorkspaceConsoleExperience(root, {
+    onOverviewPeriod(value) {
+      return workspaceConsoleExperienceController.setOverviewPeriod(value);
+    },
     onAssistantDraft(value) {
       return workspaceConsoleExperienceController.setAssistantDraft(value);
     },

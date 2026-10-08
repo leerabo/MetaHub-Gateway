@@ -62,6 +62,12 @@ export function createWorkspaceConsoleExperienceController({
     }
   }
 
+  function setOverviewPeriod(value) {
+    const changed = store.setOverviewPeriod(owner, value);
+    if (changed) publish();
+    return changed;
+  }
+
   function setAssistantDraft(value) {
     const changed = store.setAssistantDraft(owner, value);
     if (changed) publish();
@@ -142,6 +148,7 @@ export function createWorkspaceConsoleExperienceController({
     enter,
     load,
     setAssistantDraft,
+    setOverviewPeriod,
     submitAssistant,
     clearAssistant,
     configureApprovals,

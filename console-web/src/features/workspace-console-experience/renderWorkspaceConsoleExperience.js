@@ -4,10 +4,16 @@ import {
   renderConsoleExperience,
 } from "../console-experience/renderConsoleExperience.js";
 import { WORKSPACE_SOURCE_ROUTE_REGISTRY } from "../../lib/workspaceNavigation.js";
+import { renderWorkspaceOverview } from "./renderWorkspaceOverview.js";
 
-export function renderWorkspaceConsoleExperience(state, view, roleCode = "", i18n = null) {
+export function renderWorkspaceConsoleExperience(state, view, roleCode = "", i18n = null, context = {}) {
   const renderedView = view === "system-status" ? "overview" : view;
   const roleCopy = workspaceOverviewCopy(roleCode, i18n?.locale);
+  if (view === "overview") return renderWorkspaceOverview(state, {
+    hiddenSources: roleCopy.hiddenSources,
+    roleCode,
+    workspaceName: context.workspaceName,
+  });
   return renderConsoleExperience(state, {
     domain: "workspace", view: renderedView,
     domainLabel: roleCopy.label,
@@ -45,5 +51,8 @@ export function hydrateWorkspaceConsoleAssistant(root, state) {
 }
 
 export function bindWorkspaceConsoleExperience(root, handlers) {
+  root.querySelectorAll("[data-workspace-overview-period]").forEach((button) => {
+    button.onclick = () => handlers.onOverviewPeriod?.(button.dataset.workspaceOverviewPeriod);
+  });
   return bindConsoleExperienceInteractions(root, handlers);
 }

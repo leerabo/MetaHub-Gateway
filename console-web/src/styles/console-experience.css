@@ -5,6 +5,46 @@
 .workspace-system-details summary { cursor: pointer; color: #5d6c67; font-size: 14px; min-height: 36px; }
 .workspace-system-details .tenant-meta { margin-top: 12px; }
 
+.workspace-overview { display: grid; gap: 28px; color: #18352f; }
+.workspace-overview-header, .workspace-overview-section-title { display: flex; align-items: end; justify-content: space-between; gap: 16px; }
+.workspace-overview-header { padding-bottom: 20px; border-bottom: 1px solid #d8e5df; }
+.workspace-overview-header p, .workspace-overview-section-title p { margin: 0 0 4px; color: #237966; font-size: .78rem; font-weight: 700; }
+.workspace-overview-header h1 { margin: 0 0 5px; font-size: clamp(1.7rem, 2vw, 2.2rem); }
+.workspace-overview-header span, .workspace-overview-header small { color: #647872; }
+.workspace-overview-header-actions { display: flex; align-items: center; gap: 12px; }
+.workspace-overview-header button { padding: 8px 14px; border: 1px solid #c9d9d2; border-radius: 8px; background: #fff; color: #20594c; font: inherit; cursor: pointer; }
+.workspace-overview-section-title { margin-bottom: 14px; }
+.workspace-overview-section-title h2 { margin: 0; font-size: 1.18rem; }
+.workspace-overview-section-title a, .workspace-overview-attention a { color: #087b69; font-weight: 650; text-decoration: none; }
+.workspace-overview-section-title a:hover, .workspace-overview-attention a:hover { text-decoration: underline; }
+.workspace-overview-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.workspace-overview-card { display: grid; gap: 8px; min-height: 140px; padding: 19px; border: 1px solid #d9e5df; border-radius: 14px; background: #fff; color: inherit; text-decoration: none; box-shadow: 0 8px 24px rgba(20, 64, 51, .04); }
+.workspace-overview-card:hover { border-color: #4d9a83; transform: translateY(-1px); }
+.workspace-overview-card span { color: #647872; font-size: .9rem; }
+.workspace-overview-card strong { font-size: clamp(1.6rem, 2.2vw, 2.3rem); line-height: 1; font-variant-numeric: tabular-nums; }
+.workspace-overview-card small { align-self: end; color: #687d75; }
+.workspace-overview-card.is-warning strong { color: #a45b19; }
+.workspace-overview-card.is-attention strong { color: #0c7967; }
+.workspace-overview-name { margin: 0 0 6px; font-size: 1.6rem; }
+.workspace-overview-period { display: flex; gap: 4px; padding: 4px; background: #eaf2ee; border-radius: 10px; }
+.workspace-overview-period button { min-height: 36px; padding: 6px 16px; border: 0; border-radius: 7px; background: transparent; color: #48665c; font: inherit; cursor: pointer; }
+.workspace-overview-period button[aria-pressed="true"] { background: #fff; color: #087b69; font-weight: 700; box-shadow: 0 2px 6px #153b2912; }
+.workspace-overview-card .is-money { font-size: clamp(1.25rem, 1.8vw, 1.9rem); overflow-wrap: anywhere; }
+.workspace-overview-footnote { font-size: .8rem; color: #637b72; line-height: 1.7; }
+.workspace-overview-footnote a { color: #087b69; margin-left: 12px; }
+.workspace-overview-panel h2 { margin: 0 0 14px; font-size: 1.1rem; }
+.workspace-overview-lower { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 16px; }
+.workspace-overview-panel { min-width: 0; padding: 20px; border: 1px solid #d9e5df; border-radius: 14px; background: #fff; }
+.workspace-overview-attention { list-style: none; margin: 0; padding: 0; }
+.workspace-overview-attention li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 18px; min-height: 52px; border-top: 1px solid #e8efeb; }
+.workspace-overview-attention strong { font-variant-numeric: tabular-nums; }
+.workspace-overview-links { display: grid; gap: 8px; }
+.workspace-overview-links a { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; border-radius: 8px; background: #f1f8f5; color: #17483d; font-weight: 700; text-decoration: none; }
+.workspace-overview-links a:hover { background: #e1f1e9; }
+.workspace-overview-links span { color: #5c756b; font-size: .78rem; font-weight: 500; text-align: right; }
+@media (max-width: 1100px) { .workspace-overview-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 700px) { .workspace-overview-header { align-items: start; } .workspace-overview-header-actions { flex-direction: column; align-items: end; } .workspace-overview-cards, .workspace-overview-lower { grid-template-columns: minmax(0, 1fr); } }
+
 .console-experience-heading,
 .console-experience-section-heading {
   display: flex;

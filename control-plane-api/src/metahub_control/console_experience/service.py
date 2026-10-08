@@ -280,6 +280,29 @@ def get_workspace_overview(
                 version["workspace_dashboard_projection_id"],
             ),
         ).fetchall()
+        # 首次读取旧投影时就地升级，避免部署后直到后台轮询完成前一直显示空指标。
+        if not any(row["metric_code"] == "usage_cost.month_tokens" for row in rows):
+            from .scheduler import _refresh_workspace_dashboard
+
+            _refresh_workspace_dashboard(connection, actor.workspace_id, actor.tenant_id)
+            version = connection.execute(
+                """SELECT version.* FROM workspace_dashboard_projection_heads head
+                   JOIN workspace_dashboard_projection_versions version
+                     ON version.workspace_id=head.workspace_id
+                    AND version.tenant_id=head.tenant_id
+                    AND version.workspace_dashboard_projection_id=
+                        head.workspace_dashboard_projection_id
+                    AND version.generation=head.generation
+                  WHERE head.workspace_id=? AND head.tenant_id=?""",
+                (actor.workspace_id, actor.tenant_id),
+            ).fetchone()
+            rows = connection.execute(
+                """SELECT * FROM workspace_dashboard_projection_sources
+                   WHERE workspace_id=? AND tenant_id=?
+                     AND workspace_dashboard_projection_id=?
+                   ORDER BY source_code,metric_code""",
+                (actor.workspace_id, actor.tenant_id, version["workspace_dashboard_projection_id"]),
+            ).fetchall()
         sections = _sections(
             rows,
             permissions=frozenset(actor.permission_codes),
@@ -669,7 +692,7 @@ def list_workspace_approvals(
         source_domain,
         limit,
         domains=frozenset(
-            ("budget", "session_risk", "billing", "privacy", "compliance", "security")
+            ("budget", "session_risk", "mcp", "billing", "privacy", "compliance", "security")
         ),
         error_code="workspace_session.request_invalid",
     )

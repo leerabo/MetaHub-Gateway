@@ -55,10 +55,12 @@ const ORGANIZATION_HIDDEN_ROUTES = new Set([
 ]);
 
 // The organization console uses explicit pages for usage, providers, models and
-// members. The experimental natural-language assistant is retired from this
-// surface; keeping its registry entry preserves old API snapshots and tests.
+// members. Incomplete workflows stay out of the human-facing surface while
+// registry entries remain compatible with existing API snapshots.
 const RETIRED_WORKSPACE_ROUTES = new Set([
   "workspace.home.assistant",
+  // 尚未接通申请、审批和结果生效流程，不展示空的“审批中心”。
+  "workspace.home.approvals",
 ]);
 
 const ROUTE_ROWS = [

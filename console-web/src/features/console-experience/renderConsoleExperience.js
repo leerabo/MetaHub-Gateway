@@ -211,11 +211,14 @@ function renderAssistant(state, domainLabel, domain, resolveCitationNavigation =
 function renderApprovals(state, domainLabel) {
   const items = state?.approvals?.items ?? [];
   const filters = state?.approvalFilters ?? {};
+  const workspace = domainLabel !== "平台";
   return `
     <header class="console-experience-heading">
-      <div><p>${escapeHtml(domainLabel)}审批域</p><h1>${escapeHtml(domainLabel)}审批队列</h1></div>
+      <div>${workspace ? "<p>系统生成的审批记录</p>" : `<p>${escapeHtml(domainLabel)}事务</p><h1>${escapeHtml(domainLabel)}审批队列</h1>`}</div>
       <button type="button" data-console-experience-action="refresh">刷新</button>
     </header>
+    ${workspace ? `<p class="console-experience-help">只有受信服务触发预算解封、会话风险处置等操作时，系统才会生成记录。
+      目前没有员工手动发起申请的入口；此页仅查看状态，暂不提供同意或驳回操作。</p>` : ""}
     ${stateBlock(state?.status, state?.error)}
     <form class="console-experience-filter" data-console-experience-approval-filter>
       <label><span>状态</span><select name="status">
@@ -224,8 +227,11 @@ function renderApprovals(state, domainLabel) {
       <label><span>风险</span><select name="risk">
         ${options([["", "全部"], ["standard", "标准"], ["high", "高"], ["critical", "关键"]], filters.risk)}
       </select></label>
-      <label><span>来源域</span><input name="sourceDomain" maxlength="80"
-        value="${escapeAttribute(filters.sourceDomain ?? "")}" /></label>
+      <label><span>事项类型</span><select name="sourceDomain">
+        ${options(workspace
+          ? [["", "全部"], ["budget", "预算解封"], ["session_risk", "会话风险"], ["mcp", "MCP 工具调用"], ["billing", "账务"], ["privacy", "隐私"], ["compliance", "合规"], ["security", "安全"]]
+          : [["", "全部"]], filters.sourceDomain)}
+      </select></label>
       <button type="submit" ${state?.busy ? "disabled" : ""}>应用筛选</button>
     </form>
     <div class="console-experience-table-wrap">
@@ -233,13 +239,15 @@ function renderApprovals(state, domainLabel) {
         <thead><tr><th>事项</th><th>来源</th><th>风险</th><th>状态</th><th>截止时间</th></tr></thead>
         <tbody>${items.map((item) => `
           <tr>
-            <td><strong>${escapeHtml(label(item.summary_code))}</strong><small>${escapeHtml(label(item.decision_contract_code))}</small></td>
-            <td>${escapeHtml(label(item.source_domain))}<small>${escapeHtml(label(item.source_type))} · r${Number(item.source_revision)}</small></td>
+            <td><strong>${escapeHtml(approvalItemTitle(item))}</strong><small>${escapeHtml(approvalActionLabel(item.decision_contract_code))}</small></td>
+            <td>${escapeHtml(approvalSourceLabel(item.source_domain))}</td>
             <td><span class="console-experience-risk is-${escapeAttribute(item.risk_band)}">${riskLabel(item.risk_band)}</span></td>
             <td>${approvalStatus(item.status)}</td>
             <td>${formatTime(item.deadline_at)}</td>
           </tr>
-        `).join("") || '<tr><td colspan="5">当前筛选条件下没有审批事项。</td></tr>'}</tbody>
+        `).join("") || `<tr><td colspan="5">${workspace
+          ? "当前没有符合条件的记录。系统触发需要确认的风险操作后，记录会显示在这里。"
+          : "当前筛选条件下没有审批事项。"}</td></tr>`}</tbody>
       </table>
     </div>
     <div class="console-experience-pagination">
@@ -250,6 +258,22 @@ function renderApprovals(state, domainLabel) {
         ${state?.canNextApprovals ? "" : "disabled"} aria-label="下一页">&rarr;</button>
     </div>
   `;
+}
+
+function approvalSourceLabel(value) {
+  return ({ budget: "预算", session_risk: "会话风险", mcp: "MCP 工具", billing: "账务",
+    privacy: "隐私", compliance: "合规", security: "安全" })[value] ?? "其他事项";
+}
+function approvalItemTitle(item) {
+  const base = ({ budget: "预算解封", session_risk: "会话风险处置", mcp: "MCP 工具调用" })[item.source_domain]
+    ?? approvalSourceLabel(item.source_domain);
+  return `${base} · ${approvalStatus(item.status)}`;
+}
+function approvalActionLabel(value) {
+  return ({ "budget_block_release.release": "解除预算阻断", "mcp_tool.invoke": "执行工具",
+    "session_risk_action.freeze_session": "冻结会话", "session_risk_action.freeze_virtual_key": "冻结调用 KEY",
+    "session_risk_action.dismiss": "忽略风险", "session_risk_action.release_session": "恢复会话",
+    "session_risk_action.release_virtual_key": "恢复调用 KEY" })[value] ?? "查看处理状态";
 }
 
 function renderDeployments(state) {

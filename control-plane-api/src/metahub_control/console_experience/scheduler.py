@@ -10,7 +10,8 @@ import logging
 import sqlite3
 from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
+from decimal import Decimal
 from uuid import uuid4
 
 from fastapi import FastAPI
@@ -694,12 +695,41 @@ def _platform_dashboard_metrics(connection: sqlite3.Connection) -> list[dict[str
 def _workspace_dashboard_metrics(
     connection: sqlite3.Connection, workspace_id: str, tenant_id: str
 ) -> list[dict[str, object]]:
+    business_day = _now().astimezone(timezone(timedelta(hours=8))).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    activity = []
+    for period, cutoff in (
+        ("day", _db_time(business_day)),
+        ("month", _db_time(business_day.replace(day=1))),
+        ("all", None),
+    ):
+        where = "tenant_id=?" + (" AND created_at>=?" if cutoff else "")
+        params = (tenant_id, cutoff) if cutoff else (tenant_id,)
+        requests = connection.execute(
+            f"""SELECT COUNT(*) AS total,
+                       COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),0) AS failed
+                FROM request_logs WHERE {where}""", params,
+        ).fetchone()
+        usage = connection.execute(
+            f"""SELECT COALESCE(SUM(total_tokens),0) AS tokens,
+                       COALESCE(SUM(cost_cny),0) AS cny,
+                       COALESCE(SUM(cost_usd),0) AS usd,
+                       COALESCE(SUM(estimated),0) AS estimated
+                FROM usage_ledger WHERE {where}""", params,
+        ).fetchone()
+        values = {"requests": requests["total"], "failures": requests["failed"],
+                  "tokens": usage["tokens"], "estimated": usage["estimated"],
+                  "cny_micros": int(Decimal(str(usage["cny"])) * 1_000_000),
+                  "usd_micros": int(Decimal(str(usage["usd"])) * 1_000_000)}
+        activity.extend(("usage_cost", f"usage_cost.{period}_{code}", value)
+                        for code, value in values.items())
     counts = (
         (
             "role_tasks",
             connection.execute(
                 """SELECT count(*) FROM workspace_memberships
-                   WHERE workspace_id=? AND tenant_id=?""",
+                   WHERE workspace_id=? AND tenant_id=? AND status='active'""",
                 (workspace_id, tenant_id),
             ).fetchone()[0],
             "overview",
@@ -761,7 +791,42 @@ def _workspace_dashboard_metrics(
             "deployment-summary",
         ),
     )
-    return [_metric(source, int(count), action) for source, count, action in counts]
+    metrics = [_metric(source, int(count), action) for source, count, action in counts]
+    revisions = {str(item["source_code"]): int(item["source_revision"]) for item in metrics}
+    for source, code, value in (
+        *activity,
+        ("role_tasks", "role_tasks.projects", connection.execute(
+            "SELECT COUNT(*) FROM projects WHERE tenant_id=? AND status!='archived'",
+            (tenant_id,),
+        ).fetchone()[0]),
+        ("role_tasks", "role_tasks.applications", connection.execute(
+            "SELECT COUNT(*) FROM applications WHERE tenant_id=? AND status!='archived'",
+            (tenant_id,),
+        ).fetchone()[0]),
+        ("provider_health", "provider_health.models", connection.execute(
+            "SELECT COUNT(*) FROM models WHERE tenant_id=?", (tenant_id,),
+        ).fetchone()[0]),
+        ("provider_health", "provider_health.active_models", connection.execute(
+            "SELECT COUNT(*) FROM models WHERE tenant_id=? AND status='active'", (tenant_id,),
+        ).fetchone()[0]),
+        ("provider_health", "provider_health.needs_check", connection.execute(
+            """SELECT COUNT(*) FROM providers WHERE tenant_id=?
+               AND status='active' AND health_status!='healthy'""",
+            (tenant_id,),
+        ).fetchone()[0]),
+    ):
+        metrics.append({
+            "source_code": source,
+            "metric_code": code,
+            "value": int(value),
+            "state_code": "ready" if value else "empty",
+            "action_code": next(
+                item["action_code"] for item in metrics if item["source_code"] == source
+            ),
+            "source_revision": revisions[source],
+            "source_watermark": f"rows:{revisions[source]}",
+        })
+    return metrics
 
 
 def _metric(source_code: str, count: int, action_code: str) -> dict[str, object]:

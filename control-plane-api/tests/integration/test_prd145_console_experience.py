@@ -401,6 +401,55 @@ def _identity_headers(
     return headers
 
 
+def test_workspace_overview_resource_and_usage_totals(monkeypatch):
+    """Calendar boundaries, currencies and tenant isolation use real ledger facts."""
+    monkeypatch.setattr(scheduler, "_now", lambda: datetime(2026, 10, 8, 1, tzinfo=UTC))
+    with closing(sqlite3.connect(":memory:")) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.executescript("""
+            CREATE TABLE workspace_memberships(workspace_id, tenant_id, status);
+            CREATE TABLE edge_deployments(workspace_id, tenant_id);
+            CREATE TABLE provider_health_probe_logs(tenant_id);
+            CREATE TABLE dlp_rules(tenant_id);
+            CREATE TABLE approval_tasks(tenant_id);
+            CREATE TABLE notifications(workspace_id, tenant_id);
+            CREATE TABLE providers(tenant_id, status, health_status);
+            CREATE TABLE projects(tenant_id, status);
+            CREATE TABLE applications(tenant_id, status);
+            CREATE TABLE models(tenant_id, status);
+            CREATE TABLE request_logs(tenant_id, created_at, status);
+            CREATE TABLE usage_ledger(
+                tenant_id, created_at, total_tokens, cost_cny, cost_usd, estimated);
+            INSERT INTO workspace_memberships VALUES
+                ('w','t','active'),('w','t','disabled'),('x','other','active');
+            INSERT INTO projects VALUES
+                ('t','active'),('t','disabled'),('t','archived'),('other','active');
+            INSERT INTO applications VALUES ('t','active'),('t','archived');
+            INSERT INTO models VALUES ('t','active'),('t','disabled'),('other','active');
+            INSERT INTO request_logs VALUES ('t','2026-10-07T16:00:00Z','success'),
+                ('t','2026-10-07T15:59:59Z','failed'),('other','2026-10-08T00:00:00Z','success');
+            INSERT INTO usage_ledger VALUES ('t','2026-10-07T16:00:00Z',100,1.25,0.01,0),
+                ('t','2026-09-30T16:00:00Z',200,2.50,0.02,1),
+                ('t','2026-09-30T15:59:59Z',300,3.75,0.03,0),
+                ('other','2026-10-08T00:00:00Z',99999,999,999,0);
+        """)
+        values = {metric["metric_code"]: metric["value"]
+                  for metric in scheduler._workspace_dashboard_metrics(connection, "w", "t")}
+    assert values["role_tasks.records"] == 1
+    assert values["role_tasks.projects"] == 2
+    assert values["role_tasks.applications"] == 1
+    assert values["provider_health.models"] == 2
+    assert values["provider_health.active_models"] == 1
+    assert values["usage_cost.day_requests"] == 1
+    assert values["usage_cost.month_failures"] == 1
+    assert values["usage_cost.day_tokens"] == 100
+    assert values["usage_cost.month_tokens"] == 300
+    assert values["usage_cost.all_tokens"] == 600
+    assert values["usage_cost.month_cny_micros"] == 3_750_000
+    assert values["usage_cost.month_usd_micros"] == 30_000
+    assert values["usage_cost.month_estimated"] == 1
+
+
 @pytest.mark.anyio
 async def test_domain_overviews_assistants_and_credential_isolation(
     monkeypatch: pytest.MonkeyPatch, runtime
@@ -426,13 +475,25 @@ async def test_domain_overviews_assistants_and_credential_isolation(
 
         owner_sections = {section["source_code"] for section in workspace.json()["sections"]}
         assert "role_tasks" in owner_sections
+        owner_metrics = {
+            metric["metric_code"]
+            for section in workspace.json()["sections"]
+            for metric in section["metrics"]
+        }
+        assert {"usage_cost.day_requests", "usage_cost.month_tokens",
+                "usage_cost.all_tokens", "usage_cost.month_cny_micros",
+                "usage_cost.month_usd_micros", "role_tasks.projects",
+                "role_tasks.applications", "provider_health.models",
+                "provider_health.needs_check"} <= owner_metrics
 
         runtime["workspace"] = replace(runtime["workspace"], membership_role="viewer")
         viewer_workspace = await client.get(
             "/workspace/overview", headers=_workspace_headers(runtime)
         )
         assert viewer_workspace.status_code == 200, viewer_workspace.text
-        viewer_sections = {section["source_code"] for section in viewer_workspace.json()["sections"]}
+        viewer_sections = {
+            section["source_code"] for section in viewer_workspace.json()["sections"]
+        }
         assert "role_tasks" not in viewer_sections
         runtime["workspace"] = replace(runtime["workspace"], membership_role="owner")
 
