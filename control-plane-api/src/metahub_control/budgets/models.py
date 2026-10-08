@@ -71,6 +71,7 @@ class BudgetStatusInfo(BaseModel):
     budget_scope: BudgetScopeInfo
     budget_date: str
     budget_period: Literal["day", "month", "year"] = "day"
+    effective_from_utc: datetime | None = None
     ledger_spent_cny: str
     reserved_cny: str
     effective_spend_cny: str
@@ -127,6 +128,7 @@ class BudgetRuleInfo(BaseModel):
     name: str
     daily_budget_cny: str
     budget_period: Literal["day", "month", "year"] = "day"
+    effective_from_utc: datetime | None = None
     warning_threshold_percent: int
     exhausted_threshold_percent: int
     exhausted_action: str

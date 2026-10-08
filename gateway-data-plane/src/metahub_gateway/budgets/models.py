@@ -28,6 +28,7 @@ class BudgetRule:
     exhausted_action: str
     environment_id: str = ""
     budget_period: str = "day"
+    effective_from_utc: str | None = None
 
 
 @dataclass(frozen=True)

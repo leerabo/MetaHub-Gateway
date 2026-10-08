@@ -227,6 +227,37 @@ test("renderBudgetPanel shows status cards rules and admin form", () => {
   assert.doesNotMatch(html, /tenant_id/);
 });
 
+test("renderBudgetPanel shows separate daily and monthly limits with partial start", () => {
+  const daily = { ...budgetRulesPayload.budget_rules[0].today_status, budget_period: "day" };
+  const monthly = {
+    ...daily,
+    budget_rule_id: "br_month",
+    budget_period: "month",
+    effective_from_utc: "2026-07-09T09:00:00Z",
+    budget_cny: "500",
+  };
+  const scope = {
+    scope_type: "virtual_key", scope_id: "vk_1", scope_label: "生产 Key",
+  };
+  const html = renderBudgetPanel({
+    state: "ok",
+    rules: { budget_rules: [budgetRulesPayload.budget_rules[0]] },
+    status: {
+      budget_date: "2026-07-09",
+      statuses: [daily, monthly],
+      aggregate: {
+        aggregate_status: "threshold_reached", effective_action: "warn",
+        effective_remaining_cny: "18", limiting_scope: scope,
+        scope_chain: [scope],
+      },
+    },
+  }, budgetWriterContext(), virtualKeysState, projectState);
+  assert.match(html, /调用 KEY · 生产 Key · 每日/);
+  assert.match(html, /调用 KEY · 生产 Key · 每月/);
+  assert.match(html, /此前价格无法确认的调用未计入此规则/);
+  assert.equal((html.match(/class="budget-chain-card"/g) ?? []).length, 2);
+});
+
 test("renderBudgetPanel is read only after write revocation and hidden without read permission", () => {
   const readerHtml = renderBudgetPanel(
     {

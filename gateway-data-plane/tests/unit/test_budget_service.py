@@ -11,9 +11,10 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from metahub_gateway.budgets.models import BudgetDecision, EstimatedRequestCost
+from metahub_gateway.budgets.models import BudgetDecision, BudgetRule, EstimatedRequestCost
 from metahub_gateway.budgets.service import (
     _budget_window,
+    _rule_effective_start,
     _remove_replaceable_request_reservations,
     _validated_trusted_estimate,
     apply_budget_decision,
@@ -54,6 +55,19 @@ def test_budget_window_uses_shanghai_calendar_month_and_year() -> None:
     assert _budget_window(after_new_year, period="year") == (
         "2026-01-01", "2025-12-31T16:00:00Z", "2026-12-31T16:00:00Z",
     )
+
+
+def test_budget_partial_first_month_returns_to_calendar_window_next_month() -> None:
+    rule = BudgetRule(
+        budget_rule_id="br_month", tenant_id="ten_1", scope_type="tenant", scope_id="ten_1",
+        daily_budget_cny=Decimal("100"), warning_threshold_percent=80,
+        exhausted_action="block", budget_period="month",
+        effective_from_utc="2026-10-08T03:00:00Z",
+    )
+    october_start = _budget_window(datetime(2026, 10, 8, 4, tzinfo=UTC), period="month")[1]
+    november_start = _budget_window(datetime(2026, 11, 2, 4, tzinfo=UTC), period="month")[1]
+    assert _rule_effective_start(rule, october_start) == "2026-10-08T03:00:00Z"
+    assert _rule_effective_start(rule, november_start) == november_start
 
 
 def test_apply_budget_decision_enriches_request_log_context() -> None:

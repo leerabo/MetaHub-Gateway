@@ -1411,6 +1411,8 @@ def _create_budget_holds(
         try:
             period = rule["budget_period"] if "budget_period" in rule.keys() else "day"
             _same_day, period_start, period_end = _budget_window(created, period=period)
+            if "effective_from_utc" in rule.keys() and rule["effective_from_utc"]:
+                period_start = max(period_start, str(rule["effective_from_utc"]))
             amounts = load_budget_spend_amounts(
                 connection,
                 tenant_id=tenant_id,

@@ -288,6 +288,7 @@ async def test_budget_calendar_periods_and_employee_search(
         daily = await set_period("day")
         monthly = await set_period("month")
         yearly = await set_period("year")
+        listed = await client.get("/budgets", headers=headers)
         searched = await client.get("/budget-people?search=Finance&offset=0", headers=headers)
         all_people = await client.get("/budget-people?offset=0", headers=headers)
 
@@ -295,6 +296,9 @@ async def test_budget_calendar_periods_and_employee_search(
     assert monthly["today_status"]["spent_cny"] == "117"
     assert yearly["today_status"]["spent_cny"] == "128"
     assert yearly["budget_period"] == "year"
+    assert listed.status_code == 200, listed.text
+    assert {rule["budget_period"] for rule in listed.json()["budget_rules"]} == {"day", "month", "year"}
+    assert len({rule["budget_rule_id"] for rule in listed.json()["budget_rules"]}) == 3
     assert searched.status_code == 200, searched.text
     assert [person["email"] for person in searched.json()["people"]] == ["finance@example.com"]
     assert all_people.status_code == 200, all_people.text

@@ -199,6 +199,7 @@ def enforce_budget_guard(
         created_reservation_rule_ids: set[str] = set()
         for rule in rules:
             _same_day, start_utc, end_utc = _budget_window(window_now, period=rule.budget_period)
+            start_utc = _rule_effective_start(rule, start_utc)
             decision = _evaluate_rule(
                 connection,
                 rule,
@@ -534,6 +535,7 @@ def load_policy_budget_remaining(
         remaining_by_rule: list[int] = []
         for rule in rules:
             budget_date, start_utc, end_utc = _budget_window(window_now, period=rule.budget_period)
+            start_utc = _rule_effective_start(rule, start_utc)
             spent = _load_spend_amounts(
                 connection, rule, start_utc, end_utc, budget_date
             ).effective_cny_micros
@@ -744,6 +746,7 @@ def _load_budget_rules(
             warning_threshold_percent=int(row["warning_threshold_percent"]),
             exhausted_action=row["exhausted_action"],
             budget_period=row["budget_period"] if "budget_period" in row.keys() else "day",
+            effective_from_utc=row["effective_from_utc"] if "effective_from_utc" in row.keys() else None,
         )
         for row in rows
     ]
@@ -1517,6 +1520,12 @@ def _budget_window(now: datetime | None = None, *, period: str = "day") -> tuple
     else:
         raise BudgetSpendUnavailableError("budget_period.invalid")
     return budget_date, _to_db_time(local_start), _to_db_time(local_end)
+
+
+def _rule_effective_start(rule: BudgetRule, calendar_start: str) -> str:
+    """新规则首个不完整周期从保存瞬间算起，以后回归自然周期。"""
+
+    return max(calendar_start, rule.effective_from_utc) if rule.effective_from_utc else calendar_start
 
 
 def _decimal_value(value: object) -> Decimal:

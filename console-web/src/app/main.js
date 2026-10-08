@@ -5178,20 +5178,21 @@ function bindAuthenticatedEvents(consoleShellState) {
     const scopeType = String(data.get("scopeType") ?? "");
     const scopeId = scopeType === "tenant" ? "" : String(data.get("scopeId") ?? "");
     const environmentId = String(data.get("environmentId") ?? "");
-    const exists = budgetRuleAlreadyExists(environmentId, scopeType, scopeId);
+    const budgetPeriod = String(data.get("budgetPeriod") ?? "day");
+    const exists = budgetRuleAlreadyExists(environmentId, scopeType, scopeId, budgetPeriod);
     const writeRule = exists ? updateBudgetRule : createBudgetRule;
     button.disabled = true;
     budgetActionError = null;
     budgetFeedback = exists ? "预算更新中" : "预算创建中";
     try {
-      await resourceMutationRequest(ticket, writeRule, {
+      const saved = await resourceMutationRequest(ticket, writeRule, {
         controlApiUrl,
         scopeType,
         scopeId,
         environmentId,
         name: String(data.get("name") ?? ""),
         dailyBudgetCny: String(data.get("dailyBudgetCny") ?? ""),
-        budgetPeriod: String(data.get("budgetPeriod") ?? "day"),
+        budgetPeriod,
         warningThresholdPercent: optionalNumber(data.get("warningThresholdPercent"), 80),
         exhaustedAction: String(data.get("exhaustedAction") ?? "alert_only"),
         status: String(data.get("status") ?? "active"),
@@ -5199,7 +5200,9 @@ function bindAuthenticatedEvents(consoleShellState) {
       if (!isCurrentBudgetMutation(operation)) {
         return;
       }
-      budgetFeedback = exists ? "预算已更新" : "预算已创建";
+      budgetFeedback = saved?.budget_rule?.effective_from_utc
+        ? "预算已保存；本周期从保存时起算，之前价格未知的调用不计入本规则"
+        : exists ? "预算已更新" : "预算已创建";
       budgetMutationLifecycle.finish(operation);
       await refreshResourceMutation(ticket);
     } catch (error) {
@@ -17740,10 +17743,11 @@ function isCurrentBudgetMutation(operation) {
  * 该判断只决定控制台使用 POST 还是兼容 PATCH；并发冲突和最终归属仍由后端 UNIQUE、
  * tenant_id 与权威资源绑定校验。
  */
-function budgetRuleAlreadyExists(environmentId, scopeType, scopeId) {
+function budgetRuleAlreadyExists(environmentId, scopeType, scopeId, budgetPeriod = "day") {
   return budgetRulesSnapshot.some((rule) => (
     rule.environment_id === environmentId
     && rule.scope_type === scopeType
+    && (rule.budget_period ?? "day") === budgetPeriod
     && (scopeType === "tenant" || rule.scope_id === scopeId)
   ));
 }

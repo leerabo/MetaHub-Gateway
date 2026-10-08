@@ -379,6 +379,7 @@ def _write_budget_rule(
     """执行 POST/PATCH 共用写事务，并把所有外部副作用延后到 commit 成功后。"""
 
     scope_type = _normalize_required_scope_type(payload.scope_type)
+    budget_period = payload.budget_period or "day"
     connection = _connect(config)
     identity: tuple[str, str, str] | None = None
     released_blocks: list[BudgetBlockRecord] = []
@@ -423,6 +424,7 @@ def _write_budget_rule(
             environment_binding.environment_id,
             scope_type,
             scope_id,
+            budget_period,
         )
         if create_only and existing is not None:
             # POST 不具有 upsert 语义，不能让并发或误提交覆盖既有财务规则。
@@ -470,6 +472,7 @@ def _write_budget_rule(
                     environment_binding.environment_id,
                     scope_type,
                     scope_id,
+                    budget_period,
                 ]
             )
             connection.execute(
@@ -477,6 +480,7 @@ def _write_budget_rule(
                 UPDATE budget_rules
                 SET {', '.join(updates)}
                 WHERE tenant_id=? AND environment_id=? AND scope_type=? AND scope_id=?
+                  AND budget_period=?
                 """,
                 values,
             )
@@ -486,20 +490,24 @@ def _write_budget_rule(
             environment_binding.environment_id,
             scope_type,
             scope_id,
+            budget_period,
         )
         if row is None:
             # 写后回读缺失表示事务事实不完整，必须回滚且禁止产生成功副作用。
             raise ApiError("budget.status_unavailable")
-        released_blocks, release_reason = _reconcile_blocks_after_rule_update(
-            connection,
-            context,
-            row,
-            provided,
-            previous_budget=previous_budget,
-            previous_period=previous_period,
-            request_id=request_id,
-            trace_id=trace_id,
-        )
+        if existing is None:
+            row = _set_partial_period_start_if_needed(connection, row, now)
+        else:
+            released_blocks, release_reason = _reconcile_blocks_after_rule_update(
+                connection,
+                context,
+                row,
+                provided,
+                previous_budget=previous_budget,
+                previous_period=previous_period,
+                request_id=request_id,
+                trace_id=trace_id,
+            )
         audit_record = record_audit_log(
             connection,
             context,
@@ -531,6 +539,7 @@ def _write_budget_rule(
                     environment_id,
                     conflict_scope_type,
                     conflict_scope_id,
+                    budget_period,
                 )
                 connection.rollback()
                 recovery.begin()
@@ -772,6 +781,7 @@ def _budget_audit_summary(row: sqlite3.Row) -> dict[str, object]:
         "name": row["name"],
         "daily_budget_cny": _money_text(_decimal_value(row["daily_budget_cny"])),
         "budget_period": _row_budget_period(row),
+        "effective_from_utc": row["effective_from_utc"] if "effective_from_utc" in row.keys() else None,
         "warning_threshold_percent": int(row["warning_threshold_percent"]),
         "exhausted_action": row["exhausted_action"],
         "status": row["status"],
@@ -1063,8 +1073,9 @@ def _load_existing_rule(
     environment_id: str,
     scope_type: str,
     scope_id: str,
+    budget_period: str,
 ) -> sqlite3.Row | None:
-    """读取当前租户某个 scope 的预算规则，供 upsert 判断创建或更新。"""
+    """按 scope 和周期读取规则；日、月、年是三条独立的预算上限。"""
 
     return connection.execute(
         """
@@ -1072,9 +1083,34 @@ def _load_existing_rule(
         FROM budget_rules br
         JOIN environments e ON e.tenant_id=br.tenant_id AND e.environment_id=br.environment_id
         WHERE br.tenant_id=? AND br.environment_id=? AND br.scope_type=? AND br.scope_id=?
+          AND br.budget_period=?
         """,
-        (tenant_id, environment_id, scope_type, scope_id),
+        (tenant_id, environment_id, scope_type, scope_id, budget_period),
     ).fetchone()
+
+
+def _set_partial_period_start_if_needed(
+    connection: sqlite3.Connection, row: sqlite3.Row, now: str
+) -> sqlite3.Row:
+    """历史价格无法确认时，新月/年规则从保存瞬间起算并明确留痕。"""
+
+    if _row_budget_period(row) == "day":
+        return row
+    try:
+        _budget_status_info(connection, row)
+        return row
+    except BudgetSpendUnavailableError as exc:
+        if str(exc) != "budget_spend.usage_evidence_unavailable":
+            raise
+    connection.execute(
+        "UPDATE budget_rules SET effective_from_utc=? WHERE budget_rule_id=?",
+        (now, row["budget_rule_id"]),
+    )
+    refreshed = _load_rule_by_id(connection, str(row["tenant_id"]), str(row["budget_rule_id"]))
+    if refreshed is None:
+        raise BudgetSpendUnavailableError("budget_rule.partial_start_unavailable")
+    _budget_status_info(connection, refreshed)
+    return refreshed
 
 
 def _load_rule_by_id(connection: sqlite3.Connection, tenant_id: str, budget_rule_id: str) -> sqlite3.Row | None:
@@ -1108,7 +1144,9 @@ def _new_rule_values(
         # 新规则必须明确预算金额，避免创建出永远不会触发或无法解释的空预算。
         raise ApiError("budget.rule_invalid")
     budget = _normalize_money(payload.daily_budget_cny)
-    name = _normalize_name(payload.name) if "name" in provided else _default_rule_name(connection, context.user.tenant_id, scope_type, scope_id)
+    name = _normalize_name(payload.name) if "name" in provided else _default_rule_name(
+        connection, context.user.tenant_id, scope_type, scope_id, payload.budget_period or "day"
+    )
     threshold = _normalize_warning_threshold(
         payload.warning_threshold_percent if "warning_threshold_percent" in provided else DEFAULT_WARNING_THRESHOLD
     )
@@ -1268,26 +1306,28 @@ def _default_rule_name(
     tenant_id: str,
     scope_type: str,
     scope_id: str,
+    period: str = "day",
 ) -> str:
     """根据预算维度生成默认规则名，保证新规则在控制台可读。"""
 
     # 租户判断决定数据隔离边界，不能跨租户复用或返回对象。
+    suffix = {"day": "日预算", "month": "月预算", "year": "年预算"}[period]
     if scope_type == "tenant":
-        return "租户日预算"
+        return f"租户{suffix}"
     if scope_type == "project":
         row = connection.execute("SELECT name FROM projects WHERE tenant_id=? AND project_id=?", (tenant_id, scope_id)).fetchone()
-        return row["name"] if row else scope_id
+        return f"{row['name'] if row else scope_id} {suffix}"
     if scope_type == "application":
         row = connection.execute("SELECT a.name, p.name AS project_name FROM applications a LEFT JOIN projects p ON p.tenant_id=a.tenant_id AND p.project_id=a.project_id WHERE a.tenant_id=? AND a.application_id=?", (tenant_id, scope_id)).fetchone()
-        return f"{row['project_name']} / {row['name']}" if row else scope_id
+        return f"{row['project_name']} / {row['name']} {suffix}" if row else f"{scope_id} {suffix}"
     row = connection.execute(
         "SELECT name, key_prefix FROM virtual_keys WHERE tenant_id=? AND virtual_key_id=?",
         (tenant_id, scope_id),
     ).fetchone()
     if row is None:
         # 关键控制流影响权限、审计或错误归因，必须保留统一错误语义。
-        return "Virtual Key日预算"
-    return f"{row['name']} 日预算"
+        return f"Virtual Key{suffix}"
+    return f"{row['name']} {suffix}"
 
 
 def _budget_rule_info(connection: sqlite3.Connection, row: sqlite3.Row) -> BudgetRuleInfo:
@@ -1309,6 +1349,7 @@ def _budget_rule_info(connection: sqlite3.Connection, row: sqlite3.Row) -> Budge
         name=row["name"],
         daily_budget_cny=_money_text(_decimal_value(row["daily_budget_cny"])),
         budget_period=_row_budget_period(row),
+        effective_from_utc=_parse_db_time(row["effective_from_utc"]) if "effective_from_utc" in row.keys() and row["effective_from_utc"] else None,
         warning_threshold_percent=int(row["warning_threshold_percent"]),
         exhausted_threshold_percent=int(row["exhausted_threshold_percent"]),
         exhausted_action=row["exhausted_action"],
@@ -1334,6 +1375,7 @@ def _budget_status_info(
 
     period = _row_budget_period(row)
     budget_date, start_utc, end_utc = _budget_window(period=period)
+    start_utc = _rule_effective_start(row, start_utc)
     amounts = load_budget_spend_amounts(
         connection,
         tenant_id=str(row["tenant_id"]),
@@ -1378,6 +1420,7 @@ def _budget_status_info(
         budget_scope=budget_scope,
         budget_date=budget_date,
         budget_period=period,
+        effective_from_utc=_parse_db_time(row["effective_from_utc"]) if "effective_from_utc" in row.keys() and row["effective_from_utc"] else None,
         ledger_spent_cny=_micros_text(amounts.posted_cny_micros),
         reserved_cny=_micros_text(amounts.reserved_cny_micros),
         effective_spend_cny=_micros_text(amounts.effective_cny_micros),
@@ -1604,6 +1647,7 @@ def _load_spent_cny(
     """兼容阻断恢复调用：只返回正式 Usage Charge 金额，不包含 reservation。"""
 
     budget_date, _current_start, _current_end = _budget_window(period=_row_budget_period(row))
+    start_utc = _rule_effective_start(row, start_utc)
     amounts = load_budget_spend_amounts(
         connection,
         tenant_id=str(row["tenant_id"]),
@@ -1784,6 +1828,13 @@ def _row_budget_period(row: sqlite3.Row | None) -> str:
     if period not in {"day", "month", "year"}:
         raise BudgetSpendUnavailableError("budget_period.invalid")
     return str(period)
+
+
+def _rule_effective_start(row: sqlite3.Row, calendar_start: str) -> str:
+    """首个不完整周期从规则启用时起算，后续自然周期自动恢复完整窗口。"""
+
+    start = row["effective_from_utc"] if "effective_from_utc" in row.keys() else None
+    return max(calendar_start, str(start)) if start else calendar_start
 
 
 def _budget_window(now: datetime | None = None, *, period: str = "day") -> tuple[str, str, str]:

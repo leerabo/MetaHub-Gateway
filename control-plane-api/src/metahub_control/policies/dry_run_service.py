@@ -1640,6 +1640,8 @@ def _load_budget_rule_facts(
     for row in rows:
         period = row["budget_period"] if "budget_period" in row.keys() else "day"
         _same_day, start_utc, end_utc = _budget_window(now, period=period)
+        if "effective_from_utc" in row.keys() and row["effective_from_utc"]:
+            start_utc = max(start_utc, str(row["effective_from_utc"]))
         scope_type = str(row["scope_type"])
         scope_id = str(row["scope_id"])
         # 共享汇总器同时校验 tenant、Environment、scope、上海业务日和正式账本证据；

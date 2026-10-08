@@ -274,7 +274,7 @@ function renderScopeChain(statuses, aggregate, selectedPerson) {
   return `
     <section class="budget-chain-section" aria-label="适用的预算限制">
       <h3>${selectedPerson ? "这次调用会受到哪些预算限制" : "组织预算限制"}</h3>
-      <p>从组织到调用凭证逐级检查；任一级设置为“耗尽后阻断”且额度已用完，请求就会被阻断。各层金额可能覆盖同一笔调用，不能相加。</p>
+      <p>从组织到调用凭证逐级检查；同一层可同时设置日、月、年上限。任一上限设置为“耗尽后阻断”且已用完，请求就会被阻断。各层金额可能覆盖同一笔调用，不能相加。</p>
       <ol class="budget-chain-cards">
         ${scopeChain.map((scope) => renderScopeChainRow(scope, statuses)).join("")}
       </ol>
@@ -286,12 +286,12 @@ function renderScopeChain(statuses, aggregate, selectedPerson) {
  * 渲染一层预算状态；无规则的权威 scope 仍保留在链中并标记“未配置”。
  */
 function renderScopeChainRow(scope, statuses) {
-  const item = statuses.find((status) => (
+  const items = statuses.filter((status) => (
     status.scope_type === scope.scope_type && status.scope_id === scope.scope_id
   ));
-  return `
+  return (items.length ? items : [null]).map((item) => `
     <li class="budget-chain-card" data-budget-scope-id="${escapeAttribute(scope.budget_scope_id ?? scope.scope_id ?? "")}">
-      <div class="budget-chain-card-heading"><strong>${escapeHtml(SCOPE_LABELS[scope.scope_type] ?? scope.scope_type)} · ${escapeHtml(scopeDisplayName(scope))}</strong>
+      <div class="budget-chain-card-heading"><strong>${escapeHtml(SCOPE_LABELS[scope.scope_type] ?? scope.scope_type)} · ${escapeHtml(scopeDisplayName(scope))}${item ? ` · ${escapeHtml(PERIOD_LABELS[item.budget_period] ?? "每日")}` : ""}</strong>
         <mark class="status-mark status-${escapeAttribute(item?.status ?? "unconfigured")}">
           ${escapeHtml(STATUS_LABELS[item?.status] ?? item?.status ?? "未配置")}
         </mark>
@@ -301,10 +301,10 @@ function renderScopeChainRow(scope, statuses) {
         <span>预算：<strong>${escapeHtml(item.budget_cny)} CNY</strong></span>
         <span>已用：<strong>${escapeHtml(item.effective_spend_cny ?? item.spent_cny)} CNY</strong></span>
         <span>剩余：<strong>${escapeHtml(item.effective_remaining_cny ?? item.estimated_remaining_cny)} CNY</strong></span>
-      </div><p>已用金额含正式入账 ${escapeHtml(item.ledger_spent_cny ?? item.spent_cny)} CNY 和待结算预留 ${escapeHtml(item.reserved_cny ?? "0")} CNY；本层耗尽后${escapeHtml(item.exhausted_action === "block" ? "阻断" : "仅告警")}。</p>${renderBlockNotice(item)}`
+      </div><p>已用金额含正式入账 ${escapeHtml(item.ledger_spent_cny ?? item.spent_cny)} CNY 和待结算预留 ${escapeHtml(item.reserved_cny ?? "0")} CNY；本层耗尽后${escapeHtml(item.exhausted_action === "block" ? "阻断" : "仅告警")}。</p>${item.effective_from_utc ? `<p class="budget-partial-period">本周期从 ${escapeHtml(formatDateTime(item.effective_from_utc))} 起算；此前价格无法确认的调用未计入此规则。</p>` : ""}${renderBlockNotice(item)}`
       : "<p>本层未设预算，不单独限制调用。</p>"}
     </li>
-  `;
+  `).join("");
 }
 
 /**
@@ -363,7 +363,7 @@ function renderBudgetForm(selectedPerson, projectState, environmentState, rules)
   return `
     <details class="budget-create-disclosure">
       <summary>新增或修改成本预算</summary>
-      <p>按运行环境和对象设置一个预算周期。员工可能有多把调用凭证；当前单把凭证预算不等于该员工的总额限制，请先在上方查找员工并选择凭证。</p>
+      <p>同一对象可以分别设置日、月、年预算。若本周期较早的调用缺少可信价格，新建月或年预算将从保存时起算，并在规则中标明。员工可能有多把调用凭证；单把凭证预算不等于员工总额限制。</p>
       <form class="budget-rule-form" id="budget-rule-form">
       <label>
         <span>环境</span>
@@ -429,7 +429,7 @@ function renderBudgetForm(selectedPerson, projectState, environmentState, rules)
       </label>
       <div class="budget-actions">
         <button type="submit" ${environments.length ? "" : "disabled"}>保存预算</button>
-        <span>${escapeHtml(rules.length ? "已配置规则可直接更新" : "当前没有预算规则")}</span>
+        <span>不同周期分别创建；同一对象、同一周期再次保存会更新该规则。</span>
       </div>
       </form>
     </details>
@@ -478,7 +478,7 @@ function renderRuleRow(item, canWrite) {
         <strong>${escapeHtml(item.name)}</strong>
       </span>
       <span class="budget-rule-scope" data-label="维度">${escapeHtml(item.environment_name ?? item.environment ?? "-")} · ${escapeHtml(cleanScopeLabel(item.scope_label ?? item.scope_id))}</span>
-      <span data-label="周期预算">${escapeHtml(PERIOD_LABELS[item.budget_period] ?? "每日")} ${escapeHtml(item.daily_budget_cny)} CNY</span>
+      <span data-label="周期预算">${escapeHtml(PERIOD_LABELS[item.budget_period] ?? "每日")} ${escapeHtml(item.daily_budget_cny)} CNY${item.effective_from_utc ? `<small>本周期从 ${escapeHtml(formatDateTime(item.effective_from_utc))} 起算</small>` : ""}</span>
       <span data-label="告警">${escapeHtml(item.warning_threshold_percent)}%</span>
       <span class="budget-mode-cell" data-label="100% 动作">
         ${canWrite ? renderModeControl(item) : escapeHtml(ACTION_LABELS[item.exhausted_action] ?? item.exhausted_action)}
