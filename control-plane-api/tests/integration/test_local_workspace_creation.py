@@ -203,7 +203,7 @@ async def test_local_consent_never_bypasses_current_environment_or_policy(
             app.state.config = app.state.config.model_copy(update={"environment": restriction})
         result = await client.post(
             "/workspaces",
-            json=BODY,
+            json={**BODY, "local_consent_version": workspace_service.LOCAL_CREATION_CONSENT_VERSION},
             headers={
                 **_csrf(client, GLOBAL_CSRF_COOKIE),
                 "Idempotency-Key": "local-workspace-rejected-001",
@@ -225,6 +225,72 @@ async def test_local_consent_never_bypasses_current_environment_or_policy(
             ).fetchone()[0]
             == 0
         )
+    finally:
+        connection.close()
+
+
+@pytest.mark.anyio
+async def test_existing_unverified_account_can_explicitly_create_in_local_trial(
+    monkeypatch, tmp_path, migrated_database,
+):
+    database, app = _dev_app(monkeypatch, tmp_path, migrated_database)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://testserver") as client:
+        await _signup(client, monkeypatch)
+        connection = connect_database(database)
+        # Build a legacy-style account without fabricating or deleting proof.
+        connection.execute("INSERT INTO global_accounts(account_id,email_normalized,display_name,status,"
+            "login_enabled,credential_revision,session_revision,mfa_state,failed_login_count,created_at,updated_at) "
+            "SELECT 'gac_1234567890abcdef1234567890abcdef','legacy-employee@example.test','Employee',status,"
+            "login_enabled,credential_revision,session_revision,mfa_state,failed_login_count,created_at,updated_at "
+            "FROM global_accounts WHERE email_normalized='organization-owner@example.test'")
+        connection.execute("INSERT INTO account_credentials(credential_id,account_id,credential_type,algorithm,"
+            "secret_hash,status,version,created_at,updated_at) "
+            "SELECT 'acr_1234567890abcdef1234567890abcdef','gac_1234567890abcdef1234567890abcdef',"
+            "credential_type,algorithm,secret_hash,status,version,created_at,updated_at FROM account_credentials "
+            "WHERE account_id=(SELECT account_id FROM global_accounts WHERE email_normalized='organization-owner@example.test')")
+        connection.commit()
+        connection.close()
+        login = await client.post('/identity/login', json={
+            'email': 'legacy-employee@example.test', 'password': 'OrganizationTrial!2026',
+        }, headers={'Origin': ORIGIN})
+        assert login.status_code == 200, login.text
+        headers = {**_csrf(client, GLOBAL_CSRF_COOKIE), "Idempotency-Key": "existing-local-create-001"}
+        denied = await client.post("/workspaces", json=BODY, headers=headers)
+        assert denied.status_code == 403 and denied.json()["code"] == "workspace.account_unverified"
+        body = {**BODY, "local_consent_version": workspace_service.LOCAL_CREATION_CONSENT_VERSION}
+        no_csrf = await client.post("/workspaces", json=body, headers={
+            "Origin": ORIGIN, "Idempotency-Key": "existing-local-no-csrf-001",
+        })
+        assert no_csrf.status_code == 403
+        bad_consent = await client.post("/workspaces", json={**body, "local_consent_version": "unknown"}, headers=headers)
+        assert bad_consent.status_code == 422
+        original_initialize = workspace_service._initialize_operational_state
+        def fail_initialization(*args):
+            raise ApiError("workspace.unavailable")
+        monkeypatch.setattr(workspace_service, "_initialize_operational_state", fail_initialization)
+        failed = await client.post("/workspaces", json=body, headers=headers)
+        assert failed.status_code == 503
+        connection = connect_database(database)
+        assert connection.execute("SELECT count(*) FROM local_registration_consents WHERE "
+            "account_id='gac_1234567890abcdef1234567890abcdef'").fetchone()[0] == 0
+        connection.close()
+        monkeypatch.setattr(workspace_service, "_initialize_operational_state", original_initialize)
+        created = await client.post("/workspaces", json=body, headers=headers)
+        assert created.status_code == 201, created.text
+        replay = await client.post("/workspaces", json=body, headers=headers)
+        assert replay.status_code == 201 and replay.json()["workspace"] == created.json()["workspace"]
+        workspace_id = created.json()["workspace"]["workspace_id"]
+        switched = await client.post("/identity/workspace-switches", json={"workspace_id": workspace_id},
+                                    headers=_csrf(client, GLOBAL_CSRF_COOKIE))
+        assert switched.status_code == 200
+        assert (await client.get("/workspace/session")).json()["context"]["role"] == "owner"
+    connection = connect_database(database)
+    try:
+        assert connection.execute("SELECT count(*) FROM local_registration_consents WHERE "
+            "account_id='gac_1234567890abcdef1234567890abcdef'").fetchone()[0] == 1
+        assert connection.execute("SELECT count(*) FROM local_workspace_creation_admissions").fetchone()[0] == 1
+        assert connection.execute("SELECT count(*) FROM account_verifications WHERE account_id IN "
+            "(SELECT account_id FROM local_registration_consents)").fetchone()[0] == 0
     finally:
         connection.close()
 

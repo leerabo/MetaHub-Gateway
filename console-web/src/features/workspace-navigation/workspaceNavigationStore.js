@@ -1,3 +1,5 @@
+import { isWorkspaceSetupComplete } from "../../lib/workspaceNavigation.js";
+
 function ownerKey(owner) {
   const workspaceId = String(owner?.workspaceId ?? "");
   const role = String(owner?.role ?? "");
@@ -49,6 +51,7 @@ export function createWorkspaceNavigationStore({ createIdempotencyKey } = {}) {
   let owner = null;
   let navigation = null;
   let taskHome = null;
+  let setupComplete = null;
   let advancedTools = null;
   let status = "idle";
   let error = null;
@@ -83,6 +86,7 @@ export function createWorkspaceNavigationStore({ createIdempotencyKey } = {}) {
     owner = null;
     navigation = null;
     taskHome = null;
+    setupComplete = null;
     advancedTools = null;
     pendingPreference = null;
     status = "idle";
@@ -164,6 +168,7 @@ export function createWorkspaceNavigationStore({ createIdempotencyKey } = {}) {
       return conflict();
     } else if (ticket.lane === "task-home") {
       taskHome = payload;
+      setupComplete = isWorkspaceSetupComplete(payload);
     } else if (ticket.lane === "advanced-tools") {
       advancedTools = payload;
     } else if (ticket.lane === "advanced-open") {
@@ -179,6 +184,7 @@ export function createWorkspaceNavigationStore({ createIdempotencyKey } = {}) {
   function reject(ticket, nextError) {
     if (!current(ticket)) return false;
     active.delete(ticket);
+    if (ticket.lane === "task-home") setupComplete = null;
     if (ticket.lane === "navigation" || [401, 403, 409, 412].includes(Number(nextError?.status))) {
       clearProjection();
     }
@@ -268,6 +274,7 @@ export function createWorkspaceNavigationStore({ createIdempotencyKey } = {}) {
       owner,
       navigation,
       taskHome,
+      setupComplete,
       advancedTools,
       status,
       error,
@@ -287,6 +294,7 @@ export function createWorkspaceNavigationStore({ createIdempotencyKey } = {}) {
     active.clear();
     navigation = null;
     taskHome = null;
+    setupComplete = null;
     advancedTools = null;
     generation += 1;
   }

@@ -50,7 +50,7 @@ async def post_workspace(request: Request, response: Response) -> WorkspaceRespo
         if kind.strip().lower() == "organization"
         else {"kind"}
     )
-    optional = {"region", "service_mode"}
+    optional = {"region", "service_mode", "local_consent_version"}
     if kind.strip().lower() == "organization":
         optional.add("slug")
     if not required <= set(payload) or not set(payload) <= required | optional:
@@ -64,6 +64,10 @@ async def post_workspace(request: Request, response: Response) -> WorkspaceRespo
         _required_string(payload, "service_mode", maximum=40)
         if "service_mode" in payload else None
     )
+    local_consent_version = (
+        _required_string(payload, "local_consent_version", maximum=80)
+        if "local_consent_version" in payload else None
+    )
     async with _workspace_creation_lock(request, session_token, idempotency_key):
         account_id, replay = await _run(
             probe_workspace_creation_replay,
@@ -76,6 +80,7 @@ async def post_workspace(request: Request, response: Response) -> WorkspaceRespo
             slug=slug,
             region=region,
             service_mode=service_mode,
+            local_consent_version=local_consent_version,
             request_id=_request_id(request),
             trace_id=_trace_id(request),
         )
@@ -104,6 +109,7 @@ async def post_workspace(request: Request, response: Response) -> WorkspaceRespo
             slug=slug,
             region=region,
             service_mode=service_mode,
+            local_consent_version=local_consent_version,
             request_id=_request_id(request),
             trace_id=_trace_id(request),
         )

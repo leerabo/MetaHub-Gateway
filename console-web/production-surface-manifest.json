@@ -122,6 +122,6 @@
     "/user/preferences"
   ],
   "production_dockerfile": "../infra/docker/console.Dockerfile",
-  "production_asset_set_sha256": "87a414479228fbdd82b44c3e3a0f6c01ac3e9ea6ae1e062ee92c1940714e0969",
+  "production_asset_set_sha256": "46d873ce7b948281024066eee0bac49ab2592957524f87194aa0a9c19247c4fd",
   "output_directory": "dist"
 }

@@ -61,9 +61,12 @@ export function renderConsoleShell({
   const roleCode = consoleShellState?.navigation?.role_code
     ?? consoleShellState?.workspaceContext?.role
     ?? authContext?.workspace?.role;
-  const navigationItems = navigationItemsFromState(consoleShellState).map((item) =>
-    localizeNavigationItem(item, i18n, roleCode),
-  );
+  const navigationItems = navigationItemsFromState(consoleShellState).map((item) => {
+    const localized = localizeNavigationItem(item, i18n, roleCode);
+    return item.id === "quickstart" && ["owner", "admin"].includes(roleCode)
+      && consoleShellState?.workspaceSetupComplete === true
+      ? { ...localized, sidebar_visible: false } : localized;
+  });
   const activeItem = activeNavigationItem(consoleShellState, navigationItems);
   const contentOwnsTitle = activeItem.id === "overview" && pageContentHtml?.includes('class="workspace-overview"');
   const shellCopy = workspaceRoleShellCopy(roleCode, i18n);

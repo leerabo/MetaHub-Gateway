@@ -979,6 +979,7 @@ export function createIdentityPageController({
       if (workspaceCreating || workspaceView !== "create" || !workspaceDraft) return false;
       const input = {
         kind,
+        localConsentVersion: "workspace-creation-2026-10-09",
         name: kind === "organization" ? name : undefined,
         slug: kind === "organization" ? slug : undefined,
         region,
@@ -4993,6 +4994,7 @@ function safePageError(error) {
   if (error instanceof IdentityApiError || error instanceof PlatformApiError
     || error instanceof PrivacyApiError || error instanceof ComplianceApiError) {
     const messages = {
+      "workspace.account_unverified": "此账号尚未完成邮箱验证，请先通过登录页的“忘记密码”验证邮箱，再创建组织。你在现有组织中的员工职责不影响创建自己的组织。",
       "identity.delivery_unavailable": "邮箱验证服务尚未配置，请联系平台管理员。",
       "identity.registration_invalid": "注册信息不完整或格式不正确，请检查后重试。",
       "identity.password_invalid": "密码长度须为 8 至 1024 字节。",

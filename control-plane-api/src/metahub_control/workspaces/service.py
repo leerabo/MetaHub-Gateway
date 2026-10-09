@@ -33,6 +33,7 @@ logger = logging.getLogger("metahub.control.workspaces")
 _WORKSPACE_ID_RE = re.compile(r"^wsp_[0-9a-f]{32}$")
 _SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,46}[a-z0-9])$")
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9._~-]{16,128}$")
+LOCAL_CREATION_CONSENT_VERSION = "workspace-creation-2026-10-09"
 _RESERVED_SLUGS = frozenset(
     {
         "admin",
@@ -67,6 +68,7 @@ def create_workspace(
     service_mode: str | None,
     request_id: str,
     trace_id: str,
+    local_consent_version: str | None = None,
 ) -> WorkspaceResponse:
     normalized = _normalize_create_input(
         config,
@@ -75,6 +77,7 @@ def create_workspace(
         slug=slug,
         region=region,
         service_mode=service_mode,
+        local_consent_version=local_consent_version,
     )
     if not _IDEMPOTENCY_RE.fullmatch(idempotency_key):
         raise ApiError("workspace.idempotency_invalid")
@@ -92,6 +95,7 @@ def create_workspace(
         )
         local_admission = _require_workspace_creation_identity(
             connection, config, identity.account_id,
+            local_consent_version=local_consent_version, persist=True, now=now,
         )
         existing = connection.execute(
             """
@@ -436,6 +440,7 @@ def probe_workspace_creation_replay(
     service_mode: str | None,
     request_id: str,
     trace_id: str,
+    local_consent_version: str | None = None,
 ) -> tuple[str, WorkspaceResponse | None]:
     """Return an exact completed replay before consuming resource-creation risk."""
 
@@ -446,6 +451,7 @@ def probe_workspace_creation_replay(
         slug=slug,
         region=region,
         service_mode=service_mode,
+        local_consent_version=local_consent_version,
     )
     if not _IDEMPOTENCY_RE.fullmatch(idempotency_key):
         raise ApiError("workspace.idempotency_invalid")
@@ -460,7 +466,9 @@ def probe_workspace_creation_replay(
             csrf_token=csrf_token,
             touch=False,
         )
-        _require_workspace_creation_identity(connection, config, identity.account_id)
+        _require_workspace_creation_identity(
+            connection, config, identity.account_id, local_consent_version=local_consent_version,
+        )
         existing = connection.execute(
             """
             SELECT request_sha256,workspace_id FROM workspace_creation_requests
@@ -714,6 +722,7 @@ def _normalize_create_input(
     slug: str | None,
     region: str | None,
     service_mode: str | None,
+    local_consent_version: str | None = None,
 ) -> dict[str, str | None]:
     normalized_kind = kind.strip().lower()
     if normalized_kind not in {"personal", "organization"}:
@@ -735,13 +744,19 @@ def _normalize_create_input(
             raise ApiError("workspace.request_invalid")
         normalized_name = None
         normalized_slug = None
-    return {
+    if local_consent_version is not None and local_consent_version != LOCAL_CREATION_CONSENT_VERSION:
+        raise ApiError("workspace.request_invalid")
+    result = {
         "kind": normalized_kind,
         "name": normalized_name,
         "slug": normalized_slug,
         "region": normalized_region,
         "service_mode": normalized_mode,
     }
+    # Preserve old idempotency hashes for callers that do not send consent.
+    if local_consent_version is not None:
+        result["local_consent_version"] = local_consent_version
+    return result
 
 
 def _normalize_name(value: str | None, *, maximum: int = 160) -> str:
@@ -793,7 +808,9 @@ def _idempotency_hmac(config: AppConfig, value: str) -> str:
     ).hexdigest()
 
 
-def _require_workspace_creation_identity(connection, config, account_id):
+def _require_workspace_creation_identity(
+    connection, config, account_id, *, local_consent_version=None, persist=False, now=None,
+):
     from metahub_shared.db.schema import table_exists
 
     from metahub_control.identity.registration_policy import read_policy_in_transaction
@@ -815,6 +832,18 @@ def _require_workspace_creation_identity(connection, config, account_id):
             if consent is not None:
                 return {"registration_id": consent["registration_id"],
                         "policy_revision": policy["revision"]}
+            if local_consent_version == LOCAL_CREATION_CONSENT_VERSION:
+                # Existing invited/migrated accounts did not pass local signup.
+                # Record their explicit creation consent atomically, without
+                # claiming mailbox ownership or changing any membership.
+                registration_id = _id("lrg")
+                if persist:
+                    connection.execute(
+                        "INSERT INTO local_registration_consents("
+                        "registration_id,account_id,consent_version,consented_at) VALUES(?,?,?,?)",
+                        (registration_id, account_id, local_consent_version, _db_time(now)),
+                    )
+                return {"registration_id": registration_id, "policy_revision": policy["revision"]}
     raise ApiError("workspace.account_unverified")
 
 

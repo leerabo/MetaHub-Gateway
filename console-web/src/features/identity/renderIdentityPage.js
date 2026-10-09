@@ -2523,6 +2523,7 @@ function renderWorkspaceCreateForm(draft = {}, { organizationOnly = false, busy 
           `
           : ""
       }
+      <p class="identity-empty">创建后，你将成为新空间的所有者。点击创建表示同意为当前账号创建独立空间。</p>
       <div class="identity-workspace-actions">
         <button class="identity-quiet-command" type="button" data-identity-action="cancel-workspace-create" ${disabled}>取消</button>
         <button class="identity-primary" type="submit" ${disabled}>${busy ? "正在创建" : kind === "organization" ? "创建组织" : "创建空间"}</button>

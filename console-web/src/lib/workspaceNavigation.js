@@ -326,6 +326,15 @@ export function normalizeWorkspaceNavigation(value) {
   });
 }
 
+export function isWorkspaceSetupComplete(state) {
+  return ["owner", "admin"].includes(state?.role_code)
+    && state?.source_freshness === "fresh" && !state?.error
+    && ["provider_connected", "model_catalog_ready"].every(code => (
+      state?.tasks?.some(task => task.task_code === code && task.status === "completed"
+        && task.source_freshness === "fresh")
+    ));
+}
+
 export function normalizeWorkspaceGettingStarted(value) {
   exact(value, [
     "completed_count", "contract_generation", "contract_snapshot_id", "evidence_digest",
@@ -479,15 +488,11 @@ export function resolveWorkspaceNavigationRoute(
   for (const tool of advancedTools?.tools ?? []) {
     if (tool.action_enabled && tool.availability === "available") allowed.add(tool.route_code);
   }
-  const firstUse = Number(navigation.preference.revision ?? 0) <= 1;
   const requested = String(requestedRouteCode ?? "").trim();
-  // A completed setup page is not a durable home for organization users. A
-  // stale hash from the setup flow must not keep the account on that page.
+  // Developers use their own connection home. Administrators may explicitly
+  // revisit setup; their default login still opens the organization overview.
   const setupRouteRequested = requested === "workspace.home.getting-started";
-  const staleSetupRoute = setupRouteRequested && (
-    roleCode === "developer"
-    || ((roleCode === "owner" || roleCode === "admin") && !firstUse)
-  );
+  const staleSetupRoute = setupRouteRequested && roleCode === "developer";
   const organizationLogin = (roleCode === "owner" || roleCode === "admin") && !requested;
   const preferred = roleCode === "viewer"
     || roleCode === "developer"

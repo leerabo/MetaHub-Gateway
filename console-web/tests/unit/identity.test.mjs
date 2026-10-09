@@ -98,6 +98,7 @@ test("workspace client sends exact cookie, CSRF, and idempotency contracts", asy
       region: "cn-north-1",
       serviceMode: "internal_only",
       idempotencyKey: "workspace-request-0001",
+      localConsentVersion: "workspace-creation-2026-10-09",
     });
     await createAccountWorkspace({
       controlApiUrl: CONTROL_URL,
@@ -127,6 +128,7 @@ test("workspace client sends exact cookie, CSRF, and idempotency contracts", asy
     service_mode: "internal_only",
     name: "Acme AI",
     slug: "acme-ai",
+    local_consent_version: "workspace-creation-2026-10-09",
   });
   assert.deepEqual(JSON.parse(calls[2].options.body), {
     kind: "personal",
@@ -534,7 +536,22 @@ test("workspace controller reuses a key only for an identical failed body", asyn
     ["workspace-key-one", "workspace-key-one", "workspace-key-two"],
   );
   assert.match(root.innerHTML, /组织已创建/u);
+  assert.ok(attempts.every((attempt) => attempt.localConsentVersion === "workspace-creation-2026-10-09"));
   assert.doesNotMatch(root.innerHTML, /workspace-key-(?:one|two)|wsp_1111/u);
+});
+
+test("unverified workspace creation explains email verification and retains the draft", async () => {
+  const root = createRoot();
+  const controller = createIdentityPageController({ root, api: workingApi({
+    createWorkspace: async () => { throw new IdentityApiError({ status: 403,
+      code: "workspace.account_unverified", message: "A verified global account is required." }); },
+  }) });
+  await controller.mount();
+  controller.showWorkspaceCreate();
+  await controller.createWorkspace({ kind: "organization", name: "一划开天" });
+  assert.match(root.innerHTML, /忘记密码/u);
+  assert.match(root.innerHTML, /一划开天/u);
+  assert.doesNotMatch(root.innerHTML, /A verified global account/u);
 });
 
 test("other-session revoke confirms and current-session revoke returns to login", async () => {

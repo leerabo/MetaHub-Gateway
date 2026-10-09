@@ -329,6 +329,34 @@ test("PRD-146 store supersedes lane tickets and changes route without losing nav
   assert.equal(store.snapshot().owner, null);
 });
 
+test("completed organization setup hides navigation, survives routes and clears with identity", () => {
+  const store = createWorkspaceNavigationStore();
+  const owner = workspaceNavigationOwner(identitySession(), workspaceSession());
+  store.enter(owner);
+  const navigation = normalizeWorkspaceNavigation(navigationPayload());
+  store.accept(store.begin("navigation"), navigation);
+  const payload = taskHomePayload();
+  payload.tasks = ["provider_connected", "model_catalog_ready"].map((task_code) => ({
+    ...payload.tasks[0], task_code, status: "completed",
+  }));
+  payload.completed_count = 2;
+  payload.next_task_code = null;
+  store.accept(store.begin("task-home"), normalizeWorkspaceGettingStarted(payload));
+  assert.equal(store.snapshot().setupComplete, true);
+  store.changeRoute();
+  assert.equal(store.snapshot().setupComplete, true);
+  for (const roleCode of ["owner", "admin", "finance_admin", "developer"]) {
+    const shell = renderConsoleShell({ authContext: { user: { role: roleCode } },
+      consoleShellState: { workspaceSetupComplete: true,
+        navigation: { ...projectWorkspaceNavigationForConsole(navigation, "workspace.home.overview"), role_code: roleCode } },
+      contentHtml: "", i18n: { t: (_key, _params, fallback) => fallback },
+    });
+    assert.equal(shell.includes('data-console-nav="quickstart"'), !["owner", "admin"].includes(roleCode));
+  }
+  store.enter({ ...owner, globalSessionId: "other-session" });
+  assert.equal(store.snapshot().setupComplete, null);
+});
+
 test("PRD-146 store accepts only exact changed and unchanged preference revisions", () => {
   const store = createWorkspaceNavigationStore({
     createIdempotencyKey: () => "preference:test-key",
@@ -1093,7 +1121,7 @@ test("organization login without a hash always lands on the organization home", 
   );
 });
 
-test("completed setup hash never becomes the developer or organization home", () => {
+test("administrators can explicitly review setup while default login opens overview", () => {
   const navigation = normalizeWorkspaceNavigation({
     ...navigationPayload(),
     developer_route_codes: [
@@ -1104,8 +1132,10 @@ test("completed setup hash never becomes the developer or organization home", ()
   });
   assert.equal(
     resolveWorkspaceNavigationRoute(navigation, "workspace.home.getting-started", { roleCode: "admin" }).routeCode,
-    "workspace.home.overview",
+    "workspace.home.getting-started",
   );
+  assert.equal(resolveWorkspaceNavigationRoute(navigation, "", { roleCode: "admin" }).routeCode,
+    "workspace.home.overview");
   assert.equal(
     resolveWorkspaceNavigationRoute(navigation, "workspace.home.getting-started", { roleCode: "developer" }).routeCode,
     "workspace.developer.sdk",

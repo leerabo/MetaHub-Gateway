@@ -1972,6 +1972,16 @@ async function loadAndRenderActiveNavigation({
     return state[key];
   };
 
+  // A direct link/reload also needs the setup fact. Keep only this boolean
+  // between routes; the store fences it to the current account and workspace.
+  if (["owner", "admin"].includes(consoleShellState?.navigation?.role_code)
+    && !["overview", "quickstart"].includes(activeNavigationId)
+    && workspaceNavigationController.snapshot().setupComplete === null
+    && shouldLoadWorkspaceTaskHome(consoleShellState)) {
+    state.workspaceTaskHomeState = await loadWorkspaceConnectionProgress();
+    if (!refreshOwnerCurrent() || refreshId !== refreshSequence) return;
+  }
+
   switch (activeNavigationId) {
     case "overview":
       [state.workspaceConsoleExperienceState, state.workspaceTaskHomeState] = await Promise.all([
@@ -13015,6 +13025,7 @@ async function toggleConsoleSidebarGroup(button, consoleShellState) {
 }
 
 function syncConsoleSidebarState(consoleShellState) {
+  consoleShellState.workspaceSetupComplete = workspaceNavigationController.snapshot().setupComplete === true;
   const visible = consoleShellState.navigation?.navigation_items?.some(
     (item) => item.visible !== false && item.disabled !== true && item.sidebar_visible !== false
       && item.group_code === expandedConsoleGroupKey,

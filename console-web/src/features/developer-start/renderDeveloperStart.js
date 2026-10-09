@@ -29,6 +29,7 @@ import { renderResponseCache } from "../cache-policies/renderResponseCache.js";
 import { renderWorkspaceQuota } from "../workspace-quota/renderWorkspaceQuota.js";
 import { renderWorkspaceConsoleExperience } from "../workspace-console-experience/renderWorkspaceConsoleExperience.js";
 import { renderWorkspaceTaskHome } from "../workspace-navigation/renderWorkspaceNavigation.js";
+import { isWorkspaceSetupComplete } from "../../lib/workspaceNavigation.js";
 import { renderEnvironmentPanel } from "../environments/renderEnvironmentPanel.js";
 import { renderModelAliasPanel } from "../model-aliases/renderModelAliasPanel.js";
 import { renderRoutingPolicyPanel } from "../routing-policies/renderRoutingPolicyPanel.js";
@@ -603,11 +604,7 @@ function renderOverviewContent(options) {
   if (!hasPermission(options.authContext, PERMISSIONS.WORKSPACE_CONSOLE_OVERVIEW_READ)) return "";
   const taskHome = options.workspaceTaskHomeState;
   const taskRole = taskHome?.role_code ?? options.consoleShellState?.navigation?.role_code;
-  const setupTasks = Array.isArray(taskHome?.tasks)
-    ? taskHome.tasks.filter((task) => ["provider_connected", "model_catalog_ready"].includes(task?.task_code))
-    : [];
-  const setupComplete = setupTasks.length > 0
-    && setupTasks.every((task) => task?.status === "completed");
+  const setupComplete = isWorkspaceSetupComplete(taskHome);
   const firstUseGuidance = taskHome && ["owner", "admin"].includes(taskRole) && !setupComplete
     ? `
       <section class="panel workspace-first-use-panel" aria-labelledby="workspace-first-use-title">
@@ -627,6 +624,7 @@ function renderOverviewContent(options) {
     ${firstUseGuidance}
     <section class="panel workspace-console-experience-panel" aria-labelledby="console-main-title">
        ${renderWorkspaceConsoleExperience(options.workspaceConsoleExperienceState, "overview", options.consoleShellState?.navigation?.role_code, options.i18n, { workspaceName: options.consoleShellState?.workspaceContext?.name })}
+       ${setupComplete ? '<div class="workspace-setup-review"><button type="button" data-workspace-task-route="workspace.home.getting-started">接入配置</button></div>' : ""}
     </section>
   `;
 }

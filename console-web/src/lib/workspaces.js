@@ -286,6 +286,7 @@ export async function createAccountWorkspace({
   slug,
   region,
   serviceMode,
+  localConsentVersion,
   idempotencyKey,
   signal,
 } = {}) {
@@ -293,6 +294,9 @@ export async function createAccountWorkspace({
   const body = {
     kind: normalizedKind,
   };
+  if (localConsentVersion !== undefined) {
+    body.local_consent_version = requireClientText(localConsentVersion, 80, "local_consent_version");
+  }
   if (region !== undefined) body.region = requireClientText(region, 40, "region");
   if (serviceMode !== undefined) {
     body.service_mode = requireClientChoice(

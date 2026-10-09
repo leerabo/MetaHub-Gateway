@@ -3,6 +3,7 @@
 // user supplied names, provider metadata, API fields, and error codes remain
 // untouched.
 const ENGLISH_STATIC_TEXT = new Map([
+  ["接入配置", "Connection setup"],
   ["自定义规则", "Custom rules"],
   ["规则概览", "Rules overview"],
   ["已配置的规则", "Configured rules"],
