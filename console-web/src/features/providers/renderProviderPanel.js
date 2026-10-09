@@ -96,12 +96,10 @@ export function renderProviderPanel(providersState, authContext) {
         <h2 id="providers-title">模型服务</h2>
       </div>
       <span class="providers-count">${providers.length} 个服务</span>
-    </div>
-    <div class="console-page-toolbar provider-toolbar">
       ${tabs}
-      ${providersState.feedback ? `<p class="provider-feedback" role="status">${escapeHtml(providersState.feedback)}</p>` : ""}
-      ${renderActionError(providersState.actionError)}
     </div>
+    ${providersState.feedback ? `<p class="provider-feedback" role="status">${escapeHtml(providersState.feedback)}</p>` : ""}
+    ${renderActionError(providersState.actionError)}
     ${renderTestResult(providersState.lastTestResult)}
     <div class="providers-grid" role="table" aria-label="已接入模型服务">
       ${tableHeading}

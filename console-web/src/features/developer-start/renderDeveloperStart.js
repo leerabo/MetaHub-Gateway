@@ -625,7 +625,7 @@ function renderOverviewContent(options) {
     : "";
   return `
     ${firstUseGuidance}
-    <section class="panel workspace-console-experience-panel" aria-labelledby="workspace-console-overview-title">
+    <section class="panel workspace-console-experience-panel" aria-labelledby="console-main-title">
        ${renderWorkspaceConsoleExperience(options.workspaceConsoleExperienceState, "overview", options.consoleShellState?.navigation?.role_code, options.i18n, { workspaceName: options.consoleShellState?.workspaceContext?.name })}
     </section>
   `;

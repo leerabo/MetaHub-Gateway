@@ -47,11 +47,12 @@ export function renderModelCatalogPanel(modelsState, providersState, authContext
         <h2 id="models-title">模型目录</h2>
       </div>
       <span class="models-count">${models.length} 个模型</span>
+      ${canWrite ? '<button type="button" class="primary-command" data-model-create-open aria-haspopup="dialog">添加模型</button>' : ""}
     </div>
     ${renderWorkspaceConnectionStatus(workspaceTaskHomeState, "workspace.gateway.models", i18n)}
     ${renderActionError(modelsState.actionError)}
     ${modelsState.feedback ? `<p class="model-feedback" role="status">${escapeHtml(modelsState.feedback)}</p>` : ""}
-    ${canWrite ? `<div class="console-page-toolbar model-toolbar"><button type="button" class="primary-command" data-model-create-open aria-haspopup="dialog">添加模型</button></div><dialog class="model-create-dialog" data-model-create-dialog aria-labelledby="model-create-dialog-title"><div class="model-create-dialog-content"><header><div><span class="eyebrow">模型目录</span><h3 id="model-create-dialog-title">添加模型</h3></div><button type="button" class="icon-button" data-model-create-close aria-label="关闭">×</button></header>${renderCreateModelForm(providersState, modelsState.feedback, authContext)}</div></dialog>` : ""}
+    ${canWrite ? `<dialog class="model-create-dialog" data-model-create-dialog aria-labelledby="model-create-dialog-title"><div class="model-create-dialog-content"><header><div><span class="eyebrow">模型目录</span><h3 id="model-create-dialog-title">添加模型</h3></div><button type="button" class="icon-button" data-model-create-close aria-label="关闭">×</button></header>${renderCreateModelForm(providersState, modelsState.feedback, authContext)}</div></dialog>` : ""}
     <div class="models-grid" role="table" aria-label="当前租户模型目录">
       <div class="model-row model-head ${canWrite ? "" : "model-readonly-row"}" role="row">
         <span>显示名称</span>

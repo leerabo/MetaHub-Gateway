@@ -53,9 +53,7 @@ export function renderExperiments(state, authContext, consoleShellState) {
             : ""}
         </div>
       </div>
-      <div class="experiment-action-feedback${view.createError ? " is-error" : ""}" role="status" aria-live="polite">
-        ${renderCreateFeedback(view)}
-      </div>
+      <div class="experiment-action-feedback${view.createError ? " is-error" : ""}" role="status" aria-live="polite">${renderCreateFeedback(view)}</div>
       ${renderList(view)}
       ${renderDetail(view)}
       ${renderCreateDialog(view, owner)}

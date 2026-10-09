@@ -65,6 +65,7 @@ export function renderConsoleShell({
     localizeNavigationItem(item, i18n, roleCode),
   );
   const activeItem = activeNavigationItem(consoleShellState, navigationItems);
+  const contentOwnsTitle = activeItem.id === "overview" && pageContentHtml?.includes('class="workspace-overview"');
   const shellCopy = workspaceRoleShellCopy(roleCode, i18n);
   const homeItemOrder = ["owner", "admin"].includes(roleCode)
     ? ["overview", "quickstart"]
@@ -108,21 +109,14 @@ export function renderConsoleShell({
         ${renderAdvancedToolsEntry(consoleShellState?.navigation, i18n, consoleShellState?.navigation?.role_code)}
       </aside>
       <main class="console-main" aria-labelledby="console-main-title" data-workspace-role="${escapeAttribute(roleCode ?? "")}">
-        <div class="console-page-context" aria-label="当前工作区">
-          <span class="console-page-context-mark" aria-hidden="true"></span>
-          <span>MetaHub 工作区</span>
-          <span aria-hidden="true">/</span>
-          <strong>${escapeHtml(shellCopy.sidebarTitle)}</strong>
-        </div>
-        ${homeItem && activeItem.id !== homeItem.id
-          ? `<a class="console-home-return" href="#${homeItem.id === "quickstart" ? "workspace.home.getting-started" : "workspace.home.overview"}" aria-label="${escapeAttribute(t(i18n, "shell.home_return_aria", "返回空间首页"))}">${icon("arrow-left")}<span>${escapeHtml(t(i18n, "shell.home", "空间首页"))}</span></a>` : ""}
-        <div class="console-main-heading">
+        ${contentOwnsTitle ? "" : `<header class="console-main-heading">
+          ${homeItem && activeItem.id !== homeItem.id
+            ? `<a class="console-home-return" href="#${homeItem.id === "quickstart" ? "workspace.home.getting-started" : "workspace.home.overview"}" aria-label="${escapeAttribute(t(i18n, "shell.home_return_aria", "返回空间首页"))}" title="${escapeAttribute(t(i18n, "shell.home_return_aria", "返回空间首页"))}">${icon("arrow-left")}</a>` : ""}
           <div>
-            <p class="eyebrow">${escapeHtml(activeItem.group)}</p>
             <h2 id="console-main-title">${escapeHtml(activeItem.label)}</h2>
-            <p>${escapeHtml(activeItem.description ?? "")}</p>
+            ${activeItem.description ? `<p>${escapeHtml(activeItem.description)}</p>` : ""}
           </div>
-        </div>
+        </header>`}
         ${renderShellMessage(consoleShellState, i18n)}
         <div class="console-page-body">
           ${pageContentHtml}

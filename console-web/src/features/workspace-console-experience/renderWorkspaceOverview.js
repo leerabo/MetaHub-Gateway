@@ -23,7 +23,7 @@ export function renderWorkspaceOverview(state, { hiddenSources = [], roleCode = 
   ].filter(([value]) => Number(value) > 0);
   return `<div class="workspace-overview">
     <header class="workspace-overview-header">
-      <div><h2 class="workspace-overview-name">${escapeHtml(workspaceName || "组织空间")}</h2><span>组织规模与模型使用情况</span></div>
+      <h2 id="console-main-title" class="workspace-overview-name">${escapeHtml(workspaceName || "组织空间")} <span>· 概览</span></h2>
       <div class="workspace-overview-header-actions">${updated ? `<small>更新于 ${escapeHtml(updated)}</small>` : ""}
         <button type="button" data-console-experience-action="refresh">刷新</button></div>
     </header>

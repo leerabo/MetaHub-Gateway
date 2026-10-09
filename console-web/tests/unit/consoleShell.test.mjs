@@ -19,6 +19,7 @@ import {
 import { renderDeveloperStart } from "../../src/features/developer-start/renderDeveloperStart.js";
 import { AuthApiError } from "../../src/lib/auth.js";
 import { createI18n } from "../../src/i18n/messages.js";
+import { renderWorkspaceOverview } from "../../src/features/workspace-console-experience/renderWorkspaceOverview.js";
 
 test("console shell client sends navigation and preference requests without tenant id", async () => {
   const calls = [];
@@ -475,6 +476,26 @@ test("organization overview does not show a self-return home link", () => {
     contentHtml: "<section>Content</section>",
   });
   assert.doesNotMatch(html, /console-home-return/u);
+});
+
+test("overview owns one accessible page title and other pages keep an inline home return", () => {
+  const state = {
+    activeNavigationItemId: "overview",
+    navigation: { role_code: "owner", navigation_items: [
+      { id: "overview", label: "概览", group_code: "home", order: 1 },
+      { id: "models", label: "模型目录", group_code: "gateway", order: 2 },
+    ] },
+  };
+  const overviewHtml = renderConsoleShell({ consoleShellState: state,
+    contentHtml: renderWorkspaceOverview({ status: "ready", overview: { sections: [] } }, { workspaceName: "测试组织" }) });
+  assert.equal((overviewHtml.match(/id="console-main-title"/gu) ?? []).length, 1);
+  assert.match(overviewHtml, /aria-labelledby="console-main-title"/u);
+  assert.match(overviewHtml, /测试组织/u);
+  assert.doesNotMatch(overviewHtml, /console-page-context|console-main-heading/u);
+  const modelHtml = renderConsoleShell({ consoleShellState: { ...state, activeNavigationItemId: "models" }, contentHtml: "<section>模型列表</section>" });
+  assert.match(modelHtml, /<header class="console-main-heading">\s*<a class="console-home-return"/u);
+  assert.match(modelHtml, /id="console-main-title">模型目录</u);
+  assert.doesNotMatch(modelHtml, /console-page-context/u);
 });
 
 test("hidden navigation items stay out of the sidebar", () => {

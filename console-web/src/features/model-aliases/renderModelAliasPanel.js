@@ -99,14 +99,10 @@ export function renderModelAliasPanel(modelAliasesState, modelsState, authContex
         <h2 id="model-aliases-title">模型路由</h2>
       </div>
       <span class="model-aliases-count">${aliases.length} 条路由</span>
-    </div>
-    ${renderWorkspaceConnectionStatus(workspaceTaskHomeState, "workspace.gateway.aliases", i18n)}
-    <div class="console-page-toolbar model-alias-toolbar">
-      ${renderActionError(modelAliasesState.actionError)}
-      ${modelAliasesState.feedback ? `<p class="model-alias-feedback" role="status">${escapeHtml(modelAliasesState.feedback)}</p>` : ""}
-      ${canWrite ? renderRouteDependencies(modelsState, environmentState, authContext) : ""}
       ${canWrite ? '<button type="button" class="model-alias-create-button" data-model-alias-create-open aria-haspopup="dialog">添加路由</button>' : ""}
     </div>
+    ${renderWorkspaceConnectionStatus(workspaceTaskHomeState, "workspace.gateway.aliases", i18n)}
+    <div class="console-page-toolbar model-alias-toolbar">${renderActionError(modelAliasesState.actionError)}${modelAliasesState.feedback ? `<p class="model-alias-feedback" role="status">${escapeHtml(modelAliasesState.feedback)}</p>` : ""}${canWrite ? renderRouteDependencies(modelsState, environmentState, authContext) : ""}</div>
     <div class="model-aliases-grid" role="table" aria-label="当前租户模型别名">
       <div class="model-alias-row model-alias-head ${canWrite ? "" : "model-alias-readonly-row"}" role="row">
         <span>统一入口名称</span>
