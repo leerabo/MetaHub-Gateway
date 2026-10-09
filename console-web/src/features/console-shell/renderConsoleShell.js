@@ -451,7 +451,6 @@ function renderUserMenu(authContext, i18n, navigation, consoleShellState) {
 }
 
 function workspaceRoleShellCopy(roleCode, i18n, workspaceKind = "organization") {
-  if (workspaceKind === "personal") return { sidebarTitle: "个人空间" };
   const label = workspaceRoleLabel(roleCode, i18n);
   if (roleCode === "owner" || roleCode === "admin") {
     return { sidebarTitle: t(i18n, "shell.org_management", "组织管理") };

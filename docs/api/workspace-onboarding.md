@@ -52,7 +52,7 @@ revision 重新计算。
 
 顶层字段固定为：
 
-- `workspace_kind`：`personal` 或 `organization`。
+- `workspace_kind`：固定为 `organization`；个人空间已从产品和数据模型中移除。
 - `completed_steps`、固定 `total_steps=8`、`status=incomplete|active`。
 - `generation`、`revision`、可空 `activated_at`、`evaluated_at`。
 - 严格有序的 `steps`、`request_id` 和 `trace_id`。

@@ -14113,7 +14113,8 @@ function syncPolicySnapshotSubmitButton(form, kind) {
   const contractReady = kind === "publish"
     ? candidateReady || canRetryPublish
     : Boolean(policySnapshotsState?.headEtag) || canRetryRollback;
-  button.disabled = busy || !contractReady || !isPolicySnapshotReasonValid(reason);
+  // 原因在提交时校验，按钮保持可点击，用户才能看到缺少原因的明确提示。
+  button.disabled = busy || !contractReady;
 }
 
 /**
@@ -14127,9 +14128,17 @@ async function submitPolicySnapshotPublish() {
   if (
     !identity || policySnapshotOperationStatus !== "idle"
     || !hasPermission(authSession.context, PERMISSIONS.POLICY_PUBLISH)
-    || !isPolicySnapshotReasonValid(reason)
   ) {
     // 本地按钮门禁可能被手工修改，缺失会话或非法原因仍不会发送网络请求。
+    return;
+  }
+  if (!isPolicySnapshotReasonValid(reason)) {
+    policySnapshotActionError = {
+      code: "policy_snapshot.reason_required",
+      message: "请填写发布原因后再提交。",
+      suggestion: "说明本次上线目的、验证结论或变更单号。",
+    };
+    renderPolicySnapshotPanelFromMemory();
     return;
   }
   const pending = policySnapshotOperationMemory.read(identity);
@@ -14198,9 +14207,17 @@ async function submitPolicySnapshotRollback(targetId) {
     !identity || policySnapshotOperationStatus !== "idle"
     || !hasPermission(authSession.context, PERMISSIONS.POLICY_PUBLISH)
     || !target
-    || !isPolicySnapshotReasonValid(reason)
   ) {
     // 只允许页面权威历史中的上一版形成请求；伪造 ID 仍由后端做最终租户和对象校验。
+    return;
+  }
+  if (!isPolicySnapshotReasonValid(reason)) {
+    policySnapshotActionError = {
+      code: "policy_snapshot.reason_required",
+      message: "请填写回滚原因后再提交。",
+      suggestion: "说明故障现象、影响范围或回滚依据。",
+    };
+    renderPolicySnapshotPanelFromMemory();
     return;
   }
   const pending = policySnapshotOperationMemory.read(identity);

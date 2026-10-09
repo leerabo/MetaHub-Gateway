@@ -237,7 +237,7 @@ test("policy snapshot renderer shows drift and only permits the previous version
 
   assert.match(html, /当前 v3/);
   assert.match(html, /v3 &lt;- 回滚 v1/);
-  assert.match(html, /待发布内容.*与回滚版本不同/);
+  assert.match(html, /待上线配置.*与回滚版本不同/);
   assert.match(html, /下一次发布会重新上线当前候选内容/);
   assert.match(html, /data-policy-snapshot-rollback-open="psnap_v2"/);
   assert.doesNotMatch(html, /data-policy-snapshot-rollback-open="psnap_v1"/);
@@ -291,7 +291,7 @@ test("first release explains the next action without an empty history table", ()
   }, publisherContext);
   assert.match(html, /管理自定义规则/);
   assert.match(html, /若要使用场景模板，可发布空版本作为起点/);
-  assert.doesNotMatch(html, /policy-snapshot-current-title/);
+  assert.match(html, /当前按 v0 处理/);
   assert.match(html, /发布空版本/);
   assert.match(html, /首次发布后，版本、原因和操作人会显示在这里/);
   assert.doesNotMatch(html, /policy-snapshot-row-head|policy-snapshot-pager/);

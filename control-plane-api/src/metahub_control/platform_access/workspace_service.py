@@ -82,7 +82,7 @@ _SUMMARY_SELECT = """
 SELECT state.workspace_id,state.tenant_id,state.status operational_status,
   state.revision operational_revision,state.risk_revision,state.updated_at,
   workspace.kind,workspace.created_at,
-  COALESCE(organization.name,personal.display_label) display_name,
+  organization.name display_name,
   organization.slug_normalized,region.region_code,region.residency_policy_version,
   data_state.lifecycle_status,
   customer_account.customer_account_id health_customer_account_id,
@@ -122,8 +122,7 @@ JOIN workspaces workspace ON workspace.workspace_id=state.workspace_id
 JOIN workspace_tenant_bindings binding
   ON binding.workspace_id=state.workspace_id AND binding.tenant_id=state.tenant_id
 LEFT JOIN workspace_regions region ON region.workspace_id=state.workspace_id
-LEFT JOIN organization_profiles organization ON organization.workspace_id=state.workspace_id
-LEFT JOIN personal_profiles personal ON personal.workspace_id=state.workspace_id
+JOIN organization_profiles organization ON organization.workspace_id=state.workspace_id
 LEFT JOIN tenant_data_states data_state ON data_state.tenant_id=state.tenant_id
 LEFT JOIN platform_customer_account_projections customer_account
   ON customer_account.workspace_id=state.workspace_id
@@ -1248,7 +1247,7 @@ def _health(
 
 def _normalize_filters(filters: dict[str, str]) -> dict[str, str]:
     allowed_values = {
-        "kind": {"personal", "organization"},
+        "kind": {"organization"},
         "operational_status": {
             "active",
             "suspended",

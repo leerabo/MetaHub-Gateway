@@ -80,7 +80,7 @@ async def test_local_signup_creates_owner_and_switches_without_mailbox_proof(
             **headers, "Idempotency-Key": "retired-personal-workspace-001",
         })
         assert retired.status_code == 422, retired.text
-        assert retired.json()["code"] == "workspace.personal_creation_disabled"
+        assert retired.json()["code"] == "workspace.kind_invalid"
         assert (await client.get("/identity/workspaces")).json()["workspaces"] == []
         name_only = {"kind": "organization", "name": "研发团队"}
         created = await client.post("/workspaces", json=name_only, headers=headers)

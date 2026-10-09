@@ -19,7 +19,7 @@ class WorkspaceProvisioningSummary(BaseModel):
 
 class WorkspaceSummary(BaseModel):
     workspace_id: str
-    kind: Literal["personal", "organization"]
+    kind: Literal["organization"]
     status: Literal["active", "migration_conflict"]
     profile_state: Literal["draft", "confirmed", "migration_conflict"]
     name: str

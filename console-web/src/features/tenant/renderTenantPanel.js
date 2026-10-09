@@ -82,7 +82,7 @@ export function renderTenantPanel(tenantState, authContext, workspaceContext) {
 
 function renderWorkspaceProfile(state, authContext, context) {
   if (!hasPermission(authContext, PERMISSIONS.TENANT_SETTINGS_READ)) return "";
-  const title = context.kind === "personal" ? "空间资料" : "组织资料";
+  const title = "组织资料";
   const heading = `<div class="panel-heading tenant-heading"><h2 id="tenant-title">${title}</h2></div>`;
   if (state?.state === "error") {
     return `${heading}<p class="error-state" role="alert">${escapeHtml(state.message ?? "组织资料暂时无法读取，请稍后重试")}</p>`;
@@ -92,7 +92,7 @@ function renderWorkspaceProfile(state, authContext, context) {
   const canEdit = context.role === "owner" && workspace.status === "active";
   return `${heading}
     <form class="tenant-form" id="workspace-profile-form">
-      <label><span>名称</span><input name="workspaceName" value="${escapeAttribute(workspace.name)}" maxlength="${workspace.kind === "personal" ? 120 : 160}" required ${canEdit ? "" : "disabled"} /></label>
+      <label><span>名称</span><input name="workspaceName" value="${escapeAttribute(workspace.name)}" maxlength="160" required ${canEdit ? "" : "disabled"} /></label>
       <div class="tenant-actions">
         ${canEdit ? '<button type="submit">保存资料</button>' : ""}
         <span class="tenant-feedback" role="status">${canEdit ? "" : "仅组织所有者可修改资料"}</span>

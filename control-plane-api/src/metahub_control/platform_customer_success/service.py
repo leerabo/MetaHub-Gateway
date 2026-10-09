@@ -746,7 +746,7 @@ def _account_filters(filters: dict[str, str]) -> dict[str, str]:
         raise ApiError("platform.request_invalid")
     values = dict(sorted(filters.items()))
     allowed = {
-        "kind": {"personal", "organization"},
+        "kind": {"organization"},
         "operational_status": {
             "active",
             "suspended",

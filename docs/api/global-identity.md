@@ -46,10 +46,10 @@ PRD-093 的 `/workspaces` 接口只接受 GlobalSession；拒绝旧 Bearer、未
 | POST | `/workspaces` | `{kind: "organization",name,slug?,region?,service_mode?}`；本地创建授权见下文 | `201`、安全 Workspace 摘要与 `ETag` |
 | GET | `/workspaces?limit=20&offset=0` | GlobalSession Cookie | 当前账号 owner foundation Workspace 的有界分页 |
 | GET | `/workspaces/{workspace_id}` | GlobalSession Cookie | 本人 Workspace 摘要与 `ETag`；跨账号同形 404 |
-| PATCH | `/workspaces/{workspace_id}` | `{name|display_label|profile_state}`、Origin、Cookie、CSRF、`If-Match` | CAS 更新后的安全摘要与新 `ETag` |
+| PATCH | `/workspaces/{workspace_id}` | `{name|profile_state}`、Origin、Cookie、CSRF、`If-Match` | CAS 更新后的安全摘要与新 `ETag` |
 
-2026-10-09：统一新建组织空间，取消个人空间创建入口。新的 `kind: "personal"` 请求返回
-`422 workspace.personal_creation_disabled`。已有个人空间仍可读取、进入和维护；原先完成的个人空间
+2026-10-09：统一新建组织空间并移除个人空间产品。新的 `kind: "personal"` 请求返回
+`422 workspace.kind_invalid`。历史个人空间数据由迁移 0190 清理。
 创建请求仍可精确幂等重放。此次调整不转换空间类型、不删除模型、KEY、用量或费用记录。
 
 受邀或迁移的已有账号可能没有本地注册授权记录。用户在创建表单确认创建独立空间后，客户端可提交

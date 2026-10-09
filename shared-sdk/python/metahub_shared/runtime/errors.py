@@ -761,12 +761,6 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         "Choose organization when creating a Workspace.",
         owner="workspace",
     ),
-    "workspace.personal_creation_disabled": ErrorSpec(
-        422,
-        "New personal Workspaces are no longer available.",
-        "Create an organization Workspace. Existing Workspaces remain accessible.",
-        owner="workspace",
-    ),
     "workspace.slug_invalid": ErrorSpec(
         422,
         "Organization slug is invalid.",
@@ -8915,8 +8909,8 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
     ),
     "gateway.budget_unavailable": ErrorSpec(
         503,
-        "Budget guard is unavailable.",
-        "Check budget rules and usage ledger connectivity before retrying protected traffic.",
+        "Budget guard cannot confirm the request cost.",
+        "Check budget rules, the usage ledger, and CNY prices for every routed model before retrying protected traffic.",
         retryable=True,
         owner="gateway",
     ),

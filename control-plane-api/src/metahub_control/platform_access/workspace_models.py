@@ -41,7 +41,7 @@ class WorkspaceHealthSummary(PlatformResponseModel):
 
 class PlatformWorkspaceSummary(PlatformResponseModel):
     workspace_id: str
-    kind: Literal["personal", "organization"]
+    kind: Literal["organization"]
     display_name: str
     slug: str | None
     created_at: datetime

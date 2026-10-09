@@ -6,7 +6,7 @@ const WORKSPACE_SLUG = /^[a-z0-9](?:[a-z0-9-]{1,46}[a-z0-9])$/u;
 const WORKSPACE_REGION = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/u;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/u;
 const WORKSPACE_FILTER_VALUES = Object.freeze({
-  kind: new Set(["personal", "organization"]),
+  kind: new Set(["organization"]),
   operational_status: new Set([
     "active",
     "suspended",

@@ -35,7 +35,7 @@ export function renderPolicySnapshotsPanel(state, authContext) {
     ${renderHeading()}
     ${renderActionFeedback(state)}
     ${renderPendingOperationNotice(state)}
-    ${renderCurrentSnapshot(current)}
+    ${renderCurrentSnapshot(current, history)}
     ${renderCandidateSummary(state, current)}
     ${renderPublishForm(state)}
     ${renderHistory(state, history, current)}
@@ -260,16 +260,34 @@ function renderHeading() {
 }
 
 /** 渲染当前快照摘要；完整 hash 只在 code 节点展示，不进入 URL。 */
-function renderCurrentSnapshot(current) {
+function renderCurrentSnapshot(current, history = []) {
   if (!current) {
-    return "";
+    return `
+      <section class="policy-snapshot-current" aria-labelledby="policy-snapshot-current-title">
+        <div class="policy-snapshot-current-title">
+          <div>
+            <h3 id="policy-snapshot-current-title">当前生效版本</h3>
+            <strong>尚未发布</strong>
+          </div>
+          <span class="snapshot-operation snapshot-operation-none">初始状态</span>
+        </div>
+        <p class="policy-snapshot-version-note">当前按 v0 处理。v0 只是初始状态，不是一条可以回滚的配置；首次发布后才会产生 v1。</p>
+      </section>
+    `;
   }
   const operation = operationLabel(current);
+  const sameContentVersion = history.find((item) => item.snapshot_version < current.snapshot_version
+    && item.content_hash && item.content_hash === current.content_hash)?.snapshot_version;
+  const versionNote = current.operation === "rollback"
+    ? `本次从 v${escapeHtml(current.rollback_source_snapshot_version ?? "-")} 回滚；回滚会复制旧配置并创建新的 v${escapeHtml(current.snapshot_version)}，版本号不会倒退。`
+    : sameContentVersion !== undefined
+      ? `当前配置内容与 v${escapeHtml(sameContentVersion)} 相同；版本号只记录发布次数，不代表配置发生了变化。`
+      : "";
   return `
     <section class="policy-snapshot-current" aria-labelledby="policy-snapshot-current-title">
       <div class="policy-snapshot-current-title">
         <div>
-          <h3 id="policy-snapshot-current-title">线上版本</h3>
+          <h3 id="policy-snapshot-current-title">当前生效版本</h3>
           <strong>当前 v${escapeHtml(current.snapshot_version)}</strong>
         </div>
         <span class="snapshot-operation snapshot-operation-${escapeAttribute(current.operation)}">${escapeHtml(operation)}</span>
@@ -282,6 +300,7 @@ function renderCurrentSnapshot(current) {
         ${renderPair("变更原因", current.change_reason)}
         ${renderPair("版本来源", versionSourceLabel(current))}
       </dl>
+      ${versionNote ? `<p class="policy-snapshot-version-note">${versionNote}</p>` : ""}
       <details class="policy-snapshot-hash-line">
         <summary>查看内容校验值</summary>
         <code>${escapeHtml(current.content_hash ?? "-")}</code>
@@ -323,7 +342,7 @@ function renderCandidateSummary(state, current) {
   return `
     <section class="policy-snapshot-candidate candidate-${escapeAttribute(tone)}" aria-labelledby="policy-snapshot-candidate-title">
       <div>
-        <h3 id="policy-snapshot-candidate-title">待发布内容 <span class="policy-snapshot-candidate-status">${escapeHtml(status)}</span></h3>
+          <h3 id="policy-snapshot-candidate-title">待上线配置 <span class="policy-snapshot-candidate-status">${escapeHtml(status)}</span></h3>
         <p>${escapeHtml(message)}</p>
         ${invalid || count === 0 ? '<a href="#workspace.governance.policies">打开自定义规则</a>' : ""}
       </div>
@@ -346,13 +365,13 @@ function renderPublishForm(state) {
     && Boolean(state.headEtag)
     && Boolean(state.candidateEtag)
     && state.candidate_matches_current !== true) || pending;
-  const disabled = busy || pendingOtherOperation || !candidateReady || !isPolicySnapshotReasonValid(reason);
+  const disabled = busy || pendingOtherOperation || !candidateReady;
   return `
     <section class="policy-snapshot-publish" aria-labelledby="policy-snapshot-publish-title">
       <div class="policy-snapshot-section-heading">
         <div>
-          <h3 id="policy-snapshot-publish-title">发布新版本</h3>
-          <p>填写原因后发布；网关同步完成后，可在调用记录中核对效果。</p>
+          <h3 id="policy-snapshot-publish-title">发布待上线配置</h3>
+          <p>发布会创建一个新的版本；网关同步后，新请求才会使用它。</p>
         </div>
         ${pending ? `<span class="policy-snapshot-pending">结果待确认，重试将复用 ${escapeHtml(state.pendingOperation.requestId)}</span>` : ""}
       </div>
@@ -361,6 +380,7 @@ function renderPublishForm(state) {
           <span>变更原因</span>
           <textarea name="reason" rows="3" maxlength="256" placeholder="说明本次上线目的、验证结论或变更单号" ${busy ? "disabled" : pending ? "readonly" : ""}>${escapeHtml(reason)}</textarea>
         </label>
+        <p class="policy-snapshot-form-hint">必填：说明本次上线目的、验证结论或变更单号。</p>
         <div class="policy-snapshot-form-actions">
           <button type="submit" data-policy-snapshot-publish ${disabled ? "disabled" : ""}>${busy ? "发布中" : pending ? "重试发布" : state.candidate_policy_count === 0 ? "发布空版本" : "发布到网关"}</button>
         </div>
@@ -440,18 +460,18 @@ function renderRollbackForm(item, state) {
   const pendingOtherOperation = Boolean(state.pendingOperation && !pending);
   const disabled = busy
     || pendingOtherOperation
-    || (!state.headEtag && !pending)
-    || !isPolicySnapshotReasonValid(reason);
+    || (!state.headEtag && !pending);
   return `
     <form class="policy-snapshot-rollback-form" data-policy-snapshot-rollback-form="${escapeAttribute(item.policy_snapshot_id)}">
       <div>
         <strong>回滚到 v${escapeHtml(item.snapshot_version)} 的内容</strong>
-        <p>回滚会创建新版本，待发布策略保持不变；再次发布可能恢复回滚前的内容。</p>
+        <p>会复制该版本的配置并创建新的更高版本；待上线配置保持不变。</p>
       </div>
       <label>
         <span>回滚原因</span>
         <textarea name="reason" rows="2" maxlength="256" placeholder="说明故障现象、影响和回滚依据" ${busy ? "disabled" : pending ? "readonly" : ""}>${escapeHtml(reason)}</textarea>
       </label>
+      <p class="policy-snapshot-form-hint">必填：说明故障现象、影响范围或回滚依据。</p>
       <div class="policy-snapshot-form-actions">
         <button type="submit" ${disabled ? "disabled" : ""}>${busy ? "回滚中" : pending ? "重试回滚" : "确认回滚"}</button>
         <button type="button" data-policy-snapshot-rollback-cancel ${busy ? "disabled" : ""}>取消</button>

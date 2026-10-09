@@ -60,7 +60,7 @@ erDiagram
 ### 3.1 不变量
 
 1. `GlobalAccount` 是登录主体，不携带默认租户权限；邮箱/手机规范化唯一性属于平台身份域。
-2. `Workspace(kind=personal|organization)` 是业务隔离根；兼容期内 `workspace_id` 与现有 `tenant_id` 一一映射。
+2. `Workspace(kind=organization)` 是业务隔离根；`workspace_id` 与现有 `tenant_id` 一一映射。个人空间不再属于产品或数据模型。
 3. `WorkspaceMembership` 承载租户角色和状态。账号加入多个 Workspace 不复制密码凭据。
 4. `GlobalSession` 只证明账号身份；`WorkspaceSession` 固定 `account_id + workspace_id + membership_revision`。切换 Workspace 必须轮换作用域，不能接受客户端提交 `tenant_id` 补权。
 5. 平台账号通过 `PlatformOperator/PlatformRoleBinding` 授权。平台角色不自动生成 Membership，也不等于租户 `admin`。

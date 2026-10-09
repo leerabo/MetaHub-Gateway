@@ -423,7 +423,7 @@ function renderIdentityTopbar(state) {
       ${renderWorkspaceSelector(state)}
       <div class="identity-topbar-actions">
         ${isNewOrganizationAccount(state) ? '<a class="identity-quiet-command" href="#workspaces">返回组织开通</a>' : ""}
-        ${available ? `<a class="identity-quiet-command" href="console.html">${icon("arrow-left")}${escapeHtml(state.workspaceContext?.kind === "personal" ? "进入个人空间" : state.workspaceContext?.role === "owner" || state.workspaceContext?.role === "admin" ? "进入组织管理" : "进入组织空间")}</a>` : ""}
+        ${available ? `<a class="identity-quiet-command" href="console.html">${icon("arrow-left")}${escapeHtml(state.workspaceContext?.role === "owner" || state.workspaceContext?.role === "admin" ? "进入组织管理" : "进入组织空间")}</a>` : ""}
         <button
           class="identity-notification-button"
           type="button"
@@ -615,7 +615,7 @@ function renderOnboardingSection(state) {
         <div>
           <p>空间初始化</p>
           <h2 id="identity-onboarding-title">初始化中心</h2>
-          <span>${onboarding.workspace_kind === "personal" ? "个人空间" : "企业空间"} · ${onboarding.completed_steps}/${onboarding.total_steps}</span>
+          <span>组织空间 · ${onboarding.completed_steps}/${onboarding.total_steps}</span>
         </div>
         <button
           class="identity-quiet-command"
@@ -2489,10 +2489,10 @@ function renderWorkspaceList(workspaces, choices = []) {
     .map(
       (workspace) => `
         <article class="identity-workspace-row">
-          <div class="identity-workspace-mark" aria-hidden="true">${workspace.kind === "personal" ? "P" : "O"}</div>
+          <div class="identity-workspace-mark" aria-hidden="true">O</div>
           <div>
             <strong>${escapeHtml(workspace.name)}</strong>
-            <span>${workspace.kind === "personal" ? "个人空间" : "组织空间"}</span>
+            <span>组织空间</span>
           </div>
           ${choices.some((choice) => choice.workspace_id === workspace.workspace_id && choice.role !== "service_account")
     ? `<button class="identity-primary" type="button" data-identity-action="switch-workspace" data-workspace-index="${choices.findIndex((choice) => choice.workspace_id === workspace.workspace_id)}">进入空间 ${icon("arrow-right")}</button>`

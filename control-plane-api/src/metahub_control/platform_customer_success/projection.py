@@ -40,9 +40,7 @@ def reconcile_accounts(
     sources = connection.execute(
         """SELECT binding.workspace_id,binding.tenant_id,workspace.revision workspace_revision,
                   workspace.kind workspace_kind,
-                  coalesce(
-                    organization.name,personal.display_label,binding.workspace_id
-                  ) display_name,
+                  coalesce(organization.name,binding.workspace_id) display_name,
                   coalesce(
                     organization.slug_normalized,'ws-'||substr(binding.workspace_id,5,12)
                   ) slug,
@@ -65,9 +63,8 @@ def reconcile_accounts(
                       AND unixepoch(clock.resolution_deadline_at)<unixepoch(?)) breached_count
              FROM workspace_tenant_bindings binding
              JOIN workspaces workspace ON workspace.workspace_id=binding.workspace_id
-             LEFT JOIN organization_profiles organization
+             JOIN organization_profiles organization
                ON organization.workspace_id=binding.workspace_id
-             LEFT JOIN personal_profiles personal ON personal.workspace_id=binding.workspace_id
              LEFT JOIN workspace_regions region ON region.workspace_id=binding.workspace_id
              LEFT JOIN workspace_operational_states operational
                ON operational.workspace_id=binding.workspace_id

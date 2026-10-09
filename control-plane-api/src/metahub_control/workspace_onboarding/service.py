@@ -95,7 +95,7 @@ class _EvaluatedStep:
 
 @dataclass(frozen=True, slots=True)
 class _Evaluation:
-    workspace_kind: Literal["personal", "organization"]
+    workspace_kind: Literal["organization"]
     steps: tuple[_EvaluatedStep, ...]
     completed_steps: int
     bitset: int
@@ -518,32 +518,16 @@ def _profile_fact(
     tenant_id: str,
     workspace_kind: str,
 ) -> _ResourceFact:
-    if workspace_kind == "personal":
-        ready = connection.execute(
-            """
-            SELECT EXISTS(
-              SELECT 1 FROM personal_profiles profile
-              JOIN workspace_memberships member
-                ON member.workspace_id=profile.workspace_id
-               AND member.account_id=profile.account_id
-              WHERE profile.workspace_id=? AND length(trim(profile.display_label))>0
-                AND member.tenant_id=? AND member.role_code='owner'
-                AND member.status='active'
-            )
-            """,
-            (workspace_id, tenant_id),
-        ).fetchone()[0]
-    else:
-        ready = connection.execute(
-            """
-            SELECT EXISTS(
-              SELECT 1 FROM organization_profiles profile
-              WHERE profile.workspace_id=? AND profile.profile_state!='migration_conflict'
-                AND length(trim(profile.name))>0 AND length(trim(profile.slug_normalized))>0
-            )
-            """,
-            (workspace_id,),
-        ).fetchone()[0]
+    ready = connection.execute(
+        """
+        SELECT EXISTS(
+          SELECT 1 FROM organization_profiles profile
+          WHERE profile.workspace_id=? AND profile.profile_state!='migration_conflict'
+            AND length(trim(profile.name))>0 AND length(trim(profile.slug_normalized))>0
+        )
+        """,
+        (workspace_id,),
+    ).fetchone()[0]
     confirmed = ready and _valid_confirmation(
         connection, workspace_id, tenant_id, "workspace_profile"
     )
@@ -1067,11 +1051,7 @@ def _authorize_step_action(
 ) -> None:
     step = next(item for item in evaluation.steps if item.step_id == step_id)
     if step_id == "workspace_profile":
-        allowed = (
-            context.membership_role == "owner"
-            if evaluation.workspace_kind == "personal"
-            else context.membership_role in {"owner", "admin"}
-        )
+        allowed = context.membership_role in {"owner", "admin"}
         if not allowed:
             raise ApiError("onboarding.permission_denied")
     elif context.membership_role not in {"owner", "admin", "developer"}:

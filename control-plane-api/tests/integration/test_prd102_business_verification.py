@@ -71,30 +71,6 @@ def _prepare(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         ).fetchone()
         assert owner is not None
         account_id = str(owner["account_id"])
-        personal_workspace_id = "wsp_" + "2" * 32
-        personal_tenant_id = "tenant_prd102_personal"
-        connection.executescript(
-            f"""
-            INSERT INTO workspaces(
-              workspace_id,kind,status,profile_state,creation_source,revision,
-              created_by_account_id,created_at,updated_at)
-            VALUES('{personal_workspace_id}','personal','active','confirmed','user_created',1,
-              '{account_id}',datetime('now'),datetime('now'));
-            INSERT INTO workspace_tenant_creation_claims(
-              workspace_tenant_creation_claim_id,workspace_id,tenant_id,account_id,status,
-              expires_at,consumed_at,created_at)
-            VALUES('wtc_{'2' * 32}','{personal_workspace_id}','{personal_tenant_id}',
-              '{account_id}','pending',strftime('%Y-%m-%dT%H:%M:%SZ','now','+1 hour'),
-              NULL,strftime('%Y-%m-%dT%H:%M:%SZ','now'));
-            INSERT INTO tenants(tenant_id,slug,name,service_mode,status,created_at,updated_at)
-            VALUES('{personal_tenant_id}','prd102-personal','PRD-102 Personal',
-              'internal_only','active',datetime('now'),datetime('now'));
-            INSERT INTO workspace_tenant_bindings(
-              workspace_tenant_binding_id,workspace_id,tenant_id,status,created_at)
-            VALUES('wtb_{'2' * 32}','{personal_workspace_id}','{personal_tenant_id}',
-              'active',datetime('now'));
-            """
-        )
         operator_id = "pto_" + "1" * 32
         factor_id = "mfa_" + "1" * 32
         global_session_id = "gss_" + "1" * 32
@@ -183,12 +159,6 @@ def _prepare(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         expires_at=expires_at,
         token="w" * 43,
     )
-    personal_context = replace(
-        workspace_context,
-        workspace_id=personal_workspace_id,
-        tenant_id=personal_tenant_id,
-        membership_id="wmb_" + "2" * 32,
-    )
     platform_context = PlatformContext(
         platform_session_id=platform_session_id,
         operator_id=operator_id,
@@ -259,7 +229,7 @@ def _prepare(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         cors_allow_credentials=True,
     )
     app.include_router(router)
-    return database_url, app, workspace_state, workspace_context, personal_context, operator_id
+    return database_url, app, workspace_state, workspace_context, operator_id
 
 
 def _workspace_headers(key: str) -> dict[str, str]:
@@ -361,7 +331,6 @@ async def test_workspace_submit_billing_platform_review_and_sensitive_zero_match
         app,
         workspace_state,
         workspace_context,
-        personal_context,
         operator_id,
     ) = _prepare(monkeypatch, tmp_path)
     workspace_id = workspace_context.workspace_id
@@ -390,19 +359,6 @@ async def test_workspace_submit_billing_platform_review_and_sensitive_zero_match
     async with AsyncClient(transport=transport, base_url="https://testserver") as client:
         client.cookies.set(WORKSPACE_SESSION_COOKIE, "w" * 43)
         client.cookies.set(WORKSPACE_CSRF_COOKIE, "w" * 43)
-        cross_workspace = await client.get(
-            f"/workspaces/{personal_context.workspace_id}/business-verification"
-        )
-        assert cross_workspace.status_code == 404
-
-        workspace_state["context"] = personal_context
-        personal = await client.get(
-            f"/workspaces/{personal_context.workspace_id}/business-verification"
-        )
-        assert personal.status_code == 409
-        assert personal.json()["code"] == "business_verification.business_not_applicable"
-        workspace_state["context"] = workspace_context
-
         forged = _submission(workspace_id)
         forged["evidence"][0]["scan_attestation"] = "0" * 64
         invalid_scan = await client.post(

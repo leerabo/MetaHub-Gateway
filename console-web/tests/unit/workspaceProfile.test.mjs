@@ -39,14 +39,11 @@ test("Workspace profile uses existing Global Cookie APIs and exact CAS payloads"
     await getWorkspaceProfile({ controlApiUrl: "https://control.test", workspaceId: workspace.workspace_id });
     await updateWorkspaceProfile({ controlApiUrl: "https://control.test", workspaceId: workspace.workspace_id,
       revision: 1, kind: "organization", name: "Changed", authentication: "workspace", token: "ignored" });
-    await updateWorkspaceProfile({ controlApiUrl: "https://control.test", workspaceId: workspace.workspace_id,
-      revision: 2, kind: "personal", name: "Personal" });
     assert.ok(calls.every(({ url, options }) => url.endsWith("/workspaces/" + workspace.workspace_id)
       && options.credentials === "include" && options.cache === "no-store" && !options.headers.Authorization));
     assert.equal(calls[1].options.headers["X-CSRF-Token"], "global-profile-csrf");
     assert.equal(calls[1].options.headers["If-Match"], '"1"');
     assert.deepEqual(JSON.parse(calls[1].options.body), { name: "Changed" });
-    assert.deepEqual(JSON.parse(calls[2].options.body), { display_label: "Personal" });
   } finally { globalThis.fetch = previousFetch; globalThis.document = previousDocument; }
 });
 
@@ -74,8 +71,6 @@ test("Workspace profile renders without legacy User and only Owner can edit", ()
     assert.equal(html.includes('type="submit"'), role === "owner");
   }
   assert.equal(renderTenantPanel({ workspace }, { permission_codes: [] }, { role: "owner" }), "");
-  assert.match(renderTenantPanel({ workspace: { ...workspace, kind: "personal" } }, authorization,
-    { role: "owner", kind: "personal" }), /maxlength="120"/u);
   assert.doesNotMatch(renderTenantPanel({ workspace: { ...workspace, status: "migration_conflict" } },
     authorization, { role: "owner", kind: "organization" }), /type="submit"/u);
 });

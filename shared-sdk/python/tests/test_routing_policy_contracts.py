@@ -205,6 +205,7 @@ def test_prd047_dependency_errors_keep_provider_key_and_budget_guidance_safe() -
     assert budget_diagnosis.rule_id == "gateway_budget_unavailable"
     assert budget_diagnosis.retryable is True
     assert budget_diagnosis.matched_by == "error_code"
+    assert "CNY" in budget_diagnosis.suggestion
 
 
 def test_route_policy_selected_accepts_both_exact_persistent_variants() -> None:

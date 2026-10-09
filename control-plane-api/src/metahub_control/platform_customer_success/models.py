@@ -57,7 +57,7 @@ class CustomerSuccessAccountSummary(CustomerSuccessModel):
     workspace_id: str
     display_name: str
     slug: str
-    kind: Literal["personal", "organization"]
+    kind: Literal["organization"]
     region: str
     operational_status: Literal[
         "active", "suspended", "deletion_pending", "deleted", "migration_conflict"
@@ -103,7 +103,7 @@ class OwnerAccountSummary(CustomerSuccessModel):
     workspace_id: str
     display_name: str
     slug: str
-    kind: Literal["personal", "organization"]
+    kind: Literal["organization"]
     region: str
     operational_status: Literal[
         "active", "suspended", "deletion_pending", "deleted", "migration_conflict"

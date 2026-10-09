@@ -45,14 +45,10 @@ async def post_workspace(request: Request, response: Response) -> WorkspaceRespo
     idempotency_key = _single_header(request, b"idempotency-key", required=True)
     payload = await _strict_json(request)
     kind = _required_string(payload, "kind", maximum=20)
-    required = (
-        {"kind", "name"}
-        if kind.strip().lower() == "organization"
-        else {"kind"}
-    )
-    optional = {"region", "service_mode", "local_consent_version"}
-    if kind.strip().lower() == "organization":
-        optional.add("slug")
+    if kind.strip().lower() != "organization":
+        raise ApiError("workspace.kind_invalid")
+    required = {"kind", "name"}
+    optional = {"region", "service_mode", "local_consent_version", "slug"}
     if not required <= set(payload) or not set(payload) <= required | optional:
         raise ApiError("workspace.request_invalid")
     session_token = _required_session_cookie(request)
@@ -163,7 +159,7 @@ async def patch_workspace(
     _reject_query(request, ())
     expected_revision = _if_match(request)
     payload = await _strict_json(request)
-    allowed = {"name", "display_label", "profile_state"}
+    allowed = {"name", "profile_state"}
     if not payload or not set(payload) <= allowed:
         raise ApiError("workspace.update_empty" if not payload else "workspace.update_invalid")
     result = await _run(
@@ -174,7 +170,6 @@ async def patch_workspace(
         workspace_id=workspace_id,
         expected_revision=expected_revision,
         name=_optional_string(payload, "name", maximum=160),
-        display_label=_optional_string(payload, "display_label", maximum=120),
         profile_state=_optional_string(payload, "profile_state", maximum=40),
         supplied_fields=frozenset(payload),
         request_id=_request_id(request),

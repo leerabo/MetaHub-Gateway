@@ -5,10 +5,10 @@
 优先级：P0
 依赖：PRD-091、PRD-092、现有 Tenant/Environment/RBAC
 
-2026-10-09 产品修订：个人空间尚无独立功能模式，停止新建个人空间，统一创建组织空间。
-下文 personal 数据模型和读取、资料维护合同继续用于已存在的空间；精确幂等重放仍保留。
-新 personal 创建返回 `workspace.personal_creation_disabled`，前端不再展示个人/企业类型选择。
-不删除旧空间，不修改不可变 kind，也不影响员工创建自己的组织并成为所有者。
+2026-10-09 产品修订：个人空间没有独立功能模式，统一创建组织空间并清理历史个人空间数据。
+迁移 0190 删除 personal 数据模型、历史记录和读取路径；精确幂等重放仍保留。
+新 personal 创建返回 `workspace.kind_invalid`，前端只允许组织空间。
+迁移不转换空间类型，直接清理历史个人空间及其级联数据；不删除组织空间，也不影响员工创建自己的组织并成为所有者。
 
 ## 1. 目标与边界
 
@@ -40,7 +40,6 @@ PRD-093 必须创建 Owner Membership，否则“创建并成为 Owner”无法�
 - `workspace_tenant_bindings`：Workspace/Tenant 双唯一、status、created_at；不可变。
 - `workspace_regions`：workspace、region code、residency policy version、status；首版只允许受审境内 Region。
 - `organization_profiles`：workspace、名称、规范 slug、profile state、revision、时间戳。
-- `personal_profiles`：workspace、account、安全展示 label、revision；不复制密码、邮箱或手机号。
 - `workspace_memberships`：本条只写 owner foundation，唯一 `(workspace_id,account_id)`，同时保存 tenant binding 和单调 revision。
 - `workspace_provisioning_jobs`：workspace、generation、`core_committed|ready|failed`、attempt、固定错误码和时间戳。
 - `workspace_environment_origins`：workspace/tenant/environment、`system_created|legacy_existing|user_created`，证明默认环境来源。

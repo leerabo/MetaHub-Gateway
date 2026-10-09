@@ -343,7 +343,7 @@ async def test_retired_personal_creation_region_and_cross_account_boundaries(
         }
         created = await _create(first, personal_body, "workspace-personal-idempotency-01")
         assert created.status_code == 422
-        assert created.json()["code"] == "workspace.personal_creation_disabled"
+        assert created.json()["code"] == "workspace.kind_invalid"
         assert (await first.get("/workspaces")).json()["workspaces"] == []
         organization = await _create(first, _organization("retired-personal-owner", "Team"),
                                      "workspace-organization-idempotency-02")
@@ -355,7 +355,7 @@ async def test_retired_personal_creation_region_and_cross_account_boundaries(
             "workspace-personal-idempotency-03",
         )
         assert invalid_region.status_code == 422
-        assert invalid_region.json()["code"] == "workspace.region_invalid"
+        assert invalid_region.json()["code"] == "workspace.kind_invalid"
         injected = await _create(
             first,
             {**personal_body, "tenant_id": "tenant_default"},

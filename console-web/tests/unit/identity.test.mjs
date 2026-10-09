@@ -500,12 +500,8 @@ test("only organization creation is offered and stale personal submissions canno
   assert.equal(controller.setWorkspaceKind("personal"), false);
   assert.equal(await controller.createWorkspace({ kind: "personal" }), false);
   assert.equal(creates, 0);
-  assert.match(root.innerHTML, /已停止新建个人空间/u);
-  renderIdentitySecurityPage(root, { account: account(), workspaces: [workspace({
-    kind: "personal", name: "Existing Personal Space",
-  })], workspaceView: "summary" });
-  assert.match(root.innerHTML, /Existing Personal Space/u);
-  assert.match(root.innerHTML, /个人空间/u);
+  renderIdentitySecurityPage(root, { account: account(), workspaces: [], workspaceView: "summary" });
+  assert.doesNotMatch(root.innerHTML, /个人空间/u);
 });
 
 test("workspace controller reuses a key only for an identical failed body", async () => {

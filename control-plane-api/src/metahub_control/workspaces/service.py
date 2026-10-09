@@ -115,10 +115,6 @@ def create_workspace(
                 trace_id=trace_id,
             )
 
-        # Keep completed legacy requests replayable; never provision new personal spaces.
-        if normalized["kind"] == "personal":
-            raise ApiError("workspace.personal_creation_disabled")
-
         account = connection.execute(
             """
             SELECT account_id,email_normalized,display_name,credential_revision
@@ -143,17 +139,9 @@ def create_workspace(
         region_code = normalized["region"] or config.workspace_allowed_regions[0]
         tenant_id = _id("ten")
         legacy_user_id = _id("usr")
-        tenant_slug = (
-            str(normalized["slug"] or f"org-{workspace_id[4:]}")
-            if normalized["kind"] == "organization"
-            else f"personal-{workspace_id[4:20]}"
-        )
-        profile_name = (
-            str(normalized["name"])
-            if normalized["kind"] == "organization"
-            else _personal_label(str(account["display_name"]))
-        )
-        profile_state = "draft" if normalized["kind"] == "organization" else "confirmed"
+        tenant_slug = str(normalized["slug"] or f"org-{workspace_id[4:]}")
+        profile_name = str(normalized["name"])
+        profile_state = "draft"
 
         connection.execute(
             """
@@ -245,34 +233,18 @@ def create_workspace(
                 stamp,
             ),
         )
-        if normalized["kind"] == "organization":
-            connection.execute(
-                """
-                INSERT INTO organization_profiles(
-                  organization_profile_id,workspace_id,name,slug_normalized,
-                  profile_state,revision,created_at,updated_at)
-                VALUES(?,?,?,?,?,1,?,?)
-                """,
-                (
-                    _id("org"),
-                    workspace_id,
-                    profile_name,
-                    tenant_slug,
-                    profile_state,
-                    stamp,
-                    stamp,
-                ),
-            )
-        else:
-            connection.execute(
-                """
-                INSERT INTO personal_profiles(
-                  personal_profile_id,workspace_id,account_id,display_label,
-                  revision,created_at,updated_at)
-                VALUES(?,?,?,?,1,?,?)
-                """,
-                (_id("per"), workspace_id, identity.account_id, profile_name, stamp, stamp),
-            )
+        connection.execute(
+            """
+            INSERT INTO organization_profiles(
+              organization_profile_id,workspace_id,name,slug_normalized,
+              profile_state,revision,created_at,updated_at)
+            VALUES(?,?,?,?,?,1,?,?)
+            """,
+            (
+                _id("org"), workspace_id, profile_name, tenant_slug,
+                profile_state, stamp, stamp,
+            ),
+        )
 
         connection.execute(
             """
@@ -481,8 +453,6 @@ def probe_workspace_creation_replay(
             (identity.account_id, key_hmac),
         ).fetchone()
         if existing is None:
-            if normalized["kind"] == "personal":
-                raise ApiError("workspace.personal_creation_disabled")
             return identity.account_id, None
         if not hmac.compare_digest(str(existing["request_sha256"]), request_sha256):
             raise ApiError("workspace.idempotency_conflict")
@@ -602,7 +572,6 @@ def update_workspace(
     workspace_id: str,
     expected_revision: int,
     name: str | None,
-    display_label: str | None,
     profile_state: str | None,
     supplied_fields: frozenset[str],
     request_id: str,
@@ -665,16 +634,7 @@ def update_workspace(
                 values,
             ).rowcount
         else:
-            if supplied_fields != {"display_label"}:
-                raise ApiError("workspace.update_invalid")
-            normalized_label = _normalize_name(display_label, maximum=120)
-            updated = connection.execute(
-                """
-                UPDATE personal_profiles SET display_label=?,revision=?,updated_at=?
-                WHERE workspace_id=?
-                """,
-                (normalized_label, next_revision, stamp, normalized_id),
-            ).rowcount
+            raise ApiError("workspace.update_invalid")
         if updated != 1:
             raise sqlite3.IntegrityError("workspace_profile_missing")
         next_profile_state = "confirmed" if profile_state is not None else row["profile_state"]
@@ -731,7 +691,7 @@ def _normalize_create_input(
     local_consent_version: str | None = None,
 ) -> dict[str, str | None]:
     normalized_kind = kind.strip().lower()
-    if normalized_kind not in {"personal", "organization"}:
+    if normalized_kind != "organization":
         raise ApiError("workspace.kind_invalid")
     if not config.workspace_allowed_regions:
         raise ApiError("workspace.region_invalid")
@@ -742,14 +702,8 @@ def _normalize_create_input(
     normalized_mode = service_mode.strip().lower() if service_mode is not None else "internal_only"
     if normalized_mode not in {"internal_only", "public_service"}:
         raise ApiError("workspace.service_mode_invalid")
-    if normalized_kind == "organization":
-        normalized_name = _normalize_name(name)
-        normalized_slug = _normalize_slug(slug) if slug is not None else None
-    else:
-        if name is not None or slug is not None:
-            raise ApiError("workspace.request_invalid")
-        normalized_name = None
-        normalized_slug = None
+    normalized_name = _normalize_name(name)
+    normalized_slug = _normalize_slug(slug) if slug is not None else None
     if local_consent_version is not None and local_consent_version != LOCAL_CREATION_CONSENT_VERSION:
         raise ApiError("workspace.request_invalid")
     result = {
@@ -792,12 +746,6 @@ def _normalize_workspace_id(value: str) -> str:
     if not _WORKSPACE_ID_RE.fullmatch(value):
         raise ApiError("workspace.not_found")
     return value
-
-
-def _personal_label(display_name: str) -> str:
-    label = _normalize_name(display_name, maximum=100)
-    suffix = " Personal Workspace"
-    return f"{label[: 120 - len(suffix)]}{suffix}"
 
 
 def _request_sha256(normalized: dict[str, str | None]) -> str:
@@ -992,7 +940,7 @@ def _load_workspace(
     row = connection.execute(
         """
         SELECT w.workspace_id,w.kind,w.status,w.profile_state,w.revision,
-          COALESCE(op.name,pp.display_label) display_name,op.slug_normalized,
+          op.name display_name,op.slug_normalized,
           region.region_code,tenant.service_mode,environment.code environment_code,
           environment.status environment_status,origin.origin environment_origin,
           job.status provisioning_status
@@ -1010,8 +958,7 @@ def _load_workspace(
         JOIN environments environment
           ON environment.environment_id=origin.environment_id
          AND environment.tenant_id=binding.tenant_id AND environment.code='dev'
-        LEFT JOIN organization_profiles op ON op.workspace_id=w.workspace_id
-        LEFT JOIN personal_profiles pp ON pp.workspace_id=w.workspace_id
+        JOIN organization_profiles op ON op.workspace_id=w.workspace_id
         WHERE w.workspace_id=? AND membership.account_id=?
           AND membership.status='active'
         """,

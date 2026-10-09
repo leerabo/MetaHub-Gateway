@@ -478,16 +478,14 @@ def list_identity_workspaces(
         rows = connection.execute(
             f"""
             SELECT workspace.workspace_id,workspace.kind,
-              COALESCE(organization.name,personal.display_label) display_name,
+              organization.name display_name,
               organization.slug_normalized,member.role_code
             FROM workspace_memberships member
             JOIN workspaces workspace ON workspace.workspace_id=member.workspace_id
             JOIN workspace_tenant_bindings binding
               ON binding.workspace_id=member.workspace_id AND binding.tenant_id=member.tenant_id
-            LEFT JOIN organization_profiles organization
+            JOIN organization_profiles organization
               ON organization.workspace_id=workspace.workspace_id
-            LEFT JOIN personal_profiles personal
-              ON personal.workspace_id=workspace.workspace_id
             WHERE {where}
             ORDER BY workspace.created_at,workspace.workspace_id
             LIMIT ? OFFSET ?
@@ -2244,7 +2242,7 @@ def _authenticate_workspace(
           member.legacy_user_id,legacy_user.status user_status,legacy_user.role legacy_role,
           legacy_user.email,legacy_user.display_name,workspace.status workspace_status,
           workspace.revision current_workspace_revision,workspace.kind,
-          COALESCE(organization.name,personal.display_label) workspace_name,
+          organization.name workspace_name,
           organization.slug_normalized,binding.status binding_status,
           account.status account_status,account.login_enabled,
           account.session_revision current_account_session_revision,
@@ -2266,9 +2264,8 @@ def _authenticate_workspace(
         JOIN global_sessions global_session ON global_session.session_id=session.global_session_id
         JOIN tenants tenant ON tenant.tenant_id=member.tenant_id
         {operational_join}
-        LEFT JOIN organization_profiles organization
+        JOIN organization_profiles organization
           ON organization.workspace_id=workspace.workspace_id
-        LEFT JOIN personal_profiles personal ON personal.workspace_id=workspace.workspace_id
         WHERE session.token_hmac=?
         """,
         (_session_hmac(config, "token", session_token),),
@@ -2411,7 +2408,7 @@ def _switch_target(
         SELECT member.workspace_membership_id,member.workspace_id,member.tenant_id,
           member.account_id,member.legacy_user_id,member.role_code,
           member.revision membership_revision,workspace.revision workspace_revision,
-          workspace.kind,COALESCE(organization.name,personal.display_label) workspace_name,
+          workspace.kind,organization.name workspace_name,
           organization.slug_normalized,account.session_revision account_session_revision,
           legacy_user.role legacy_role,legacy_user.status user_status,tenant.status tenant_status
         FROM workspace_memberships member
@@ -2422,9 +2419,8 @@ def _switch_target(
         JOIN users legacy_user ON legacy_user.tenant_id=member.tenant_id
           AND legacy_user.user_id=member.legacy_user_id
         JOIN tenants tenant ON tenant.tenant_id=member.tenant_id
-        LEFT JOIN organization_profiles organization
+        JOIN organization_profiles organization
           ON organization.workspace_id=workspace.workspace_id
-        LEFT JOIN personal_profiles personal ON personal.workspace_id=workspace.workspace_id
         WHERE member.account_id=? AND member.workspace_id=? AND member.status='active'
           AND member.role_code!='service_account' AND workspace.status='active'
           AND binding.status='active' AND account.status='active' AND account.login_enabled=1

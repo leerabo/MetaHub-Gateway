@@ -339,7 +339,7 @@ export async function updateAccountWorkspace({
   if (!changes || typeof changes !== "object" || Array.isArray(changes)) {
     invalidClient("changes");
   }
-  const allowed = new Set(["display_label", "name", "profile_state"]);
+  const allowed = new Set(["name", "profile_state"]);
   const body = {};
   for (const [key, value] of Object.entries(changes)) {
     if (!allowed.has(key)) invalidClient("changes");
@@ -539,7 +539,7 @@ function validateWorkspaceOnboarding(payload) {
   return {
     workspace_kind: requireChoice(
       payload.workspace_kind,
-      ["personal", "organization"],
+      ["organization"],
       "onboarding.workspace_kind",
     ),
     completed_steps: completedSteps,
@@ -623,7 +623,7 @@ function validateIdentityWorkspace(workspace) {
   requireExactKeys(workspace, ["kind", "name", "role", "slug", "workspace_id"], "workspace");
   return {
     workspace_id: requireText(workspace.workspace_id, 80, "workspace_id"),
-    kind: requireChoice(workspace.kind, ["personal", "organization"], "kind"),
+    kind: requireChoice(workspace.kind, ["organization"], "kind"),
     name: requireText(workspace.name, 160, "name"),
     slug: workspace.slug === null ? null : requireText(workspace.slug, 48, "slug"),
     role: requireChoice(workspace.role, WORKSPACE_ROLES, "role"),
@@ -891,7 +891,7 @@ function validateWorkspace(workspace) {
   requireExactKeys(workspace.provisioning, ["status"], "provisioning");
   return {
     workspace_id: requireText(workspace.workspace_id, 80, "workspace_id"),
-    kind: requireChoice(workspace.kind, ["personal", "organization"], "kind"),
+    kind: requireChoice(workspace.kind, ["organization"], "kind"),
     status: requireChoice(workspace.status, ["active", "migration_conflict"], "status"),
     profile_state: requireChoice(
       workspace.profile_state,

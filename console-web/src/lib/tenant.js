@@ -7,11 +7,11 @@ export function getWorkspaceProfile(input) {
 }
 
 export function updateWorkspaceProfile({ workspaceId, revision, kind, name, ...options }) {
-  if (!new Set(["organization", "personal"]).has(kind)) {
+  if (kind !== "organization") {
     throw new AuthApiError({ status: 400, code: "workspace.update_invalid", message: "空间资料不可用。" });
   }
   return profileRequest(updateAccountWorkspace, {
-    ...options, workspaceId, revision, changes: { [kind === "organization" ? "name" : "display_label"]: name },
+    ...options, workspaceId, revision, changes: { name },
   });
 }
 

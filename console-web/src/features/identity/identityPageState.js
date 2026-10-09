@@ -976,16 +976,15 @@ export function createIdentityPageController({
       return true;
     },
     async createWorkspace({ kind, name, slug, region, serviceMode }) {
-      if (workspaceCreating || workspaceView !== "create" || !workspaceDraft) return false;
-      if (kind !== "organization") {
-        renderSecurity({ error: { message: "已停止新建个人空间，请创建组织空间。" } });
+      // 个人空间已下线；即使旧页面或脚本提交 stale kind，也不能进入网络请求。
+      if (workspaceCreating || workspaceView !== "create" || !workspaceDraft || kind !== "organization") {
         return false;
       }
       const input = {
         kind,
         localConsentVersion: "workspace-creation-2026-10-09",
-        name: kind === "organization" ? name : undefined,
-        slug: kind === "organization" ? slug : undefined,
+        name,
+        slug,
         region,
         serviceMode,
       };
@@ -2755,9 +2754,7 @@ export function createIdentityPageController({
 
   function canMutateOnboardingStep(step, action) {
     if (step.id === "workspace_profile") {
-      const allowed = onboarding?.workspace_kind === "personal"
-        ? workspaceContext?.role === "owner"
-        : new Set(["owner", "admin"]).has(workspaceContext?.role);
+      const allowed = new Set(["owner", "admin"]).has(workspaceContext?.role);
       if (!allowed) return false;
     } else if (!new Set(["owner", "admin", "developer"]).has(workspaceContext?.role)) {
       return false;
@@ -4999,7 +4996,6 @@ function safePageError(error) {
     || error instanceof PrivacyApiError || error instanceof ComplianceApiError) {
     const messages = {
       "workspace.account_unverified": "此账号尚未完成邮箱验证，请先通过登录页的“忘记密码”验证邮箱，再创建组织。你在现有组织中的员工职责不影响创建自己的组织。",
-      "workspace.personal_creation_disabled": "已停止新建个人空间，请创建组织空间。已有空间仍可使用。",
       "identity.delivery_unavailable": "邮箱验证服务尚未配置，请联系平台管理员。",
       "identity.registration_invalid": "注册信息不完整或格式不正确，请检查后重试。",
       "identity.password_invalid": "密码长度须为 8 至 1024 字节。",

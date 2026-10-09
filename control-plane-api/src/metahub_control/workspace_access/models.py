@@ -22,7 +22,7 @@ WorkspaceRole = Literal[
 
 class IdentityWorkspaceSummary(BaseModel):
     workspace_id: str
-    kind: Literal["personal", "organization"]
+    kind: Literal["organization"]
     name: str
     slug: str | None
     role: WorkspaceRole

@@ -52,7 +52,7 @@ class WorkspaceOnboardingResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    workspace_kind: Literal["personal", "organization"]
+    workspace_kind: Literal["organization"]
     completed_steps: int = Field(ge=0, le=8)
     total_steps: int = 8
     status: OnboardingProgressStatus

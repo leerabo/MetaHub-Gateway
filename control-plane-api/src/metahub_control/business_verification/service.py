@@ -334,7 +334,7 @@ def get_workspace_business_verification(
     request_id: str,
     trace_id: str,
 ) -> WorkspaceBusinessVerificationResponse:
-    """读取当前 Workspace 企业认证安全摘要，personal Workspace 固定返回不适用。"""
+    """读取当前组织空间的企业认证安全摘要。"""
 
     # 非规范 Workspace 标识与不可见 owner 同形返回不存在，避免资源枚举。
     if _WORKSPACE_ID_RE.fullmatch(workspace_id) is None:
@@ -1419,9 +1419,6 @@ def _require_workspace_finance(
     # Workspace 必须仍处于 active 且绑定当前 tenant，失效绑定不能继续访问法定资料。
     if row is None or row["status"] != "active":
         raise ApiError("business_verification.not_found")
-    # personal Workspace 没有企业法定主体，固定返回不适用而不是构造空模板。
-    if row["kind"] != "organization":
-        raise ApiError("business_verification.business_not_applicable")
 
 
 def _require_platform(actor: PlatformContext, permission: str) -> None:

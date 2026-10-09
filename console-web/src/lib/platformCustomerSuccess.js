@@ -21,7 +21,7 @@ const ACCOUNT_FILTERS = Object.freeze({
   customer_account_id: null,
   workspace_id: null,
   slug: null,
-  kind: new Set(["personal", "organization"]),
+  kind: new Set(["organization"]),
   region: null,
   operational_status: new Set([
     "active", "suspended", "deletion_pending", "deleted", "migration_conflict",
