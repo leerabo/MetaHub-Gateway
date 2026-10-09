@@ -12935,7 +12935,7 @@ function scheduleConsoleNavigationSideEffects({
   }, CONSOLE_NAVIGATION_SIDE_EFFECT_DELAY_MS);
 }
 
-/** 分组手风琴只保存当前 Workspace 的服务端 UI 偏好，失败时恢复已确认 revision。 */
+/** 分组立即响应点击；服务端偏好写入仍受 Workspace owner 和 revision 约束。 */
 async function toggleConsoleSidebarGroup(button, consoleShellState) {
   const session = authSession;
   const refreshId = refreshSequence;
@@ -12998,6 +12998,11 @@ async function toggleConsoleSidebarGroup(button, consoleShellState) {
     if (!current()) return;
     if ([401, 403, 409].includes(Number(error?.status))) {
       handleConsoleWorkspaceContextInvalidation();
+      return;
+    }
+    // A temporary preference outage must not close the menu being used.
+    if (error?.code?.endsWith(".network_unavailable") || Number(error?.status) === 503) {
+      renderConsoleSidebarPreferenceError({ message: "目录已切换，导航偏好暂未保存；下次切换时会重试。" });
       return;
     }
     expandedConsoleGroupKey = previous;

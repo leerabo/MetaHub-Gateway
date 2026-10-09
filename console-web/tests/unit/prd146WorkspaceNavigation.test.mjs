@@ -466,6 +466,172 @@ test("PRD-146 route changes abort in-flight preference and fence queued writes",
   assert.equal(controller.snapshot().navigation.preference.sidebar_collapsed, false);
 });
 
+test("navigation preferences reconcile a cancelled PATCH that committed before route change", async () => {
+  const pending = deferred();
+  const calls = [];
+  let revision = 2;
+  let reads = 0;
+  const controller = createWorkspaceNavigationController({
+    createIdempotencyKey: () => `preference:write-${calls.length}`,
+    api: completeApi({
+      navigation: async () => {
+        reads += 1;
+        const payload = navigationPayload();
+        payload.preference.revision = revision;
+        return normalizeWorkspaceNavigation(payload);
+      },
+      updatePreference: async (input) => {
+        calls.push(input);
+        if (calls.length === 1) {
+          revision = 3; // The server commits, but its response arrives after abort.
+          return pending.promise;
+        }
+        assert.equal(input.revision, revision);
+        revision += 1;
+        return normalizeWorkspaceNavigationPreference({ ...preferencePayload(), revision,
+          expanded_group_code: input.changes.expanded_group_code ?? null });
+      },
+    }),
+  });
+  await controller.loadNavigation();
+  const old = controller.savePreference({ expanded_group_code: "gateway" }).catch(error => error);
+  await new Promise(resolve => setImmediate(resolve));
+  controller.changeRoute();
+  assert.equal(calls[0].signal.aborted, true);
+  const latest = await controller.savePreference({ expanded_group_code: "workspace" });
+  pending.resolve(normalizeWorkspaceNavigationPreference(preferencePayload()));
+  assert.equal((await old).status, 409);
+  assert.equal(reads, 2);
+  assert.deepEqual(calls.map(input => input.revision), [2, 3]);
+  assert.equal(latest.navigation.preference.expanded_group_code, "workspace");
+  assert.equal(controller.snapshot().navigation.preference.revision, 4);
+});
+
+test("preference revision conflict refreshes once and keeps queued writes on the latest revision", async () => {
+  const calls = [];
+  let reads = 0;
+  let keys = 0;
+  const controller = createWorkspaceNavigationController({
+    createIdempotencyKey: () => `preference:key-${++keys}`,
+    api: completeApi({
+      navigation: async () => {
+        const payload = navigationPayload();
+        payload.preference.revision = ++reads === 1 ? 2 : 3;
+        return normalizeWorkspaceNavigation(payload);
+      },
+      updatePreference: async (input) => {
+        calls.push(input);
+        if (calls.length === 1) throw Object.assign(new Error("revision changed"), {
+          status: 409, code: "identity.revision_conflict",
+        });
+        return normalizeWorkspaceNavigationPreference({ ...preferencePayload(),
+          revision: input.revision + 1, sidebar_collapsed: input.changes.sidebar_collapsed ?? false });
+      },
+    }),
+  });
+  await controller.loadNavigation();
+  await Promise.all([
+    controller.savePreference({ expanded_group_code: "gateway" }),
+    controller.savePreference({ sidebar_collapsed: true }),
+  ]);
+  assert.equal(reads, 2);
+  assert.deepEqual(calls.map(input => input.revision), [2, 3, 4]);
+  assert.notEqual(calls[0].idempotencyKey, calls[1].idempotencyKey);
+  assert.equal(controller.snapshot().navigation.preference.revision, 5);
+  assert.equal(controller.snapshot().status, "ready");
+  assert.equal(controller.snapshot().error, null);
+});
+
+test("preference recovery cannot write after the revalidated identity changes", async () => {
+  let identities = 0;
+  let writes = 0;
+  const controller = createWorkspaceNavigationController({
+    createIdempotencyKey: () => "preference:stable-key",
+    api: completeApi({
+      identitySession: async () => identitySession(++identities === 1 ? "identity-session-one" : "identity-session-two"),
+      updatePreference: async () => {
+        writes += 1;
+        throw Object.assign(new Error("revision changed"), { status: 409, code: "identity.revision_conflict" });
+      },
+    }),
+  });
+  await controller.loadNavigation();
+  await assert.rejects(controller.savePreference({ expanded_group_code: "gateway" }), error => error.status === 409);
+  assert.equal(writes, 1);
+  assert.equal(controller.snapshot().owner.globalSessionId, "identity-session-two");
+});
+
+test("lost preference response is reconciled before one bounded retry", async () => {
+  const calls = [];
+  let revision = 2;
+  let unavailable = false;
+  const controller = createWorkspaceNavigationController({
+    createIdempotencyKey: () => `preference:retry-${calls.length}`,
+    api: completeApi({
+      navigation: async () => normalizeWorkspaceNavigation({ ...navigationPayload(),
+        preference: { ...navigationPayload().preference, revision } }),
+      updatePreference: async input => {
+        calls.push(input);
+        assert.equal(input.revision, revision);
+        revision += 1;
+        if (calls.length === 1 || unavailable) throw Object.assign(new Error("connection lost"), {
+          status: 0, code: "workspace_navigation.network_unavailable",
+        });
+        return normalizeWorkspaceNavigationPreference({ ...preferencePayload(), revision,
+          expanded_group_code: input.changes.expanded_group_code });
+      },
+    }),
+  });
+  await controller.loadNavigation();
+  await controller.savePreference({ expanded_group_code: "workspace" });
+  assert.deepEqual(calls.map(input => input.revision), [2, 3]);
+  assert.equal(controller.snapshot().navigation.preference.expanded_group_code, "workspace");
+  unavailable = true;
+  await assert.rejects(controller.savePreference({ expanded_group_code: "gateway" }), /connection lost/u);
+  assert.equal(calls.length, 4); // Persistent outages cannot create an unlimited retry loop.
+  unavailable = false;
+  await controller.savePreference({ expanded_group_code: "gateway" });
+  assert.equal(calls.at(-1).revision, 6);
+});
+
+test("failed preference reconciliation retains the menu but requires reauthentication before writing", async () => {
+  let unavailable = false;
+  let reads = 0;
+  let writes = 0;
+  const controller = createWorkspaceNavigationController({
+    createIdempotencyKey: () => "preference:connection-recovery",
+    api: completeApi({
+      identitySession: async () => {
+        reads += 1;
+        if (unavailable) throw Object.assign(new Error("account connection lost"), {
+          status: 0, code: "identity.network_unavailable",
+        });
+        return identitySession();
+      },
+      updatePreference: async () => {
+        writes += 1;
+        if (writes === 1) {
+          unavailable = true;
+          throw Object.assign(new Error("response lost"), {
+            status: 0, code: "workspace_navigation.network_unavailable",
+          });
+        }
+        return normalizeWorkspaceNavigationPreference(preferencePayload());
+      },
+    }),
+  });
+  await controller.loadNavigation();
+  await assert.rejects(controller.savePreference({ expanded_group_code: "gateway" }), /account connection lost/u);
+  assert.ok(controller.snapshot().owner);
+  assert.ok(controller.snapshot().navigation);
+  await assert.rejects(controller.savePreference({ expanded_group_code: "gateway" }), /account connection lost/u);
+  assert.equal(writes, 1);
+  unavailable = false;
+  await controller.savePreference({ expanded_group_code: "gateway" });
+  assert.equal(writes, 2);
+  assert.equal(reads, 4);
+});
+
 test("PRD-146 late WorkspaceSession cannot replace the newer Workspace owner", async () => {
   const sessions = [deferred(), deferred()];
   const signals = [];

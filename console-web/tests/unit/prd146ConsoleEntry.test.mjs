@@ -446,7 +446,7 @@ test("PRD-146 old Workspace navigation controls cannot act on the current sessio
   }
 });
 
-for (const status of [401, 403, 409, 503]) {
+for (const status of [0, 401, 403, 409, 503]) {
   for (const stale of [false, true]) {
     test(`PRD-146 group preference ${status} ${stale ? "stale" : "current"} response is owner-fenced`, async () => {
       const { scope, effects } = harness();
@@ -462,10 +462,10 @@ for (const status of [401, 403, 409, 503]) {
       const operation = toggle({ dataset: { sidebarGroupToggle: "home" },
         closest: () => ({ querySelector: () => ({}) }), getAttribute: () => "false" }, shell());
       if (stale) scope.refreshSequence += 1;
-      pending.reject({ status });
+      pending.reject({ status, ...(status === 0 ? { code: "workspace_navigation.network_unavailable" } : {}) });
       await operation;
-      assert.deepEqual(effects, stale ? ["expand:home"] : status === 503
-        ? ["expand:home", "expand:null", "preference-error"] : ["expand:home", "invalidate"]);
+      assert.deepEqual(effects, stale ? ["expand:home"] : [0, 503].includes(status)
+        ? ["expand:home", "preference-error"] : ["expand:home", "invalidate"]);
     });
   }
 }

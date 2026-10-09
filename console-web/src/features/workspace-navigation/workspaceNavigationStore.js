@@ -196,9 +196,8 @@ export function createWorkspaceNavigationStore({ createIdempotencyKey } = {}) {
   function beginPreference(changes) {
     if (!owner || !navigation || !changes || typeof changes !== "object"
       || Array.isArray(changes) || Object.keys(changes).length === 0) return null;
-    const signature = JSON.stringify(Object.entries(changes).sort(([left], [right]) => (
-      left.localeCompare(right)
-    )));
+    const signature = JSON.stringify([navigation.contract_snapshot_id, navigation.preference.revision,
+      Object.entries(changes).sort(([left], [right]) => left.localeCompare(right))]);
     const idempotencyKey = pendingPreference?.signature === signature
       ? pendingPreference.idempotencyKey
       : createIdempotencyKey?.("preference");
@@ -251,6 +250,15 @@ export function createWorkspaceNavigationStore({ createIdempotencyKey } = {}) {
 
   function rejectPreference(ticket, nextError) {
     if (!current(ticket) || ticket.lane !== "preference") return false;
+    // A UI preference CAS conflict does not revoke the current authorization.
+    // Keep the projection so the controller can re-read and retry this write.
+    if (Number(nextError?.status) === 409 && nextError?.code === "identity.revision_conflict") {
+      active.delete(ticket);
+      pendingPreference = null;
+      status = "conflict";
+      error = nextError;
+      return true;
+    }
     return reject(ticket, nextError);
   }
 

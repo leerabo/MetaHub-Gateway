@@ -14,8 +14,10 @@ export function createWorkspaceNavigationController({ api, createIdempotencyKey 
   let workspaceSessionController = null;
   let workspaceSessionSequence = 0;
   let pendingAdvancedOpen = null;
+  let preferenceInFlight = 0;
+  let preferenceNeedsReload = false;
 
-  async function loadNavigation() {
+  async function loadNavigation({ recoverPreference = false } = {}) {
     const sequence = ++workspaceSessionSequence;
     workspaceSessionController?.abort();
     store.cancel("navigation");
@@ -80,6 +82,14 @@ export function createWorkspaceNavigationController({ api, createIdempotencyKey 
     } catch (error) {
       // Superseded failures must not look like a current 401/403 to the shell.
       if (!current()) throw conflictError();
+      if (recoverPreference && store.snapshot().owner
+        && (Number(error?.status) === 503 || error?.code?.endsWith(".network_unavailable"))) {
+        // Keep the authorized menu usable, but require another successful read
+        // before any preference write after this failed reconciliation.
+        preferenceNeedsReload = true;
+        store.cancel("navigation");
+        throw error;
+      }
       if (ticket) {
         if (!store.reject(ticket, error)) throw conflictError();
       } else {
@@ -110,22 +120,41 @@ export function createWorkspaceNavigationController({ api, createIdempotencyKey 
     const requestedGeneration = store.snapshot().generation;
     const operation = async () => {
       if (store.snapshot().generation !== requestedGeneration) throw conflictError();
-      const ticket = store.beginPreference(changes);
-      if (!ticket) throw new TypeError("workspace preference ticket is unavailable");
-      try {
-        const response = await api.updatePreference({
-          workspaceId: ticket.workspaceId,
-          contractSnapshotId: ticket.contractSnapshotId,
-          revision: ticket.revision,
-          changes: ticket.changes,
-          idempotencyKey: ticket.idempotencyKey,
-          signal: ticket.controller.signal,
-        });
-        if (!store.acceptPreference(ticket, response)) throw conflictError();
-        return store.snapshot();
-      } catch (error) {
-        if (!store.rejectPreference(ticket, error)) throw conflictError();
-        throw error;
+      if (!store.snapshot().owner) throw conflictError();
+      // Aborting fetch does not undo a PATCH already committed by the server.
+      // Reconcile its revision before the next write, within the same route owner.
+      if (preferenceNeedsReload || !store.snapshot().navigation) {
+        await loadNavigation({ recoverPreference: true });
+        if (store.snapshot().generation !== requestedGeneration) throw conflictError();
+        preferenceNeedsReload = false;
+      }
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const ticket = store.beginPreference(changes);
+        if (!ticket) throw conflictError();
+        preferenceInFlight += 1;
+        try {
+          const response = await api.updatePreference({
+            workspaceId: ticket.workspaceId,
+            contractSnapshotId: ticket.contractSnapshotId,
+            revision: ticket.revision,
+            changes: ticket.changes,
+            idempotencyKey: ticket.idempotencyKey,
+            signal: ticket.controller.signal,
+          });
+          if (!store.acceptPreference(ticket, response)) throw conflictError();
+          return store.snapshot();
+        } catch (error) {
+          if (!store.rejectPreference(ticket, error)) throw conflictError();
+          const lostResponse = error?.code === "workspace_navigation.network_unavailable";
+          if (lostResponse) preferenceNeedsReload = true;
+          if (attempt !== 0 || (!lostResponse && (Number(error?.status) !== 409
+            || error?.code !== "identity.revision_conflict"))) throw error;
+          await loadNavigation({ recoverPreference: true });
+          if (store.snapshot().generation !== requestedGeneration) throw conflictError();
+          preferenceNeedsReload = false;
+        } finally {
+          preferenceInFlight -= 1;
+        }
       }
     };
     const result = preferenceTail.then(operation, operation);
@@ -191,9 +220,11 @@ export function createWorkspaceNavigationController({ api, createIdempotencyKey 
     store.leave();
     preferenceTail = Promise.resolve();
     pendingAdvancedOpen = null;
+    preferenceNeedsReload = false;
   }
 
   function changeRoute() {
+    preferenceNeedsReload ||= preferenceInFlight > 0;
     workspaceSessionSequence += 1;
     workspaceSessionController?.abort();
     workspaceSessionController = null;
