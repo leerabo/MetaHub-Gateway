@@ -423,7 +423,7 @@ function renderIdentityTopbar(state) {
       ${renderWorkspaceSelector(state)}
       <div class="identity-topbar-actions">
         ${isNewOrganizationAccount(state) ? '<a class="identity-quiet-command" href="#workspaces">返回组织开通</a>' : ""}
-        ${available ? `<a class="identity-quiet-command" href="console.html">${icon("arrow-left")}${escapeHtml(state.workspaceContext?.role === "owner" || state.workspaceContext?.role === "admin" ? "进入组织管理" : "进入组织空间")}</a>` : ""}
+        ${available ? `<a class="identity-quiet-command" href="console.html">${icon("arrow-left")}${escapeHtml(state.workspaceContext?.kind === "personal" ? "进入个人空间" : state.workspaceContext?.role === "owner" || state.workspaceContext?.role === "admin" ? "进入组织管理" : "进入组织空间")}</a>` : ""}
         <button
           class="identity-notification-button"
           type="button"
@@ -2453,7 +2453,7 @@ function renderOrganizationStart(container, state) {
         <p class="identity-organization-account">${escapeHtml(state.account.display_name || state.account.email)}</p>
         <h1 id="organization-start-title">${creating ? "创建组织" : "你的组织，从这里开始"}</h1>
         ${renderFeedback(state.feedback)}${renderError(state.error)}
-        ${creating ? renderWorkspaceCreateForm(state.workspaceDraft, { organizationOnly: true, busy: state.workspaceCreating })
+          ${creating ? renderWorkspaceCreateForm(state.workspaceDraft, { busy: state.workspaceCreating })
     : `<button class="identity-primary identity-organization-create" type="button" data-identity-action="show-workspace-create"><span>创建组织</span>${icon("arrow-right")}</button>`}
       </main>
     </div>`;
@@ -2472,7 +2472,7 @@ function renderWorkspaceSection(state) {
         ${
           creating
             ? ""
-            : '<button class="identity-quiet-command" type="button" data-identity-action="show-workspace-create"><span aria-hidden="true">+</span> 创建空间</button>'
+            : '<button class="identity-quiet-command" type="button" data-identity-action="show-workspace-create"><span aria-hidden="true">+</span> 创建组织</button>'
         }
       </div>
       ${creating ? renderWorkspaceCreateForm(state.workspaceDraft, { busy: state.workspaceCreating }) : renderWorkspaceList(workspaces, state.workspaceChoices)}
@@ -2503,30 +2503,19 @@ function renderWorkspaceList(workspaces, choices = []) {
     .join("")}</div>`;
 }
 
-function renderWorkspaceCreateForm(draft = {}, { organizationOnly = false, busy = false } = {}) {
-  const kind = draft?.kind === "personal" ? "personal" : "organization";
+function renderWorkspaceCreateForm(draft = {}, { busy = false } = {}) {
   const disabled = busy ? "disabled" : "";
   return `
     <form class="identity-workspace-form" data-workspace-create-form aria-busy="${busy}">
-      <input type="hidden" name="kind" value="${kind}" />
-      ${organizationOnly ? "" : `<div class="identity-workspace-kind" role="group" aria-label="空间类型">
-        <button type="button" data-identity-action="set-workspace-kind" data-workspace-kind="personal" aria-pressed="${kind === "personal"}" ${disabled}>个人</button>
-        <button type="button" data-identity-action="set-workspace-kind" data-workspace-kind="organization" aria-pressed="${kind === "organization"}" ${disabled}>企业</button>
-      </div>`}
-      ${
-        kind === "organization"
-          ? `
-            <label>
-              <span>组织名称</span>
-              <input name="name" type="text" maxlength="160" autocomplete="organization" placeholder="公司或团队名称" value="${escapeAttribute(draft?.name ?? "")}" required autofocus ${disabled} />
-            </label>
-          `
-          : ""
-      }
-      <p class="identity-empty">创建后，你将成为新空间的所有者。点击创建表示同意为当前账号创建独立空间。</p>
+      <input type="hidden" name="kind" value="organization" />
+      <label>
+        <span>组织名称</span>
+        <input name="name" type="text" maxlength="160" autocomplete="organization" placeholder="公司或团队名称" value="${escapeAttribute(draft?.name ?? "")}" required autofocus ${disabled} />
+      </label>
+      <p class="identity-empty">创建后，你将成为该组织空间的所有者。</p>
       <div class="identity-workspace-actions">
         <button class="identity-quiet-command" type="button" data-identity-action="cancel-workspace-create" ${disabled}>取消</button>
-        <button class="identity-primary" type="submit" ${disabled}>${busy ? "正在创建" : kind === "organization" ? "创建组织" : "创建空间"}</button>
+        <button class="identity-primary" type="submit" ${disabled}>${busy ? "正在创建" : "创建组织"}</button>
       </div>
     </form>
   `;

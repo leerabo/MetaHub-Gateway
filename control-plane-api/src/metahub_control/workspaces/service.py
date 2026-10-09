@@ -115,6 +115,10 @@ def create_workspace(
                 trace_id=trace_id,
             )
 
+        # Keep completed legacy requests replayable; never provision new personal spaces.
+        if normalized["kind"] == "personal":
+            raise ApiError("workspace.personal_creation_disabled")
+
         account = connection.execute(
             """
             SELECT account_id,email_normalized,display_name,credential_revision
@@ -477,6 +481,8 @@ def probe_workspace_creation_replay(
             (identity.account_id, key_hmac),
         ).fetchone()
         if existing is None:
+            if normalized["kind"] == "personal":
+                raise ApiError("workspace.personal_creation_disabled")
             return identity.account_id, None
         if not hmac.compare_digest(str(existing["request_sha256"]), request_sha256):
             raise ApiError("workspace.idempotency_conflict")

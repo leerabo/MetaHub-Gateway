@@ -758,7 +758,13 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
     "workspace.kind_invalid": ErrorSpec(
         422,
         "Workspace kind is invalid.",
-        "Choose personal or organization.",
+        "Choose organization when creating a Workspace.",
+        owner="workspace",
+    ),
+    "workspace.personal_creation_disabled": ErrorSpec(
+        422,
+        "New personal Workspaces are no longer available.",
+        "Create an organization Workspace. Existing Workspaces remain accessible.",
         owner="workspace",
     ),
     "workspace.slug_invalid": ErrorSpec(

@@ -327,7 +327,7 @@ async def test_organization_create_is_atomic_idempotent_and_has_no_fake_resource
 
 
 @pytest.mark.anyio
-async def test_personal_region_exact_body_and_cross_account_boundaries(
+async def test_retired_personal_creation_region_and_cross_account_boundaries(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     migrated_workspace_database: Path,
@@ -342,12 +342,13 @@ async def test_personal_region_exact_body_and_cross_account_boundaries(
             "service_mode": "internal_only",
         }
         created = await _create(first, personal_body, "workspace-personal-idempotency-01")
-        assert created.status_code == 201
-        workspace_id = created.json()["workspace"]["workspace_id"]
-        assert created.json()["workspace"]["slug"] is None
-        duplicate = await _create(first, personal_body, "workspace-personal-idempotency-02")
-        assert duplicate.status_code == 409
-        assert duplicate.json()["code"] == "workspace.create_conflict"
+        assert created.status_code == 422
+        assert created.json()["code"] == "workspace.personal_creation_disabled"
+        assert (await first.get("/workspaces")).json()["workspaces"] == []
+        organization = await _create(first, _organization("retired-personal-owner", "Team"),
+                                     "workspace-organization-idempotency-02")
+        assert organization.status_code == 201
+        workspace_id = organization.json()["workspace"]["workspace_id"]
         invalid_region = await _create(
             first,
             {**personal_body, "region": "us-east-1"},

@@ -290,7 +290,7 @@ export async function createAccountWorkspace({
   idempotencyKey,
   signal,
 } = {}) {
-  const normalizedKind = requireClientChoice(kind, ["personal", "organization"], "kind");
+  const normalizedKind = requireClientChoice(kind, ["organization"], "kind");
   const body = {
     kind: normalizedKind,
   };

@@ -69,7 +69,7 @@ export function renderConsoleShell({
   });
   const activeItem = activeNavigationItem(consoleShellState, navigationItems);
   const contentOwnsTitle = activeItem.id === "overview" && pageContentHtml?.includes('class="workspace-overview"');
-  const shellCopy = workspaceRoleShellCopy(roleCode, i18n);
+  const shellCopy = workspaceRoleShellCopy(roleCode, i18n, consoleShellState?.workspaceContext?.kind);
   const homeItemOrder = ["owner", "admin"].includes(roleCode)
     ? ["overview", "quickstart"]
     : ["quickstart", "overview"];
@@ -426,7 +426,7 @@ function renderUserMenu(authContext, i18n, navigation, consoleShellState) {
       <div><strong>${escapeHtml(identity.account.display_name || identity.account.email || "")}</strong>
         <span>${escapeHtml(workspace.name ?? "")}</span><small>${escapeHtml(workspaceRoleLabel(workspace.role, i18n))}</small></div>
       <a class="user-menu-preferences" href="identity.html?view=account#security">${escapeHtml(t(i18n, "shell.account_settings", "账号设置"))}</a>
-      <a class="user-menu-preferences" href="identity.html?view=workspaces">${escapeHtml(t(i18n, "shell.switch_workspace", "切换组织"))}</a>
+      <a class="user-menu-preferences" href="identity.html?view=workspaces">${escapeHtml(t(i18n, "shell.switch_workspace", "切换空间"))}</a>
       <button id="logout-button" type="button">${escapeHtml(t(i18n, "shell.logout", "登出"))}</button>
     </div>`;
   }
@@ -450,7 +450,8 @@ function renderUserMenu(authContext, i18n, navigation, consoleShellState) {
   `;
 }
 
-function workspaceRoleShellCopy(roleCode, i18n) {
+function workspaceRoleShellCopy(roleCode, i18n, workspaceKind = "organization") {
+  if (workspaceKind === "personal") return { sidebarTitle: "个人空间" };
   const label = workspaceRoleLabel(roleCode, i18n);
   if (roleCode === "owner" || roleCode === "admin") {
     return { sidebarTitle: t(i18n, "shell.org_management", "组织管理") };

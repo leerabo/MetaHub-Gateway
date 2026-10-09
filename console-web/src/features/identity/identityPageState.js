@@ -931,7 +931,7 @@ export function createIdentityPageController({
       return true;
     },
     setWorkspaceKind(kind) {
-      if (workspaceCreating || workspaceView !== "create" || !new Set(["personal", "organization"]).has(kind)) {
+      if (workspaceCreating || workspaceView !== "create" || kind !== "organization") {
         return false;
       }
       workspaceDraft = { ...workspaceDraft, kind };
@@ -977,6 +977,10 @@ export function createIdentityPageController({
     },
     async createWorkspace({ kind, name, slug, region, serviceMode }) {
       if (workspaceCreating || workspaceView !== "create" || !workspaceDraft) return false;
+      if (kind !== "organization") {
+        renderSecurity({ error: { message: "已停止新建个人空间，请创建组织空间。" } });
+        return false;
+      }
       const input = {
         kind,
         localConsentVersion: "workspace-creation-2026-10-09",
@@ -4995,6 +4999,7 @@ function safePageError(error) {
     || error instanceof PrivacyApiError || error instanceof ComplianceApiError) {
     const messages = {
       "workspace.account_unverified": "此账号尚未完成邮箱验证，请先通过登录页的“忘记密码”验证邮箱，再创建组织。你在现有组织中的员工职责不影响创建自己的组织。",
+      "workspace.personal_creation_disabled": "已停止新建个人空间，请创建组织空间。已有空间仍可使用。",
       "identity.delivery_unavailable": "邮箱验证服务尚未配置，请联系平台管理员。",
       "identity.registration_invalid": "注册信息不完整或格式不正确，请检查后重试。",
       "identity.password_invalid": "密码长度须为 8 至 1024 字节。",

@@ -76,6 +76,12 @@ async def test_local_signup_creates_owner_and_switches_without_mailbox_proof(
             "Origin": ORIGIN, "Idempotency-Key": "local-workspace-no-csrf-001",
         })
         assert no_csrf.status_code == 403
+        retired = await client.post("/workspaces", json={"kind": "personal"}, headers={
+            **headers, "Idempotency-Key": "retired-personal-workspace-001",
+        })
+        assert retired.status_code == 422, retired.text
+        assert retired.json()["code"] == "workspace.personal_creation_disabled"
+        assert (await client.get("/identity/workspaces")).json()["workspaces"] == []
         name_only = {"kind": "organization", "name": "研发团队"}
         created = await client.post("/workspaces", json=name_only, headers=headers)
         assert created.status_code == 201, created.text

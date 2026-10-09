@@ -100,13 +100,13 @@ test("workspace client sends exact cookie, CSRF, and idempotency contracts", asy
       idempotencyKey: "workspace-request-0001",
       localConsentVersion: "workspace-creation-2026-10-09",
     });
-    await createAccountWorkspace({
+    await assert.rejects(() => createAccountWorkspace({
       controlApiUrl: CONTROL_URL,
       kind: "personal",
       region: "cn-east-1",
       serviceMode: "public_service",
       idempotencyKey: "workspace-request-0002",
-    });
+    }), (error) => error.code === "workspace.request_invalid");
   } finally {
     globalThis.document = originalDocument;
   }
@@ -115,7 +115,6 @@ test("workspace client sends exact cookie, CSRF, and idempotency contracts", asy
     calls.map(({ url, options }) => [url, options.method, options.credentials, options.cache]),
     [
       ["http://control.local/workspaces", "GET", "include", "no-store"],
-      ["http://control.local/workspaces", "POST", "include", "no-store"],
       ["http://control.local/workspaces", "POST", "include", "no-store"],
     ],
   );
@@ -129,11 +128,6 @@ test("workspace client sends exact cookie, CSRF, and idempotency contracts", asy
     name: "Acme AI",
     slug: "acme-ai",
     local_consent_version: "workspace-creation-2026-10-09",
-  });
-  assert.deepEqual(JSON.parse(calls[2].options.body), {
-    kind: "personal",
-    region: "cn-east-1",
-    service_mode: "public_service",
   });
   for (const call of calls) {
     assert.equal("Authorization" in call.options.headers, false);
@@ -490,6 +484,28 @@ test("security renderer escapes workspace fields and omits all internal identifi
   assert.match(root.innerHTML, /data-session-index="0"/u);
   assert.match(root.innerHTML, /data-session-index="1"/u);
   assert.doesNotMatch(root.innerHTML, new RegExp(`${SESSION_ONE}|${SESSION_TWO}`, "u"));
+});
+
+test("only organization creation is offered and stale personal submissions cannot create a space", async () => {
+  const root = createRoot();
+  let creates = 0;
+  const controller = createIdentityPageController({ root, api: workingApi({
+    createWorkspace: async () => { creates++; return workspaceDetailPayload(); },
+  }) });
+  await controller.mount();
+  controller.showWorkspaceCreate();
+  assert.match(root.innerHTML, /name="kind" value="organization"/u);
+  assert.match(root.innerHTML, /组织名称/u);
+  assert.doesNotMatch(root.innerHTML, /data-workspace-kind="personal"|空间类型/u);
+  assert.equal(controller.setWorkspaceKind("personal"), false);
+  assert.equal(await controller.createWorkspace({ kind: "personal" }), false);
+  assert.equal(creates, 0);
+  assert.match(root.innerHTML, /已停止新建个人空间/u);
+  renderIdentitySecurityPage(root, { account: account(), workspaces: [workspace({
+    kind: "personal", name: "Existing Personal Space",
+  })], workspaceView: "summary" });
+  assert.match(root.innerHTML, /Existing Personal Space/u);
+  assert.match(root.innerHTML, /个人空间/u);
 });
 
 test("workspace controller reuses a key only for an identical failed body", async () => {
