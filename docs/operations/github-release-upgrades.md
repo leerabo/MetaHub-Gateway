@@ -1,6 +1,6 @@
 # Ubuntu 上的 GitHub 版本更新
 
-状态：更新代码和本地边界测试已加入，完整 Ubuntu 安装、升级、恢复验收仍在进行。当前没有上传或发布本次试用版本，不能把本文当作已经完成部署的证明。
+状态：`v2.0.0-trial.45` 已上传为 GitHub prerelease，包含部署包、清单、签名和公钥；完整 Ubuntu 安装、升级、恢复验收仍在进行，不能把本文当作已经完成公网部署的证明。
 
 ## 流程
 
@@ -42,7 +42,7 @@ openssl genpkey -algorithm Ed25519 -out /offline/release-private.pem
 openssl pkey -in /offline/release-private.pem -pubout -out release-public.pem
 ```
 
-公钥通过独立可信渠道核对并安装，不能让更新程序从同一个待验证发布包获取信任根。经批准发布时，本轮 GitHub Release 标签为 `v2.0.0-trial.45`，附上上面三个文件。默认不执行仓库中的 Git hooks，也不在服务器上运行 `git pull`。本文未创建 GitHub Actions 或自动发布任务。
+公钥通过独立可信渠道核对并安装，不能让更新程序从同一个待验证发布包获取信任根。本轮 GitHub Release 标签为 `v2.0.0-trial.45`，已附上部署包、清单、签名和公钥四个文件。默认不执行仓库中的 Git hooks，也不在服务器上运行 `git pull`。本文未创建 GitHub Actions 或自动发布任务。
 
 ## 宿主机配置
 
@@ -63,7 +63,7 @@ sudo systemctl enable --now metahub-update.timer metahub-release-sync.timer
 sudo systemctl start metahub-release-sync.service
 ```
 
-systemd 示例假设初始工具目录为 `/opt/metahub`，实际不同则修改 ExecStart。仓库目前为 `leerabo/MetaHub`。试用预发布版本需显式 `include_prereleases: true`；正式环境可设为 false。本版下载器支持公开仓库，没有接收或保存 GitHub token；私有仓库支持尚未完成。网络需允许 GitHub API/Release 资源，以及镜像构建使用的官方镜像、Python 和 Debian 固定快照源。
+systemd 示例假设初始工具目录为 `/opt/metahub`，实际不同则修改 ExecStart。仓库目前为 `leerabo/MetaHub`。试用预发布版本需显式 `include_prereleases: true`；正式环境可设为 false。当前自动同步脚本仍按公开仓库流程运行；本次私有仓库安装按 Release 说明使用临时 GitHub token 通过 API 下载，token 只在 root 私有环境中提供，不写入更新器、网页或日志。网络需允许 GitHub API/Release 资源，以及镜像构建使用的官方镜像、Python 和 Debian 固定快照源。
 
 ## 配置和数据
 

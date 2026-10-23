@@ -55,7 +55,7 @@ npm --prefix console-web run dev
 常用验证命令：
 
 ```bash
-npm --prefix console-web test -- --runInBand
+npm --prefix console-web test
 npm --prefix console-web run lint -- --no-fix
 npm --prefix console-web run build
 ```
