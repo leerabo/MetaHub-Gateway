@@ -78,6 +78,21 @@ def test_expired_deadline_blocks_sql_but_never_blocks_rollback(monkeypatch):
     assert native.statements == [("ROLLBACK", None)]
 
 
+def test_read_only_snapshot_starts_before_transaction_local_deadline_settings(monkeypatch):
+    """A settings SELECT would implicitly start a transaction before isolation is set."""
+    monkeypatch.setattr(database.time, "monotonic", lambda: 100)
+    native = NativeConnection()
+    connection = database._PostgresConnection(native, None)
+    begin = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"
+    with database.database_operation_deadline(101):
+        connection.execute(begin)
+        connection.execute("SELECT 1")
+        connection.execute("ROLLBACK")
+    assert native.statements[0] == (begin, None)
+    assert "set_config" in native.statements[1][0]
+    assert native.statements[2:] == [("SELECT 1", None), ("ROLLBACK", None)]
+
+
 @pytest.mark.parametrize("deadline", [True, "bad", float("nan"), float("inf")])
 def test_invalid_deadline_does_not_change_context(deadline):
     with pytest.raises(sqlite3.Error), database.database_operation_deadline(deadline):

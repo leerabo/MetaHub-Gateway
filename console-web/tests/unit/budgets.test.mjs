@@ -224,18 +224,19 @@ test("renderBudgetPanel puts one rule list before employee lookup and opens an e
   assert.doesNotMatch(html, /id="budget-scope-chain-key"/);
   assert.doesNotMatch(html, /mhv_prod_\*\*\*\*/);
   assert.doesNotMatch(html, /tenant_id/);
-  assert.ok(html.indexOf("已设置的预算") < html.indexOf("查询员工用量"));
+  assert.ok(html.indexOf("组织、项目与应用预算") < html.indexOf("查询员工用量"));
   assert.doesNotMatch(html, /运行环境摘要|组织预算概览/);
 });
 
-test("renderBudgetPanel pages rules and waits for an employee search", () => {
+test("renderBudgetPanel separates personal rules and waits for an employee search", () => {
   const html = renderBudgetPanel({
     state: "ok", rules: { budget_rules: budgetRulesPayload.budget_rules, total: 37 },
     ruleOffset: 10, people: { people: [], total: 0 }, peopleSearch: "",
   }, budgetWriterContext(), virtualKeysState, projectState);
-  assert.match(html, /共 37 条规则，每页最多 10 条/);
-  assert.match(html, /11–20 \/ 37/);
-  assert.match(html, /data-budget-rule-page="1"/);
+  assert.match(html, /人员预算/);
+  assert.match(html, /data-budget-open-form="virtual_key">＋ 新增人员预算/);
+  assert.match(html, /查找员工并选择其调用 KEY/);
+  assert.doesNotMatch(html, /data-budget-rule-page/);
   assert.match(html, /输入姓名或邮箱后查找；每页最多显示 20 人/);
 });
 
@@ -299,6 +300,7 @@ test("renderBudgetPanel is read only after write revocation and hidden without r
 
   assert.match(readerHtml, /当前角色可查看预算状态/);
   assert.doesNotMatch(readerHtml, /budget-rule-form/);
+  assert.doesNotMatch(readerHtml, /data-budget-open-form/);
   assert.equal(viewerHtml, "");
 });
 
@@ -340,4 +342,22 @@ test("renderDeveloperStart renders budgets active navigation content", () => {
 
   assert.match(container.innerHTML, /budgets-panel/);
   assert.match(container.innerHTML, /生产 Key 日预算/);
+});
+
+
+test("budget hierarchy keeps child-only caps under authoritative parents and separates people", () => {
+  const base = budgetRulesPayload.budget_rules[0];
+  const rules = [
+    {...base, budget_rule_id:"org", scope_type:"tenant", scope_id:"tenant", scope_label:"测试组织", environment_id:"dev", budget_period:"month"},
+    {...base, budget_rule_id:"app", scope_type:"application", scope_id:"app_1", scope_label:"应用甲", environment_id:"dev", budget_scope:{parent_scope_id:"prj_1"}},
+    {...base, budget_rule_id:"person", scope_owner_display_name:"张三", scope_owner_email:"person@example.invalid", environment_id:"dev"}
+  ];
+  const html = renderBudgetPanel({state:"ok", rules:{budget_rules:rules}}, budgetWriterContext(), null, projectState);
+  assert.match(html, /data-budget-depth="0" open/);
+  assert.match(html, /data-budget-depth="1"/);
+  assert.match(html, /本层未设置预算/);
+  const personal = html.slice(html.indexOf('aria-label="人员预算"'));
+  assert.match(personal, /张三/);
+  assert.doesNotMatch(personal, /data-budget-rule-id="app"/);
+  assert.match(html, /预算告警/);
 });

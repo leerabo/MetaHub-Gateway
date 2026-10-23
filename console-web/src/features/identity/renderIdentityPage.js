@@ -2,10 +2,12 @@
 import { renderPrivacyCenter } from "./renderPrivacyCenter.js";
 import { renderComplianceCenter } from "./renderComplianceCenter.js";
 import { renderAccountPreferences } from "../account-preferences/renderAccountPreferences.js";
+import { renderThemeToggle } from "../../lib/theme.js";
 
 export function renderIdentityAccountLoadingPage(root) {
   root.innerHTML = `<section class="identity-account-loading" aria-busy="true" aria-label="加载账号设置">
     <a href="console.html">MetaHub</a><h1>账号设置</h1>
+    <p role="status" aria-live="polite">正在加载账号和空间信息…</p>
     <div class="identity-account-skeleton" aria-hidden="true"></div>
     <div class="identity-account-skeleton" aria-hidden="true"></div>
   </section>`;
@@ -422,6 +424,7 @@ function renderIdentityTopbar(state) {
       </a>
       ${renderWorkspaceSelector(state)}
       <div class="identity-topbar-actions">
+        ${renderThemeToggle()}
         ${isNewOrganizationAccount(state) ? '<a class="identity-quiet-command" href="#workspaces">返回组织开通</a>' : ""}
         ${available ? `<a class="identity-quiet-command" href="console.html">${icon("arrow-left")}${escapeHtml(state.workspaceContext?.role === "owner" || state.workspaceContext?.role === "admin" ? "进入组织管理" : "进入组织空间")}</a>` : ""}
         <button

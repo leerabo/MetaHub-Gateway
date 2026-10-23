@@ -201,8 +201,8 @@ test("Developer and Platform render public lifecycle proof without private keys 
 
   const root = { innerHTML: "" };
   renderPlatformWorkspace(root, platformState(platformWorkspace()));
-  assert.match(root.innerHTML, /Contracts and SDKs/u);
-  assert.match(root.innerHTML, /Canonical diff and approval/u);
+  assert.match(root.innerHTML, /接口与 SDK 发布/u);
+  assert.match(root.innerHTML, /接口版本/u);
   assert.match(root.innerHTML, /data-platform-developer-contract-build-form/u);
   assert.match(root.innerHTML, /data-platform-developer-contract-approve-form/u);
   assert.match(root.innerHTML, /Signature summary/u);
@@ -277,7 +277,7 @@ test("Platform release controller commits current builds and clears workspace af
     newIdempotencyKey: () => IDEMPOTENCY,
   });
   assert.equal(await controller.mount(), true);
-  assert.match(root.innerHTML, /Contracts and SDKs/u);
+  assert.match(root.innerHTML, /接口与 SDK 发布/u);
   assert.equal(await controller.buildDeveloperContract({
     apiVersion: "1.1.0",
     pythonSdkVersion: "1.1.0",
@@ -296,7 +296,7 @@ test("Platform release controller commits current builds and clears workspace af
     producerRevision: 46,
     confirmed: true,
   }), false);
-  assert.doesNotMatch(root.innerHTML, /Contracts and SDKs/u);
+  assert.doesNotMatch(root.innerHTML, /接口与 SDK 发布/u);
   assert.doesNotMatch(root.innerHTML, /api-v1-to-v1\.1/u);
   controller.destroy();
   assert.equal(root.innerHTML, "");

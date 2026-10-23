@@ -1,6 +1,7 @@
 """模块职责：说明本文件在 MetaHub 企业级 AI Gateway 中承担的接口、服务或测试职责。
 
-维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，Provider Key 与 Token 不得明文落日志。
+维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义。
+Provider Key 与 Token 不得明文落日志。
 来源文件：gateway-data-plane/tests/integration/test_model_alias_routing.py
 """
 
@@ -22,6 +23,7 @@ from metahub_gateway.api.openai_compatible import router as openai_compatible_ro
 from metahub_gateway.providers import keypool as provider_keypool
 from metahub_gateway.routing import models as routing_models
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
+from metahub_shared.db import seed as seed_module
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import create_service_app
 
@@ -129,7 +131,8 @@ def fake_upstream():
 
 
 def prepare_database(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, provider_base_url: str
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, provider_base_url: str,
+    *, catalog_prices_only: bool = False,
 ) -> str:
     """prepare_database：说明该定义的测试或脚本职责。
 
@@ -142,8 +145,33 @@ def prepare_database(
     monkeypatch.setenv("METAHUB_PROVIDER_LOCAL_OPENAI_API_KEY", PROVIDER_KEY)
     monkeypatch.setenv("METAHUB_SEED_VIRTUAL_KEY", VIRTUAL_KEY)
     apply_migrations(database_url)
-    seed = apply_seed_data(database_url)
+    if catalog_prices_only:
+        # Catalog repricing excludes the example seed's higher-priority free
+        # provider contract. Real request-time price precedence stays intact.
+        with monkeypatch.context() as seeding:
+            seeding.setattr(seed_module, "_upsert_commercial_provider_cost_rate", lambda *a: None)
+            seed = apply_seed_data(database_url)
+    else:
+        seed = apply_seed_data(database_url)
     connection = connect_database(database_url)
+    # Gateway calls require an active application in an active project. Keep
+    # alias tests behind the same authorization gate as actual client calls.
+    timestamp = "2026-07-09T00:00:00Z"
+    project_id, application_id = "prj_prd015_alias", "app_prd015_alias"
+    connection.execute(
+        """INSERT INTO projects(project_id,tenant_id,project_code,name,status,created_at,updated_at)
+        VALUES(?,?,'alias-test','Alias test project','active',?,?)""",
+        (project_id, seed.tenant_id, timestamp, timestamp),
+    )
+    connection.execute(
+        """INSERT INTO applications(application_id,tenant_id,project_id,application_code,name,
+        status,created_at,updated_at) VALUES(?,?,?,'alias-test','Alias test app','active',?,?)""",
+        (application_id, seed.tenant_id, project_id, timestamp, timestamp),
+    )
+    connection.execute(
+        "UPDATE virtual_keys SET project_id=?,application_id=? WHERE tenant_id=?",
+        (project_id, application_id, seed.tenant_id),
+    )
     provider = connection.execute(
         "SELECT provider_id FROM providers WHERE tenant_id=? AND provider_code='local_openai'",
         (seed.tenant_id,),
@@ -187,6 +215,16 @@ def prepare_database(
         """,
         (seed.tenant_id, environment["environment_id"], default_model["model_id"]),
     )
+    # Current Control API writes the normalized fallback collection together
+    # with its legacy single-field projection. Snapshot graph guards require it.
+    connection.execute(
+        """INSERT INTO model_alias_fallback_candidates(
+          model_alias_fallback_candidate_id, tenant_id, model_alias_id, model_id,
+          configured_priority, created_at, updated_at
+        ) VALUES('mafc_prd015_fallback', ?, 'alias_prd015_company_default',
+                 'model_prd015_fallback', 1, ?, ?)""",
+        (seed.tenant_id, timestamp, timestamp),
+    )
     connection.commit()
     return database_url
 
@@ -224,7 +262,8 @@ async def test_model_alias_routes_to_default_model_and_logs_decision(
     connection = connect_database(database_url)
     decision = connection.execute(
         """
-        SELECT requested_model, selected_internal_model_id, provider_code, decision_status, decision_reason
+        SELECT requested_model, selected_internal_model_id, provider_code,
+               decision_status, decision_reason
         FROM routing_decisions
         WHERE request_id='req_prd015_alias_default'
         """
@@ -947,7 +986,9 @@ async def test_cost_first_selects_lower_estimated_cost_and_persists_candidates(
     """成本优先只在两候选合格时估算 Token，并原子保存策略、价格和候选解释。"""
 
     upstream_url, captured = fake_upstream
-    database_url = prepare_database(monkeypatch, tmp_path, upstream_url)
+    database_url = prepare_database(
+        monkeypatch, tmp_path, upstream_url, catalog_prices_only=True,
+    )
     connection = connect_database(database_url)
     connection.execute(
         """
@@ -1011,6 +1052,75 @@ async def test_cost_first_selects_lower_estimated_cost_and_persists_candidates(
     ]
     assert all(row["price_source"] == "model_catalog" for row in candidates)
     assert all(len(str(row["estimated_cost_amount"]).partition(".")[2]) == 15 for row in candidates)
+
+
+@pytest.mark.anyio
+async def test_cost_first_reprices_each_request_without_rewriting_prior_decisions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_upstream,
+) -> None:
+    """Catalog price changes must affect the next request and preserve old facts."""
+    await test_cost_first_selects_lower_estimated_cost_and_persists_candidates(
+        monkeypatch, tmp_path, fake_upstream,
+    )
+    _, captured = fake_upstream
+    connection = connect_database(sqlite_url(tmp_path / "metahub.db"))
+    try:
+        prior = [tuple(row) for row in connection.execute(
+            "SELECT c.* FROM routing_candidates c JOIN routing_decisions d "
+            "ON d.routing_decision_id=c.routing_decision_id "
+            "WHERE d.request_id='req_prd047_cost_first' ORDER BY c.configured_priority"
+        ).fetchall()]
+        app = build_gateway_app()
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://gateway",
+        ) as client:
+            for alias, price, version, expected in [
+                ("default-chat", "0.010000000000", "catalog-repriced-v2", "local-chat-model"),
+                ("fallback-chat", "0.000000000000", "catalog-free-v3", "fallback-upstream"),
+            ]:
+                connection.execute(
+                    "UPDATE models SET input_price_per_1k=?, output_price_per_1k=?, "
+                    "price_schema_version=? WHERE model_alias=?",
+                    (price, price, version, alias),
+                )
+                connection.commit()
+                response = await client.post(
+                    "/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {VIRTUAL_KEY}",
+                        "X-Request-ID": f"req_cost_repriced_{version}",
+                    },
+                    json={
+                        "model": "company-default",
+                        "messages": [{"role": "user", "content": "12345678"}],
+                        "max_completion_tokens": 8,
+                    },
+                )
+                assert response.status_code == 200, response.text
+                assert captured[-1]["body"]["model"] == expected
+                decision = connection.execute(
+                    "SELECT routing_policy_version, decision_reason FROM routing_decisions "
+                    "WHERE request_id=?", (f"req_cost_repriced_{version}",),
+                ).fetchone()
+                assert tuple(decision) == (2, "routing.cost_lowest")
+                selected = connection.execute(
+                    "SELECT c.price_schema_version FROM routing_candidates c "
+                    "JOIN routing_decisions d ON d.routing_decision_id=c.routing_decision_id "
+                    "WHERE d.request_id=? AND c.status='selected'",
+                    (f"req_cost_repriced_{version}",),
+                ).fetchone()
+                assert selected[0] == version
+        assert len(captured) == 3
+        after = [tuple(row) for row in connection.execute(
+            "SELECT c.* FROM routing_candidates c JOIN routing_decisions d "
+            "ON d.routing_decision_id=c.routing_decision_id "
+            "WHERE d.request_id='req_prd047_cost_first' ORDER BY c.configured_priority"
+        ).fetchall()]
+        assert after == prior
+    finally:
+        connection.close()
 
 
 @pytest.mark.parametrize(
@@ -2278,7 +2388,8 @@ async def test_model_alias_skips_fresh_unhealthy_provider(
         (tenant_id, upstream_url),
     )
     connection.execute(
-        "UPDATE models SET provider_id='provider_prd035_fallback' WHERE model_id='model_prd015_fallback'"
+        "UPDATE models SET provider_id='provider_prd035_fallback' "
+        "WHERE model_id='model_prd015_fallback'"
     )
     connection.execute(
         """
@@ -2322,7 +2433,8 @@ async def test_direct_model_rejects_fresh_but_allows_stale_unhealthy_provider(
     database_url = prepare_database(monkeypatch, tmp_path, upstream_url)
     connection = connect_database(database_url)
     connection.execute(
-        "UPDATE providers SET health_status='unhealthy', health_updated_at=datetime('now') WHERE provider_code='local_openai'"
+        "UPDATE providers SET health_status='unhealthy', health_updated_at=datetime('now') "
+        "WHERE provider_code='local_openai'"
     )
     connection.commit()
     app = build_gateway_app()
@@ -2334,7 +2446,8 @@ async def test_direct_model_rejects_fresh_but_allows_stale_unhealthy_provider(
             json={"model": "default-chat", "messages": [{"role": "user", "content": "blocked"}]},
         )
         connection.execute(
-            "UPDATE providers SET health_updated_at=datetime('now', '-10 minutes') WHERE provider_code='local_openai'"
+            "UPDATE providers SET health_updated_at=datetime('now', '-10 minutes') "
+            "WHERE provider_code='local_openai'"
         )
         connection.commit()
         allowed = await client.post(
@@ -2674,7 +2787,8 @@ async def test_model_alias_disabled_and_no_active_model_failures_are_logged(
         )
         connection.execute("UPDATE model_aliases SET status='active' WHERE alias='company-default'")
         connection.execute(
-            "UPDATE models SET status='disabled' WHERE model_alias IN ('default-chat', 'fallback-chat')"
+            "UPDATE models SET status='disabled' "
+            "WHERE model_alias IN ('default-chat', 'fallback-chat')"
         )
         connection.commit()
         no_active_model = await client.post(

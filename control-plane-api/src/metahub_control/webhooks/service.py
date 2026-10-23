@@ -1447,13 +1447,13 @@ def _dispatch_event_with_pending_resume(
                 )
                 connection.execute(
                     """
-                    INSERT OR IGNORE INTO webhook_deliveries(
+                    INSERT INTO webhook_deliveries(
                       webhook_delivery_id, tenant_id, webhook_endpoint_id, event_id, event_type,
                       event_timestamp, payload_json, status, attempt_count, max_attempts,
                       secret_version, created_at, updated_at, payload_format, wire_body_text,
                       security_event_rate_limit_per_minute
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING
                     """,
                     (
                         f"whd_{uuid4().hex}",
@@ -1585,12 +1585,12 @@ def freeze_webhook_event_delivery_snapshot(
             )
             connection.execute(
                 """
-                INSERT OR IGNORE INTO webhook_deliveries(
+                INSERT INTO webhook_deliveries(
                   webhook_delivery_id,tenant_id,webhook_endpoint_id,event_id,event_type,
                   event_timestamp,payload_json,status,attempt_count,max_attempts,
                   delivery_kind,secret_version,created_at,updated_at,payload_format,
                   wire_body_text,security_event_rate_limit_per_minute
-                ) VALUES(?,?,?,?,?,?,?,'pending',0,?,'original',?,?,?,?,?,?)
+                ) VALUES(?,?,?,?,?,?,?,'pending',0,?,'original',?,?,?,?,?,?) ON CONFLICT DO NOTHING
                 """,
                 (
                     f"whd_{uuid4().hex}",
@@ -1629,7 +1629,7 @@ def freeze_webhook_event_delivery_snapshot(
                 raise ApiError("webhook.delivery_unavailable")
             frozen_endpoint_ids.add(str(delivery["webhook_endpoint_id"]))
         if not expected_endpoint_ids.issubset(frozen_endpoint_ids):
-            # INSERT OR IGNORE 只能由既有唯一 intent 解释；随机 ID 冲突或并发漂移必须整体回滚。
+            # 唯一键冲突只能由既有 intent 解释；随机 ID 冲突或并发漂移必须整体回滚。
             raise ApiError("webhook.delivery_unavailable")
         return len(frozen)
     except ApiError:
@@ -2523,13 +2523,13 @@ def _deliver_event_to_endpoint(
         )
         cursor = connection.execute(
             """
-            INSERT OR IGNORE INTO webhook_deliveries(
+            INSERT INTO webhook_deliveries(
               webhook_delivery_id, tenant_id, webhook_endpoint_id, event_id, event_type,
               event_timestamp, payload_json, status, attempt_count, max_attempts,
               secret_version, created_at, updated_at, payload_format, wire_body_text,
               security_event_rate_limit_per_minute
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING
             """,
             (
                 delivery_id,

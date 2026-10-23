@@ -45,6 +45,7 @@ from metahub_shared.runtime.routing_policy import (
     TokenEstimate,
     estimate_request_tokens,
 )
+from metahub_shared.runtime.workspace_fx import resolve_workspace_fx_rate
 from metahub_shared.runtime.webhooks import WebhookEvent, build_webhook_event
 
 from metahub_gateway.auth.virtual_key import GatewayAuthContext
@@ -1332,8 +1333,25 @@ def _estimate_request_cost(
             price_available=False,
         )
     currency = rate.currency
-    # 日预算以 CNY 为唯一结算单位；没有版本化汇率时，USD/未知币种都不是“免费”。
-    if currency != "CNY":
+    # 日预算以 CNY 为唯一结算单位。USD 价格必须使用同一观察时点的组织汇率
+    # 转成 CNY；没有汇率时仍然失败关闭，绝不能把 USD 当成免费或直接比较原值。
+    comparison_rate = Decimal("1")
+    if currency == "USD":
+        fx = resolve_workspace_fx_rate(
+            connection,
+            tenant_id=route.tenant_id,
+            observed_at=_to_db_time(price_as_of or _utcnow()),
+        )
+        if fx is None:
+            return EstimatedRequestCost(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cache_tokens=cache_tokens,
+                cost_cny=Decimal("0"),
+                price_available=False,
+            )
+        comparison_rate = fx.usd_to_cny
+    elif currency != "CNY":
         return EstimatedRequestCost(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -1353,7 +1371,7 @@ def _estimate_request_cost(
                 + Decimal(cache_tokens) * cache_price
                 + Decimal(output_tokens) * output_price
             ) / Decimal(1_000_000)
-            cost_cny = amount.quantize(MONEY_QUANT)
+            cost_cny = (amount * comparison_rate).quantize(MONEY_QUANT)
     except DecimalException as exc:
         # 极端或损坏财务事实统一使用预算不可用，不能穿透为 infra.unhandled。
         raise ApiError("gateway.budget_unavailable") from exc
@@ -1464,12 +1482,12 @@ def _insert_alert_event(
 
     connection.execute(
         """
-        INSERT OR IGNORE INTO budget_alert_events(
+        INSERT INTO budget_alert_events(
           budget_alert_event_id, tenant_id, environment_id, budget_rule_id, scope_type, scope_id,
           budget_date, threshold_percent, event_type, current_cost_cny,
           projected_cost_cny, budget_cny, action_taken, request_id, trace_id, created_at
         )
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING
         """,
         (
             f"bae_{uuid4().hex}",

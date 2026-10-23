@@ -560,7 +560,6 @@ export function renderRequestFeedbackSection(state, authContext, i18n) {
       <div class="request-feedback-heading">
         <div>
           <h4 id="request-feedback-title">${escapeHtml(t(i18n, "feedback.form.title", "调用反馈"))}</h4>
-          <code>${escapeHtml(state.sourceRequestId)}</code>
         </div>
         <span>${escapeHtml(`${selectedTags.size} / ${MAX_FEEDBACK_TAGS}`)}</span>
       </div>

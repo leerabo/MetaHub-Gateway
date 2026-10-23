@@ -810,7 +810,7 @@ test("logout shows an explicit pending state until the server session is closed"
   assert.match(root.innerHTML, /data-identity-login-form/u);
 });
 
-test("safe page errors escape HTML and expose only request_id", async () => {
+test("login errors provide localized recovery guidance without exposing server text", async () => {
   const root = createRoot();
   const controller = createIdentityPageController({
     root,
@@ -829,7 +829,9 @@ test("safe page errors escape HTML and expose only request_id", async () => {
 
   await controller.login({ email: "owner@example.com", password: "PrivatePassword" });
   assert.doesNotMatch(root.innerHTML, /<img|trace_must_not_render|PrivatePassword/u);
-  assert.match(root.innerHTML, /&lt;img src=x onerror=unsafe\(\)&gt;/u);
+  assert.match(root.innerHTML, /邮箱或密码不正确/u);
+  assert.match(root.innerHTML, /忘记密码/u);
+  assert.doesNotMatch(root.innerHTML, /onerror|Login credentials/u);
   assert.match(root.innerHTML, /request_id: req_&lt;unsafe&gt;/u);
 });
 

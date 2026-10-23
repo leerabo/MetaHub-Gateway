@@ -1,0 +1,20 @@
+{
+    admin off
+    log default {
+        output discard
+    }
+}
+{$METAHUB_DOMAIN} {
+    {$METAHUB_TLS_POLICY}
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options nosniff
+        Referrer-Policy same-origin
+        X-Frame-Options DENY
+        -Server
+    }
+    reverse_proxy console:8080 {
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto https
+    }
+}

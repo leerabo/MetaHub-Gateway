@@ -177,9 +177,10 @@ function renderProviderRow(provider, keyState, canWrite, canReadEngineering, eng
         ${canWrite && provider.auth_type !== "none" ? `<button type="button" class="provider-main-action${missingKey ? " provider-setup-action" : ""}"
           data-provider-key-open="${escapeAttribute(provider.provider_id)}"
           aria-haspopup="dialog">${missingKey ? "配置 API KEY" : "管理 API KEY"}</button>` : ""}
-        ${canReadModels && canTest && provider.health_status === "healthy" ? '<button type="button" class="provider-main-action" data-console-nav="models" data-console-route="workspace.gateway.models" data-console-target="workspace.gateway.models">配置模型</button>' : ""}
         </div>
-        ${canWrite || canReadEngineering ? `<div class="provider-maintenance-actions" aria-label="服务操作">
+        ${canWrite || canReadModels && canTest && provider.health_status === "healthy" ? `<button type="button" class="provider-more-trigger" popovertarget="provider-actions-${escapeAttribute(provider.provider_id)}" aria-haspopup="true" aria-expanded="false">更多操作 <span aria-hidden="true">▾</span></button>
+        <div id="provider-actions-${escapeAttribute(provider.provider_id)}" class="provider-maintenance-actions provider-action-menu" popover="auto" data-action-menu aria-label="服务操作">
+        ${canReadModels && canTest && provider.health_status === "healthy" ? '<button type="button" class="provider-main-action" data-console-nav="models" data-console-route="workspace.gateway.models" data-console-target="workspace.gateway.models">配置模型</button>' : ""}
         ${canWrite ? `${canTest ? `<form data-provider-test-form data-provider-id="${escapeAttribute(provider.provider_id)}">
           <button${needsTest ? ' class="provider-setup-action"' : ' class="provider-secondary-action"'} type="submit">测试连接</button>
         </form>` : ""}

@@ -173,6 +173,10 @@ class PriceFact:
     available: bool = True
     # 快照同时携带缓存命中单价；当前 TokenEstimate 没有独立缓存 Token，预演不虚构用量。
     cache_price_per_1k: Decimal = Decimal("0")
+    # USD 价格在预算预演中统一折算为 CNY；汇率必须来自同一观察时点的版本。
+    comparison_currency: str | None = None
+    comparison_fx_rate: Decimal | None = None
+    comparison_fx_rate_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -524,10 +528,9 @@ def _price_cost(
     output_tokens: int,
     cache_tokens: int = 0,
 ) -> tuple[Decimal, bool]:
-    """只计算 CNY 成本；USD 无汇率时明确标记 CNY 价格不可用。"""
+    """把 CNY 或带有效汇率的 USD 价格折算为 CNY。"""
 
-    # M0 不做汇率换算；USD 或缺价只能显示 CNY 价格不可用，不能凭空估算。
-    if not price.available or price.currency.upper() != "CNY":
+    if not price.available:
         return Decimal("0").quantize(MONEY_QUANT), False
     if type(cache_tokens) is not int or cache_tokens < 0 or cache_tokens > input_tokens:
         return Decimal("0").quantize(MONEY_QUANT), False
@@ -536,6 +539,21 @@ def _price_cost(
         + Decimal(cache_tokens) * price.cache_price_per_1k
         + Decimal(output_tokens) * price.output_price_per_1k
     ) / Decimal(1_000_000)
+    currency = price.currency.upper()
+    if currency == "CNY":
+        pass
+    elif (
+        currency == "USD"
+        and price.comparison_currency == "CNY"
+        and type(price.comparison_fx_rate) is Decimal
+        and price.comparison_fx_rate.is_finite()
+        and price.comparison_fx_rate > 0
+        and isinstance(price.comparison_fx_rate_version, str)
+        and price.comparison_fx_rate_version
+    ):
+        amount *= price.comparison_fx_rate
+    else:
+        return Decimal("0").quantize(MONEY_QUANT), False
     return amount.quantize(MONEY_QUANT), True
 
 

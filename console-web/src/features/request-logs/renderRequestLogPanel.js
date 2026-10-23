@@ -791,6 +791,7 @@ function renderFilterForm(filters) {
         </select></label>
         <div class="request-log-filter-actions">
           <button type="submit">查询</button>
+          <button type="button" id="request-log-refresh" aria-label="刷新最新调用记录">刷新</button>
           <button type="button" id="request-log-filter-reset">清空</button>
         </div>
       </div>
@@ -956,6 +957,7 @@ export function renderRequestLogDetail(detail, error, feedbackState, authContext
         </div>
       </div>
       ${renderDetailSummary(log, detail.request_log)}
+      ${renderBudgetDecision(log, detail.request_log.budget_evaluations ?? [])}
       ${renderRequestFeedbackSection(feedbackState, authContext, i18n)}
       ${dialog
         ? `<div class="request-log-technical-body request-log-technical-body-expanded">
@@ -963,35 +965,63 @@ export function renderRequestLogDetail(detail, error, feedbackState, authContext
             ${renderRoutingDecision(detail.request_log.routing_decision, detail.request_log.routing_attempts ?? [])}
             ${renderRoutingAttempts(detail.request_log.routing_attempts ?? [], detail.request_log, { compact: true })}
             ${renderUsage(detail.request_log.usage ?? [])}
+            ${renderTechnicalDiagnostics(log, detail.request_log)}
           </div>`
-        : `<details class="request-log-technical-details">
-            <summary>查看完整诊断</summary>
-            <div class="request-log-technical-body">
-              ${renderPolicySnapshotDecision(log)}
-              ${renderDlpDecision(log, detail.request_log.dlp_matches ?? [])}
-              ${renderIntentRisk(detail.request_log.intent_risk)}
-              ${renderOutputSafetyEvidence(detail.request_log.output_safety)}
-              ${renderBudgetDecision(log, detail.request_log.budget_evaluations ?? [])}
-              ${renderDiagnosisCard(detail.request_log.error_diagnosis)}
-              ${renderRoutingDecision(detail.request_log.routing_decision, detail.request_log.routing_attempts ?? [])}
-              ${renderRoutingAttempts(detail.request_log.routing_attempts ?? [], detail.request_log)}
-              ${renderStreamSessions(requestLogStreamSessions(detail.request_log), detail.request_log)}
-              ${renderUsage(detail.request_log.usage ?? [])}
-            </div>
-          </details>`}
+        : renderTechnicalDiagnostics(log, detail.request_log, { includeRouting: true })}
     </div>
   `;
   return dialog ? renderRequestLogDialog(detailMarkup, log.request_id) : detailMarkup;
 }
 
+/** 弹框和内嵌详情共享脱敏诊断，避免布局切换遗漏安全结论。 */
+function renderTechnicalDiagnostics(log, detail, { includeRouting = false } = {}) {
+  return `<details class="request-log-technical-details">
+    <summary>查看完整诊断</summary>
+    <div class="request-log-technical-body">
+      ${renderPolicySnapshotDecision(log)}
+      ${renderDlpDecision(log, detail.dlp_matches ?? [])}
+      ${renderIntentRisk(detail.intent_risk)}
+      ${renderOutputSafetyEvidence(detail.output_safety)}
+      ${renderDiagnosisCard(detail.error_diagnosis)}
+      ${renderCacheAffinitySelections(detail.cache_affinity_selections ?? [], detail.usage ?? [])}
+      ${includeRouting ? "" : (detail.routing_attempts ?? [])
+        .map((item) => renderProviderErrorFact(item.provider_error_fact, "attempt")).join("")}
+      ${includeRouting ? `${renderRoutingDecision(detail.routing_decision, detail.routing_attempts ?? [])}
+        ${renderRoutingAttempts(detail.routing_attempts ?? [], detail)}
+        ${renderUsage(detail.usage ?? [])}` : ""}
+      ${renderStreamSessions(requestLogStreamSessions(detail), detail)}
+    </div>
+  </details>`;
+}
+
+/** 预计复用与上游实报缓存用量分别展示；不读取绑定、凭据或作用域标识。 */
+function renderCacheAffinitySelections(selections, usage) {
+  const reasons = {
+    binding_warm_reused: "预计复用绑定", binding_rebound: "重新绑定",
+    binding_created: "创建绑定", binding_cold_reused: "复用冷绑定",
+  };
+  const reported = usage.filter((item) => item.cache_tokens != null)
+    .map((item) => renderPair("上游实报缓存 Token", item.cache_tokens)).join("");
+  return `<section class="request-log-subsection cache-affinity-evidence"><h4>Prompt Cache 亲和</h4>
+    <p>预计复用不代表实际缓存命中；缓存用量以上游实报为准。</p>
+    ${selections.length ? selections.map((item) => `<dl class="request-log-detail-grid">
+      ${renderPair("选择结果", reasons[item.selection_reason] ?? "未识别的选择结果")}
+      ${renderPair("配置版本", item.cache_affinity_version == null ? "未提供" : `v${item.cache_affinity_version}`)}
+      ${renderPair("目标", item.target_kind === "managed" ? "托管目标" : item.target_kind === "environment" ? "环境目标" : "未提供")}
+      ${renderPair("模型", publicModelLabel(item.model_id))}
+      ${renderPair("模型服务", PROVIDER_LABELS[item.provider_code] ?? item.provider_code ?? "未提供")}
+    </dl>`).join("") : "<p>本次请求未记录 Prompt Cache 亲和选择</p>"}
+    ${reported ? `<dl class="request-log-detail-grid">${reported}</dl>` : ""}
+  </section>`;
+}
+
 function renderRequestLogDialog(content, requestId) {
   return `
-    <div class="request-log-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="request-log-detail-title">
-      <div class="request-log-detail-backdrop" data-request-log-detail-close></div>
+    <dialog class="request-log-detail-dialog" aria-modal="true" aria-labelledby="request-log-detail-title">
       <div class="request-log-detail-dialog-card">
         ${content.replace("<h3>调用详情</h3>", '<h3 id="request-log-detail-title">调用详情</h3>')}
       </div>
-    </div>
+    </dialog>
   `;
 }
 
@@ -1129,6 +1159,8 @@ function renderOutputSafetyEvidence(outputSafety) {
         ${renderPair("判定", OUTPUT_SAFETY_DECISION_LABELS[decision] ?? (decision || "未知"))}
         ${renderPair("动作", OUTPUT_SAFETY_ACTION_LABELS[outputSafety.action] ?? outputSafety.action ?? "-")}
         ${renderPair("暴露状态", OUTPUT_SAFETY_EXPOSURE_LABELS[outputSafety.exposure_state] ?? outputSafety.exposure_state ?? "未知")}
+        ${renderPair("Provider 已观察 Token", outputSafety.observed_output_token_count ?? "未提供")}
+        ${renderPair("已扫描 Token", outputSafety.scanned_token_count ?? "未提供")}
         ${renderPair("账单复核", reviewLabel)}
       </dl>
     </section>
@@ -1326,6 +1358,8 @@ function renderBudgetDecision(log, evaluations) {
   return `
     <section class="request-log-subsection budget-decision-card">
       <h4>预算检查</h4>
+      ${log.budget_status === "exhausted" && log.budget_action === "allow"
+        ? '<p>预算已耗尽，当前设置为“仅告警”，本次调用仍被放行。失败原因请查看下方“失败说明”。</p>' : ""}
       <dl class="request-log-detail-grid">
         ${renderPair("状态", budgetStatusLabel(log.budget_status))}
         ${renderPair("处理结果", budgetActionLabel(log.budget_action))}

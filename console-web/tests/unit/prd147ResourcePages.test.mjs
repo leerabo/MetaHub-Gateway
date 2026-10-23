@@ -18,6 +18,8 @@ import { createCostAnomalyPageState } from "../../src/features/cost-anomalies/co
 import { createPolicySnapshotLoadLifecycle, shouldLoadPolicySnapshots } from "../../src/features/policy-snapshots/renderPolicySnapshotsPanel.js";
 import { bindFinOpsLedgerInteractions } from "../../src/features/finops-ledger/bindFinOpsLedger.js";
 import { renderConsoleEntryLoading, revealConsoleSidebarItem } from "../../src/features/console-shell/renderConsoleShell.js";
+import { bindProjectExpansion } from "../../src/features/projects/renderProjectApplicationPanel.js";
+import { bindFallbackModelPicker } from "../../src/features/model-aliases/fallbackModelPicker.js";
 
 const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
 const allPermissions = Object.values(PERMISSIONS);
@@ -61,8 +63,9 @@ class Element {
     this.dataset.budgetModeRuleId = "budget_sample";
     this.value = "alert_only";
     this.values = { name: "Sample", status: "disabled", confirmed: "on", entryCode: "sample", version: "2026.09.08.1",
-      regionCode: "cn-east", capabilityCodes: "chat", providerCode: "sample", timeoutSeconds: "5", role: "auditor" };
-    this.button = { disabled: false, dataset: {}, textContent: "Submit" };
+      regionCode: "cn-east", capabilityCodes: "chat", providerCode: "sample", timeoutSeconds: "5", role: "auditor",
+      inputPricePerMillion: "1" };
+    this.button = { disabled: false, dataset: {}, textContent: "Submit", addEventListener() {} };
     this.feedback = { textContent: "", setAttribute(name, value) { this[name] = value; } };
     this.reload = { hidden: true };
     const owner = this;
@@ -77,7 +80,8 @@ class Element {
   querySelector(selector) {
     if (selector === "[data-model-setup-feedback]") return this.feedback;
     if (selector === "[data-model-setup-reload]") return this.reload;
-    return selector?.startsWith("[name=") ? null : this.button;
+    if (selector?.startsWith("#budget-") || selector === "[data-budget-employee-search]") return null;
+    return selector?.startsWith("[name=") || selector === "[data-fallback-picker]" ? null : this.button;
   }
   querySelectorAll() { return []; }
   setAttribute() {}
@@ -107,15 +111,33 @@ const clients = ["createEnvironment", "updateEnvironment", "createProject", "cre
   "createModel", "updateModel", "listEnvironments", "listProjects", "listApplications", "listVirtualKeys", "listProviders",
   "listProviderKeys", "listProviderCatalog", "listModels", "listFiles", "uploadFile", "listProviderStatuses", "probeProvider",
   "createModelAlias", "updateModelAlias", "updateFallbackPolicy", "listModelAliases",
-  "listWorkspaceMembers", "updateWorkspaceMember", "getUsageSummary", "listUsageRecords"];
+  "listWorkspaceMembers", "updateWorkspaceMember", "getUsageSummary", "listUsageRecords",
+  "getPersonalUsageSummary", "listPersonalUsageRecords"];
 clients.push("listBudgets", "getBudgetStatus", "createBudgetRule", "updateBudgetRule", "updateBudgetMode",
   "listFinOpsLedger", "createFinOpsAdjustment");
 
 function harness(navigation, selector) {
   const element = new Element();
+  const keyEditor = selector === "[data-virtual-key-binding-form]";
+  const keyDialog = {
+    dataset: { virtualKeyBindingDialog: "vkey_sample" },
+    querySelector: (value) => value === "[data-virtual-key-binding-form]" ? element : null,
+    querySelectorAll: () => [], close() {},
+  };
+  if (keyEditor) {
+    const project = new Element();
+    project.dataset.currentProject = "";
+    const application = new Element();
+    application.dataset.currentApplication = "";
+    const originalQuery = element.querySelector.bind(element);
+    element.querySelector = (value) => value === "[data-virtual-key-binding-project]" ? project
+      : value === "[data-virtual-key-binding-application]" ? application
+      : value === ".virtual-key-feedback" ? element.feedback : originalQuery(value);
+  }
   const calls = [], effects = [], scheduled = [];
   const pending = deferred();
   const scope = { AuthApiError, DOMException, AbortController, crypto: globalThis.crypto, PERMISSIONS, hasPermission, filePageOwner, isFileAbortError,
+    bindProjectExpansion, bindFallbackModelPicker,
     workspaceResourcePageOwner,
     hasWorkspaceConsoleSession, gatewayUrl: "https://gateway.example.test", consoleUrl: "https://console.example.test",
     currentI18n: null, gatewayDebugState: {}, policyDryRunState: {}, renderConsoleEntryLoading, revealConsoleSidebarItem,
@@ -140,6 +162,7 @@ function harness(navigation, selector) {
     clearRequestExplanationSessionState() {},
     workspacePageVisitTracker: { leave() {} }, workspacePageVisitShellState: null,
     expandedConsoleGroupKey: null, mobileSidebarCollapsed: true,
+    expandedProjectIds: new Set(), providerKeyStateCache: new Map(), providerProbeInFlight: new Map(),
     activeSdkLanguage: "python", activeMigrationLanguage: "python", migrationGuideEventWarning: null,
     selectedMigrationEnvironmentId: null, selectedMigrationModelAlias: null,
     providerHealthRequestGeneration: 0, providerHealthController: null,
@@ -150,7 +173,8 @@ function harness(navigation, selector) {
     optionalNumber: (value, fallback) => value ? Number(value) : fallback,
     optionalText: (value) => value || undefined, readCapabilities: () => ({ chat: true }),
     workspaceProviderEngineeringController: { snapshot: () => ({}), close: () => effects.push("engineering-close") },
-    workspaceNavigationController: { loadGettingStarted: async () => ({ source_freshness: "fresh", tasks: [] }) },
+    workspaceNavigationController: { snapshot: () => ({ setupComplete: true }),
+      loadGettingStarted: async () => ({ source_freshness: "fresh", tasks: [] }) },
     workspaceProviderEngineeringProviders: [],
     refresh: async () => { effects.push("refresh"); },
     clearAuthSession: () => effects.push("clear-auth"),
@@ -158,7 +182,8 @@ function harness(navigation, selector) {
     queueMicrotask: (fn) => scheduled.push(fn),
     app: { replaceChildren: () => effects.push("clear-dom") },
     document: { querySelector: (value) => value === selector ? element : null,
-      querySelectorAll: (value) => value === selector ? [element] : [] },
+      querySelectorAll: (value) => keyEditor && value === "[data-virtual-key-binding-dialog]" ? [keyDialog]
+        : value === selector ? [element] : [] },
     FormData: class {
       constructor(form) { effects.push("form-read"); return new URLSearchParams(form.values); }
     },
@@ -174,13 +199,14 @@ function harness(navigation, selector) {
   for (const client of clients) scope[client] = async (input) => { calls.push({ client, input }); return pending.promise; };
   const start = source.indexOf('  const createEnvironmentForm = document.querySelector(');
   const end = source.indexOf('  const dismissSecretButton = document.querySelector(', start);
-  const fallbackStart = source.indexOf('  for (const fallbackForm of document.querySelectorAll(');
-  const fallbackEnd = source.indexOf('  const usageFilterForm = document.querySelector(', fallbackStart);
   const secretStart = source.indexOf('  const dismissSecretButton = document.querySelector(');
-  const secretEnd = source.indexOf('  const budgetScopeChainKey = document.querySelector(', secretStart);
+  const secretEnd = source.indexOf('  const budgetPersonSearchForm = document.querySelector(', secretStart);
   const budgetEnd = source.indexOf('  const dlpRuleFilters = document.querySelector(', secretEnd);
+  assert.ok(start >= 0 && end > start, "resource handler boundaries must exist");
+  assert.ok(secretStart >= 0 && secretEnd > secretStart && budgetEnd > secretEnd,
+    "secret and budget handler boundaries must exist");
   const functions = runInNewContext(`${helpers.map(production).join("\n")}
-    function bindActualResourceHandlers() { bindWorkspaceMemberInteractions(); ${source.slice(start, end)} ${source.slice(fallbackStart, fallbackEnd)} ${source.slice(secretEnd, budgetEnd)} }
+    function bindActualResourceHandlers() { bindWorkspaceMemberInteractions(); ${source.slice(start, end)} ${source.slice(secretEnd, budgetEnd)} }
     function bindActualSecretHandlers() { ${source.slice(secretStart, secretEnd)} }
     ({ ${helpers.join(",")}, bindActualResourceHandlers, bindActualSecretHandlers });`, scope);
   Object.assign(scope, functions);
@@ -359,7 +385,7 @@ const forms = [
   ["virtual-keys", "#create-virtual-key-form", "createVirtualKey"],
   ["virtual-keys", "[data-virtual-key-form]", "disableVirtualKey"],
   ["virtual-keys", "[data-virtual-key-form]", "updateVirtualKey", "submit", "active"],
-  ["virtual-keys", "[data-virtual-key-limits-form]", "updateVirtualKeyLimits"],
+  ["virtual-keys", "[data-virtual-key-binding-form]", "updateVirtualKeyLimits"],
   ["providers", "[data-provider-catalog-compatibility]", "getProviderCatalogCompatibility", "click"],
   ["providers", "[data-provider-catalog-create-form]", "createProviderFromCatalog"],
   ["providers", "[data-provider-catalog-preflight-form]", "preflightCatalogProvider"],
@@ -396,18 +422,21 @@ for (const navigation of ["budgets", "internal-finops"]) {
     test(`finance ${navigation} drops late ${outcome} without changing the next Workspace`, async () => {
       const h = harness(navigation);
       const operation = load(h);
-      assert.equal(h.calls.length, navigation === "budgets" ? 2 : 1);
+      assert.equal(h.calls.length, 1);
       for (const call of h.calls) {
         assert.equal(call.input.authentication, "workspace");
         assert.equal(Object.hasOwn(call.input, "token"), false);
       }
       h.switchOwner();
+      h.scope.selectedBudgetVirtualKeyId = "next-workspace-key";
       assert.ok(h.calls.every((call) => call.input.signal.aborted));
       if (outcome === "success") h.pending.resolve(payload);
       else h.pending.reject(new AuthApiError({ status: Number(outcome) }));
       assert.equal(await operation, null);
       assert.deepEqual(h.effects, []);
       assert.equal(h.scope.budgetRulesSnapshot.length, 0);
+      assert.equal(h.scope.selectedBudgetVirtualKeyId, "next-workspace-key");
+      assert.equal(h.calls.length, 1, "stale reads must not start a budget status request");
       assert.equal(h.scope.finOpsPageState.snapshot().ledger_entries.length, 0);
     });
   }
@@ -423,14 +452,13 @@ for (const navigation of ["budgets", "internal-finops"]) {
   });
 }
 
-test("budget update recognizes tenant rules without a legacy user or tenant ID", async () => {
+test("organization budget creation needs no legacy user or tenant ID", async () => {
   const h = harness("budgets", "#budget-rule-form");
   h.element.values = { scopeType: "tenant", environmentId: "env_test", dailyBudgetCny: "0.000001" };
-  h.scope.budgetRulesSnapshot = [{ scope_type: "tenant", scope_id: "private_tenant_id", environment_id: "env_test" }];
   assert.equal(h.scope.authSession.context.user, undefined);
   h.functions.bindActualResourceHandlers();
   const operation = h.element.fire("submit");
-  assert.equal(h.calls[0].client, "updateBudgetRule");
+  assert.equal(h.calls[0].client, "createBudgetRule");
   assert.equal(h.calls[0].input.scopeId, "");
   assert.equal(h.calls[0].input.dailyBudgetCny, "0.000001");
   h.pending.resolve(payload);
@@ -448,6 +476,26 @@ test("budget 409 preserves operation evidence and releases both mutation locks",
   assert.equal(h.scope.budgetActionError, error);
   assert.equal(h.scope.budgetMutationLifecycle.isBusy(), false);
   assert.equal(h.scope.resourcePageLifecycle.blocksReplacement(false), false);
+  assert.equal(h.effects.filter((effect) => effect === "refresh").length, 0);
+  assert.equal(h.element.values.name, "Sample", "conflicts preserve the editable draft");
+});
+
+test("zero-price model requires explicit confirmation and then submits exactly once", async () => {
+  const h = harness("models", "#create-model-form");
+  h.element.values.inputPricePerMillion = "0";
+  h.functions.bindActualResourceHandlers();
+  await h.element.fire("submit");
+  assert.equal(h.calls.length, 0);
+  assert.match(h.element.feedback.textContent, /三个价格均为 0/u);
+  assert.equal(h.scope.resourcePageLifecycle.blocksReplacement(false), false);
+  h.element.values.unpricedConfirmed = "on";
+  const operation = h.element.fire("submit");
+  await h.element.fire("submit");
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].client, "createModel");
+  assert.equal(h.calls[0].input.inputPricePer1k, 0);
+  h.pending.resolve(payload);
+  await operation;
   assert.equal(h.effects.filter((effect) => effect === "refresh").length, 1);
 });
 
@@ -521,10 +569,14 @@ for (const selector of ["#finops-filter-form", "#finops-adjustment-form", "[data
   });
 }
 for (const [navigation, selector, client, event = "submit", status] of forms) {
+  const changeForm = (h) => {
+    if (client === "updateVirtualKeyLimits") h.element.values.rpmLimit = "5";
+  };
   test(`PRD-147 actual ${client} handler uses Cookie, blocks duplicate submission and refreshes once`, async () => {
     const h = harness(navigation, selector);
     if (status) h.element.values.status = status;
     h.functions.bindActualResourceHandlers();
+    changeForm(h);
     const operation = h.element.fire(event);
     await h.element.fire(event);
     assert.equal(h.calls.length, 1);
@@ -543,6 +595,7 @@ for (const [navigation, selector, client, event = "submit", status] of forms) {
     test(`PRD-147 actual ${client} rejects ${boundary} old DOM before reading form data`, async () => {
       const h = harness(navigation, selector);
       h.functions.bindActualResourceHandlers();
+      changeForm(h);
       if (boundary === "workspace") h.switchOwner();
       if (boundary === "hash") h.scope.hash = "overview";
       if (boundary === "detached") h.element.isConnected = false;
@@ -556,6 +609,7 @@ for (const [navigation, selector, client, event = "submit", status] of forms) {
     test(`PRD-147 actual ${client} discards late ${outcome} after Workspace switch`, async () => {
       const h = harness(navigation, selector);
       h.functions.bindActualResourceHandlers();
+      changeForm(h);
       const operation = h.element.fire(event);
       assert.equal(h.calls.length, 1);
       h.switchOwner();
@@ -625,7 +679,7 @@ for (const [navigation, loader] of loaders) {
       assert.equal(Object.hasOwn(call.input, "token"), false);
     }
     if (navigation === "models") assert.deepEqual(h.calls.map((call) => call.client), ["listModels", "listProviders"]);
-    if (navigation === "virtual-keys") assert.deepEqual(h.calls.map((call) => call.client), ["listVirtualKeys", "listProjects", "listApplications", "listEnvironments"]);
+    if (navigation === "virtual-keys") assert.deepEqual(h.calls.map((call) => call.client), ["listVirtualKeys"]);
     if (navigation === "files") assert.deepEqual(h.calls.map((call) => call.client), ["listFiles"]);
   });
   for (const outcome of ["success", "401"]) {

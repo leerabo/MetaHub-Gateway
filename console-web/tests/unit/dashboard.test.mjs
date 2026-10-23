@@ -227,7 +227,7 @@ test("dashboard panel renders metrics rankings and escaped recent errors", () =>
   assert.match(html, /¥1.25/);
   assert.match(html, /deepseek-&lt;script&gt;/);
   assert.match(html, /mhv_dev_\*\*\*\*/);
-  assert.match(html, /gateway.&lt;bad&gt;/);
+  assert.doesNotMatch(html, /gateway.&lt;bad&gt;/);
   assert.match(html, /上游 &lt;script&gt;限流&lt;\/script&gt;/);
   assert.match(html, /data-request-id="req_prd026_failed"/);
   assert.doesNotMatch(html, /<script>限流<\/script>/);
@@ -248,7 +248,7 @@ test("dashboard panel renders empty state and hides log link for viewer", () => 
   assert.match(emptyHtml, /data-console-nav="providers"/);
   assert.match(emptyHtml, /data-console-nav="debug-console"/);
   assert.doesNotMatch(emptyHtml, /data-request-id=/);
-  assert.match(viewerErrorHtml, /<code>req_prd026_failed<\/code>/);
+  assert.doesNotMatch(viewerErrorHtml, /req_prd026_failed/);
   assert.doesNotMatch(viewerErrorHtml, /data-request-id="req_prd026_failed"/);
 });
 
@@ -280,7 +280,7 @@ test("developer start overview renders PAGE-092 role dashboard state", () => {
   });
 
   assert.match(container.innerHTML, /workspace-console-experience-panel/);
-  assert.match(container.innerHTML, /workspace-console-overview-title/);
+  assert.match(container.innerHTML, /id="console-main-title"/);
   assert.doesNotMatch(container.innerHTML, /dashboard-overview-shell|角色首页|data-role-dashboard-card|Top 模型|req_prd026_failed/);
 });
 

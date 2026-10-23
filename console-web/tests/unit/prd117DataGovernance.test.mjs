@@ -224,10 +224,11 @@ test("PRD-117 Platform controller loads, filters, and paginates only evidence DT
   assert.equal(controller.selectView("data-residency"), undefined);
   await new Promise((resolve) => setImmediate(resolve));
   assert.match(root.innerHTML, /数据驻留/u);
-  assert.match(root.innerHTML, /Policy-bound observations/u);
-  assert.match(root.innerHTML, /Generation 1/u);
+  assert.match(root.innerHTML, /已记录的区域与存储位置/u);
+  assert.match(root.innerHTML, /版本 1/u);
   assert.doesNotMatch(root.innerHTML, /object_key|prompt_body|response_body|provider_key/u);
-  assert.doesNotMatch(root.innerHTML, new RegExp(HASH, "u"));
+  assert.match(root.innerHTML, new RegExp(`<details class="platform-audit-technical"><summary>查看</summary><code>${HASH}</code></details>`, "u"));
+  assert.doesNotMatch(root.innerHTML, /<details class="platform-audit-technical"[^>]*\sopen(?:[\s=>])/u);
   assert.equal(await controller.filterResidencyEvidence({
     workspaceId: WORKSPACE_ID,
     component: "gateway",

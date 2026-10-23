@@ -585,7 +585,7 @@ test("hydration uses textContent/value and never parses service text as markup",
   assert.match(claimLabel.textContent, /claimCanary/);
   assert.equal(recommendationMessage.textContent, "当前证据不足以给出优化建议。");
   assert.equal(sourceLabel.textContent, "运行概览");
-  assert.equal(nodes.queryId.textContent, `asq_${"a".repeat(32)}`);
+  for (const name of ["queryId", "auditId", "requestId", "traceId"]) assert.equal(nodes[name].textContent, "");
 });
 
 test("existing Console shell renders PAGE-107 only from authorized backend navigation", () => {

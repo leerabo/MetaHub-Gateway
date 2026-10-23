@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -128,6 +129,25 @@ def prepare_database(
         "SELECT virtual_key_id FROM virtual_keys WHERE tenant_id=?",
         (seed.tenant_id,),
     ).fetchone()["virtual_key_id"]
+    # Real gateway credentials require an active project and application. Keep
+    # that authorization gate in these budget integration tests so a 401 cannot
+    # accidentally stand in for the expected budget decision.
+    timestamp = "2026-07-09T00:00:00Z"
+    project_id, application_id = "prj_prd023_budget", "app_prd023_budget"
+    connection.execute(
+        """INSERT INTO projects(project_id,tenant_id,project_code,name,status,created_at,updated_at)
+        VALUES(?,?,'budget-test','Budget test project','active',?,?)""",
+        (project_id, seed.tenant_id, timestamp, timestamp),
+    )
+    connection.execute(
+        """INSERT INTO applications(application_id,tenant_id,project_id,application_code,name,status,created_at,updated_at)
+        VALUES(?,?,?,'budget-test','Budget test application','active',?,?)""",
+        (application_id, seed.tenant_id, project_id, timestamp, timestamp),
+    )
+    connection.execute(
+        "UPDATE virtual_keys SET project_id=?,application_id=? WHERE tenant_id=? AND virtual_key_id=?",
+        (project_id, application_id, seed.tenant_id, virtual_key_id),
+    )
     connection.execute(
         """
         UPDATE models
@@ -138,6 +158,7 @@ def prepare_database(
         (seed.tenant_id,),
     )
     connection.commit()
+    connection.close()
     # 返回测试租户和 Key，用例随后用它们验证预算规则只作用于当前租户调用链路。
     return database_url, seed.tenant_id, virtual_key_id
 
@@ -184,6 +205,49 @@ def insert_budget_rule(
     )
     connection.commit()
     return rule_id
+
+
+def publish_test_cost_rate(database_url: str, tenant_id: str, *, input_price: int,
+                           effective_from: str = "2026-07-09T00:00:00Z") -> None:
+    """Append an immutable effective workspace price, using current per-million units."""
+    connection = connect_database(database_url)
+    try:
+        rate = connection.execute(
+            "SELECT workspace_provider_cost_rate_id FROM workspace_provider_cost_rates "
+            "WHERE tenant_id=? AND currency='CNY'", (tenant_id,),
+        ).fetchone()
+        assert rate is not None
+        rate_id = rate["workspace_provider_cost_rate_id"]
+        number = connection.execute(
+            "SELECT coalesce(max(version_number),0)+1 FROM workspace_provider_cost_rate_versions "
+            "WHERE workspace_provider_cost_rate_id=?", (rate_id,),
+        ).fetchone()[0]
+        version_id = "pcrv_" + uuid4().hex
+        digest = hashlib.sha256(f"{rate_id}|{number}|{input_price}|{effective_from}".encode()).hexdigest()
+        connection.execute(
+            """INSERT INTO workspace_provider_cost_rate_versions(
+            workspace_provider_cost_rate_version_id,workspace_provider_cost_rate_id,version_number,
+            input_rate_micros_per_1k,output_rate_micros_per_1k,cache_rate_micros_per_1k,
+            effective_from,source_type,source_id,source_sha256,status,revision,content_sha256,created_at)
+            VALUES(?,?,?,?,0,0,?,'manual',?,?,'active',1,?,?)""",
+            (version_id, rate_id, number, input_price * 1_000_000, effective_from,
+             version_id, digest, digest, effective_from),
+        )
+        connection.execute(
+            "UPDATE workspace_provider_cost_rate_heads SET workspace_provider_cost_rate_version_id=?, "
+            "head_revision=head_revision+1,adoption_state='active',updated_at=? "
+            "WHERE workspace_provider_cost_rate_id=?", (version_id, effective_from, rate_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def freeze_budget_price_clocks(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Selection, reservation and accounting must observe the same simulated day;
+    # otherwise a seed price created today shadows this historical test price.
+    monkeypatch.setattr(routing_models, "_utcnow", lambda: budget_service._utcnow())
+    monkeypatch.setattr(usage_ledger, "_utcnow", lambda: budget_service._utcnow())
 
 
 def insert_output_block_rule(
@@ -352,7 +416,15 @@ def configure_prd052_project_keys(
         )
         connection.execute(
             """
-            UPDATE virtual_keys SET project_id=?
+            INSERT INTO applications(application_id,tenant_id,project_id,application_code,name,status,created_at,updated_at)
+            VALUES('app_prd052_a',?,?,'prd052-a','PRD052 Application A','active',?,?),
+                  ('app_prd052_b',?,?,'prd052-b','PRD052 Application B','active',?,?)
+            """,
+            (tenant_id, project_a_id, now, now, tenant_id, project_b_id, now, now),
+        )
+        connection.execute(
+            """
+            UPDATE virtual_keys SET project_id=?,application_id='app_prd052_a'
             WHERE tenant_id=? AND virtual_key_id=?
             """,
             (project_a_id, tenant_id, virtual_key_a_id),
@@ -361,8 +433,8 @@ def configure_prd052_project_keys(
             """
             INSERT INTO virtual_keys(
               virtual_key_id, tenant_id, name, key_prefix, key_hash, status,
-              environment, environment_id, project_id, created_at, updated_at
-            ) VALUES(?, ?, 'PRD052 Key B', ?, ?, 'active', 'dev', ?, ?, ?, ?)
+              environment, environment_id, project_id, application_id, created_at, updated_at
+            ) VALUES(?, ?, 'PRD052 Key B', ?, ?, 'active', 'dev', ?, ?, 'app_prd052_b', ?, ?)
             """,
             (
                 virtual_key_b_id,
@@ -919,6 +991,8 @@ async def test_budget_block_stops_before_upstream_and_logs_reason(
 
     upstream_url, captured = fake_upstream
     database_url, tenant_id, virtual_key_id = prepare_database(monkeypatch, tmp_path, upstream_url)
+    freeze_budget_price_clocks(monkeypatch)
+    publish_test_cost_rate(database_url, tenant_id, input_price=1_000_000)
     rule_id = insert_budget_rule(
         database_url,
         tenant_id=tenant_id,
@@ -931,13 +1005,9 @@ async def test_budget_block_stops_before_upstream_and_logs_reason(
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://gateway") as client:
         response = await _chat(client, "req_prd023_block")
-        connection = connect_database(database_url)
         # 首次大请求建立 active block 后把模型价格降为 0，验证后续小请求仍不能绕过阻断事实。
-        connection.execute(
-            "UPDATE models SET input_price_per_1k=0, output_price_per_1k=0 WHERE tenant_id=?",
-            (tenant_id,),
-        )
-        connection.commit()
+        publish_test_cost_rate(database_url, tenant_id, input_price=0,
+                               effective_from="2026-07-09T03:59:00Z")
         repeated = await _chat(client, "req_prd033_active_block")
 
     assert response.status_code == 402
@@ -1020,6 +1090,8 @@ async def test_budget_warning_event_is_deduplicated_per_day(
 
     upstream_url, captured = fake_upstream
     database_url, tenant_id, virtual_key_id = prepare_database(monkeypatch, tmp_path, upstream_url)
+    freeze_budget_price_clocks(monkeypatch)
+    publish_test_cost_rate(database_url, tenant_id, input_price=1_000_000)
     rule_id = insert_budget_rule(
         database_url,
         tenant_id=tenant_id,
@@ -1071,6 +1143,10 @@ async def test_budget_raise_recovers_next_request_without_restart(
 
     upstream_url, captured = fake_upstream
     database_url, tenant_id, virtual_key_id = prepare_database(monkeypatch, tmp_path, upstream_url)
+    # Budget exhaustion is only meaningful when the routed model has an
+    # auditable versioned price. Missing prices must remain the distinct
+    # gateway.budget_unavailable (503) failure-closed path.
+    publish_test_cost_rate(database_url, tenant_id, input_price=1_000_000)
     rule_id = insert_budget_rule(
         database_url,
         tenant_id=tenant_id,

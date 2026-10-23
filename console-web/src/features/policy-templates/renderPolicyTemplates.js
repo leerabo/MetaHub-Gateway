@@ -97,7 +97,7 @@ function renderSelectedTemplate(state, template) {
           <span>${escapeHtml(categoryLabel(template.category))}</span>
           <span>v${escapeHtml(String(template.version))}</span>
           <span>优先级 ${escapeHtml(String(template.priority))}</span>
-          <span>${escapeHtml(ACTION_LABELS[template.actionType] ?? template.actionType)}</span>
+          <span>${escapeHtml(template.templateCode === "low_cost_mode" ? "动态成本优先" : ACTION_LABELS[template.actionType] ?? template.actionType)}</span>
         </div>
         <h3>${escapeHtml(template.name)}</h3>
         <p>${escapeHtml(template.description)}</p>
@@ -236,7 +236,7 @@ function renderImpact(state) {
                 <td>${index + 1}</td>
                 <td>${item.generated ? "本次模板" : escapeHtml(shortId(item.policy_id))}</td>
                 <td>${escapeHtml(String(item.priority))}</td>
-                <td>${escapeHtml(ACTION_LABELS[item.action_type] ?? item.action_type)}</td>
+                <td>${escapeHtml(item.generated && preview.template.templateCode === "low_cost_mode" ? "动态成本优先" : ACTION_LABELS[item.action_type] ?? item.action_type)}</td>
                 <td>${escapeHtml(shadowingLabel(item.shadowing))}</td>
               </tr>
             `).join("")}
@@ -247,7 +247,7 @@ function renderImpact(state) {
         <div><dt>应用前版本</dt><dd>v${escapeHtml(String(impact.expected_head_version))}，可作为回滚目标</dd></div>
         <div><dt>应用后版本</dt><dd>v${escapeHtml(String(impact.expected_head_version + 1))}</dd></div>
         ${impact.derived_target_model_id
-          ? `<div><dt>将使用的模型</dt><dd>${escapeHtml(impact.derived_target_model_name || "已选模型")}</dd></div>`
+          ? `<div><dt>当前参考模型</dt><dd>${escapeHtml(impact.derived_target_model_name || "已选模型")}</dd></div>`
           : ""}
         ${impact.allowed_model_alias_names?.length
           ? `<div><dt>允许别名</dt><dd>${impact.allowed_model_alias_names.map(escapeHtml).join("、")}</dd></div>`
@@ -264,19 +264,22 @@ function renderImpact(state) {
   `;
 }
 
-/** 低成本模板的固定模型策略会先于现有模型路由生效。 */
+/** The reference winner explains the preview; runtime quotes every request again. */
 function renderRouteNotice(impact) {
   const modelName = escapeHtml(impact.derived_target_model_name || "本次选中的模型");
   const previousVersion = escapeHtml(String(impact.expected_head_version));
   return `
     <div class="policy-template-route-notice">
-      <strong>本次选中：${modelName}</strong>
-      <p>此模型按当前价格和可用性选出。应用后，所选项目命中的请求会固定使用它，不会自动跟随价格变化，
-        也不会走原路由的候选模型和故障切换。原路由配置不会删除。</p>
+      <strong>当前参考模型：${modelName}</strong>
+      <p>参考模型按当前价格、每千输入及每千输出 Token 的用量选出，不固定使用。
+        应用后，每次请求都会按最新生效价格、组织汇率和该请求的预计输入输出用量重新比较，
+        选择合格模型中预计成本最低的模型；价格更新后，下一次请求自动重新选择。</p>
+      <p>停用、能力不符、服务或密钥不可用、缺少有效价格的模型不参与选择。
+        安全检查仍然生效；调用失败时按成本顺序尝试其他合格模型。原路由配置保留。</p>
       <p>要恢复原路由，可在“上线与版本”回滚到 v${previousVersion}；系统会停用本模板创建的规则。
         若期间改过策略，回滚会先检查冲突。</p>
       <button class="button button--secondary" type="button"
-        data-policy-template-remediation="model-aliases">改用模型路由的“成本优先”</button>
+        data-policy-template-remediation="model-aliases">查看模型路由</button>
     </div>
   `;
 }
@@ -331,7 +334,7 @@ function prerequisiteGuidance(code) {
   if (code === "eligible_low_cost_model_required") {
     return {
       title: "没有可用于低成本模式的模型",
-      detail: "请检查模型已启用，支持对话和流式调用，有有效的人民币价格及可用服务凭据。无需向量能力。也可在模型路由中选择“成本优先”。",
+      detail: "请检查模型已启用，支持对话和流式调用，有有效价格及可用服务凭据。无需向量能力。也可在模型路由中选择“成本优先”。",
       actions: [
         { target: "models", label: "查看模型能力" },
         { target: "model-aliases", label: "设置成本优先路由" },
@@ -387,10 +390,10 @@ function renderConfirmation(state) {
         <dl class="policy-template-confirm__summary">
           <div><dt>适配状态</dt><dd>${escapeHtml(STATUS_LABELS[template.compatibility.status] ?? "状态未知")}</dd></div>
           <div><dt>应用项目</dt><dd>${escapeHtml(project?.name ?? "所选项目")}</dd></div>
-          <div><dt>执行动作</dt><dd>${escapeHtml(ACTION_LABELS[generatedPolicy?.action_type] ?? generatedPolicy?.action_type ?? "-")}</dd></div>
+          <div><dt>执行动作</dt><dd>${escapeHtml(template.templateCode === "low_cost_mode" ? "动态成本优先" : ACTION_LABELS[generatedPolicy?.action_type] ?? generatedPolicy?.action_type ?? "-")}</dd></div>
           <div><dt>新增规则</dt><dd>1 条，应用后共 ${escapeHtml(String(impact.after_policy_count))} 条</dd></div>
           <div><dt>上线版本</dt><dd>v${escapeHtml(String(impact.expected_head_version + 1))}（可回退到 v${escapeHtml(String(impact.expected_head_version))}）</dd></div>
-          ${impact.derived_target_model_id ? `<div><dt>将使用的模型</dt><dd>${escapeHtml(impact.derived_target_model_name || "已选模型")}</dd></div>` : ""}
+          ${impact.derived_target_model_id ? `<div><dt>当前参考模型</dt><dd>${escapeHtml(impact.derived_target_model_name || "已选模型")}</dd></div>` : ""}
           ${warningLabels.length ? `<div class="policy-template-confirm__warning"><dt>应用提醒</dt><dd>${escapeHtml(warningText)}</dd></div>` : ""}
         </dl>
         ${template.templateCode === "low_cost_mode" ? renderRouteNotice(impact) : ""}

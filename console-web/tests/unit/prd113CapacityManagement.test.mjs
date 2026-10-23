@@ -26,7 +26,7 @@ test("chaos stop intent remains pending and cannot be submitted twice", () => {
   }];
   const root = { innerHTML: "" };
   renderPlatformWorkspace(root, state);
-  assert.match(root.innerHTML, /Awaiting stop confirmation/u);
+  assert.match(root.innerHTML, /等待终止确认/u);
   assert.doesNotMatch(root.innerHTML, /name="action" value="kill"/u);
   assert.doesNotMatch(root.innerHTML, />Terminal</u);
 });
@@ -125,17 +125,17 @@ test("capacity clients enforce closed projections, CSRF, CAS, and fixed commands
 test("renderer prunes capacity, chaos, and economics projections independently", () => {
   const billing = fakeRoot();
   renderPlatformWorkspace(billing, platformState(["platform.unit_economics.read"]));
-  assert.match(billing.innerHTML, /Unit economics/u);
-  assert.doesNotMatch(billing.innerHTML, /Service headroom|data-platform-capacity-(?:forecast|load|chaos)-form/u);
+  assert.match(billing.innerHTML, /单位成本/u);
+  assert.doesNotMatch(billing.innerHTML, /服务余量|data-platform-capacity-(?:forecast|load|chaos)-form/u);
 
   const security = fakeRoot();
   renderPlatformWorkspace(security, platformState([
     "platform.capacity.read", "platform.capacity.chaos",
   ]));
-  assert.match(security.innerHTML, /Service headroom/u);
+  assert.match(security.innerHTML, /服务余量/u);
   assert.match(security.innerHTML, /value="approve"/u);
   assert.match(security.innerHTML, /value="kill"/u);
-  assert.doesNotMatch(security.innerHTML, /data-platform-capacity-forecast-form|data-platform-capacity-load-form|Unit economics/u);
+  assert.doesNotMatch(security.innerHTML, /data-platform-capacity-forecast-form|data-platform-capacity-load-form|单位成本/u);
 
   const ops = fakeRoot();
   renderPlatformWorkspace(ops, platformState([
@@ -143,7 +143,7 @@ test("renderer prunes capacity, chaos, and economics projections independently",
   ]));
   assert.match(ops.innerHTML, /data-platform-capacity-forecast-form/u);
   assert.match(ops.innerHTML, /data-platform-capacity-load-form/u);
-  assert.match(ops.innerHTML, /Create chaos experiment/u);
+  assert.match(ops.innerHTML, /创建故障演练/u);
   assert.doesNotMatch(ops.innerHTML, /tenant_id|workspace_id|internal_endpoint|secret/iu);
 });
 

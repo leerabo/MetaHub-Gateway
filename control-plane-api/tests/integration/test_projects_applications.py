@@ -116,6 +116,44 @@ async def login(client: AsyncClient, email: str, password: str) -> str:
     return response.json()["access_token"]
 
 
+@pytest.mark.anyio
+async def test_project_owner_picker_and_assignment_permissions(monkeypatch, tmp_path):
+    """负责人可设置和清除；候选读取不放大开发者权限。"""
+    prepare_database(monkeypatch, tmp_path)
+    async with AsyncClient(
+        transport=ASGITransport(app=build_control_app()), base_url="http://control",
+    ) as client:
+        admin_token = await login(client, "admin@metahub.local", ADMIN_PASSWORD)
+        developer_token = await login(client, "developer@example.com", DEVELOPER_PASSWORD)
+        admin = {"Authorization": f"Bearer {admin_token}"}
+        developer = {"Authorization": f"Bearer {developer_token}"}
+        candidates = await client.get("/projects/owner-candidates?search=Developer", headers=admin)
+        assert candidates.status_code == 200, candidates.text
+        assert candidates.json()["candidates"] == [
+            {"user_id": "user_prd029_developer", "display_name": "Developer User"},
+        ]
+        denied = await client.get("/projects/owner-candidates", headers=developer)
+        assert denied.status_code == 403
+        created = await client.post("/projects", headers=admin, json={
+            "name": "负责人测试", "owner_user_id": "user_prd029_developer",
+        })
+        assert created.status_code == 201, created.text
+        project = created.json()["project"]
+        assert project["owner_display_name"] == "Developer User"
+        cleared = await client.patch(
+            f"/projects/{project['project_id']}", headers=admin, json={"owner_user_id": None},
+        )
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["project"]["owner_user_id"] is None
+        # 不存在于当前组织的负责人必须拒绝，且不能改变已有状态。
+        invalid = await client.patch(
+            f"/projects/{project['project_id']}", headers=admin,
+            json={"owner_user_id": "user_other_tenant"},
+        )
+        assert invalid.status_code == 422, invalid.text
+        assert invalid.json()["code"] == "project.owner_invalid"
+
+
 async def create_movable_application(
     client: AsyncClient,
     admin_token: str,

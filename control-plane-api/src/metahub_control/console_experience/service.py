@@ -1479,10 +1479,11 @@ def _ensure_account_preference(
 ) -> sqlite3.Row:
     stamp = _db_time(_now())
     connection.execute(
-        """INSERT OR IGNORE INTO account_preferences(
+        """INSERT INTO account_preferences(
              account_preference_id,account_id,locale,status,revision,source,
              confirmation_state,created_at,updated_at)
-           VALUES(?,?,'zh-CN','active',1,'identity','confirmed',?,?)""",
+           VALUES(?,?,'zh-CN','active',1,'identity','confirmed',?,?)
+           ON CONFLICT(account_id) DO NOTHING""",
         (_stable_id("acp_", f"account-preference:{account_id}"), account_id, stamp, stamp),
     )
     row = connection.execute(

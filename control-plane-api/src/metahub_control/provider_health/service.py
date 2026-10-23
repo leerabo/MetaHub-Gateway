@@ -667,19 +667,21 @@ def claim_next_scheduled(config: AppConfig) -> tuple[str, str] | None:
 
     connection = _connect(config)
     now = _db_time(_utcnow())
-    row = connection.execute(
-        """
-        SELECT tenant_id, provider_id
-        FROM providers
-        WHERE status='active' AND next_probe_at IS NOT NULL AND next_probe_at<=?
-          AND (probe_lease_until IS NULL OR probe_lease_until<=?)
-        ORDER BY next_probe_at ASC, provider_id ASC
-        LIMIT 1
-        """,
-        (now, now),
-    ).fetchone()
-    # 空结果表示本轮没有到期任务，调度器会短暂等待而不是制造错误日志。
-    return (row["tenant_id"], row["provider_id"]) if row else None
+    try:
+        row = connection.execute(
+            """
+            SELECT tenant_id, provider_id
+            FROM providers
+            WHERE status='active' AND next_probe_at IS NOT NULL AND next_probe_at<=?
+              AND (probe_lease_until IS NULL OR probe_lease_until<=?)
+            ORDER BY next_probe_at ASC, provider_id ASC
+            LIMIT 1
+            """,
+            (now, now),
+        ).fetchone()
+        return (row["tenant_id"], row["provider_id"]) if row else None
+    finally:
+        connection.close()
 
 
 def _claim_provider(
@@ -1445,9 +1447,10 @@ def _connect(config: AppConfig) -> sqlite3.Connection:
         raise ApiError("infra.database_not_configured")
     try:
         connection = connect_database(config.database_url)
-        connection.execute("PRAGMA busy_timeout=5000")
-        if config.database_url != ":memory:":
-            connection.execute("PRAGMA journal_mode=WAL")
+        if getattr(connection, "backend", "sqlite") == "sqlite":
+            connection.execute("PRAGMA busy_timeout=5000")
+            if config.database_url != ":memory:":
+                connection.execute("PRAGMA journal_mode=WAL")
         return connection
     # 数据库连接异常转换为统一错误码，不把文件路径或驱动异常暴露给 API。
     except DbError as exc:

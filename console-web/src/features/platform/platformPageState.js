@@ -19,7 +19,6 @@ import { renderPlatformGate, renderPlatformWorkspace } from "./renderPlatformPag
 
 const PLATFORM_NAVIGATION_IDS = new Set([
   "overview",
-  "admin-assistant",
   "approvals",
   "console-migration",
   "infrastructure",
@@ -61,7 +60,6 @@ const PLATFORM_NAVIGATION_IDS = new Set([
 ]);
 const PLATFORM_CONSOLE_EXPERIENCE_VIEWS = new Set([
   "overview",
-  "admin-assistant",
   "approvals",
 ]);
 const WORKSPACE_READ_PERMISSIONS = new Set([
@@ -88,6 +86,7 @@ export function createPlatformPageController({
   if (!root || !api) throw new TypeError("platform page requires root and api");
   let generation = 0;
   let request = null;
+  let navigationWindow = null;
   const state = {
     loading: true,
     session: null,
@@ -578,8 +577,8 @@ export function createPlatformPageController({
         }
       }
       if (state.view === "job-runtime" && !state.jobQueues) void loadJobRuntime();
-      if (state.view === "billing" && !state.metering && typeof api.meteringState === "function") {
-        void loadBillingPage();
+      if (state.view === "billing" && billingResources().some(([field]) => state[field] === null)) {
+        return loadBillingPage();
       }
       if (state.view === "feature-rollouts" && !state.featureFlags) {
         void loadFeatureRollouts();
@@ -665,7 +664,9 @@ export function createPlatformPageController({
       if (state.view === "offline-bundles" && !state.offlineBundles) {
         void loadOfflineBundles();
       }
-      if (state.view === "support" && !state.supportTickets) void loadSupportTickets();
+      if (state.view === "support" && supportResources().some(([field]) => state[field] === null)) {
+        return loadSupportTickets();
+      }
       if (state.view === "privacy" && !state.privacyQueue) void loadPrivacyQueue();
       if (state.view === "compliance" && !state.complianceControls) {
         void loadComplianceControls();
@@ -3350,6 +3351,8 @@ export function createPlatformPageController({
       return Object.freeze({ ...state });
     },
     destroy() {
+      navigationWindow?.removeEventListener("hashchange", navigateFromHash);
+      navigationWindow = null;
       generation += 1;
       request?.abort();
       request = null;
@@ -3419,6 +3422,7 @@ export function createPlatformPageController({
       if (!state.navigation.some((item) => item.id === state.view)) {
         state.view = state.navigation[0]?.id ?? "overview";
       }
+      replacePlatformHash(state.view);
       const consoleOnly = PLATFORM_CONSOLE_EXPERIENCE_VIEWS.has(state.view);
       if (consoleOnly) {
         const consoleActive = PLATFORM_CONSOLE_EXPERIENCE_VIEWS.has(state.view)
@@ -3451,10 +3455,9 @@ export function createPlatformPageController({
         return true;
       }
       consoleMigrationController.leave();
-      const fleetOnly = new Set([
-        "edge-fleet", "edge-upgrades", "edge-licenses", "edge-backups", "offline-bundles",
-      ]).has(state.view);
-      if (!fleetOnly && permissions.has("platform.operator.manage")) {
+      // Fetch the active page only. An unrelated slow or unavailable service
+      // must not block this page or flood the control API on every navigation.
+      if (state.view === "operators" && permissions.has("platform.operator.manage")) {
         tasks.push(api.operators({ signal: ticket.signal }).then((value) => { next.operators = value; }));
         if (typeof api.registrationPolicy === "function") {
           tasks.push(api.registrationPolicy({ signal: ticket.signal }).then((value) => {
@@ -3462,10 +3465,10 @@ export function createPlatformPageController({
           }));
         }
       }
-      if (!fleetOnly && permissions.has("platform.catalog.read") && typeof api.plans === "function") {
+      if (state.view === "billing" && permissions.has("platform.catalog.read") && typeof api.plans === "function") {
         tasks.push(api.plans({ signal: ticket.signal }).then((value) => { next.plans = value; }));
       }
-      if (!fleetOnly && (permissions.has("platform.provider_catalog.manage")
+      if (state.view === "provider-catalog" && (permissions.has("platform.provider_catalog.manage")
         || permissions.has("platform.provider_catalog.security_read"))
         && typeof api.providerCatalog === "function") {
         tasks.push(api.providerCatalog({ signal: ticket.signal }).then((value) => {
@@ -3517,7 +3520,7 @@ export function createPlatformPageController({
           signal: ticket.signal,
         }).then((value) => { next.channelStatements = value; }));
       }
-      if (!fleetOnly && permissions.has("platform.billing.read")
+      if (state.view === "billing" && permissions.has("platform.billing.read")
         && typeof api.billingSummary === "function") {
         tasks.push(api.billingSummary({
           status: state.billingStatus,
@@ -3529,14 +3532,14 @@ export function createPlatformPageController({
         && typeof api.meteringState === "function") {
         tasks.push(api.meteringState({ signal: ticket.signal }).then((value) => { next.metering = value; }));
       }
-      if (!fleetOnly && permissions.has("platform.billing.read")
+      if (state.view === "billing" && permissions.has("platform.billing.read")
         && typeof api.refunds === "function") {
         tasks.push(api.refunds({
           status: state.refundStatus,
           signal: ticket.signal,
         }).then((value) => { next.refunds = value; }));
       }
-      if (!fleetOnly && permissions.has("platform.verification.read")
+      if (state.view === "verification" && permissions.has("platform.verification.read")
         && typeof api.businessVerifications === "function") {
         tasks.push(api.businessVerifications({
           status: state.verificationStatus,
@@ -3544,19 +3547,19 @@ export function createPlatformPageController({
           signal: ticket.signal,
         }).then((value) => { next.verification = value; }));
       }
-      if (!fleetOnly && permissions.has("platform.notification_template.read")
+      if (state.view === "notification-templates" && permissions.has("platform.notification_template.read")
         && typeof api.notificationTemplates === "function") {
         tasks.push(api.notificationTemplates({ signal: ticket.signal }).then((value) => {
           next.notificationTemplates = value;
         }));
       }
-      if (!fleetOnly && permissions.has("platform.infrastructure.read")
+      if (state.view === "infrastructure" && permissions.has("platform.infrastructure.read")
         && typeof api.infrastructureStatus === "function") {
         tasks.push(api.infrastructureStatus({ signal: ticket.signal }).then((value) => {
           next.infrastructure = value;
         }));
       }
-      if (!fleetOnly && permissions.has("platform.gateway.read")
+      if (state.view === "gateway" && permissions.has("platform.gateway.read")
         && typeof api.gatewayCells === "function") {
         tasks.push(api.gatewayCells({ signal: ticket.signal }).then((value) => {
           next.gatewayCells = value;
@@ -3608,14 +3611,14 @@ export function createPlatformPageController({
           next.offlineBundles = value;
         }));
       }
-      if (!fleetOnly && permissions.has("platform.job.read")
+      if (state.view === "job-runtime" && permissions.has("platform.job.read")
         && typeof api.jobQueues === "function") {
         tasks.push(api.jobQueues({
           status: state.jobStatus,
           signal: ticket.signal,
         }).then((value) => { next.jobQueues = value; }));
       }
-      if (!fleetOnly && permissions.has("platform.feature.read")
+      if (state.view === "feature-rollouts" && permissions.has("platform.feature.read")
         && typeof api.featureFlags === "function") {
         tasks.push(api.featureFlags({
           status: state.featureStatus,
@@ -3623,13 +3626,13 @@ export function createPlatformPageController({
           signal: ticket.signal,
         }).then((value) => { next.featureFlags = value; }));
       }
-      if (!fleetOnly && permissions.has("platform.config_distribution.read")
+      if (state.view === "config-distribution" && permissions.has("platform.config_distribution.read")
         && typeof api.configDistribution === "function") {
         tasks.push(api.configDistribution({ signal: ticket.signal }).then((value) => {
           next.configDistribution = value;
         }));
       }
-      if (!fleetOnly && (permissions.has("platform.observability.read")
+      if (state.view === "observability" && (permissions.has("platform.observability.read")
         || permissions.has("platform.observability.security_read"))
         && typeof api.observabilityServices === "function"
         && typeof api.serviceLevelObjectives === "function"
@@ -3644,7 +3647,7 @@ export function createPlatformPageController({
           next.errorBudgets = budgets;
         }));
       }
-      if (!fleetOnly && permissions.has("platform.dr.read")
+      if (state.view === "disaster-recovery" && permissions.has("platform.dr.read")
         && typeof api.disasterRecoveryStatus === "function"
         && typeof api.disasterRecoveryBackups === "function") {
         tasks.push(Promise.all([
@@ -3655,26 +3658,26 @@ export function createPlatformPageController({
           next.disasterRecoveryBackups = backups;
         }));
       }
-      if (!fleetOnly && new Set(["overview", "status-incidents"]).has(state.view)
+      if (state.view === "status-incidents"
         && permissions.has("platform.status.read")
         && typeof api.statusIncidents === "function") {
         tasks.push(api.statusIncidents({ signal: ticket.signal }).then((value) => {
           next.statusIncidents = value;
         }));
       }
-      if (!fleetOnly && permissions.has("platform.capacity.read")
+      if (state.view === "capacity" && permissions.has("platform.capacity.read")
         && typeof api.capacity === "function") {
         tasks.push(api.capacity({ signal: ticket.signal }).then((value) => {
           next.capacity = value;
         }));
       }
-      if (!fleetOnly && permissions.has("platform.unit_economics.read")
+      if (state.view === "capacity" && permissions.has("platform.unit_economics.read")
         && typeof api.unitEconomics === "function") {
         tasks.push(api.unitEconomics({ signal: ticket.signal }).then((value) => {
           next.unitEconomics = value;
         }));
       }
-      if (!fleetOnly && permissions.has("platform.data_residency.read")
+      if (state.view === "data-residency" && permissions.has("platform.data_residency.read")
         && typeof api.residencyEvidence === "function") {
         tasks.push(api.residencyEvidence({
           ...state.residencyEvidenceFilters,
@@ -3683,7 +3686,7 @@ export function createPlatformPageController({
           signal: ticket.signal,
         }).then((value) => { next.residencyEvidence = value; }));
       }
-      if (!fleetOnly && (permissions.has("platform.risk.read")
+      if (state.view === "abuse-risk" && (permissions.has("platform.risk.read")
         || permissions.has("platform.risk.support_read"))
         && typeof api.riskCases === "function") {
         tasks.push(api.riskCases({
@@ -3692,7 +3695,7 @@ export function createPlatformPageController({
           signal: ticket.signal,
         }).then((value) => { next.riskCases = value; }));
       }
-      if (!fleetOnly
+      if (state.view === "support"
         && (permissions.has("platform.support.request")
           || permissions.has("platform.support.approve"))) {
         tasks.push(api.grants({ signal: ticket.signal }).then((value) => { next.grants = value; }));
@@ -3706,7 +3709,7 @@ export function createPlatformPageController({
           signal: ticket.signal,
         }).then((value) => { next.supportTickets = value; }));
       }
-      if (!fleetOnly && permissions.has("platform.audit.read")) {
+      if (state.view === "audit" && permissions.has("platform.audit.read")) {
         tasks.push(api.audit({ signal: ticket.signal }).then((value) => { next.audit = value; }));
       }
       if (state.view === "privacy" && permissions.has("platform.privacy.read")
@@ -3722,7 +3725,7 @@ export function createPlatformPageController({
           signal: ticket.signal,
         }).then((value) => { next.complianceControls = value; }));
       }
-      if (!fleetOnly && hasWorkspaceRead(permissions)) {
+      if (state.view === "workspaces" && hasWorkspaceRead(permissions)) {
         tasks.push(api.workspaces({
           filters: state.workspaceFilters,
           cursor: state.workspaceCursor,
@@ -3934,30 +3937,42 @@ export function createPlatformPageController({
   }
 
   async function loadSupportTickets() {
-    if (state.view !== "support" || typeof api.supportTickets !== "function"
-      || !currentPermissions().has("platform.support.ticket.read")) return false;
+    const resources = supportResources();
+    if (state.view !== "support" || !resources.length) return false;
     const ticket = begin();
     state.loading = true;
     state.error = null;
     render();
     try {
-      const response = await api.supportTickets({
-        status: state.supportTicketFilters.status,
-        severity: state.supportTicketFilters.severity,
-        workspaceId: state.supportTicketFilters.workspaceId,
-        signal: ticket.signal,
-      });
-      if (!currentSupportTicket(ticket)) return false;
-      state.supportTickets = response;
-      state.selectedSupportTicketId = response.items.some(
-        (item) => item.ticket_id === state.selectedSupportTicketId,
-      ) ? state.selectedSupportTicketId : response.items[0]?.ticket_id ?? null;
+      const values = await Promise.all(resources.map(async ([field, method, options]) => [
+        field, await api[method]({ ...options, signal: ticket.signal }),
+      ]));
+      if (!current(ticket) || state.view !== "support") return false;
+      Object.assign(state, Object.fromEntries(values));
+      if (state.supportTickets) {
+        state.selectedSupportTicketId = state.supportTickets.items.some(
+          (item) => item.ticket_id === state.selectedSupportTicketId,
+        ) ? state.selectedSupportTicketId : state.supportTickets.items[0]?.ticket_id ?? null;
+      }
       state.loading = false;
       render();
       return true;
     } catch (error) {
       return fail(ticket, error);
     }
+  }
+
+  function supportResources() {
+    const permissions = currentPermissions();
+    return [
+      ["grants", "grants", {}, permissions.has("platform.support.request")
+        || permissions.has("platform.support.approve")],
+      ["supportTickets", "supportTickets", {
+        status: state.supportTicketFilters.status,
+        severity: state.supportTicketFilters.severity,
+        workspaceId: state.supportTicketFilters.workspaceId,
+      }, permissions.has("platform.support.ticket.read")],
+    ].filter(([, method, , allowed]) => allowed && typeof api[method] === "function");
   }
 
   async function loadEdgeFleet() {
@@ -4888,7 +4903,8 @@ export function createPlatformPageController({
   }
 
   async function loadBillingPage() {
-    if (typeof api.billingSummary !== "function") return false;
+    const resources = billingResources();
+    if (state.view !== "billing" || !resources.length) return false;
     const ticket = begin();
     state.loading = true;
     state.error = null;
@@ -4896,24 +4912,27 @@ export function createPlatformPageController({
     state.meterRecoveryIntent = null;
     render();
     try {
-      const billing = await api.billingSummary({
-        status: state.billingStatus,
-        cursor: state.billingCursor,
-        signal: ticket.signal,
-      });
-      if (!current(ticket)) return false;
-      const metering = currentPermissions().has("platform.billing.read")
-        && typeof api.meteringState === "function"
-        ? await api.meteringState({ signal: ticket.signal }) : null;
-      if (!current(ticket)) return false;
-      state.billing = billing;
-      state.metering = metering;
+      const values = await Promise.all(resources.map(async ([field, method, options]) => [
+        field, await api[method]({ ...options, signal: ticket.signal }),
+      ]));
+      if (!current(ticket) || state.view !== "billing") return false;
+      Object.assign(state, Object.fromEntries(values));
       state.loading = false;
       render();
       return true;
     } catch (error) {
       return fail(ticket, error);
     }
+  }
+
+  function billingResources() {
+    const permissions = currentPermissions();
+    return [
+      ["plans", "plans", {}, "platform.catalog.read"],
+      ["billing", "billingSummary", { status: state.billingStatus, cursor: state.billingCursor }, "platform.billing.read"],
+      ["metering", "meteringState", {}, "platform.billing.read"],
+      ["refunds", "refunds", { status: state.refundStatus }, "platform.billing.read"],
+    ].filter(([, method, , permission]) => permissions.has(permission) && typeof api[method] === "function");
   }
 
   async function loadRefundQueue() {
@@ -5288,6 +5307,10 @@ export function createPlatformPageController({
   }
 
   function bind() {
+    if (!navigationWindow && typeof globalThis.window?.addEventListener === "function") {
+      navigationWindow = globalThis.window;
+      navigationWindow.addEventListener("hashchange", navigateFromHash);
+    }
     root.addEventListener("submit", (event) => {
       const form = event.target;
       if (!(form instanceof globalThis.HTMLFormElement)) return;
@@ -6586,6 +6609,18 @@ export function createPlatformPageController({
       }
     });
     root.addEventListener("click", (event) => {
+      const summary = event.target.closest("summary");
+      if (summary?.parentElement?.matches(".platform-nav-group")) {
+        const opened = summary.parentElement;
+        // Native details keeps keyboard behavior and focus; this only adds the
+        // single-open accordion rule after the browser toggles the clicked group.
+        setTimeout(() => {
+          if (!opened.open) return;
+          root.querySelectorAll(".platform-nav-group[open]").forEach((group) => {
+            if (group !== opened) group.open = false;
+          });
+        }, 0);
+      }
       const target = event.target.closest("button, [data-platform-view]");
       if (!target) return;
       if (target.dataset.platformView) {
@@ -6813,6 +6848,16 @@ export function createPlatformPageController({
         }
       }
     });
+  }
+
+  function navigateFromHash() {
+    const view = initialPlatformView();
+    if (!state.session || !state.navigation.length) {
+      // Authentication still has to load and validate the backend navigation.
+      state.view = view;
+      return;
+    }
+    if (controller.selectView(view) === false) replacePlatformHash(state.view);
   }
 
   function begin() {

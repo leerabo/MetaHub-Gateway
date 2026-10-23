@@ -34,11 +34,7 @@ export function renderSdkExamples({ pythonState, javascriptState, activeLanguage
   const normalizedLanguage = normalizeSdkLanguage(activeLanguage);
   return `
     <section class="panel sdk-examples-panel" aria-labelledby="sdk-examples-title">
-      <div class="panel-heading sdk-examples-heading">
-        <div>
-          <h2 id="sdk-examples-title">接入信息</h2>
-        </div>
-      </div>
+      <h2 id="sdk-examples-title" class="sdk-examples-title">接入信息</h2>
       ${renderWorkspaceConnectionStatus(workspaceTaskHomeState, "workspace.developer.sdk", i18n)}
       ${renderConnectionDetails(pythonState?.state === "ok" ? pythonState : javascriptState?.state === "ok" ? javascriptState : pythonState ?? javascriptState)}
       <details class="sdk-developer-details"><summary>开发者 SDK 示例</summary>

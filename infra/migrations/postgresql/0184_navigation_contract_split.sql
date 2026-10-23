@@ -1,8 +1,6 @@
 -- metahub: navigation-contract-split-v2
 -- Promote the Governance/System split into the persisted contract.
 
-BEGIN;
-
 ALTER TABLE workspace_navigation_contract_items
   DROP CONSTRAINT ck_workspace_navigation_contract_items_8;
 ALTER TABLE workspace_navigation_contract_items
@@ -71,7 +69,7 @@ SELECT 'nci_' || substr(metahub_sha256(upgrade.new_snapshot_id || ':' || old.sou
     CASE old.group_code WHEN 'observability' THEN CASE old.source_navigation_id
       WHEN 'request-logs' THEN 'governance' WHEN 'request-explanations' THEN 'governance'
       ELSE 'system' END ELSE old.group_code END,
-    old.required_permissions_json::json,old.display_order)), metahub_utc_now()
+    old.required_permissions_json::json,old.display_order)::text), metahub_utc_now()
 FROM prd184_contract_upgrade upgrade
 JOIN workspace_navigation_contract_items old
   ON old.navigation_contract_snapshot_id=upgrade.old_snapshot_id;
@@ -125,5 +123,3 @@ UPDATE workspace_navigation_member_states state
 SET contract_snapshot_id=upgrade.new_snapshot_id
 FROM prd184_contract_upgrade upgrade
 WHERE upgrade.workspace_id=state.workspace_id AND upgrade.tenant_id=state.tenant_id;
-
-COMMIT;

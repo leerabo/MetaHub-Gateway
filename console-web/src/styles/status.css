@@ -53,6 +53,17 @@ button, input { font: inherit; }
 .status-state { width: min(100% - 32px, 720px); min-height: 100vh; margin: auto; display: grid; place-content: center; gap: 12px; text-align: center; }
 .status-state h1, .status-state p { margin: 0; letter-spacing: 0; }
 :focus-visible { outline: 3px solid #2f6fed; outline-offset: 3px; }
+/* Public status uses a readable light glass surface without requiring sign-in. */
+body { background:radial-gradient(circle at 8% 0%,#d2eef1,transparent 45rem),radial-gradient(circle at 94% 25%,#e4e5f6,transparent 42rem),#f3f8fc; color:#193344; }
+.status-header { border-color:#c4d7e1; }
+.status-summary,.status-section,.status-event {
+  border:1px solid #c4d7e1; border-radius:16px; background:rgb(255 255 255 / 72%);
+  box-shadow:0 10px 30px rgb(35 70 90 / 7%); backdrop-filter:blur(16px);
+}
+.status-section { margin-top:20px; padding:24px; }
+.status-brand,.status-section h2 { color:#193344; }
+.status-updated,.status-empty,.status-stale-note,.status-event-meta,.status-reference { color:#4a6170; }
+.status-manage-link,.status-subscribe-button { border-radius:10px; background:#137e94; border-color:#137e94; }
 @media (max-width: 680px) {
   .status-shell { width: min(100% - 24px, 1040px); padding-top: 14px; }
   .status-header { align-items: flex-start; flex-direction: column; gap: 5px; padding-bottom: 12px; }

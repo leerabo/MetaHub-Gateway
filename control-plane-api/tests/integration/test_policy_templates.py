@@ -2897,3 +2897,208 @@ async def test_template_rollback_lock_permission_and_audit_failure_are_atomic(
     assert head["current_snapshot_version"] == 2
     assert failed_snapshots["count"] == 0
     assert failed_audits["count"] == 0
+
+
+@pytest.mark.anyio
+async def test_low_cost_runtime_requotes_price_changes_and_preserves_policy_boundary(
+    monkeypatch, tmp_path
+):
+    from dataclasses import replace
+    from decimal import Decimal
+
+    from metahub_gateway.api.openai_compatible import router as gateway_router
+    from metahub_gateway.budgets import service as budget_service
+    from metahub_gateway.budgets.models import EstimatedRequestCost
+    from metahub_gateway.policies.cache import PolicySnapshotLeaseDecision
+    from metahub_gateway.routing.template_cost import resolve_low_cost_template_plan
+    from metahub_shared.db.security import hash_secret
+    from metahub_shared.runtime.config import load_app_config
+    from metahub_shared.runtime.fastapi_app import create_service_app
+    from metahub_shared.runtime.policy_snapshot import (
+        build_policy_snapshot_artifact,
+        build_policy_snapshot_item,
+    )
+
+    database_url = _prepare_database(monkeypatch, tmp_path)
+    async with AsyncClient(
+        transport=ASGITransport(app=_build_app()), base_url="http://control"
+    ) as client:
+        auth = {"Authorization": f"Bearer {await _login(client)}"}
+        project = await _create_template_project(client, auth, code="dynamic-cost")
+        facts = _seed_template_planner_facts(database_url, budget_project_id=project)
+        with connect_database(database_url) as connection:
+            connection.execute(
+                "UPDATE models SET status='disabled' WHERE model_id NOT LIKE 'model_prd068_%'"
+            )
+            connection.commit()
+        await _publish_template_baseline(client, auth, request_suffix="dynamic_cost")
+        response, preview = await _preview_template(
+            client, auth, template_id="ptpl_low_cost_mode", bindings={"project_id": project}
+        )
+        applied, _ = await _apply_template_preview(
+            client,
+            auth,
+            template_id="ptpl_low_cost_mode",
+            bindings={"project_id": project},
+            preview_response=response,
+            preview=preview,
+            request_id="req_dynamic_cost_apply",
+        )
+        assert applied.status_code == 201, applied.text
+        body = applied.json()
+    with connect_database(database_url) as connection:
+        key = connection.execute(
+            "SELECT virtual_key_id FROM virtual_keys WHERE tenant_id=?", (facts["tenant_id"],)
+        ).fetchone()[0]
+    policy = build_policy_snapshot_item(
+        evaluation_order=0,
+        policy_id=body["application"]["generated_policy_id"],
+        policy_version=1,
+        policy_rule_id="rule_dynamic",
+        policy_action_id="action_dynamic",
+        priority=1000,
+        action_type="route_to",
+        target_model_id=facts["low_cost_model_id"],
+        expression=f'project == "{project}"',
+    )
+    options = dict(
+        tenant_id=facts["tenant_id"],
+        policy=policy,
+        project_id=project,
+        snapshot_version=body["policy_snapshot"]["snapshot_version"],
+        requested_model="public",
+        environment="dev",
+        environment_id=facts["environment_id"],
+        request_id="req_dynamic_before",
+        trace_id="trc_dynamic",
+        virtual_key_id=key,
+        request_kind="chat",
+        payload={"messages": [{"role": "user", "content": "hello"}], "max_tokens": 100},
+    )
+    config = load_app_config("gateway-data-plane")
+    before = resolve_low_cost_template_plan(config, **options)
+    assert before.initial_route.model_id == facts["low_cost_model_id"]
+    assert before.fallback_routes
+    # Verify the API branch and its log projection too. A trusted frozen quote
+    # isolates budget admission from the separately tested pricing resolver.
+    with connect_database(database_url) as connection:
+        connection.execute(
+            """INSERT INTO applications(application_id,tenant_id,project_id,application_code,
+               name,status,created_at,updated_at)
+               VALUES('app_dynamic_api',?,?,'dynamic-api','API check','active',
+               datetime('now'),datetime('now'))""",
+            (facts["tenant_id"], project),
+        )
+        connection.execute(
+            """UPDATE virtual_keys SET project_id=?,application_id='app_dynamic_api',key_hash=?
+               WHERE virtual_key_id=?""",
+            (project, hash_secret("mhv_dynamic_api_test"), key),
+        )
+        connection.execute(
+            """INSERT INTO budget_rules(budget_rule_id,tenant_id,environment_id,scope_type,
+               scope_id,name,daily_budget_cny,warning_threshold_percent,
+               exhausted_threshold_percent,exhausted_action,status,created_at,updated_at)
+               VALUES('br_dynamic_api',?,?,'virtual_key',?,'Test block','0.000001',80,100,
+               'block','active',datetime('now'),datetime('now'))""",
+            (facts["tenant_id"], facts["environment_id"], key),
+        )
+        connection.commit()
+    artifact = build_policy_snapshot_artifact(
+        tenant_id=facts["tenant_id"], policy_snapshot_id="psnap_dynamic_api",
+        snapshot_version=body["policy_snapshot"]["snapshot_version"], operation="publish",
+        previous_snapshot_id="psnap_dynamic_previous",
+        previous_snapshot_version=body["policy_snapshot"]["snapshot_version"] - 1,
+        policies=(policy,),
+    )
+
+    class FrozenCache:
+        async def acquire(self, tenant_id):
+            assert tenant_id == facts["tenant_id"]
+            return PolicySnapshotLeaseDecision(
+                True, artifact, artifact.snapshot_version, "current", None, 1.0
+            )
+
+    gateway = create_service_app("gateway-data-plane", "Dynamic template test")
+    gateway.include_router(gateway_router)
+    gateway.state.policy_snapshot_cache = FrozenCache()
+    monkeypatch.setattr(
+        budget_service, "_estimate_request_cost",
+        lambda *args, **kwargs: EstimatedRequestCost(1, 1, Decimal("1"), True),
+    )
+
+    async def verify_api_target(request_id, expected):
+        async with AsyncClient(
+            transport=ASGITransport(app=gateway), base_url="http://gateway"
+        ) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": "Bearer mhv_dynamic_api_test", "X-Request-ID": request_id},
+                json={"model": before.initial_route.model_alias,
+                      "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100},
+            )
+        assert response.status_code == 402, response.text
+        with connect_database(database_url) as connection:
+            log = connection.execute(
+                "SELECT policy_target_model_id,error_code,budget_action FROM request_logs "
+                "WHERE request_id=?", (request_id,),
+            ).fetchone()
+            assert log["policy_target_model_id"] == expected
+            assert log["error_code"] == "gateway.budget_exhausted"
+            assert log["budget_action"] == "block"
+            assert connection.execute(
+                "SELECT COUNT(*) FROM routing_attempts WHERE request_id=?", (request_id,),
+            ).fetchone()[0] == 0
+
+    await verify_api_target("req_dynamic_api_before", facts["low_cost_model_id"])
+    with connect_database(database_url) as connection:
+        connection.execute(
+            """INSERT INTO model_price_plans(
+                price_plan_id,tenant_id,model_id,input_price_per_1k,output_price_per_1k,
+                currency,price_schema_version,effective_from,source,created_at
+               ) VALUES('price_dynamic',?,'model_prd068_catalog_z_tie',0.01,0.01,
+                'CNY','price-plan-v1','2026-01-01T00:00:00Z','manual',datetime('now'))""",
+            (facts["tenant_id"],),
+        )
+        connection.commit()
+    options["request_id"] = "req_dynamic_after"
+    after = resolve_low_cost_template_plan(config, **options)
+    assert after.initial_route.model_id == "model_prd068_catalog_z_tie"
+    await verify_api_target("req_dynamic_api_after", "model_prd068_catalog_z_tie")
+    with connect_database(database_url) as connection:
+        record = connection.execute(
+            "SELECT candidate_summary FROM routing_decisions WHERE request_id='req_dynamic_after'"
+        ).fetchone()
+        summary = json.loads(record[0])
+        assert summary["candidates"][0]["price_source"] == "price_plan"
+        assert "hello" not in record[0]
+        connection.execute(
+            "UPDATE models SET status='disabled' WHERE model_id='model_prd068_catalog_z_tie'"
+        )
+        connection.commit()
+    options["request_id"] = "req_dynamic_disabled"
+    assert (
+        resolve_low_cost_template_plan(config, **options).initial_route.model_id
+        == facts["low_cost_model_id"]
+    )
+    assert resolve_low_cost_template_plan(config, **{**options, "policy": None}) is None
+    assert (
+        resolve_low_cost_template_plan(config, **{**options, "project_id": "other_project"}) is None
+    )
+    assert (
+        resolve_low_cost_template_plan(
+            config, **{**options, "policy": replace(policy, policy_id="manual_policy")}
+        )
+        is None
+    )
+    assert (
+        resolve_low_cost_template_plan(
+            config, **{**options, "policy": replace(policy, policy_version=2)}
+        )
+        is None
+    )
+    with connect_database(database_url) as connection:
+        connection.execute("UPDATE models SET status='disabled'")
+        connection.commit()
+    with pytest.raises(ApiError) as error:
+        resolve_low_cost_template_plan(config, **{**options, "request_id": "req_dynamic_empty"})
+    assert error.value.code == "gateway.no_route_available"

@@ -49,7 +49,7 @@ export function renderVirtualKeyPanel(virtualKeysState, authContext, projectStat
   const keys = virtualKeysState.virtual_keys ?? [];
   const canWrite = hasPermission(authContext, PERMISSIONS.VIRTUAL_KEY_WRITE);
   const canManageWorkspace = hasPermission(authContext, PERMISSIONS.USER_MANAGE);
-  const canManageKeys = canManageWorkspace;
+  const canManageKeys = canManageWorkspace && canWrite;
   const personalOnly = !canManageWorkspace;
   const projects = projectState?.state === "ok" ? projectState.projects ?? [] : [];
   const applications = projectState?.state === "ok" ? projectState.applications ?? [] : [];
@@ -72,14 +72,16 @@ export function renderVirtualKeyPanel(virtualKeysState, authContext, projectStat
     ${canWrite ? renderVirtualKeyDialog(virtualKeysState, defaultEnvironment, i18n) : ""}
     ${`<div class="virtual-keys-grid" id="issued-keys" role="table" aria-label="已创建的 KEY">
       <div class="virtual-key-row virtual-key-head" role="row">
-        <span>${keyCopy(i18n, "名称", "Name")}</span>
-        <span>${keyCopy(i18n, "前缀", "Prefix")}</span>
-        <span>${keyCopy(i18n, "环境", "Environment")}</span>
-        <span>${keyCopy(i18n, "归属范围", "Attribution")}</span>
-        <span>${keyCopy(i18n, "状态", "Status")}</span>
-        <span>${keyCopy(i18n, "最近使用", "Last used")}</span>
-        <span>${keyCopy(i18n, "限制", "Limits")}</span>
-        <span>${keyCopy(i18n, "操作", "Actions")}</span>
+        <span role="columnheader">${keyCopy(i18n, "名称", "Name")}</span>
+        <span role="columnheader">KEY</span>
+        <span role="columnheader">${keyCopy(i18n, "环境", "Environment")}</span>
+        <span role="columnheader">${keyCopy(i18n, "使用者", "User")}</span>
+        <span role="columnheader">${keyCopy(i18n, "项目", "Project")}</span>
+        <span role="columnheader">${keyCopy(i18n, "应用", "Application")}</span>
+        <span role="columnheader">${keyCopy(i18n, "状态", "Status")}</span>
+        <span role="columnheader">${keyCopy(i18n, "最近使用", "Last used")}</span>
+        <span role="columnheader">${keyCopy(i18n, "限制", "Limits")}</span>
+        <span role="columnheader">${keyCopy(i18n, "操作", "Actions")}</span>
       </div>
       ${keys.length ? keys.map((key) => renderVirtualKeyRow(key, canManageKeys, personalOnly, i18n, projects, applications)).join("") : renderEmptyRow(i18n)}
     </div>`}
@@ -175,38 +177,44 @@ function renderVirtualKeyRow(key, canManageKeys, personalOnly, i18n = null, proj
         : keyCopy(i18n, "已停用", "Disabled");
   return `
     <div class="virtual-key-row" data-virtual-key-row="${escapeAttribute(key.virtual_key_id)}" role="row">
-      <span class="virtual-key-name"><span class="virtual-key-field-label">${keyCopy(i18n, "KEY 名称", "Key name")}</span>
+      <span class="virtual-key-name" role="cell"><span class="virtual-key-field-label">${keyCopy(i18n, "KEY 名称", "Key name")}</span>
         <strong>${escapeHtml(displayVirtualKeyName(key))}</strong>
         ${key.description ? `<em>${escapeHtml(key.description)}</em>` : ""}
       </span>
-      <span><span class="virtual-key-field-label">${keyCopy(i18n, "密钥前缀", "Key prefix")}</span><code>${escapeHtml(displayVirtualKeyPrefix(key.key_prefix))}</code></span>
-      <span><span class="virtual-key-field-label">${keyCopy(i18n, "环境", "Environment")}</span>${escapeHtml(key.environment_name ?? environmentLabel(key.environment, i18n) ?? key.environment)}</span>
-      <span class="virtual-key-binding"><span class="virtual-key-field-label">${personalOnly ? keyCopy(i18n, "当前项目", "Current project") : keyCopy(i18n, "归属范围", "Attribution")}</span>
-        ${!personalOnly && key.owner_display_name ? `<em class="virtual-key-owner">使用者：${escapeHtml(key.owner_display_name)}</em>` : ""}
-        ${key.consumer_id ? `<strong>${keyCopy(i18n, "历史成员关联", "Former member link")}</strong><em>${key.consumer_status === "active" ? keyCopy(i18n, "使用者已启用", "Consumer active") : keyCopy(i18n, "使用者已停用", "Consumer disabled")}</em>` : ""}
-        ${key.project_id ? `<strong>${escapeHtml(key.project_name ?? keyCopy(i18n, "已关联项目", "Linked project"))}</strong>` : ""}
-        ${key.application_id ? `<em>${escapeHtml(key.application_name ?? keyCopy(i18n, "已关联应用", "Linked application"))}</em>` : ""}
-        ${!key.consumer_id && !key.project_id && !key.application_id ? `<em>${personalOnly ? keyCopy(i18n, "本人 · 待分配应用", "Personal · application pending") : keyCopy(i18n, "当前组织 · 待分配应用", "Organization · application pending")}</em>` : ""}
-        ${!personalOnly && canManageKeys && projects.length ? `<button type="button" class="virtual-key-binding-open" data-open-virtual-key-binding-dialog="${escapeAttribute(key.virtual_key_id)}">调整归属</button>` : ""}
+      <span class="virtual-key-credential" role="cell"><span class="virtual-key-field-label">KEY</span>
+        <span class="virtual-key-prefix-line"><code>${escapeHtml(displayVirtualKeyPrefix(key.key_prefix))}</code>
+          ${key.disabled_reason !== "member_removed" && key.has_recoverable_secret ? `<button type="button" class="icon-button virtual-key-copy-saved" data-copy-saved-virtual-key="${escapeAttribute(key.virtual_key_id)}" title="复制 KEY" aria-label="复制 KEY">${icon("copy")}</button>` : ""}
+          ${key.status === "active" && !key.has_recoverable_secret ? `<button type="button" class="icon-button virtual-key-copy-saved virtual-key-copy-unavailable" disabled title="${keyCopy(i18n, "此 KEY 无法恢复，请删除后重新创建", "This key cannot be recovered; delete it and create a new one")}" aria-label="${keyCopy(i18n, "复制 KEY 不可用", "Copy unavailable")}">${icon("copy")}</button>` : ""}
+        </span>
+        <span class="virtual-key-copy-feedback" data-virtual-key-copy-feedback role="status"></span>
+        ${key.status === "active" && !key.has_recoverable_secret ? `<em class="virtual-key-copy-unavailable-label">${keyCopy(i18n, "需重新创建", "Recreate")}</em>` : ""}
       </span>
-      <span><span class="virtual-key-field-label">${keyCopy(i18n, "状态", "Status")}</span><mark class="status-mark status-${escapeHtml(key.status)}">${escapeHtml(statusLabel)}</mark>${unassigned ? `<em class="virtual-key-governed-state">${keyCopy(i18n, "管理员分配应用后启用", "Enabled after administrator assigns an application")}</em>` : awaitingActivation ? `<em class="virtual-key-governed-state">${keyCopy(i18n, "请重新保存归属", "Save the assignment again")}</em>` : key.status === "disabled" && key.disabled_reason === "project_inactive" ? `<em class="virtual-key-governed-state">${keyCopy(i18n, "项目或应用已暂停", "Project or application paused")}</em>` : key.status === "disabled" && key.disabled_reason === "manual" ? `<em class="virtual-key-governed-state">${keyCopy(i18n, "无法调用", "Cannot be used")}</em>` : ""}</span>
-      <span><span class="virtual-key-field-label">${keyCopy(i18n, "最近使用", "Last used")}</span>${key.last_used_at ? escapeHtml(formatDateTime(key.last_used_at)) : keyCopy(i18n, "尚未使用", "Not used yet")}</span>
-      <div class="virtual-key-limits-cell">
+      <span class="virtual-key-environment" role="cell"><span class="virtual-key-field-label">${keyCopy(i18n, "环境", "Environment")}</span>${escapeHtml(key.environment_name ?? environmentLabel(key.environment, i18n) ?? key.environment)}</span>
+      <span class="virtual-key-owner" role="cell"><span class="virtual-key-field-label">${keyCopy(i18n, "使用者", "User")}</span>
+        ${escapeHtml(key.owner_display_name || (personalOnly ? keyCopy(i18n, "本人", "Me") : keyCopy(i18n, "未提供姓名", "Name unavailable")))}
+        ${key.consumer_id ? `<em>${keyCopy(i18n, "历史成员关联", "Former member link")} · ${key.consumer_status === "active" ? keyCopy(i18n, "使用者已启用", "Consumer active") : keyCopy(i18n, "使用者已停用", "Consumer disabled")}</em>` : ""}
+      </span>
+      <span class="virtual-key-project" role="cell"><span class="virtual-key-field-label">${keyCopy(i18n, "项目", "Project")}</span>
+        ${key.project_id ? escapeHtml(key.project_name ?? keyCopy(i18n, "已关联项目", "Linked project")) : keyCopy(i18n, "未分配", "Unassigned")}
+      </span>
+      <span class="virtual-key-application" role="cell"><span class="virtual-key-field-label">${keyCopy(i18n, "应用", "Application")}</span>
+        ${key.application_id ? escapeHtml(key.application_name ?? keyCopy(i18n, "已关联应用", "Linked application")) : keyCopy(i18n, "待分配应用", "Application pending")}
+      </span>
+      <span role="cell"><span class="virtual-key-field-label">${keyCopy(i18n, "状态", "Status")}</span><mark class="status-mark status-${escapeHtml(key.status)}">${escapeHtml(statusLabel)}</mark>${unassigned ? `<em class="virtual-key-governed-state">${keyCopy(i18n, "管理员分配应用后启用", "Enabled after administrator assigns an application")}</em>` : awaitingActivation ? `<em class="virtual-key-governed-state">${keyCopy(i18n, "请重新保存归属", "Save the assignment again")}</em>` : key.status === "disabled" && key.disabled_reason === "project_inactive" ? `<em class="virtual-key-governed-state">${keyCopy(i18n, "项目或应用已暂停", "Project or application paused")}</em>` : key.status === "disabled" && key.disabled_reason === "manual" ? `<em class="virtual-key-governed-state">${keyCopy(i18n, "无法调用", "Cannot be used")}</em>` : ""}</span>
+      <span class="virtual-key-last-used" role="cell"><span class="virtual-key-field-label">${keyCopy(i18n, "最近使用", "Last used")}</span>${key.last_used_at ? escapeHtml(formatDateTime(key.last_used_at)) : keyCopy(i18n, "尚未使用", "Not used yet")}</span>
+      <div class="virtual-key-limits-cell" role="cell">
         ${renderLimitSummary(key.rate_limit_rule, i18n)}
-        ${canManageKeys ? `<button type="button" class="virtual-key-limit-open" data-open-virtual-key-limit-dialog="${escapeAttribute(key.virtual_key_id)}">${keyCopy(i18n, "调整限制", "Adjust limits")}</button>` : ""}
       </div>
-      <span class="virtual-key-row-actions">
-        ${key.disabled_reason !== "member_removed" && key.has_recoverable_secret ? `<button type="button" class="icon-button virtual-key-copy-saved" data-copy-saved-virtual-key="${escapeAttribute(key.virtual_key_id)}" title="复制 KEY" aria-label="复制 KEY">${icon("copy")}</button><span class="virtual-key-copy-feedback" data-virtual-key-copy-feedback role="status"></span>` : ""}
-        ${key.status === "active" && !key.has_recoverable_secret ? `<button type="button" class="icon-button virtual-key-copy-saved virtual-key-copy-unavailable" disabled title="${keyCopy(i18n, "此 KEY 无法恢复，请删除后重新创建", "This key cannot be recovered; delete it and create a new one")}" aria-label="${keyCopy(i18n, "复制 KEY 不可用", "Copy unavailable")}">${icon("copy")}</button><em class="virtual-key-copy-unavailable-label">${keyCopy(i18n, "需重新创建", "Recreate")}</em>` : ""}
+      <span class="virtual-key-row-actions" role="cell">
+        ${canManageKeys ? `<button type="button" data-open-virtual-key-binding-dialog="${escapeAttribute(key.virtual_key_id)}">${keyCopy(i18n, "编辑", "Edit")}</button>` : ""}
         ${canManageKeys && Number.isSafeInteger(key.credential_revision) && key.status === "active" ? `<button type="button" data-rotate-virtual-key="${escapeAttribute(key.virtual_key_id)}" data-key-revision="${key.credential_revision}" title="${keyCopy(i18n, "轮换 KEY，旧 KEY 将立即失效", "Rotate key; the old key stops working immediately")}" aria-label="${keyCopy(i18n, "轮换", "Rotate")} ${escapeAttribute(key.name)}">${icon("rotate-cw")}</button>` : ""}
         ${canManageKeys || personalOnly ? `<form data-virtual-key-form data-personal-key-delete="true" data-virtual-key-id="${escapeAttribute(key.virtual_key_id)}">
           <input type="hidden" name="status" value="disabled" />
           <button type="submit" class="danger-button">删除</button>
         </form>` : ""}
       </span>
-      ${canManageKeys ? renderLimitDialog(key, i18n) : ""}
     </div>
-    ${!personalOnly && canManageKeys && projects.length ? renderBindingDialog(key, projects, applications, i18n) : ""}
+    ${canManageKeys ? renderBindingDialog(key, projects, applications, i18n) : ""}
   `;
 }
 
@@ -221,40 +229,28 @@ function renderBindingDialog(key, projects, applications, i18n = null) {
     <dialog class="virtual-key-binding-dialog" id="${escapeAttribute(dialogId)}" data-virtual-key-binding-dialog="${escapeAttribute(key.virtual_key_id)}" aria-labelledby="${escapeAttribute(dialogId)}-title">
       <form class="virtual-key-binding-dialog-content" method="dialog" data-virtual-key-binding-form data-virtual-key-id="${escapeAttribute(key.virtual_key_id)}">
         <div class="virtual-key-dialog-heading">
-          <h3 id="${escapeAttribute(dialogId)}-title">调整 KEY 归属</h3>
+          <h3 id="${escapeAttribute(dialogId)}-title">${keyCopy(i18n, "编辑 KEY", "Edit key")}</h3>
           <button type="button" class="icon-button" data-virtual-key-binding-dialog-close aria-label="关闭">×</button>
         </div>
         <p class="virtual-key-limit-dialog-key">${escapeHtml(displayVirtualKeyName(key))}${key.owner_display_name ? ` · ${escapeHtml(key.owner_display_name)}` : ""}</p>
-        <label><span>项目</span><select name="projectId" data-virtual-key-binding-project>${projectOptions}</select></label>
-        <label><span>应用</span><select name="applicationId" data-virtual-key-binding-application>${applicationOptions}</select></label>
+        <label><span>名称</span><input name="name" maxlength="80" required value="${escapeAttribute(displayVirtualKeyName(key))}" /></label>
+        <fieldset class="virtual-key-edit-section">
+          <legend>项目与应用</legend>
+          <label><span>项目</span><select name="projectId" data-virtual-key-binding-project data-current-project="${escapeAttribute(key.project_id ?? "")}">${projectOptions}</select></label>
+          <label><span>应用</span><select name="applicationId" data-virtual-key-binding-application data-current-application="${escapeAttribute(key.application_id ?? "")}">${applicationOptions}</select></label>
+          <p data-key-project-loading role="status"></p>
+        </fieldset>
+        <fieldset class="virtual-key-edit-section">
+          <legend>调用限制</legend>
+          <div class="virtual-key-limit-fields">
+            ${renderLimitInput("rpmLimit", "每分钟请求数", key.rate_limit_rule?.rpm_limit, i18n)}
+            ${renderLimitInput("tpmLimit", "每分钟 Token 数", key.rate_limit_rule?.tpm_limit, i18n)}
+            ${renderLimitInput("concurrencyLimit", "同时请求数", key.rate_limit_rule?.concurrency_limit, i18n)}
+          </div>
+        </fieldset>
         <div class="virtual-key-actions">
           <button type="submit">保存</button>
           <button type="button" class="secondary-button" data-virtual-key-binding-dialog-close>取消</button>
-          <span class="virtual-key-feedback" role="status"></span>
-        </div>
-      </form>
-    </dialog>
-  `;
-}
-
-function renderLimitDialog(key, i18n = null) {
-  const dialogId = `virtual-key-limit-dialog-${String(key.virtual_key_id).replace(/[^a-zA-Z0-9_-]/gu, "-")}`;
-  return `
-    <dialog class="virtual-key-limit-dialog" id="${escapeAttribute(dialogId)}" data-virtual-key-limit-dialog="${escapeAttribute(key.virtual_key_id)}" aria-labelledby="${escapeAttribute(dialogId)}-title">
-      <form class="virtual-key-limit-dialog-content" method="dialog" data-virtual-key-limits-form data-virtual-key-id="${escapeAttribute(key.virtual_key_id)}">
-        <div class="virtual-key-dialog-heading">
-          <h3 id="${escapeAttribute(dialogId)}-title">${keyCopy(i18n, "调整限制", "Adjust limits")}</h3>
-          <button type="button" class="icon-button" data-virtual-key-limit-dialog-close aria-label="关闭">×</button>
-        </div>
-        <p class="virtual-key-limit-dialog-key">${escapeHtml(displayVirtualKeyName(key))}</p>
-        <div class="virtual-key-limit-fields">
-          ${renderLimitInput("rpmLimit", "RPM", key.rate_limit_rule?.rpm_limit, i18n)}
-          ${renderLimitInput("tpmLimit", "TPM", key.rate_limit_rule?.tpm_limit, i18n)}
-          ${renderLimitInput("concurrencyLimit", "并发", key.rate_limit_rule?.concurrency_limit, i18n)}
-        </div>
-        <div class="virtual-key-actions">
-          <button type="submit">${keyCopy(i18n, "保存", "Save")}</button>
-          <button type="button" class="secondary-button" data-virtual-key-limit-dialog-close>${keyCopy(i18n, "取消", "Cancel")}</button>
           <span class="virtual-key-feedback" role="status"></span>
         </div>
       </form>

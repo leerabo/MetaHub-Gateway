@@ -49,7 +49,7 @@ export function renderLoginPage(container, options = {}) {
   `;
 }
 
-export function renderWorkspaceSessionPrompt(container, { error, pending = false } = {}) {
+export function renderWorkspaceSessionPrompt(container, { error, requestId, pending = false } = {}) {
   if (!container) return;
   if (pending) {
     container.innerHTML = '<section class="console-entry-loading" role="status"><strong>MetaHub</strong><p>正在退出登录...</p></section>';
@@ -65,7 +65,7 @@ export function renderWorkspaceSessionPrompt(container, { error, pending = false
           ${error ? '<button type="button" data-console-session-retry>重新连接</button>' : '<a href="identity.html">前往登录</a>'}
           <a href="./">返回首页</a>
         </div>
-        ${error ? `<details class="console-entry-diagnostics"><summary>查看错误详情</summary><p>${escapeHtml(error)}</p><a href="identity.html">重新登录或选择组织</a></details>` : ""}
+        ${error ? `<details class="console-entry-diagnostics"><summary>查看错误详情</summary><p>${escapeHtml(error)}</p>${requestId ? `<p>请求编号：<code>${escapeHtml(requestId)}</code></p>` : ""}<a href="identity.html">重新登录或选择组织</a></details>` : ""}
       </section>
     </main>`;
 }

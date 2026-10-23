@@ -13,6 +13,7 @@ import {
   listApplications,
   listApplicationMembers,
   listProjects,
+  listProjectOwnerCandidates,
   updateApplicationMembers,
   updateApplication,
   updateProject,
@@ -182,9 +183,10 @@ test("renderProjectApplicationPanel shows admin forms and developer readonly sta
   assert.match(adminHtml, /create-application-form/);
   assert.match(adminHtml, /账务核心/);
   assert.match(adminHtml, /账务 API/);
-  assert.match(adminHtml, /class="project-children"/u);
-  assert.match(adminHtml, /class="application-child-row application-child-head"/u);
-  assert.match(adminHtml, /应用<\/span>\s*<span>状态<\/span>\s*<span>KEY 数量<\/span>\s*<span>更新时间<\/span>\s*<span>成员<\/span>/u);
+  assert.match(adminHtml, /class="project-children"[^>]*hidden/u);
+  assert.match(adminHtml, /data-toggle-project="prj_1" aria-expanded="false" aria-controls="project-children-prj_1"/u);
+  assert.match(adminHtml, /负责人 \/ 成员/u);
+  assert.doesNotMatch(adminHtml, /application-child-head|↳/u);
   assert.match(adminHtml, /application-child-name/u);
   assert.match(adminHtml, /data-manage-application-members="app_1"/u);
   assert.match(adminHtml, /data-application-members-dialog/u);
@@ -194,7 +196,41 @@ test("renderProjectApplicationPanel shows admin forms and developer readonly sta
   assert.match(adminHtml, /项目已创建/);
   assert.match(developerHtml, /当前角色可查看项目与应用归属/);
   assert.doesNotMatch(developerHtml, /create-project-form/);
+  assert.match(developerHtml, /data-manage-application-members="app_1"/u);
+  assert.doesNotMatch(developerHtml, /data-application-members-save/u);
   assert.equal(viewerHtml, "");
+});
+
+test("project tree retains expansion and displays member counts without exposing owner IDs", () => {
+  const html = renderProjectApplicationPanel({
+    state: "ok", expandedProjectIds: ["prj_1"],
+    projects: [{ ...projectPayload.projects[0], owner_user_id: "user_internal", owner_display_name: null }],
+    applications: [{ ...applicationPayload.applications[0], member_count: 300 }],
+  }, withPermissionSnapshot({ user: { role: "admin" } }, [PERMISSIONS.PROJECT_READ, PERMISSIONS.PROJECT_WRITE]));
+  assert.match(html, /aria-expanded="true"/u);
+  assert.doesNotMatch(html, /id="project-children-prj_1"[^>]*hidden/u);
+  assert.match(html, /300 位成员/u);
+  assert.doesNotMatch(html, /<span[^>]*>user_internal<\/span>/u);
+  assert.match(html, /选择负责人/u);
+});
+
+test("owner edits distinguish preserve, assign and clear, and candidates are searchable", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return { ok: true, headers: new Map(), async json() { return { candidates: [], total: 0 }; } };
+  };
+  const base = { controlApiUrl: "http://control.local", token: "jwt-token", projectId: "prj_1" };
+  await updateProject({ ...base, name: "更新名称" });
+  await updateProject({ ...base, ownerUserId: "user_1" });
+  await updateProject({ ...base, ownerUserId: null });
+  await createProject({ ...base, name: "项目", ownerUserId: "user_1" });
+  await listProjectOwnerCandidates({ ...base, search: "张", limit: 50 });
+  assert.equal(Object.hasOwn(JSON.parse(calls[0].options.body), "owner_user_id"), false);
+  assert.equal(JSON.parse(calls[1].options.body).owner_user_id, "user_1");
+  assert.equal(JSON.parse(calls[2].options.body).owner_user_id, null);
+  assert.equal(JSON.parse(calls[3].options.body).owner_user_id, "user_1");
+  assert.match(calls[4].url, /\/projects\/owner-candidates\?search=%E5%BC%A0&limit=50/u);
 });
 
 test("renderProjectApplicationPanel allows deleting an unused project tree", () => {

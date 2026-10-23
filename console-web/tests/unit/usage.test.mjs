@@ -675,7 +675,7 @@ test("usage panel renders totals records and estimated label for authorized role
   assert.doesNotMatch(html, /virtual_key_id|provider_id|environment_id|project_id|application_id/u);
 });
 
-test("finance usage includes only the signed-in member's key records beside organization totals", () => {
+test("organization overview keeps the signed-in member's records in a separate hidden personal view", () => {
   const html = renderUsagePanel(
     {
       state: "ok",
@@ -690,10 +690,39 @@ test("finance usage includes only the signed-in member's key records beside orga
       [PERMISSIONS.BILLING_USAGE_READ, PERMISSIONS.VIRTUAL_KEY_READ]),
   );
   assert.match(html, /组织汇总/);
+  assert.match(html, /整个组织的调用用量与成本/);
+  assert.match(html, /data-usage-dimension="overview" aria-labelledby="usage-dimension-overview"/);
+  assert.match(html, /data-usage-dimension="personal" hidden aria-labelledby="usage-own-title"/);
+  assert.match(html, /<option value="overview" selected>组织总览/);
   assert.match(html, /我的用量/);
   assert.match(html, /最近调用记录/);
   assert.match(html, /mechx/);
   assert.doesNotMatch(html, /req_personal/);
+});
+
+test("personal view hides organization metrics and exports, and is unavailable without own-key read permission", () => {
+  const state = {
+    state: "ok", dimension: "personal", summary: summaryPayload,
+    personalSummary: { totals: { request_count: 1, input_tokens: 12, output_tokens: 8, total_tokens: 20 } },
+  };
+  const html = renderUsagePanel(state, withPermissionSnapshot({ user: { role: "admin" } },
+    [PERMISSIONS.BILLING_USAGE_READ, PERMISSIONS.BILLING_USAGE_EXPORT, PERMISSIONS.VIRTUAL_KEY_READ]));
+  assert.match(html, /data-usage-scope-label>个人汇总/);
+  assert.match(html, /data-usage-organization hidden>[\s\S]*?id="usage-export-csv"/);
+  assert.match(html, /<div data-usage-organization hidden>[\s\S]*?aria-label="用量总览"/);
+  assert.match(html, /data-usage-dimension="personal" aria-labelledby="usage-own-title"/);
+  assert.match(html, /data-usage-dimension="overview" hidden/);
+
+  const organizationOnly = renderUsagePanel(state, withPermissionSnapshot({ user: { role: "finance_admin" } },
+    [PERMISSIONS.BILLING_USAGE_READ]));
+  assert.doesNotMatch(organizationOnly, /data-usage-dimension="personal"|我的用量|个人汇总/);
+  assert.match(organizationOnly, /<option value="overview" selected>组织总览/);
+  assert.match(organizationOnly, /data-usage-organization>/);
+
+  const personalOnly = renderUsagePanel(state, withPermissionSnapshot({ user: { role: "developer" } },
+    [PERMISSIONS.VIRTUAL_KEY_READ]));
+  assert.match(personalOnly, /只显示本人通过个人 KEY 的统计/);
+  assert.doesNotMatch(personalOnly, /组织汇总|组织总览/);
 });
 
 test("usage hides consumer ids when the directory name is unavailable", () => {

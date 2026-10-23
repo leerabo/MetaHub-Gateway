@@ -126,7 +126,11 @@ import { installIdentityAccessExperience } from "./accessExperience.js";
 import { identitySection, workspaceSectionRoute } from "./identitySections.js";
 import { serviceOrigin } from "../../lib/runtimeOrigins.js";
 import { installUserFacingTextGuard } from "../../lib/userFacingTextGuard.js";
+import { initializeTheme } from "../../lib/theme.js";
+import { initializeDialogs } from "../../lib/dialogs.js";
 
+initializeTheme();
+initializeDialogs();
 const root = globalThis.document?.querySelector("#identity-app");
 if (root) {
   installUserFacingTextGuard(root);

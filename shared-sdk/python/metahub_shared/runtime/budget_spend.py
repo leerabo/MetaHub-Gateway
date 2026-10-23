@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from decimal import Decimal, DecimalException, localcontext
 
 from metahub_shared.runtime.budget_reservations import load_outstanding_reserved_cny_micros
+from metahub_shared.runtime.workspace_fx import resolve_workspace_fx_rate
 
 # 预算金额固定使用六位 CNY 微元；总额上限与既有十亿元日预算合同保持一致。
 MICROS_PER_CNY = 1_000_000
@@ -151,7 +153,8 @@ def _load_posted_usage_cny_micros(
 
     rows = connection.execute(
         f"""
-        SELECT normalized_cny_micros, cny_normalization_status, price_evidence_status
+        SELECT amount_micros, currency, normalized_cny_micros, cny_normalization_status,
+               price_evidence_status, created_at
         FROM finops_ledger_entries
         WHERE {' AND '.join(clauses)}
         ORDER BY ledger_sequence ASC
@@ -160,18 +163,53 @@ def _load_posted_usage_cny_micros(
     )
     total = 0
     for row in rows:
-        normalization_status = row[1]
-        evidence_status = row[2]
+        amount_micros = row[0]
+        currency = row[1]
+        normalized_micros = row[2]
+        normalization_status = row[3]
+        evidence_status = row[4]
         # unpriced 虽以零金额入账，但代表价格未知；把它当免费会关闭预算保护。
-        if (
-            normalization_status != "normalized"
-            or evidence_status not in VALID_USAGE_PRICE_EVIDENCE
-        ):
+        if normalization_status == "normalized" and evidence_status in VALID_USAGE_PRICE_EVIDENCE:
+            amount = _bounded_micros(normalized_micros, reason="budget_spend.usage_amount_invalid")
+        elif evidence_status == "priced" and currency == "USD":
+            # 旧版本曾把 USD 分录写成“已定价但未归一化”。按原分录发生时刻补算，
+            # 让历史记录可参与预算，同时保持汇率版本和账单发生时间一致。
+            try:
+                fx = resolve_workspace_fx_rate(
+                    connection,
+                    tenant_id=tenant_id,
+                    observed_at=str(row[5]),
+                )
+            except (ValueError, sqlite3.Error) as exc:
+                raise BudgetSpendUnavailableError("budget_spend.fx_unavailable") from exc
+            if fx is None:
+                raise BudgetSpendUnavailableError("budget_spend.fx_unavailable")
+            amount = _usd_micros_to_cny_micros(amount_micros, fx.usd_to_cny)
+        else:
             # 证据不完整时不能把零金额解释为免费，调用方必须在 Provider 前返回统一 503。
             raise BudgetSpendUnavailableError("budget_spend.usage_evidence_unavailable")
-        amount = _bounded_micros(row[0], reason="budget_spend.usage_amount_invalid")
         total = _bounded_add(total, amount, reason="budget_spend.posted_total_invalid")
     return total
+
+
+def _usd_micros_to_cny_micros(value: object, usd_to_cny: Decimal) -> int:
+    """按发生时组织汇率把 USD 微元精确换算为 CNY 微元。"""
+
+    usd_micros = _bounded_micros(value, reason="budget_spend.usage_amount_invalid")
+    if not usd_to_cny.is_finite() or usd_to_cny <= 0:
+        raise BudgetSpendUnavailableError("budget_spend.fx_invalid")
+    try:
+        with localcontext() as context:
+            context.prec = 64
+            cny = (
+                Decimal(usd_micros) / Decimal(MICROS_PER_CNY) * usd_to_cny
+            ).quantize(Decimal("0.000001"))
+        micros = cny * Decimal(MICROS_PER_CNY)
+        if micros != micros.to_integral_value() or micros < 0:
+            raise BudgetSpendUnavailableError("budget_spend.fx_conversion_invalid")
+        return _bounded_micros(int(micros), reason="budget_spend.fx_conversion_invalid")
+    except (DecimalException, OverflowError) as exc:
+        raise BudgetSpendUnavailableError("budget_spend.fx_conversion_invalid") from exc
 
 
 def _validate_scope(

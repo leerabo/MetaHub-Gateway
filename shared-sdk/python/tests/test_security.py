@@ -9,10 +9,32 @@ from __future__ import annotations
 import base64
 
 import pytest
-from metahub_shared.db.security import decrypt_provider_key, encrypt_provider_key
+from metahub_shared.db.security import decrypt_provider_key, encrypt_provider_key, verify_password
 
 # 测试加密主密钥只存在当前进程，用于验证合同，禁止复用到任何本地或生产数据库。
 ENCRYPTION_SECRET = "test-only-provider-encryption-secret"
+
+
+@pytest.mark.parametrize("parallelism", (2, 4))
+def test_existing_argon2_password_profiles(parallelism: int) -> None:
+    from argon2 import PasswordHasher
+
+    stored = PasswordHasher(parallelism=parallelism).hash("test-only-password")
+    assert verify_password("test-only-password", stored)
+    assert not verify_password("wrong-password", stored)
+
+
+def test_unbounded_argon2_parameters_are_rejected_before_verification(monkeypatch) -> None:
+    from argon2 import PasswordHasher
+
+    stored = PasswordHasher(parallelism=4).hash("test-only-password")
+
+    def unexpected_verify(*_args):
+        pytest.fail("Unbounded parameters must never reach the password KDF")
+
+    monkeypatch.setattr(PasswordHasher, "verify", unexpected_verify)
+    for parameter in ("m=131072,t=3,p=4", "m=65536,t=6,p=4", "m=65536,t=3,p=8"):
+        assert not verify_password("test-only-password", stored.replace("m=65536,t=3,p=4", parameter))
 
 
 def test_provider_key_ciphertext_round_trip() -> None:

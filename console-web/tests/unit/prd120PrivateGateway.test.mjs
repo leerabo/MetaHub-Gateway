@@ -409,7 +409,7 @@ test("Platform direct Fleet hash survives session refresh and ignores unrelated 
   assert.equal(fleetReads, 1);
   assert.equal(unrelatedReads, 0);
   assert.equal(statusReads, 0);
-  assert.match(root.innerHTML, /Private Gateway fleet/u);
+  assert.match(root.innerHTML, /私有 Gateway 集群/u);
   assert.doesNotMatch(root.innerHTML, /workspace_id|tenant_id|certificate_id/u);
   assert.doesNotMatch(root.innerHTML, /01\/01/u);
 
@@ -418,7 +418,7 @@ test("Platform direct Fleet hash survives session refresh and ignores unrelated 
   assert.equal(fleetReads, 1);
   assert.equal(statusReads, 1);
   assert.match(root.innerHTML, /class="platform-shell"/u);
-  assert.doesNotMatch(root.innerHTML, /Private Gateway fleet/u);
+  assert.doesNotMatch(root.innerHTML, /私有 Gateway 集群/u);
   assert.doesNotMatch(root.innerHTML, /edp_[a-z0-9]+/u);
   controller.destroy();
 });

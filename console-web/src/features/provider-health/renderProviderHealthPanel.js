@@ -9,6 +9,18 @@ const STATUS_LABELS = {
   disabled: "已禁用",
 };
 
+const PROVIDER_TYPE_LABELS = Object.freeze({
+  zhipu: "智谱",
+  dashscope: "通义",
+  wenxin: "文心",
+  volcengine: "火山引擎",
+  hunyuan: "腾讯混元",
+  deepseek: "DeepSeek",
+  openai_compatible: "OpenAI 兼容",
+  custom: "自定义服务",
+  migration_compatible: "迁移兼容",
+});
+
 /** 渲染 PAGE-051 Provider 健康页。 */
 export function renderProviderHealthPanel(state, authContext) {
   // 缺少后端健康读权限时零 DOM；OpsAdmin 等角色不再被旧角色集合拦截。
@@ -102,7 +114,7 @@ function renderSummary(label, value, status) {
 function renderHealthRow(item, probingProviderId, canProbe) {
   const probing = probingProviderId === item.provider_id;
   return `<article class="provider-health-row status-${escapeAttribute(item.effective_health_status)}">
-    <div><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.provider_code)} · ${escapeHtml(item.provider_type)}</span><span class="break-anywhere">${escapeHtml(item.base_url)}</span></div>
+    <div><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(PROVIDER_TYPE_LABELS[item.provider_type] ?? "模型服务")}</span><span class="break-anywhere">${escapeHtml(item.base_url)}</span></div>
     <dl><div><dt>状态</dt><dd>${escapeHtml(STATUS_LABELS[item.effective_health_status] ?? item.effective_health_status)}</dd></div><div><dt>最近成功</dt><dd>${formatDate(item.last_success_at)}</dd></div><div><dt>延迟</dt><dd>${item.last_probe_latency_ms == null ? "-" : `${escapeHtml(item.last_probe_latency_ms)} ms`}</dd></div><div><dt>错误</dt><dd>${escapeHtml(item.last_probe_error_code ?? "-")}</dd></div></dl>
     ${renderHealthCaveat(item)}
     ${canProbe ? `<button type="button" class="icon-button" data-provider-probe="${escapeAttribute(item.provider_id)}" title="立即探测" aria-label="立即探测 ${escapeAttribute(item.name)}" ${probing ? "disabled" : ""}>${probing ? "探测中" : "↻"}</button>` : ""}

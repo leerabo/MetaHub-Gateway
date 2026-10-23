@@ -493,7 +493,8 @@ def _connect(config: AppConfig) -> sqlite3.Connection:
 
     try:
         connection = connect_database(config.database_url)
-        connection.execute("PRAGMA busy_timeout=5000")
+        if getattr(connection, "backend", "sqlite") == "sqlite":
+            connection.execute("PRAGMA busy_timeout=5000")
         return connection
     except DbError:
         raise ApiError("branding.unavailable") from None

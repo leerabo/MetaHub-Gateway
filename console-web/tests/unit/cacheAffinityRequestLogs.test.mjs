@@ -119,7 +119,8 @@ test("request log renders safe affinity selections and distinguishes reported ca
     html,
     /binding_secret|credential_secret|revision_digest_secret|scope_digest_secret|classified_secret|key_prefix_secret/,
   );
-  assert.doesNotMatch(html, /cas_1111|caf_2222|provider_deepseek/);
+  assert.doesNotMatch(html, /cas_1111|caf_2222|provider_deepseek|model_deepseek/);
+  assert.match(html, /未识别模型/u);
 });
 
 test("request log uses a neutral empty affinity state and viewer receives no DOM", () => {

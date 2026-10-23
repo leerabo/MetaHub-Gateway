@@ -411,12 +411,12 @@ test("policy template confirmation and success render complete public facts", ()
   let html = renderPolicyTemplates(state.snapshot());
   assert.match(html, /应用项目/);
   assert.match(html, /客户中心/);
-  assert.match(html, /执行动作[\s\S]*定向路由/);
+  assert.match(html, /执行动作[\s\S]*动态成本优先/);
   assert.match(html, /新增规则[\s\S]*1 条/);
   assert.match(html, /上线版本[\s\S]*v8/);
-  assert.match(html, /将使用的模型[\s\S]*glm-5\.3-flash/);
-  assert.match(html, /本次选中：glm-5\.3-flash/);
-  assert.match(html, /不会自动跟随价格变化/);
+  assert.match(html, /当前参考模型[\s\S]*glm-5\.3-flash/);
+  assert.match(html, /当前参考模型：glm-5\.3-flash/);
+  assert.match(html, /价格更新后，下一次请求自动重新选择/);
   assert.match(html, /回滚到 v7；系统会停用本模板创建的规则/);
   assert.doesNotMatch(html, new RegExp(GENERATED_POLICY_ID));
   assert.doesNotMatch(html, new RegExp(PREVIOUS_SNAPSHOT_ID));

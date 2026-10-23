@@ -68,6 +68,9 @@ def claim_next_customer_health_tenant(
         ).fetchone()
         if due is None:
             return None
+        # PostgreSQL SELECT starts a read transaction. End the preflight snapshot
+        # before opening the write transaction and checking the lease again.
+        connection.rollback()
         connection.execute("BEGIN IMMEDIATE")
         current = _transaction_now(connection, now)
         now_text = _db_time(current)
@@ -90,16 +93,18 @@ def claim_next_customer_health_tenant(
         token = secrets.token_hex(32)
         generation = old_generation + 1
         expires = current + timedelta(seconds=SCHEDULER_LEASE_SECONDS)
-        connection.execute(
+        cursor = connection.execute(
             """
             UPDATE customer_health_scheduler_tenants
             SET status='leased',generation=?,lease_owner_id=?,lease_token=?,
                 lease_expires_at=?,updated_at=?
             WHERE tenant_id=? AND status=? AND generation=?
               AND consecutive_failure_count=?
-              AND next_evaluation_at IS ?
-              AND lease_owner_id IS ? AND lease_token IS ? AND lease_expires_at IS ?
-              AND last_completed_window_end IS ? AND last_error_code IS ?
+              AND next_evaluation_at IS NOT DISTINCT FROM ?
+              AND lease_owner_id IS NOT DISTINCT FROM ?
+              AND lease_token IS NOT DISTINCT FROM ? AND lease_expires_at IS NOT DISTINCT FROM ?
+              AND last_completed_window_end IS NOT DISTINCT FROM ?
+              AND last_error_code IS NOT DISTINCT FROM ?
               AND (status='pending' OR unixepoch(lease_expires_at)<=unixepoch(?))
             """,
             (
@@ -110,7 +115,7 @@ def claim_next_customer_health_tenant(
                 row["last_error_code"], now_text,
             ),
         )
-        if connection.execute("SELECT changes()").fetchone()[0] != 1:
+        if cursor.rowcount != 1:
             connection.rollback()
             return None
         claim = CustomerHealthTenantClaim(
@@ -158,7 +163,7 @@ def evaluate_claimed_customer_health(
         source = collect_source_snapshot(connection, claim.tenant_id, evaluated_at=current)
         score_id, _inserted, _outbox_created = materialize_customer_health(connection, source)
         next_hour = current.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-        connection.execute(
+        cursor = connection.execute(
             """
             UPDATE customer_health_scheduler_tenants
             SET status='pending',next_evaluation_at=?,consecutive_failure_count=0,
@@ -175,7 +180,7 @@ def evaluate_claimed_customer_health(
                 _db_time(claim.lease_expires_at), now_text,
             ),
         )
-        if connection.execute("SELECT changes()").fetchone()[0] != 1:
+        if cursor.rowcount != 1:
             connection.rollback()
             return None
         connection.commit()
@@ -211,7 +216,7 @@ def fail_claimed_customer_health(
         failures = claim.consecutive_failure_count + 1
         delay = FAILURE_BACKOFF_SECONDS[min(failures - 1, len(FAILURE_BACKOFF_SECONDS) - 1)]
         now_text = _db_time(current)
-        connection.execute(
+        cursor = connection.execute(
             """
             UPDATE customer_health_scheduler_tenants
             SET status='pending',next_evaluation_at=?,consecutive_failure_count=?,
@@ -227,7 +232,7 @@ def fail_claimed_customer_health(
                 claim.lease_token, _db_time(claim.lease_expires_at), now_text,
             ),
         )
-        changed = connection.execute("SELECT changes()").fetchone()[0] == 1
+        changed = cursor.rowcount == 1
         if changed:
             connection.commit()
         else:
@@ -350,7 +355,12 @@ def _connect(config: AppConfig) -> sqlite3.Connection:
 
     try:
         connection = connect_database(config.database_url)
-        connection.execute("PRAGMA busy_timeout=5000")
+        if getattr(connection, "backend", "sqlite") == "sqlite":
+            try:
+                connection.execute("PRAGMA busy_timeout=5000")
+            except BaseException:
+                connection.close()
+                raise
         return connection
     # 数据库地址或连接失败只暴露固定不可用码，不透出文件路径与底层异常。
     except DbError:

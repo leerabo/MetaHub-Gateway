@@ -13,6 +13,21 @@ const STATUS_LABELS = {
   archived: "归档",
 };
 
+/** 将展开动作限制在当前面板，支持键盘并通知控制器保留展开状态。 */
+export function bindProjectExpansion(container, onToggle = () => {}) {
+  container.querySelectorAll("[data-toggle-project]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const children = Array.from(container.querySelectorAll(".project-children"))
+        .find((group) => group.id === button.getAttribute("aria-controls"));
+      if (!children) return;
+      const expanded = button.getAttribute("aria-expanded") !== "true";
+      button.setAttribute("aria-expanded", String(expanded));
+      children.hidden = !expanded;
+      onToggle(button.dataset.toggleProject, expanded);
+    });
+  });
+}
+
 /**
  * 渲染项目和应用管理面板。
  * 项目/应用是日志、用量、预算和 Virtual Key 绑定的业务归属根，页面必须避免显示或提交 tenant_id。
@@ -44,8 +59,9 @@ export function renderProjectApplicationPanel(projectState, authContext) {
     ${renderActionError(projectState.actionError)}
     ${renderFeedback(projectState.feedback)}
     ${canWrite ? renderAdminForms(projects) : renderReadOnlyNotice()}
-    ${renderProjectTree(projects, applications, canWrite)}
-    ${canWrite ? `${renderEditDialogs(projects, applications)}${renderApplicationMembersDialog()}` : ""}
+    ${renderProjectTree(projects, applications, canWrite, projectState.expandedProjectIds ?? [])}
+    ${canWrite ? renderEditDialogs(projects, applications) : ""}
+    ${renderApplicationMembersDialog(canWrite)}
   `;
 }
 
@@ -97,7 +113,7 @@ function renderAdminForms(projects) {
 
 /**
  * 渲染项目创建表单。
- * 表单字段与后端 CreateProjectRequest 保持一致，不包含 tenant_id 或 owner_user_id。
+ * 负责人从组织成员选择，不要求用户输入内部编号。
  */
 function renderProjectForm() {
   return `
@@ -111,6 +127,7 @@ function renderProjectForm() {
         <span>说明</span>
         <input name="description" maxlength="500" placeholder="业务系统、负责人或用途" />
       </label>
+      ${renderOwnerPicker()}
       <div class="project-actions">
         <button type="submit">创建项目</button>
       </div>
@@ -176,65 +193,57 @@ function renderReadOnlyNotice() {
  * 渲染项目表格。
  * 计数来自后端聚合，前端不重新计算，避免和租户过滤口径不一致。
  */
-function renderProjectTree(projects, applications, canWrite) {
+function renderProjectTree(projects, applications, canWrite, expandedProjectIds) {
   return `
     <div class="projects-grid" data-has-actions="${canWrite ? "true" : "false"}" role="table" aria-label="当前租户项目">
       <div class="project-row project-head" role="row">
-        <span>项目</span>
+        <span>项目 / 应用</span>
         <span>状态</span>
-        <span>负责人</span>
-        <span>应用</span>
+        <span>负责人 / 成员</span>
+        <span>应用数量</span>
         <span>KEY 数量</span>
         <span>更新时间</span>
         ${canWrite ? "<span>操作</span>" : ""}
       </div>
       ${projects.length ? projects.map((item) => {
         const children = applications.filter((application) => application.project_id === item.project_id);
-        return `<div class="project-tree-group">${renderProjectRow(item, children, canWrite)}${renderApplicationSection(children, canWrite)}</div>`;
+        const expanded = expandedProjectIds.includes(item.project_id);
+        return `<div class="project-tree-group">${renderProjectRow(item, children, canWrite, expanded)}${renderApplicationSection(children, canWrite, item.project_id, expanded)}</div>`;
       }).join("") : renderProjectEmpty()}
     </div>
   `;
 }
 
 /**
- * 渲染项目下的独立应用表格。应用有自己的列定义，避免把项目负责人等字段
- * 强行塞进应用行，也让应用操作在应用自己的上下文中保持可扫描。
+ * 子行沿用项目列定义；只展示人数，完整名单按需在弹框读取。
  */
-function renderApplicationSection(applications, canWrite) {
-  const applicationHeader = `
-    <div class="application-child-row application-child-head" role="row">
-      <span>应用</span>
-      <span>状态</span>
-      <span>KEY 数量</span>
-      <span>更新时间</span>
-      <span>成员</span>
-      ${canWrite ? "<span>操作</span>" : ""}
-    </div>
-  `;
+function renderApplicationSection(applications, canWrite, projectId, expanded) {
   const rows = applications.length
     ? applications.map((application) => renderApplicationChildRow(application, canWrite)).join("")
     : `<div class="application-child-row application-child-empty" role="row">
-        <span><span class="tree-branch" aria-hidden="true">↳</span>暂无应用</span>
-        <span></span><span>—</span><span>—</span><span>—</span>${canWrite ? "<span></span>" : ""}
+        <span>这个项目还没有应用。</span>
       </div>`;
-  return `<div class="project-children" role="rowgroup">${applicationHeader}${rows}</div>`;
+  return `<div class="project-children" id="project-children-${escapeAttribute(projectId)}" role="rowgroup"${expanded ? "" : " hidden"}>${rows}</div>`;
 }
 
 /**
  * 渲染单个项目行，避免把项目 ID 当成主要展示字段。
  */
-function renderProjectRow(item, applications, canWrite) {
+function renderProjectRow(item, applications, canWrite, expanded) {
   return `
     <div class="project-row" role="row">
-      <span class="project-name">
+      <span class="project-name" data-label="项目">
+        <button type="button" class="project-expand-button" data-toggle-project="${escapeAttribute(item.project_id)}" aria-expanded="${expanded}" aria-controls="project-children-${escapeAttribute(item.project_id)}">
+        <svg class="project-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
         <strong>${escapeHtml(item.name)}</strong>
+        </button>
       </span>
-      <span>${renderStatusMark(item.status)}</span>
-      <span>${escapeHtml(item.owner_display_name ?? item.owner_user_id ?? "-")}</span>
-      <span>${escapeHtml(applications.length ?? item.application_count ?? 0)}</span>
-      <span>${escapeHtml(item.virtual_key_count ?? 0)}</span>
-      <time datetime="${escapeAttribute(item.updated_at)}">${escapeHtml(formatDateTime(item.updated_at))}</time>
-      ${canWrite ? `<span class="project-row-actions">
+      <span data-label="状态">${renderStatusMark(item.status)}</span>
+      <span data-label="负责人" class="project-owner">${escapeHtml(item.owner_display_name || (item.owner_user_id ? "负责人姓名待读取" : "未设置负责人"))}</span>
+      <span data-label="应用数量">${escapeHtml(item.application_count ?? applications.length)}</span>
+      <span data-label="KEY 数量">${escapeHtml(item.virtual_key_count ?? 0)}</span>
+      <time data-label="更新时间" datetime="${escapeAttribute(item.updated_at)}">${escapeHtml(formatDateTime(item.updated_at))}</time>
+      ${canWrite ? `<span class="project-row-actions" data-label="操作">
         <button type="button" data-edit-project="${escapeAttribute(item.project_id)}">编辑</button>
         <button type="button" data-delete-project="${escapeAttribute(item.project_id)}"${item.virtual_key_count ? " disabled title=\"已有 KEY 或使用记录时请结束项目\"" : ""}>删除</button>
       </span>` : ""}
@@ -255,35 +264,35 @@ function renderProjectEmpty() {
 function renderApplicationChildRow(item, canWrite) {
   return `
     <div class="application-child-row" role="row">
-      <span class="project-name application-child-name">
-        <span class="tree-branch" aria-hidden="true">↳</span>
+      <span class="project-name application-child-name" data-label="应用">
         <strong>${escapeHtml(item.name)}</strong>
       </span>
-      <span>${renderStatusMark(item.status)}</span>
-      <span>${escapeHtml(item.virtual_key_count ?? 0)}</span>
-      <time datetime="${escapeAttribute(item.updated_at)}">${escapeHtml(formatDateTime(item.updated_at))}</time>
-      <span>${escapeHtml(item.member_count == null ? "—" : item.member_count)}</span>
-      ${canWrite ? `<span class="project-row-actions">
-        <button type="button" data-manage-application-members="${escapeAttribute(item.application_id)}" data-application-name="${escapeAttribute(item.name)}">成员</button>
+      <span data-label="状态">${renderStatusMark(item.status)}</span>
+      <span data-label="成员"><button type="button" class="application-member-count" data-manage-application-members="${escapeAttribute(item.application_id)}" data-application-name="${escapeAttribute(item.name)}" aria-label="查看 ${escapeAttribute(item.name)} 成员">${item.member_count == null ? "查看成员" : `${escapeHtml(item.member_count)} 位成员`}</button></span>
+      <span class="application-project-count" aria-hidden="true">—</span>
+      <span data-label="KEY 数量">${escapeHtml(item.virtual_key_count ?? 0)}</span>
+      <time data-label="更新时间" datetime="${escapeAttribute(item.updated_at)}">${escapeHtml(formatDateTime(item.updated_at))}</time>
+      ${canWrite ? `<span class="project-row-actions" data-label="操作">
         <button type="button" data-edit-application="${escapeAttribute(item.application_id)}">编辑</button>
         <button type="button" data-delete-application="${escapeAttribute(item.application_id)}"${item.virtual_key_count ? " disabled title=\"已有 KEY 或历史用量时请结束应用\"" : ""}>删除</button>
-      </span>` : "<span></span>"}
+      </span>` : ""}
     </div>
   `;
 }
 
-function renderApplicationMembersDialog() {
+function renderApplicationMembersDialog(canWrite) {
   return `
     <dialog class="model-alias-dialog project-members-dialog" data-application-members-dialog aria-labelledby="application-members-dialog-title">
-      <form method="dialog" class="model-alias-dialog-content project-members-form" data-application-members-form>
+      <form method="dialog" class="model-alias-dialog-content project-members-form" data-application-members-form data-can-write="${canWrite}">
         <div class="model-alias-dialog-heading">
           <div><span class="model-alias-dialog-kicker">应用</span><h3 id="application-members-dialog-title" data-application-members-title>应用成员</h3></div>
           <button type="button" class="icon-button" data-project-dialog-close aria-label="关闭">×</button>
         </div>
+        <p class="application-members-help">${canWrite ? "勾选组织成员以分配到此应用；名单支持搜索和分页。" : "查看已分配到此应用的成员；名单支持搜索和分页。"}</p>
         <label class="application-members-search"><span class="sr-only">搜索成员</span><input type="search" data-application-members-search placeholder="搜索成员" autocomplete="off" /></label>
         <div class="application-members-list" data-application-members-list><div class="empty-state">正在读取成员</div></div>
         <div class="application-members-meta"><span data-application-members-count>0 人已选择</span><span data-application-members-page></span><span class="application-members-pagination"><button type="button" class="button-secondary" data-application-members-prev disabled>上一页</button><button type="button" class="button-secondary" data-application-members-next disabled>下一页</button></span></div>
-        <div class="project-actions"><button type="button" class="button-secondary" data-project-dialog-close>取消</button><button type="submit" data-application-members-save>保存</button></div>
+        <div class="project-actions"><button type="button" class="button-secondary" data-project-dialog-close>${canWrite ? "取消" : "关闭"}</button>${canWrite ? '<button type="submit" data-application-members-save>保存</button>' : ""}</div>
       </form>
     </dialog>`;
 }
@@ -295,6 +304,7 @@ function renderEditDialogs(projects, applications) {
         <div class="project-dialog-heading"><h3>编辑项目</h3><button type="button" class="icon-button" data-project-dialog-close>×</button></div>
         <label><span>项目名称</span><input name="name" maxlength="120" required value="${escapeAttribute(item.name)}" /></label>
         <label><span>说明</span><input name="description" maxlength="500" value="${escapeAttribute(item.description ?? "")}" /></label>
+        ${renderOwnerPicker(item)}
         <label><span>状态</span><select name="status">${renderStatusOptions(item.status)}</select></label>
         <div class="project-actions"><button type="submit">保存</button></div>
       </form>
@@ -310,6 +320,14 @@ function renderEditDialogs(projects, applications) {
         <div class="project-actions"><button type="submit">保存</button></div>
       </form>
     </dialog>`).join("")}`;
+}
+
+function renderOwnerPicker(project = {}) {
+  return `<div class="project-owner-picker" data-project-owner-picker>
+    <label><span>负责人</span><input type="search" data-project-owner-search placeholder="搜索组织成员" autocomplete="off" /></label>
+    <label><span class="sr-only">选择负责人</span><select name="ownerUserId" data-project-owner-select data-current-owner="${escapeAttribute(project.owner_user_id ?? "")}"><option value="">未设置负责人</option>${project.owner_user_id ? `<option value="${escapeAttribute(project.owner_user_id)}" selected>${escapeHtml(project.owner_display_name || "当前负责人")}</option>` : ""}</select></label>
+    <span class="project-owner-hint" data-project-owner-hint>打开表单后读取成员，可按姓名搜索。</span>
+  </div>`;
 }
 
 function renderStatusOptions(selected) {

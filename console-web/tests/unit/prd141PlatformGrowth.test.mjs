@@ -270,7 +270,7 @@ test("PRD-141 controller never persists or renders an export receipt", async () 
 test("PRD-141 renderer exposes full tabs and clips the channel projection", () => {
   const full = renderPlatformGrowth(workbenchState(), new Set(platformContext().permissions));
   assert.match(full, /data-platform-growth-root/u);
-  assert.match(full, /Funnels[\s\S]*Cohorts[\s\S]*Campaigns[\s\S]*Experiments[\s\S]*Attribution/u);
+  assert.match(full, /转化漏斗[\s\S]*留存分析[\s\S]*获客活动[\s\S]*增长实验[\s\S]*归因结果/u);
   assert.match(full, /data-platform-growth-campaign-form/u);
   assert.match(full, /data-platform-growth-export-form/u);
   assert.doesNotMatch(full, new RegExp(RECEIPT, "u"));
@@ -285,7 +285,7 @@ test("PRD-141 renderer exposes full tabs and clips the channel projection", () =
     channelState,
     new Set(["platform.growth.channel_attribution_read"]),
   );
-  assert.match(channel, /Channel summary/u);
+  assert.match(channel, /渠道汇总/u);
   assert.doesNotMatch(channel, /Campaign ID|Source ID|<th>Value<\/th>/u);
   assert.doesNotMatch(channel, /data-platform-growth-export-form/u);
 });

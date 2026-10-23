@@ -401,7 +401,7 @@ test("Workspace and Platform stores clear independently and render stable deskto
   });
   await controller.mount();
   workspaceState.clear();
-  assert.match(root.innerHTML, /Private Gateway fleet/u);
+  assert.match(root.innerHTML, /私有 Gateway 集群/u);
   acceptWorkspaceHealth(workspaceState, owner, healthPayload());
   controller.destroy();
   assert.equal(workspaceState.snapshot().healthStates[DEPLOYMENT_ID].health.health_score, 92);

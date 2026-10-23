@@ -22,11 +22,15 @@ export function serviceOrigin(location, port) {
   // Preserve the Console's local-development default rather than passing an
   // empty origin into the Workspace Cookie boundary.
   if (!location) return `http://localhost:${port}`;
+  // HTTPS deployments route every service through the same TLS ingress,
+  // including a private host or loopback acceptance endpoint.
+  if (location.protocol === "https:") return location.origin ?? "";
   if (!isDirectServiceHost(location?.hostname)) return location?.origin ?? "";
   return `${location?.protocol ?? "http:"}//${location?.hostname ?? "localhost"}:${port}`;
 }
 
 export function gatewayServiceOrigin(location) {
+  if (location?.protocol === "https:") return location.origin ?? "";
   if (isDirectServiceHost(location?.hostname)) return serviceOrigin(location, 8000);
-  return "http://localhost:8000";
+  return location?.origin ?? "http://localhost:8000";
 }

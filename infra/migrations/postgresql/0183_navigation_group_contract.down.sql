@@ -1,6 +1,4 @@
 -- metahub: navigation-group-contract-v1 down
-
-BEGIN;
 ALTER TABLE workspace_navigation_projection_items DISABLE TRIGGER USER;
 UPDATE workspace_navigation_projection_items
    SET group_code='observability'
@@ -9,4 +7,3 @@ UPDATE workspace_navigation_projection_items
    'migration-operations','support-tickets','system-status'
  );
 ALTER TABLE workspace_navigation_projection_items ENABLE TRIGGER USER;
-COMMIT;

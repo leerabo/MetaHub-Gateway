@@ -57,6 +57,8 @@ RESOURCE_PERMISSIONS = frozenset(
         "billing.finops.write",
         "billing.budget.read",
         "billing.budget.write",
+        "session_risk.read",
+        "session_risk.manage",
     }
 )
 

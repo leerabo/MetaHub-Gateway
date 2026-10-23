@@ -79,6 +79,13 @@ def apply_migrations(
     connection = connect_database(configured_url)
     try:
         if database_backend(configured_url) == "postgresql":
+            _guard_production_postgresql_collation(connection)
+        _guard_personal_data_retirement(
+            connection,
+            backend=database_backend(configured_url),
+            migrations_dir=migrations_dir or _default_migrations_dir(),
+        )
+        if database_backend(configured_url) == "postgresql":
             return _apply_postgresql_migrations(
                 connection,
                 run_id=run_id,
@@ -93,6 +100,67 @@ def apply_migrations(
         # 迁移入口每次调用都独占连接；正常、幂等和异常分支都必须立即释放文件句柄，
         # 否则 Windows 下后续复制、替换或删除验收数据库会被残留连接阻塞。
         connection.close()
+
+
+def _guard_production_postgresql_collation(connection: Any) -> None:
+    """Reject incompatible locale-dependent manifests before any schema writes.
+
+    Changing initdb flags does not change an existing cluster or database. Do not
+    rewrite stored signatures or an existing database's locale to bypass drift.
+    """
+    if os.getenv("METAHUB_ENV", "dev") != "prod":
+        return
+    row = connection.execute(
+        "SELECT datcollate,datctype,pg_encoding_to_char(encoding) AS encoding "
+        "FROM pg_database WHERE datname=current_database()"
+    ).fetchone()
+    if (row is None or row["datcollate"] not in {"C", "POSIX"}
+            or row["datctype"] not in {"C", "POSIX"} or row["encoding"] != "UTF8"):
+        raise DbError(
+            "db.collation_unsupported",
+            "Production migrations require a UTF-8 PostgreSQL database with C/POSIX locale.",
+            "Preserve the existing database; validate a separate binary-locale migration before switching.",
+        )
+
+
+def _guard_personal_data_retirement(connection: Any, *, backend: str, migrations_dir: Path) -> None:
+    """Never silently run the historical personal-data purge on a customer DB.
+
+    Do not rewrite the already-applied migration or its checksum. Production
+    deployments with affected data need a separate preservation/migration plan.
+    Run before any migration metadata or schema writes, including the baseline.
+    """
+    if (os.getenv("METAHUB_ENV", "dev") != "prod"
+            or not (migrations_dir / "0190_remove_personal_workspaces.sql").is_file()):
+        return
+    if backend == "postgresql":
+        rows = connection.execute(
+            "SELECT table_name AS name FROM information_schema.tables "
+            "WHERE table_schema=current_schema() AND table_name IN "
+            "('workspaces','personal_profiles','schema_migrations')"
+        ).fetchall()
+    else:
+        rows = connection.execute(
+            "SELECT name FROM sqlite_schema WHERE type='table' AND name IN "
+            "('workspaces','personal_profiles','schema_migrations')"
+        ).fetchall()
+    tables = {row["name"] for row in rows}
+    if "schema_migrations" in tables and connection.execute(
+        "SELECT 1 FROM schema_migrations WHERE version='0190' AND status='applied' LIMIT 1"
+    ).fetchone():
+        return
+    has_personal_workspaces = "workspaces" in tables and connection.execute(
+        "SELECT 1 FROM workspaces WHERE kind='personal' LIMIT 1"
+    ).fetchone()
+    has_personal_profiles = "personal_profiles" in tables and connection.execute(
+        "SELECT 1 FROM personal_profiles LIMIT 1"
+    ).fetchone()
+    if has_personal_workspaces or has_personal_profiles:
+        raise DbError(
+            "db.destructive_migration_blocked",
+            "Existing personal-space data prevents automatic production migration 0190.",
+            "Preserve the database and use a separately reviewed data-preserving migration plan.",
+        )
 
 
 def _apply_migrations_with_connection(
@@ -368,7 +436,10 @@ def _apply_postgresql_migrations(
                 "Use a fresh database or complete the reviewed recovery procedure.",
             )
         try:
-            connection.executescript(baseline.sql)
+            # The bootstrap includes thousands of DDL objects and ANALYZE after
+            # its committed validation. Use the same bounded offline allowance
+            # as native migrations, then restore the pool's request timeout.
+            connection.executescript(baseline.sql, statement_timeout_ms=900000)
         except sqlite3.Error as exc:
             raise DbError(
                 "db.migration_failed",
@@ -610,6 +681,9 @@ def _verify_postgresql_baseline(
 
 def _apply_one_postgresql_migration(connection: Any, migration: MigrationFile) -> bool:
     _require_transaction_body(migration.sql)
+    # Offline DDL can validate thousands of foreign keys. Keep the normal
+    # request timeout unchanged; this budget disappears at commit/rollback.
+    connection.execute("SET LOCAL statement_timeout = '15min'").close()
     connection.execute(
         "SELECT pg_advisory_xact_lock(hashtextextended('metahub.schema.migration',0))"
     ).close()
@@ -630,6 +704,14 @@ def _apply_one_postgresql_migration(connection: Any, migration: MigrationFile) -
 
     started = time.perf_counter()
     try:
+        if (os.getenv("METAHUB_ENV", "dev") == "prod" and migration.version == "0190"
+                and migration.name == "remove_personal_workspaces"):
+            # Recheck under write-blocking locks: an old writer could have added
+            # personal data since the initial pre-migration read-only check.
+            connection.execute("LOCK TABLE workspaces,personal_profiles IN SHARE MODE").close()
+            _guard_personal_data_retirement(
+                connection,backend="postgresql",migrations_dir=migration.path.parent,
+            )
         connection.execute(migration.sql).close()
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         connection.execute(
@@ -641,6 +723,9 @@ def _apply_one_postgresql_migration(connection: Any, migration: MigrationFile) -
             (migration.version, migration.name, migration.checksum, elapsed_ms),
         ).close()
         connection.commit()
+    except DbError:
+        connection.rollback()
+        raise
     except sqlite3.Error as exc:
         connection.rollback()
         _record_failed_postgresql_migration(connection, migration, started)

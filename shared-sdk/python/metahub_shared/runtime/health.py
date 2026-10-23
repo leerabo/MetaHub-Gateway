@@ -148,8 +148,12 @@ def _check_database(config: AppConfig) -> HealthDependencyCheck:
     started = time.perf_counter()
     try:
         connection = connect_database(config.database_url)
-        connection.execute("SELECT 1").fetchone()
-        connection.close()
+        try:
+            connection.execute("SELECT 1").fetchone()
+        finally:
+            # A failed ping must return its checkout too. Otherwise an outage
+            # drains the pool and prevents readiness from recovering afterward.
+            connection.close()
         return HealthDependencyCheck(
             name="database",
             status="ok",

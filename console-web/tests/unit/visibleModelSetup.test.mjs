@@ -50,7 +50,7 @@ test("a single environment is automatic; multiple environments cannot hide a ran
   assert.doesNotMatch(single, /<select name="environmentId"|value="off"/u);
   const multiple = routes([model("chat"), model("other")], [environment("test"), environment("prod")]);
   assert.match(multiple, /<select name="environmentId" required/u);
-  assert.ok(multiple.indexOf('<select name="environmentId"') < multiple.indexOf('<details class="model-advanced"'));
+  assert.ok(multiple.indexOf('<select name="environmentId"') < multiple.indexOf('<button type="submit"'));
   assert.match(multiple, /<option value="">请选择调用模型/u);
   assert.match(multiple, /<option value="">请选择运行环境/u);
   assert.doesNotMatch(multiple, /value="(?:test|prod|chat|other)" selected/u);

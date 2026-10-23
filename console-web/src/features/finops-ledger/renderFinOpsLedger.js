@@ -83,7 +83,7 @@ export function renderFinOpsLedger(finOpsState, authContext) {
     <div class="finops-workspace">
       ${renderLedgerTable(entries, selectedEntry?.finops_ledger_entry_id, canWrite)}
     </div>
-    ${selectedEntry ? renderFinOpsDetailPanel(selectedEntry) : ""}
+    ${selectedEntry ? renderFinOpsDetailPanel(selectedEntry, authContext) : ""}
     ${renderPager(finOpsState)}
     ${canWrite ? renderAdjustmentDialog(finOpsState.dialog) : ""}
   `;
@@ -245,7 +245,7 @@ function renderEmptyRow() {
 /**
  * 渲染 PAGE-075 详情区域；未选择分录时显示稳定占位，不自动选第一行。
  */
-export function renderFinOpsDetailPanel(entry) {
+export function renderFinOpsDetailPanel(entry, authContext = null) {
   const legacyWarning = entry.price_evidence_status === "legacy_amount_only"
     ? `<div class="finops-evidence-warning" role="note">仅历史金额证据，不可按单价重算。</div>`
     : "";
@@ -272,6 +272,8 @@ export function renderFinOpsDetailPanel(entry) {
         ${renderDetailPair("输出安全复核", entry.output_safety_dispute?.review_status)}
         ${renderDetailPair("入账时间", formatDateTime(entry.created_at))}
       </dl>
+      ${entry.source_request_id && hasPermission(authContext, PERMISSIONS.REQUEST_LOG_READ)
+        ? `<button type="button" data-finops-request-id="${escapeAttribute(entry.source_request_id)}">查看关联调用</button>` : ""}
     </dialog>
   `;
 }

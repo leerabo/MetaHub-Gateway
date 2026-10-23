@@ -174,7 +174,7 @@ test("Developer and Platform release views expose gate, SLA, exception, and patc
 
   const root = { innerHTML: "" };
   renderPlatformWorkspace(root, platformState(platformWorkspace(supplyChain)));
-  assert.match(root.innerHTML, /Release security gates/u);
+  assert.match(root.innerHTML, /安全检查结果/u);
   assert.match(root.innerHTML, /data-platform-supply-chain-exception-form/u);
   assert.match(root.innerHTML, /Independent approval/u);
   assert.match(root.innerHTML, /fixed dddddddddd/u);

@@ -48,6 +48,7 @@ class ApplicationInfo(BaseModel):
     description: str | None
     status: str
     virtual_key_count: int = 0
+    member_count: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -56,6 +57,20 @@ class ProjectListResponse(BaseModel):
     """项目列表响应，统一携带 request_id/trace_id 便于审计和排障。"""
 
     projects: list[ProjectInfo]
+    request_id: str
+    trace_id: str
+
+
+class ProjectOwnerCandidate(BaseModel):
+    """项目负责人候选，不返回邮箱、凭据或组织外用户。"""
+
+    user_id: str
+    display_name: str
+
+
+class ProjectOwnerCandidatesResponse(BaseModel):
+    candidates: list[ProjectOwnerCandidate]
+    total: int
     request_id: str
     trace_id: str
 

@@ -31,6 +31,7 @@ from metahub_shared.admin_assistant import (
     validate_assistant_answer_wire,
 )
 from metahub_shared.db import DbError, connect_database
+from metahub_shared.db.connection import database_operation_deadline
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.error_diagnosis import diagnose_error
 from metahub_shared.runtime.errors import ApiError
@@ -392,7 +393,13 @@ def _open_runtime_connection(
 
     connection: sqlite3.Connection | None = None
     try:
-        connection = connect_database(config.database_url, check_same_thread=False)
+        with database_operation_deadline(deadline):
+            connection = connect_database(config.database_url, check_same_thread=False)
+        if getattr(connection, "backend", None) == "postgresql":
+            # PostgreSQL supplies durable WAL itself. Keep the warm checkout
+            # idle; each operation sets its read-only/deadline transaction state.
+            _remaining_deadline(deadline, error_code)
+            return connection
         remaining_ms = max(1, int(_remaining_deadline(deadline, error_code) * 1_000))
         connection.execute(f"PRAGMA busy_timeout={remaining_ms}")
         journal_mode = connection.execute("PRAGMA journal_mode=WAL").fetchone()
@@ -650,7 +657,9 @@ def _close_runtime_connection_bundle(
                 first_error = exc
 
     for connection in connections:
-        attempt(lambda connection=connection: connection.set_progress_handler(None, 0))
+        postgresql = getattr(connection, "backend", None) == "postgresql"
+        if not postgresql:
+            attempt(lambda connection=connection: connection.set_progress_handler(None, 0))
         try:
             in_transaction = connection.in_transaction
         # 事务状态读取失败时仍继续清 handler 与连接，但整束连接最终不可判成功。
@@ -660,7 +669,8 @@ def _close_runtime_connection_bundle(
         if in_transaction:
             attempt(connection.rollback)
         # 清理连接级设置，避免暖连接归还后影响下一个 owner。
-        attempt(lambda connection=connection: connection.execute("PRAGMA query_only=OFF"))
+        if not postgresql:
+            attempt(lambda connection=connection: connection.execute("PRAGMA query_only=OFF"))
 
     for connection in connections:
         attempt(connection.close)

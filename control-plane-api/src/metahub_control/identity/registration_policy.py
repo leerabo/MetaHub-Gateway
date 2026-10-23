@@ -53,7 +53,9 @@ def public_registration_policy(config):
 
 def _delivery_available(config):
     return (
-        config.identity_challenge_delivery_mode == "test_capture" and config.environment != "prod"
+        config.identity_challenge_delivery_mode == "smtp" or (
+            config.identity_challenge_delivery_mode == "test_capture" and config.environment != "prod"
+        )
     )
 
 

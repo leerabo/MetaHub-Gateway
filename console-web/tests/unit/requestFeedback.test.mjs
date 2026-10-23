@@ -249,7 +249,7 @@ test("PAGE-070 renders only admin/developer escapes facts and keeps viewer at ze
   };
   const html = renderRequestFeedbackSection(state, authContext("developer"), createI18n("zh-CN"));
   assert.match(html, /data-request-feedback-form/);
-  assert.match(html, /req_&lt;unsafe&gt;/);
+  assert.doesNotMatch(html, /req_&lt;unsafe&gt;/);
   assert.match(html, /value="accurate" checked/);
   assert.doesNotMatch(html, /tenant_id|actor_user_id|provider_key|<unsafe>/);
   assert.equal(renderRequestFeedbackSection(
@@ -309,7 +309,7 @@ test("PAGE-071 memory rejects stale tenant result and renderer uses backend tota
   };
   assert.equal(memory.acceptSuccess(ticketB, payload, ownerB), true);
   const html = renderRequestFeedbackSummaryPanel(memory.snapshot(), authContext("developer", "tenant_b"), {}, createI18n("en-US"));
-  assert.match(html, /Feedback report/);
+  assert.match(html, /Member feedback/);
   assert.match(html, /name="fromTime"[^>]*placeholder="2026-07-01T00:00:00Z"[^>]*value=""/);
   assert.match(html, /name="toTime"[^>]*placeholder="2026-07-20T00:00:00Z"[^>]*value=""/);
   assert.match(html, /4\.25 \/ 5/);

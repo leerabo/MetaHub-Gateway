@@ -46,7 +46,8 @@ from metahub_control.audit import (
     dispatch_audit_recorded,
     record_audit_log,
 )
-from metahub_control.auth import AuthContext, require_transaction_permission
+from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 from metahub_control.webhooks.service import dispatch_webhook_event
 
 from .models import (
@@ -161,7 +162,11 @@ def list_session_risks(
     filter_digest = _filter_digest(filters)
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "session_risk.read", read_only=True
+        )
+        transaction.begin()
+        context = transaction.context
         _validate_virtual_key_owner(connection, context.user.tenant_id, filters.virtual_key_id)
         if cursor is not None:
             cursor_state = _decode_cursor(
@@ -220,7 +225,7 @@ def list_session_risks(
             request_id=request_id,
             trace_id=trace_id,
         )
-        connection.commit()
+        transaction.commit()
         return response
     # 已归类业务错误保持原统一错误码，回滚只清理当前只读事务且不得暴露数据库细节。
     except ApiError:
@@ -287,20 +292,14 @@ def apply_session_risk_action(
     audit_record: AuditRecord | None = None
     webhook_event: WebhookEvent | None = None
     try:
-        connection.execute("BEGIN IMMEDIATE")
-        # read 与 manage 独立复核，manage-only 自定义角色不能借写入口读取或处置风险事实。
-        require_transaction_permission(
-            connection,
-            context,
-            "session_risk.read",
-            unavailable_error_code="session_risk.evidence_unavailable",
+        # Authenticate the actual Cookie or legacy session in the same transaction.
+        # Both permissions remain mandatory, including on idempotent replay.
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "session_risk.read",
+            additional_permissions=("session_risk.manage",),
         )
-        require_transaction_permission(
-            connection,
-            context,
-            "session_risk.manage",
-            unavailable_error_code="session_risk.evidence_unavailable",
-        )
+        transaction.begin()
+        context = transaction.context
         replay = _load_action_replay(
             connection,
             context.user.tenant_id,
@@ -334,7 +333,7 @@ def apply_session_risk_action(
                 trace_id=trace_id,
             )
             sync_intent = _build_store_sync_intent(config, replay_score)
-            connection.commit()
+            transaction.commit()
             return response, None, sync_intent
 
         # 对象始终按认证租户读取；不存在与跨租户使用相同错误，随后用 revision 阻止覆盖并发事实。
@@ -387,7 +386,7 @@ def apply_session_risk_action(
             trace_id=trace_id,
         )
         sync_intent = _build_store_sync_intent(config, refreshed)
-        commit_audited_transaction(connection)
+        transaction.commit(commit_audited_transaction)
     # 业务拒绝已携带稳定错误码，只回滚本事务并保持跨租户同形语义。
     except ApiError:
         _rollback_safely(connection)

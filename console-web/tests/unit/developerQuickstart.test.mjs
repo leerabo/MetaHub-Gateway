@@ -221,15 +221,15 @@ test("completed organization setup removes the wizard from overview and keeps in
       role_code: "owner",
       source_freshness: "fresh",
       tasks: [
-        { task_code: "provider_connected", status: "completed", action_enabled: true, action_route_code: "workspace.gateway.providers" },
-        { task_code: "model_catalog_ready", status: "completed", action_enabled: true, action_route_code: "workspace.gateway.models" },
+        { task_code: "provider_connected", status: "completed", source_freshness: "fresh", action_enabled: true, action_route_code: "workspace.gateway.providers" },
+        { task_code: "model_catalog_ready", status: "completed", source_freshness: "fresh", action_enabled: true, action_route_code: "workspace.gateway.models" },
       ],
     },
     workspaceConsoleExperienceState: {
       status: "ready",
       overview: {
         status: "ready",
-        sections: [{ source_code: "status", freshness: "fresh", metrics: [{ metric_code: "records", value: 3, state_code: "ready" }] }],
+        sections: [{ source_code: "role_tasks", freshness: "fresh", metrics: [{ metric_code: "role_tasks.records", value: 3, state_code: "ready" }] }],
       },
     },
   });
@@ -237,5 +237,5 @@ test("completed organization setup removes the wizard from overview and keeps in
   assert.doesNotMatch(container.innerHTML, /workspace-first-use-panel/u);
   assert.doesNotMatch(container.innerHTML, /组织接入进度/u);
   assert.match(container.innerHTML, /workspace-console-experience-panel/u);
-  assert.match(container.innerHTML, /3/u);
+  assert.match(container.innerHTML, /成员人数<\/span><strong>3<\/strong>/u);
 });

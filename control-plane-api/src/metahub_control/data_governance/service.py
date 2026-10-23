@@ -1012,11 +1012,11 @@ def write_residency_evidence_in_transaction(
     stamp = now if isinstance(now, str) else _db_time(now or _database_now(connection))
     evidence_id = _id("rse_")
     inserted = connection.execute(
-        """INSERT OR IGNORE INTO residency_evidence(
+        """INSERT INTO residency_evidence(
              residency_evidence_id,workspace_id,tenant_id,residency_policy_id,
              policy_generation,component_code,region_code,storage_class,outcome,
              violation_code,observed_watermark,manifest_sha256,observed_at,created_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING""",
         (
             evidence_id,
             workspace_id,

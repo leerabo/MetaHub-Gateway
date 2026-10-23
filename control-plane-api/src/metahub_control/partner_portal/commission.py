@@ -589,13 +589,13 @@ def _insert_commission_record(
     )
     connection.execute(
         """
-        INSERT OR IGNORE INTO commission_records(
+        INSERT INTO commission_records(
           commission_record_id,tenant_id,partner_id,partner_customer_id,
           source_finops_ledger_entry_id,source_ledger_sequence,source_request_id,source_trace_id,
           customer_code_snapshot,display_name_snapshot,project_id,amount_micros,currency,
           commission_rate_bps,commission_amount_micros,input_tokens,output_tokens,total_tokens,
           cache_tokens,estimated,status,source_created_at,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'accrued',?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'accrued',?,?,?) ON CONFLICT DO NOTHING
         """,
         values,
     )

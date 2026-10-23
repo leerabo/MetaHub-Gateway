@@ -33,11 +33,12 @@ export function renderPolicySnapshotsPanel(state, authContext) {
   const history = Array.isArray(state.policy_snapshots) ? state.policy_snapshots : [];
   return `
     ${renderHeading()}
-    ${renderActionFeedback(state)}
     ${renderPendingOperationNotice(state)}
-    ${renderCurrentSnapshot(current, history)}
-    ${renderCandidateSummary(state, current)}
-    ${renderPublishForm(state)}
+    <div class="policy-snapshot-workspace">
+      ${renderCurrentSnapshot(current, history)}
+      ${renderCandidateSummary(state, current)}
+      ${renderPublishForm(state)}
+    </div>
     ${renderHistory(state, history, current)}
   `;
 }
@@ -231,18 +232,18 @@ function normalizeOperationDescriptor(descriptor) {
 function renderLoadingState() {
   return `
     <div class="policy-snapshot-heading">
-      <h2 id="policy-snapshots-title">规则上线</h2>
+      <h2 id="policy-snapshots-title">路由规则上线</h2>
       <p>正在读取待发布策略和线上版本。</p>
     </div>
     <div class="policy-snapshot-empty" role="status">加载中…</div>
   `;
 }
 
-/** 渲染致命读取错误，只显示统一错误、request_id 和安全建议。 */
+/** 渲染致命读取错误；界面不显示内部错误码、请求编号或后端原文。 */
 function renderFatalError(state) {
   return `
     <div class="policy-snapshot-heading">
-      <h2 id="policy-snapshots-title">规则上线</h2>
+      <h2 id="policy-snapshots-title">路由规则上线</h2>
       <p>待发布策略和线上版本暂不可用，请稍后重试。</p>
     </div>
     ${renderError(state)}
@@ -253,13 +254,12 @@ function renderFatalError(state) {
 function renderHeading() {
   return `
     <div class="policy-snapshot-heading">
-      <h2 id="policy-snapshots-title">规则上线</h2>
-      <p>规则保存后，核对待发布内容并发布到网关。<a href="#workspace.governance.policies">管理自定义规则</a></p>
+      <h2 id="policy-snapshots-title">路由规则上线</h2>
     </div>
   `;
 }
 
-/** 渲染当前快照摘要；完整 hash 只在 code 节点展示，不进入 URL。 */
+/** 渲染当前快照摘要；版本校验摘要只供服务端使用，不进入用户界面。 */
 function renderCurrentSnapshot(current, history = []) {
   if (!current) {
     return `
@@ -271,7 +271,7 @@ function renderCurrentSnapshot(current, history = []) {
           </div>
           <span class="snapshot-operation snapshot-operation-none">初始状态</span>
         </div>
-        <p class="policy-snapshot-version-note">当前按 v0 处理。v0 只是初始状态，不是一条可以回滚的配置；首次发布后才会产生 v1。</p>
+        <p class="policy-snapshot-version-note">当前按 v0 处理；首次发布后才会产生 v1。</p>
       </section>
     `;
   }
@@ -292,18 +292,19 @@ function renderCurrentSnapshot(current, history = []) {
         </div>
         <span class="snapshot-operation snapshot-operation-${escapeAttribute(current.operation)}">${escapeHtml(operation)}</span>
       </div>
-      <dl class="policy-snapshot-summary-grid">
+      <dl class="policy-snapshot-summary-grid policy-snapshot-summary-compact">
         ${renderPair("策略数量", current.policy_count)}
-        ${renderPair("审批状态", approvalLabel(current.approval_status))}
-        ${renderPair("发布人", actorLabel(current.created_by))}
         ${renderPair("发布时间", formatDateTime(current.published_at))}
-        ${renderPair("变更原因", current.change_reason)}
-        ${renderPair("版本来源", versionSourceLabel(current))}
       </dl>
-      ${versionNote ? `<p class="policy-snapshot-version-note">${versionNote}</p>` : ""}
-      <details class="policy-snapshot-hash-line">
-        <summary>查看内容校验值</summary>
-        <code>${escapeHtml(current.content_hash ?? "-")}</code>
+      <details class="policy-snapshot-technical-details">
+        <summary>查看版本信息</summary>
+        <dl class="policy-snapshot-summary-grid">
+          ${renderPair("审批状态", approvalLabel(current.approval_status))}
+          ${renderPair("发布人", actorLabel(current.created_by))}
+          ${renderPair("变更原因", current.change_reason)}
+          ${renderPair("版本来源", versionSourceLabel(current))}
+        </dl>
+        ${versionNote ? `<p class="policy-snapshot-version-note">${versionNote}</p>` : ""}
       </details>
     </section>
   `;
@@ -318,39 +319,39 @@ function renderCandidateSummary(state, current) {
   const matches = state.candidate_matches_current === true;
   const count = state.candidate_policy_count ?? 0;
   let status = "可以发布";
-  let message = `已启用 ${count} 条策略；发布后网关将在下一轮轮询中拉取新版本。`;
+  let message = `${count} 条规则待上线。`;
   let tone = "changed";
   if (invalid) {
     status = "候选无效";
-    message = "规则校验失败，请在自定义规则中修正后再发布。";
+    message = "规则校验失败，请先修正。";
     tone = "invalid";
   } else if (matches) {
     status = "与线上一致";
-    message = "当前配置与已发布版本一致，无需重复发布。";
+    message = "当前配置已与线上一致。";
     tone = "matched";
   } else if (current?.operation === "rollback") {
-    status = "与回滚版本不同";
-    message = "回滚没有改动待发布策略。下一次发布会重新上线当前候选内容。";
-    tone = "warning";
+    status = "已完成回滚";
+    message = "线上当前已使用回滚后的配置；待上线配置保持不变，发布后才会改变线上规则。";
+    tone = "matched";
   } else if (count === 0) {
     status = current ? "上线后将清空规则" : "尚未发布";
     message = current?.policy_count > 0
-      ? "发布后线上策略会被清空。请先确认这是预期结果。"
-      : "目前没有启用的规则。可先添加规则；若要使用场景模板，可发布空版本作为起点。";
+      ? "发布后线上不再启用规则。"
+      : "目前没有启用的规则。若要使用场景模板，可发布空版本作为起点。";
     tone = "warning";
   }
   return `
     <section class="policy-snapshot-candidate candidate-${escapeAttribute(tone)}" aria-labelledby="policy-snapshot-candidate-title">
       <div>
-          <h3 id="policy-snapshot-candidate-title">待上线配置 <span class="policy-snapshot-candidate-status">${escapeHtml(status)}</span></h3>
+        <h3 id="policy-snapshot-candidate-title">待上线配置 <span class="policy-snapshot-candidate-status">${escapeHtml(status)}</span></h3>
+        <strong class="policy-snapshot-candidate-count">${escapeHtml(count)} 条规则</strong>
+      </div>
+      ${current ? "" : '<span class="policy-snapshot-candidate-meta">线上尚未发布</span>'}
+      <details class="policy-snapshot-candidate-details">
+        <summary>查看说明</summary>
         <p>${escapeHtml(message)}</p>
-        ${invalid || count === 0 ? '<a href="#workspace.governance.policies">打开自定义规则</a>' : ""}
-      </div>
-      <div class="policy-snapshot-candidate-meta">
-        ${current ? "" : "<span>线上尚未发布</span>"}
-        <strong>${escapeHtml(count)} 条策略</strong>
-        ${state.candidate_content_hash ? `<details><summary>校验值</summary><code>${escapeHtml(shortHash(state.candidate_content_hash))}</code></details>` : ""}
-      </div>
+        ${invalid || count === 0 ? '<a href="#workspace.governance.policies">管理自定义规则</a>' : ""}
+      </details>
     </section>
   `;
 }
@@ -366,23 +367,29 @@ function renderPublishForm(state) {
     && Boolean(state.candidateEtag)
     && state.candidate_matches_current !== true) || pending;
   const disabled = busy || pendingOtherOperation || !candidateReady;
+  const clearingRules = Number(state.candidate_policy_count ?? 0) === 0
+    && Number(state.current_snapshot?.policy_count ?? 0) > 0;
+  const actionLabel = clearingRules
+    ? "停用全部规则（发布空版本）"
+    : state.candidate_policy_count === 0
+      ? "发布空版本"
+      : "发布到网关";
   return `
     <section class="policy-snapshot-publish" aria-labelledby="policy-snapshot-publish-title">
       <div class="policy-snapshot-section-heading">
         <div>
           <h3 id="policy-snapshot-publish-title">发布待上线配置</h3>
-          <p>发布会创建一个新的版本；网关同步后，新请求才会使用它。</p>
         </div>
-        ${pending ? `<span class="policy-snapshot-pending">结果待确认，重试将复用 ${escapeHtml(state.pendingOperation.requestId)}</span>` : ""}
+        ${pending ? `<span class="policy-snapshot-pending">待确认</span>` : ""}
       </div>
       <form id="policy-snapshot-publish-form" class="policy-snapshot-reason-form">
         <label>
           <span>变更原因</span>
-          <textarea name="reason" rows="3" maxlength="256" placeholder="说明本次上线目的、验证结论或变更单号" ${busy ? "disabled" : pending ? "readonly" : ""}>${escapeHtml(reason)}</textarea>
+          <textarea name="reason" rows="2" maxlength="256" placeholder="填写本次变更原因" ${busy ? "disabled" : pending ? "readonly" : ""}>${escapeHtml(reason)}</textarea>
         </label>
-        <p class="policy-snapshot-form-hint">必填：说明本次上线目的、验证结论或变更单号。</p>
+        ${state.rollbackTargetId ? "" : renderActionFeedback(state)}
         <div class="policy-snapshot-form-actions">
-          <button type="submit" data-policy-snapshot-publish ${disabled ? "disabled" : ""}>${busy ? "发布中" : pending ? "重试发布" : state.candidate_policy_count === 0 ? "发布空版本" : "发布到网关"}</button>
+          <button type="submit" data-policy-snapshot-publish ${disabled ? "disabled" : ""}>${busy ? "发布中" : pending ? "重试发布" : actionLabel}</button>
         </div>
       </form>
     </section>
@@ -403,7 +410,7 @@ function renderHistory(state, history, current) {
         <div class="policy-snapshot-row policy-snapshot-row-head" role="row">
           <span>版本</span>
           <span>来源</span>
-          <span>策略 / 校验值</span>
+          <span>策略</span>
           <span>原因 / 操作者</span>
           <span>发布时间</span>
           <span>操作</span>
@@ -419,6 +426,7 @@ function renderHistory(state, history, current) {
 function renderHistoryRow(item, state, current) {
   const isCurrent = item.policy_snapshot_id === current?.policy_snapshot_id;
   const isPrevious = item.snapshot_version === current?.previous_snapshot_version;
+  const withdrawn = item.rollback_unavailable_reason === "template_withdrawn";
   const rollbackOpen = state.rollbackTargetId === item.policy_snapshot_id;
   const busy = BUSY_OPERATION_STATES.has(state.operationStatus);
   const pendingOtherOperation = Boolean(
@@ -435,9 +443,8 @@ function renderHistoryRow(item, state, current) {
         <strong>${escapeHtml(operationLabel(item))}</strong>
         <em>${escapeHtml(versionSourceLabel(item))}</em>
       </span>
-      <span data-label="策略 / 校验值" class="policy-snapshot-row-hash">
+      <span data-label="策略" class="policy-snapshot-row-hash">
         <strong>${escapeHtml(item.policy_count)} 条策略</strong>
-        <code title="${escapeAttribute(item.content_hash ?? "")}">${escapeHtml(shortHash(item.content_hash))}</code>
       </span>
       <span data-label="原因 / 操作者" class="policy-snapshot-row-reason">
         <strong>${escapeHtml(item.change_reason ?? "-")}</strong>
@@ -445,7 +452,7 @@ function renderHistoryRow(item, state, current) {
       </span>
       <time data-label="发布时间" datetime="${escapeAttribute(item.published_at ?? "")}">${escapeHtml(formatDateTime(item.published_at))}</time>
       <span data-label="操作" class="policy-snapshot-row-action">
-        ${isPrevious ? `<button type="button" data-policy-snapshot-rollback-open="${escapeAttribute(item.policy_snapshot_id)}" ${busy || pendingOtherOperation ? "disabled" : ""}>回滚此版</button>` : "-"}
+        ${isPrevious && withdrawn ? '<span title="此版本包含已撤回的模板规则；重新应用模板后才能启用">已撤回</span>' : isPrevious ? `<button type="button" data-policy-snapshot-rollback-open="${escapeAttribute(item.policy_snapshot_id)}" ${busy || pendingOtherOperation ? "disabled" : ""}>回滚此版</button>` : "-"}
       </span>
     </div>
     ${isPrevious && rollbackOpen ? renderRollbackForm(item, state) : ""}
@@ -472,6 +479,7 @@ function renderRollbackForm(item, state) {
         <textarea name="reason" rows="2" maxlength="256" placeholder="说明故障现象、影响和回滚依据" ${busy ? "disabled" : pending ? "readonly" : ""}>${escapeHtml(reason)}</textarea>
       </label>
       <p class="policy-snapshot-form-hint">必填：说明故障现象、影响范围或回滚依据。</p>
+      ${renderActionFeedback(state)}
       <div class="policy-snapshot-form-actions">
         <button type="submit" ${disabled ? "disabled" : ""}>${busy ? "回滚中" : pending ? "重试回滚" : "确认回滚"}</button>
         <button type="button" data-policy-snapshot-rollback-cancel ${busy ? "disabled" : ""}>取消</button>
@@ -507,7 +515,7 @@ function renderHistoryPager(state) {
   `;
 }
 
-/** 渲染非致命操作错误和成功反馈；两者都保留 request_id 便于排障。 */
+/** 渲染非致命操作错误和成功反馈；结果显示在触发它的操作附近。 */
 function renderActionFeedback(state) {
   const error = state.actionError ? renderError(state.actionError) : "";
   const feedback = state.feedback
@@ -530,23 +538,60 @@ function renderPendingOperationNotice(state) {
     <div class="policy-snapshot-pending-notice" role="status">
       <div>
         <strong>${escapeHtml(operationLabel)}结果待确认</strong>
-        <span>提交结果暂未确认，重试将沿用原变更请求：${escapeHtml(pending.requestId)}</span>
+        <span>提交结果暂未确认，可以重试或放弃本次操作。</span>
       </div>
       <button type="button" data-policy-snapshot-abandon>放弃未决重试并刷新</button>
     </div>
   `;
 }
 
-/** 渲染统一错误，不反射 reason、ETag、DSL 或服务端内部异常正文。 */
+/** 渲染统一错误，不反射 reason、ETag、DSL、错误码或请求编号。 */
 function renderError(error) {
+  const presentation = presentError(error);
   return `
     <div class="policy-snapshot-error" role="alert">
-      <strong>${escapeHtml(error.code ?? "policy_snapshot.unavailable")}</strong>
-      <span>${escapeHtml(error.message ?? "策略快照操作失败")}</span>
-      ${error.suggestion ? `<span>${escapeHtml(error.suggestion)}</span>` : ""}
-      <code>request_id: ${escapeHtml(error.requestId ?? error.request_id ?? "-")}</code>
+      <strong>${escapeHtml(presentation.title)}</strong>
+      <span>${escapeHtml(presentation.message)}</span>
     </div>
   `;
+}
+
+/** 把服务端错误映射成用户能直接处理的提示，未知错误统一降噪。 */
+function presentError(error) {
+  const messages = {
+    "policy_snapshot.rollback_target_invalid": {
+      title: "无法回滚这个版本",
+      message: "这个历史版本已不可恢复，请刷新后选择可恢复的上一版。",
+    },
+    "policy_snapshot.reason_required": {
+      title: "请填写操作原因",
+      message: "填写原因后才能继续。",
+    },
+    "policy_snapshot.version_conflict": {
+      title: "版本已发生变化",
+      message: "页面内容已过期，已重新读取最新版本，请再试一次。",
+    },
+    "policy_snapshot.candidate_conflict": {
+      title: "待上线配置已发生变化",
+      message: "已重新读取最新配置，请确认后再试。",
+    },
+    "policy_snapshot.no_changes": {
+      title: "没有需要发布的变化",
+      message: "当前配置已经与线上版本一致。",
+    },
+    "policy_snapshot.pending_operation_conflict": {
+      title: "已有操作等待确认",
+      message: "请先重试或放弃上一次操作。",
+    },
+    "policy_snapshot.result_unknown": {
+      title: "操作结果尚未确认",
+      message: "连接中断，请重试本次操作。",
+    },
+  };
+  return messages[error?.code] ?? {
+    title: "操作未完成",
+    message: "请刷新页面后再试。",
+  };
 }
 
 /** 渲染摘要键值对，所有服务端文本都经统一转义。 */
@@ -580,12 +625,6 @@ function actorLabel(actor) {
 /** 映射 M1 审批状态，避免内部枚举直接主导界面文案。 */
 function approvalLabel(value) {
   return value === "not_required" ? "无需审批" : value ?? "-";
-}
-
-/** 缩短内容 hash 用于表格扫描；完整值仍保留在安全 title 或当前 code 节点。 */
-function shortHash(value) {
-  const normalized = String(value ?? "");
-  return normalized ? `${normalized.slice(0, 12)}${normalized.length > 12 ? "..." : ""}` : "-";
 }
 
 /** 格式化 UTC ISO 时间，不依赖浏览器本地时区推导版本先后。 */

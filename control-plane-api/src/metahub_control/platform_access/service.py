@@ -548,6 +548,45 @@ def bootstrap_platform_owner(
         connection.close()
 
 
+def _consume_platform_factor(
+    connection: sqlite3.Connection,
+    config: AppConfig,
+    *,
+    account_id: str,
+    totp_code: str,
+    device_fingerprint: str,
+    now: datetime,
+) -> tuple[str, int, int]:
+    """本地开发平台登录的无 MFA 通行路径；生产环境始终走真实 TOTP。"""
+
+    if getattr(config, "dev_platform_no_mfa", False):
+        factor = connection.execute(
+            """
+            SELECT factor_id, revision, last_accepted_counter
+            FROM account_mfa_factors
+            WHERE account_id=? AND status='active'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (account_id,),
+        ).fetchone()
+        if factor is None:
+            raise ApiError("platform.permission_denied")
+        return (
+            str(factor["factor_id"]),
+            int(factor["revision"]),
+            int(factor["last_accepted_counter"] or 0),
+        )
+    return consume_active_totp_in_transaction(
+        connection,
+        config,
+        account_id=account_id,
+        code=totp_code,
+        device_fingerprint=device_fingerprint,
+        now=now,
+    )
+
+
 def issue_platform_session(
     config: AppConfig,
     *,
@@ -573,11 +612,11 @@ def issue_platform_session(
         ).fetchone()
         if operator is None:
             raise ApiError("platform.permission_denied")
-        factor_id, factor_revision, _counter = consume_active_totp_in_transaction(
+        factor_id, factor_revision, _counter = _consume_platform_factor(
             connection,
             config,
             account_id=identity.account_id,
-            code=totp_code,
+            totp_code=totp_code,
             device_fingerprint=device_fingerprint,
             now=now,
         )

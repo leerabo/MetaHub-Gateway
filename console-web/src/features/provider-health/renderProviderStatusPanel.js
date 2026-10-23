@@ -36,6 +36,10 @@ const PROVIDER_TYPE_LABELS = Object.freeze({
   migration_compatible: "迁移兼容",
 });
 
+function providerTypeLabel(value) {
+  return PROVIDER_TYPE_LABELS[value] ?? "模型服务";
+}
+
 /** 故障来源和分类只翻译固定枚举，未知值仍以转义文本展示，便于发现合同漂移。 */
 const FAILURE_SOURCE_LABELS = Object.freeze({
   non_stream_call: "非流式调用",
@@ -158,7 +162,7 @@ function renderStatusItem(item = {}, probingProviderId, canProbe) {
     <header class="provider-status-item-heading">
       <div class="provider-status-identity">
         <strong>${escapeHtml(item.name ?? "-")}</strong>
-        <span class="break-anywhere">${escapeHtml(item.provider_code ?? "-")} · ${escapeHtml(item.provider_type ?? "-")}</span>
+        <span class="break-anywhere">${escapeHtml(providerTypeLabel(item.provider_type))}</span>
         <span class="break-anywhere">${escapeHtml(item.base_url ?? "-")}</span>
       </div>
       <div class="provider-status-current" aria-label="当前状态：${escapeAttribute(STATUS_LABELS[effectiveStatus])}">

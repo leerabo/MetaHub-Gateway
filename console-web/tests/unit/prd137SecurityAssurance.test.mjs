@@ -130,11 +130,11 @@ test("PRD-137 clients reject response extensions and assessment or finding owner
 test("PRD-137 renderer exposes cropped proofs and workflows without exploit material", () => {
   const root = fakeRoot();
   renderPlatformWorkspace(root, platformState(assessment()));
-  assert.match(root.innerHTML, /Security assurance/u);
-  assert.match(root.innerHTML, /Incremental release|incremental release/u);
-  assert.match(root.innerHTML, /Scenario runs/u);
+  assert.match(root.innerHTML, /安全复核/u);
+  assert.match(root.innerHTML, /增量发布/u);
+  assert.match(root.innerHTML, /场景运行/u);
   assert.match(root.innerHTML, /Cleanup receipts[\s\S]*1[\s\S]*1 scenario runs/u);
-  assert.match(root.innerHTML, /Findings and remediation/u);
+  assert.match(root.innerHTML, /问题与改进/u);
   assert.match(root.innerHTML, /data-platform-assurance-remediation-form/u);
   assert.match(root.innerHTML, /Risk acceptance/u);
   assert.doesNotMatch(root.innerHTML, new RegExp(CODE_TREE_SHA, "u"));

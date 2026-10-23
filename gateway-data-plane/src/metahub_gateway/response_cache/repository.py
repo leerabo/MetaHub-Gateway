@@ -755,13 +755,13 @@ def _ensure_key_generation(
     cache_identity_digest: str,
     now: str,
 ) -> int:
-    """创建或读取 identity generation；INSERT OR IGNORE 只用于同一完整复合主键。"""
+    """创建或读取 identity generation；唯一键冲突只用于同一完整复合主键。"""
 
     connection.execute(
         """
-        INSERT OR IGNORE INTO response_cache_key_generations(
+        INSERT INTO response_cache_key_generations(
           tenant_id,hmac_key_version,cache_identity_digest,generation,updated_at
-        ) VALUES(?,?,?,1,?)
+        ) VALUES(?,?,?,1,?) ON CONFLICT DO NOTHING
         """,
         (tenant_id, hmac_key_version, cache_identity_digest, now),
     )
@@ -829,9 +829,9 @@ def _ensure_tag_generations(
         digest = build_tag_digest(key=hmac_key, tenant_id=tenant_id, tag=tag)
         connection.execute(
             """
-            INSERT OR IGNORE INTO response_cache_tag_generations(
+            INSERT INTO response_cache_tag_generations(
               tenant_id,hmac_key_version,tag_kind,tag_digest,generation,updated_at
-            ) VALUES(?,?,?,?,1,?)
+            ) VALUES(?,?,?,?,1,?) ON CONFLICT DO NOTHING
             """,
             (tenant_id, digest.hmac_key_version, digest.kind, digest.digest, now),
         )

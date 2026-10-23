@@ -1,7 +1,5 @@
 -- metahub: stream-retry-provider-error-fact-owners-v1 down
 
-BEGIN;
-
 CREATE OR REPLACE FUNCTION "fn_trg_stream_session_provider_error_fact_confli_692891cdef35"()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -21,5 +19,3 @@ BEGIN
   RETURN NEW;
 END;
 $$;
-
-COMMIT;

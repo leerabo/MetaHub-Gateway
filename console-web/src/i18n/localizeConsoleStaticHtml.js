@@ -74,7 +74,7 @@ const ENGLISH_STATIC_TEXT = new Map([
   ["待检查", "Not checked"],
   ["还不能应用这个场景，请先完成下面的准备工作，再返回重新检查。", "This scenario cannot be applied yet. Complete the steps below, then return and check again."],
   ["没有可用于低成本模式的模型", "No model is eligible for low-cost mode"],
-  ["请检查模型已启用，支持对话和流式调用，有有效的人民币价格及可用服务凭据。无需向量能力。也可在模型路由中选择“成本优先”。", "Check that the model is enabled, supports chat and streaming, and has a valid CNY price and usable provider credentials. Embeddings are not required. You can also choose Cost first in model routing."],
+  ["请检查模型已启用，支持对话和流式调用，有有效价格及可用服务凭据。无需向量能力。也可在模型路由中选择“成本优先”。", "Check that the model is enabled, supports chat and streaming, and has a valid price and usable provider credentials. Embeddings are not required. You can also choose Cost first in model routing."],
   ["查看模型能力", "View model capabilities"],
   ["设置成本优先路由", "Set Cost first routing"],
   ["查看模型目录", "View model catalog"],

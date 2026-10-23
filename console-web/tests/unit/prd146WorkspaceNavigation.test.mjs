@@ -550,7 +550,7 @@ test("preference revision conflict refreshes once and keeps queued writes on the
       updatePreference: async (input) => {
         calls.push(input);
         if (calls.length === 1) throw Object.assign(new Error("revision changed"), {
-          status: 409, code: "identity.revision_conflict",
+          status: 412, code: "identity.revision_conflict",
         });
         return normalizeWorkspaceNavigationPreference({ ...preferencePayload(),
           revision: input.revision + 1, sidebar_collapsed: input.changes.sidebar_collapsed ?? false });

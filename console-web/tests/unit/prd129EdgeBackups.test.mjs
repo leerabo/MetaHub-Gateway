@@ -234,8 +234,8 @@ test("Workspace and Platform backup views prune facts on permission drift", asyn
   const root = fakeRoot();
   const controller = createPlatformPageController({ root, api: platformApi() });
   assert.equal(await controller.mount(), true);
-  assert.match(root.innerHTML, /Gateway backups/u);
-  assert.match(root.innerHTML, /RPO current/u);
+  assert.match(root.innerHTML, /网关备份/u);
+  assert.match(root.innerHTML, /RPO 正常/u);
   assert.match(root.innerHTML, /生产未触碰/u);
   assert.doesNotMatch(root.innerHTML, /manifest_sha256|kms_key_id_sha256|isolated_target_sha256/iu);
   controller.destroy();

@@ -87,9 +87,15 @@ async def test_global_login_me_sessions_rotate_logout_and_legacy_compatibility(
         assert "tenant_id" not in login.text and "role" not in login.text
         assert login.json()["request_id"] != "password-canary-request-id"
         set_cookies = login.headers.get_list("set-cookie")
-        assert len(set_cookies) == 2
+        assert len(set_cookies) == 4
+        assert {cookie.split("=", 1)[0] for cookie in set_cookies} == {
+            "__Host-metahub-global-session", "__Host-metahub-global-csrf",
+            "__Host-metahub-workspace-session", "__Host-metahub-workspace-csrf",
+        }
         assert "Secure" in set_cookies[0] and "HttpOnly" in set_cookies[0]
         assert "Secure" in set_cookies[1] and "HttpOnly" not in set_cookies[1]
+        for cookie in set_cookies[2:]:
+            assert "Max-Age=0" in cookie and "Secure" in cookie
 
         me = await first.get("/identity/me")
         sessions = await first.get("/identity/sessions?limit=20&offset=0")

@@ -50,6 +50,7 @@ class PolicySnapshotInfo(BaseModel):
     approval_status: Literal["not_required"]
     previous_snapshot_version: int | None = None
     rollback_source_snapshot_version: int | None = None
+    rollback_unavailable_reason: Literal["template_withdrawn"] | None = None
     created_by: PolicySnapshotActorInfo
     created_at: datetime
     published_at: datetime

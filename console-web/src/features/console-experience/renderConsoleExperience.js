@@ -319,7 +319,7 @@ function stateBlock(status, error) {
 function options(items, selected) { return items.map(([value, text]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${text}</option>`).join(""); }
 function empty(text) { return `<p class="console-experience-empty">${escapeHtml(text)}</p>`; }
 function label(value) { const text = String(value ?? ""); return Object.hasOwn(LABELS, text) ? LABELS[text] : "未识别事项"; }
-function freshnessLabel(value) { return ({ fresh: "数据已更新", stale: "最近快照", unavailable: "来源不可用" })[value] ?? "状态待确认"; }
+function freshnessLabel(value) { return ({ fresh: "正常", stale: "最近更新", unavailable: "暂不可用" })[value] ?? "待确认"; }
 function sectionFreshnessLabel(section) {
   const metrics = Array.isArray(section?.metrics) ? section.metrics : [];
   const empty = metrics.length > 0 && metrics.every((metric) => metric?.value === null || Number(metric?.value) === 0);

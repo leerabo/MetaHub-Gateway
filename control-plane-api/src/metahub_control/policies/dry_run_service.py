@@ -58,6 +58,7 @@ from metahub_shared.runtime.routing_policy import (
     select_routing_candidates,
 )
 from metahub_shared.runtime.webhooks import build_webhook_event
+from metahub_shared.runtime.workspace_fx import resolve_workspace_fx_rate
 
 from metahub_control.audit import (
     AuditRecord,
@@ -1718,12 +1719,27 @@ def _load_effective_price(
     ).fetchone()
     if row is None:
         return PriceFact(Decimal("0"), Decimal("0"), "CNY", available=False)
+    try:
+        fx = resolve_workspace_fx_rate(
+            connection,
+            tenant_id=tenant_id,
+            observed_at=_to_db_time(now),
+        )
+    except sqlite3.OperationalError as exc:
+        # 旧测试数据库没有汇率表时，USD 必须保持不可用，不能伪造当前汇率。
+        if "no such table" not in str(exc).lower():
+            raise
+        fx = None
+    currency = str(row["currency"] or "CNY").upper()
     return PriceFact(
         input_price_per_1k=parse_nonnegative_decimal(row["input_price_per_1k"]),
         output_price_per_1k=parse_nonnegative_decimal(row["output_price_per_1k"]),
-        currency=str(row["currency"] or "CNY").upper(),
+        currency=currency,
         available=True,
         cache_price_per_1k=parse_nonnegative_decimal(row["cache_price_per_1k"]),
+        comparison_currency="CNY" if currency == "USD" and fx is not None else None,
+        comparison_fx_rate=fx.usd_to_cny if currency == "USD" and fx is not None else None,
+        comparison_fx_rate_version=fx.version_id if currency == "USD" and fx is not None else None,
     )
 
 

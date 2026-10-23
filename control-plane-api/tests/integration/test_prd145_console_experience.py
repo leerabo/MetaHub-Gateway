@@ -641,6 +641,14 @@ async def test_global_account_preference_cas_idempotency_and_outbox(
         assert current.status_code == 200, current.text
         initial = current.json()
         assert current.headers["etag"] == f'"{initial["revision"]}"'
+        # A platform operator uses the same browser for account settings. The
+        # platform cookie must never replace the Global credential, but it may
+        # coexist with a valid Global session.
+        coexist_headers = _identity_headers(runtime)
+        coexist_headers["Cookie"] += "; " + _platform_headers(runtime)["Cookie"]
+        coexist = await client.get("/identity/preferences", headers=coexist_headers)
+        assert coexist.status_code == 200, coexist.text
+        assert coexist.json()["preference_id"] == initial["preference_id"]
         target_locale = "en-US" if initial["locale"] == "zh-CN" else "zh-CN"
         key = "prd145-preference-command-0001"
         headers = _identity_headers(

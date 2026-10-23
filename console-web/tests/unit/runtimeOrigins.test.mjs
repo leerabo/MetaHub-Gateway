@@ -17,9 +17,17 @@ test("private-address trial resolves companion service ports while domain deploy
   assert.equal(gatewayServiceOrigin(lan), "http://172.16.100.2:8000");
   const domain = { protocol: "https:", hostname: "trial.metahub.example", origin: "https://trial.metahub.example" };
   assert.equal(serviceOrigin(domain, 8001), domain.origin);
-  assert.equal(gatewayServiceOrigin(domain), "http://localhost:8000");
+  assert.equal(gatewayServiceOrigin(domain), domain.origin);
 });
 
 test("module-only consumers retain the local Control origin without a browser location", () => {
   assert.equal(serviceOrigin(undefined, 8001), "http://localhost:8001");
+});
+
+test("HTTPS ingress never escapes to fixed companion ports on private or loopback hosts", () => {
+  for (const hostname of ["localhost", "127.0.0.1", "172.16.100.2"]) {
+    const location = { protocol: "https:", hostname, origin: `https://${hostname}:8446` };
+    assert.equal(serviceOrigin(location, 8001), location.origin);
+    assert.equal(gatewayServiceOrigin(location), location.origin);
+  }
 });

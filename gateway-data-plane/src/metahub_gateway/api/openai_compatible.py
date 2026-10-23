@@ -156,6 +156,7 @@ from metahub_gateway.routing.models import (
     resolve_policy_target_route,
     validate_requested_model_authority,
 )
+from metahub_gateway.routing.template_cost import resolve_low_cost_template_plan
 from metahub_gateway.session_risk import (
     SessionRiskPreflightResult,
     SessionRiskRequestIdentity,
@@ -1310,25 +1311,46 @@ async def _handle_gateway_request(
                 experiment_resolution.execution,
             )
             await experiment_guard.start()
-        # route_to 仅解析策略指定的租户内目标，不继承客户端别名原有的运行时 Fallback。
+        # 普通 route_to 保留固定目标；内置成本模板每次请求重新报价并生成候选顺序。
         elif policy_result.decision == "route_to":
-            route = resolve_policy_target_route(
-                config,
-                tenant_id=auth_context.tenant_id,
-                target_model_id=policy_result.target_model_id or "",
-                requested_model=request_model,
-                environment=auth_context.environment,
-                environment_id=auth_context.environment_id,
-                request_id=_request_id(request),
-                trace_id=_trace_id(request),
-                virtual_key_id=auth_context.virtual_key_id,
-                policy_id=policy_result.policy_id,
-                snapshot_version=policy_lease.snapshot_version,
+            leased_policy = (
+                next(
+                    (item for item in policy_lease.snapshot.policies
+                     if item.policy_id == policy_result.policy_id), None,
+                ) if policy_lease.snapshot else None
             )
-            # route_to 是单候选安全重路由，不能继承原 alias 的运行时 Fallback。
-            # routing_attempts 的角色合同仍只有 primary/fallback；Policy 来源由 route 的
-            # routing_reason 与 request_logs 摘要表达，不能发明会被数据库拒绝的新枚举。
-            route_plan = GatewayRoutePlan(initial_route=route, initial_role="primary")
+            route_plan = resolve_low_cost_template_plan(
+                config, tenant_id=auth_context.tenant_id, policy=leased_policy,
+                project_id=auth_context.project_id, snapshot_version=policy_lease.snapshot_version,
+                requested_model=request_model, environment=auth_context.environment,
+                environment_id=auth_context.environment_id, request_id=_request_id(request),
+                trace_id=_trace_id(request), virtual_key_id=auth_context.virtual_key_id,
+                request_kind=request_kind, payload=payload,
+                trusted_token_estimate=trusted_batch.token_estimate if trusted_batch else None,
+            )
+            if route_plan is None:
+                route = resolve_policy_target_route(
+                    config,
+                    tenant_id=auth_context.tenant_id,
+                    target_model_id=policy_result.target_model_id or "",
+                    requested_model=request_model,
+                    environment=auth_context.environment,
+                    environment_id=auth_context.environment_id,
+                    request_id=_request_id(request),
+                    trace_id=_trace_id(request),
+                    virtual_key_id=auth_context.virtual_key_id,
+                    policy_id=policy_result.policy_id,
+                    snapshot_version=policy_lease.snapshot_version,
+                )
+                # route_to 是单候选安全重路由，不能继承原 alias 的运行时 Fallback。
+                # routing_attempts 的角色合同仍只有 primary/fallback；Policy 来源由 route 的
+                # routing_reason 与 request_logs 摘要表达，不能发明会被数据库拒绝的新枚举。
+                route_plan = GatewayRoutePlan(initial_route=route, initial_role="primary")
+            else:
+                route = route_plan.initial_route
+                request_log_context = replace(
+                    request_log_context, policy_target_model_id=route.model_id,
+                )
         else:
             trusted_routing_kwargs = (
                 {"trusted_token_estimate": trusted_batch.token_estimate}

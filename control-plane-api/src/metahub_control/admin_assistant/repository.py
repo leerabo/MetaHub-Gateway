@@ -9,9 +9,10 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import wraps
 from uuid import uuid4
 
-from metahub_shared.db.connection import connect_database
+from metahub_shared.db.connection import connect_database, database_operation_deadline
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ERROR_SPECS, ApiError
 from metahub_shared.runtime.webhooks import build_assistant_queried_event
@@ -104,6 +105,22 @@ def required_permissions(query_type: str, *, target_request_id: str | None) -> t
     return tuple(sorted(permissions))
 
 
+def _within_database_deadline(operation):
+    """Keep the same absolute budget through checkout, statements and commit."""
+
+    @wraps(operation)
+    def run(*args, deadline: float, **kwargs):
+        with database_operation_deadline(deadline):
+            return operation(*args, deadline=deadline, **kwargs)
+
+    return run
+
+
+def _is_postgresql(connection: sqlite3.Connection) -> bool:
+    return getattr(connection, "backend", None) == "postgresql"
+
+
+@_within_database_deadline
 def read_source_snapshot(
     config: AppConfig,
     context: AuthContext,
@@ -140,12 +157,17 @@ def read_source_snapshot(
             deadline,
             error_code="admin_assistant.source_unavailable",
         )
-        connection.execute("PRAGMA query_only=ON")
-        connection.set_progress_handler(
-            lambda: 1 if time.monotonic() >= deadline else 0,
-            1_000,
-        )
-        connection.execute("BEGIN")
+        if _is_postgresql(connection):
+            # One stable, server-enforced read-only snapshot, including live
+            # authorization. Transaction-local settings disappear on rollback.
+            connection.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        else:
+            connection.execute("PRAGMA query_only=ON")
+            connection.set_progress_handler(
+                lambda: 1 if time.monotonic() >= deadline else 0,
+                1_000,
+            )
+            connection.execute("BEGIN")
         # 路由认证已完整重算目录和矩阵哈希；来源事务在同一快照内复核 Session、角色指纹
         # 及本次所需 grant，关闭认证后的撤权竞态，同时避免再次扫描无关权限目录。
         live_context = refresh_transaction_authentication_fingerprint(
@@ -210,6 +232,7 @@ def read_source_snapshot(
             raise ApiError("admin_assistant.source_unavailable") from cleanup_error
 
 
+@_within_database_deadline
 def persist_attempt(
     config: AppConfig,
     context: AuthContext,
@@ -267,11 +290,14 @@ def persist_attempt(
             deadline,
             error_code="admin_assistant.audit_unavailable",
         )
-        connection.set_progress_handler(
-            lambda: 1 if time.monotonic() >= deadline else 0,
-            1_000,
-        )
+        if not _is_postgresql(connection):
+            connection.set_progress_handler(
+                lambda: 1 if time.monotonic() >= deadline else 0,
+                1_000,
+            )
         connection.execute("BEGIN IMMEDIATE")
+        if _is_postgresql(connection):
+            connection.execute("SET LOCAL synchronous_commit=on")
         live_context = refresh_transaction_authentication_fingerprint(
             connection,
             context,
@@ -294,7 +320,7 @@ def persist_attempt(
                 raise ApiError("auth.permission_denied")
         # PAGE-107 初始认证保持只读，避免并发 attempt 在建立 actor 前争 writer；可信 Session 的
         # last_seen 与 Query/Audit/AuditLog/outbox 同事务更新，回滚时不能留下伪成功访问痕迹。
-        connection.execute(
+        updated_session = connection.execute(
             """
             UPDATE sessions SET last_seen_at=?,updated_at=?
             WHERE tenant_id=? AND session_id=? AND user_id=? AND status='active'
@@ -308,7 +334,7 @@ def persist_attempt(
             ),
         )
         # Session owner 未被唯一更新说明最终复核后已失效，禁止提交任何回答或治理事实。
-        if int(connection.execute("SELECT changes()").fetchone()[0]) != 1:
+        if updated_session.rowcount != 1:
             raise ApiError("auth.permission_denied")
         # duration 必须包含写锁等待与最终认证复核；在 BEGIN IMMEDIATE 之前计算会系统性低报。
         duration_ms = _persist_duration_ms(started_monotonic)
@@ -565,7 +591,7 @@ def _usage_values(
         SELECT COUNT(*) AS usage_count,COALESCE(SUM(input_tokens),0) AS input_tokens,
                COALESCE(SUM(output_tokens),0) AS output_tokens,
                COALESCE(SUM(total_tokens),0) AS total_tokens,
-               COALESCE(SUM(CAST(ROUND(cost_cny*1000000) AS INTEGER)),0) AS cost_cny_micros,
+               COALESCE(SUM(CAST(ROUND(cost_cny*1000000) AS BIGINT)),0) AS cost_cny_micros,
                COALESCE(SUM(estimated),0) AS estimated_count
         FROM usage_ledger
         WHERE tenant_id=? AND julianday(created_at)>=julianday(?)
@@ -614,6 +640,30 @@ def _error_values(
     ).fetchone()
     # UDF 只接收单个分类字段并返回共享公开目录中的固定码；先映射再 GROUP BY，
     # 让 NULL、未知值和任意敏感 canary 合并到同一安全桶，同时保持总计不变。
+    if _is_postgresql(connection):
+        # Bind the frozen allowlist; never install a Python UDF or pass unknown
+        # historical error text to the answer. Map before GROUP BY and LIMIT.
+        safe_codes = tuple(sorted(_PUBLIC_ERROR_CODES))
+        placeholders = ",".join("?" for _ in safe_codes)
+        safe_expression = f"CASE WHEN error_code IN ({placeholders}) THEN error_code ELSE ? END"
+        rows = connection.execute(
+            f"""
+            SELECT safe.error_code,COUNT(*) AS error_count
+            FROM (
+              SELECT {safe_expression} AS error_code FROM request_logs
+              WHERE tenant_id=? AND status='failed'
+                AND julianday(created_at)>=julianday(?) AND julianday(created_at)<julianday(?)
+            ) safe
+            GROUP BY safe.error_code ORDER BY error_count DESC,safe.error_code ASC LIMIT 5
+            """,
+            (*safe_codes, _SAFE_ERROR_CODE_FALLBACK, tenant_id, start, end),
+        ).fetchall()
+        errors = tuple((str(row["error_code"]), int(row["error_count"])) for row in rows)
+        failure_count = int(failure_row["failure_count"] or 0)
+        return (
+            {"top_errors": errors, "failure_count": failure_count},
+            {"request_logs": failure_count},
+        )
     connection.create_function(
         _SQLITE_SAFE_ERROR_FUNCTION,
         1,
@@ -840,7 +890,8 @@ def _apply_sqlite_deadline(
         raise ApiError(error_code)
     # busy_timeout 接受整数毫秒；向下取整可确保一次锁等待不越过剩余预算。
     remaining_ms = max(1, int(remaining * 1_000))
-    connection.execute(f"PRAGMA busy_timeout={remaining_ms}")
+    if not _is_postgresql(connection):
+        connection.execute(f"PRAGMA busy_timeout={remaining_ms}")
 
 
 def safe_request_log_error_code(value: object) -> str:
@@ -855,6 +906,10 @@ def safe_request_log_error_code(value: object) -> str:
 def _read_busy_timeout(connection: sqlite3.Connection, *, error_code: str) -> int:
     """读取长期连接原锁预算；无法证明旧值时禁止覆盖连接级状态。"""
 
+    if _is_postgresql(connection):
+        # PostgreSQL uses transaction-local statement/lock timeouts from the
+        # enclosing absolute deadline, with no session setting to restore.
+        return 0
     try:
         row = connection.execute("PRAGMA busy_timeout").fetchone()
         if row is None:
@@ -893,7 +948,9 @@ def _restore_connection_state(
             if first_error is None:
                 first_error = exc
 
-    attempt(lambda: connection.set_progress_handler(None, 0))
+    postgresql = _is_postgresql(connection)
+    if not postgresql:
+        attempt(lambda: connection.set_progress_handler(None, 0))
     try:
         in_transaction = connection.in_transaction
     # 连事务状态都无法读取时按不可信处理，但仍尝试恢复其它连接级状态。
@@ -902,10 +959,11 @@ def _restore_connection_state(
         first_error = first_error or exc
     if in_transaction:
         attempt(connection.rollback)
-    if restore_query_only:
+    if restore_query_only and not postgresql:
         attempt(lambda: connection.execute("PRAGMA query_only=OFF"))
     # busy_timeout 是连接级状态，必须在成功、业务异常和 SQLite 异常三条路径都恢复。
-    attempt(lambda: connection.execute(f"PRAGMA busy_timeout={previous_busy_timeout}"))
+    if not postgresql:
+        attempt(lambda: connection.execute(f"PRAGMA busy_timeout={previous_busy_timeout}"))
     return first_error
 
 

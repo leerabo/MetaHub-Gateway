@@ -283,10 +283,10 @@ def create_approval(
         )
         connection.execute(
             """
-            INSERT OR IGNORE INTO approval_scheduler_tenants(
+            INSERT INTO approval_scheduler_tenants(
               tenant_id,status,lease_generation,lease_owner_id,lease_token,
               lease_expires_at,next_scan_at,created_at,updated_at
-            ) VALUES(?,'idle',0,NULL,NULL,NULL,?,?,?)
+            ) VALUES(?,'idle',0,NULL,NULL,NULL,?,?,?) ON CONFLICT DO NOTHING
             """,
             (owner_tenant, timestamp, timestamp, timestamp),
         )
@@ -433,10 +433,10 @@ def create_mcp_approval_in_transaction(
     )
     connection.execute(
         """
-        INSERT OR IGNORE INTO approval_scheduler_tenants(
+        INSERT INTO approval_scheduler_tenants(
           tenant_id,status,lease_generation,lease_owner_id,lease_token,
           lease_expires_at,next_scan_at,created_at,updated_at
-        ) VALUES(?,'idle',0,NULL,NULL,NULL,?,?,?)
+        ) VALUES(?,'idle',0,NULL,NULL,NULL,?,?,?) ON CONFLICT DO NOTHING
         """,
         (tenant_id, timestamp, timestamp, timestamp),
     )

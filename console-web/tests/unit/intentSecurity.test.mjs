@@ -375,8 +375,8 @@ test("PAGE-097 renders all semantic states and offers one explicit bounded detai
     assert.match(html, new RegExp(`data-intent-risk-status="${status}"`));
     assert.match(html, new RegExp(label.replace(/[()]/g, "\\$&")));
     assert.match(html, /data-request-log-detail-refresh="req_gateway_069"/);
-    assert.match(html, /刷新详情/);
-    assert.match(html, /request_id[\s\S]*req_gateway_069/);
+    assert.match(html, />刷新<\/button>/);
+    assert.doesNotMatch(html, /<dt>request_id<\/dt>/);
   }
   assert.match(renderIntentRiskStatus("pending"), /进程内 best-effort 队列/);
   assert.match(renderIntentRiskStatus("detected"), /模型请求未因此被阻断/);
@@ -389,6 +389,7 @@ test("PAGE-097 escapes fixed-enum drift and main uses command refresh without po
   const html = renderIntentRiskStatus("failed", {
     reason_code: unsafe,
     detector_version: unsafe,
+    risk_type: unsafe,
   });
   assert.match(html, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
   assert.doesNotMatch(html, /<img src=x/);

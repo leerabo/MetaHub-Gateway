@@ -50,7 +50,8 @@ test("refresh adopts server expansion only before a newer local choice or pendin
 });
 
 test("late page hydration uses current expansion and mobile state, pruning hidden groups", () => {
-  const scope = { expandedConsoleGroupKey: "workspace", mobileSidebarCollapsed: true };
+  const scope = { expandedConsoleGroupKey: "workspace", mobileSidebarCollapsed: true,
+    workspaceNavigationController: { snapshot: () => ({ setupComplete: true }) } };
   const sync = runInNewContext(`${section("function syncConsoleSidebarState(", "function applyExpandedConsoleGroup(")}\nsyncConsoleSidebarState;`, scope);
   const shell = {
     sidebarExpandedGroupKey: "finance", mobileSidebarCollapsed: false,
@@ -75,7 +76,7 @@ test("a delayed page preference response cannot replace a later group choice", a
     workspaceNavigationController: { savePreference: () => pending.promise },
     expandedConsoleGroupKey: "finance", sidebarGroupSequence: 1, sidebarGroupPending: false,
   };
-  const schedule = runInNewContext(`${section("function scheduleConsoleNavigationSideEffects(", "/** 分组手风琴")}\nscheduleConsoleNavigationSideEffects;`, scope);
+  const schedule = runInNewContext(`${section("function scheduleConsoleNavigationSideEffects(", "async function toggleConsoleSidebarGroup(")}\nscheduleConsoleNavigationSideEffects;`, scope);
   schedule({ routeCode: "finance", navigationOwnerCurrent: () => true });
   const saving = callback();
   scope.expandedConsoleGroupKey = "developer-center";

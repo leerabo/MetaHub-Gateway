@@ -46,25 +46,29 @@ export function renderUsagePanel(usageState, authContext, budgetState) {
   const summary = usageState.summary ?? {};
   const exportState = usageState.exportState ?? { status: "idle" };
   const canExport = hasPermission(authContext, PERMISSIONS.BILLING_USAGE_EXPORT);
+  const canReadPersonal = hasPermission(authContext, PERMISSIONS.VIRTUAL_KEY_READ);
+  const personalView = canReadPersonal && usageState.dimension === "personal";
   return `
     <div class="panel-heading usage-heading">
       <div>
         <h2 id="usage-title">用量与成本</h2>
+        <p data-usage-organization${personalView ? " hidden" : ""}>${hasUsageFilters(usageState.filters) ? "组织用量 · 当前筛选范围" : "整个组织的调用用量与成本，包含所有成员、项目和应用。"}</p>
       </div>
       <div class="usage-heading-actions">
-        <span class="usage-scope-label">组织汇总</span>
-        ${renderUsageExportButton(canExport, exportState)}
+        <span class="usage-scope-label" data-usage-scope-label>${personalView ? "个人汇总" : "组织汇总"}</span>
+        <span data-usage-organization${personalView ? " hidden" : ""}>${renderUsageExportButton(canExport, exportState)}</span>
       </div>
     </div>
-    <div class="console-page-toolbar usage-toolbar">
+    <div class="console-page-toolbar usage-toolbar" data-usage-organization${personalView ? " hidden" : ""}>
       ${renderActionError(usageState.actionError)}
       ${renderFilterForm(usageState.filters ?? {}, summary.by_consumer ?? [])}
     </div>
-    ${renderUsageExportFeedback(canExport, exportState)}
-    ${renderTotals(summary.totals)}
-    ${renderBudgetOverview(budgetState)}
-    ${renderSummaryTables(summary, usageState.dimension ?? "overview")}
-    ${hasPermission(authContext, PERMISSIONS.VIRTUAL_KEY_READ) ? renderOwnUsage(usageState) : ""}
+    <div data-usage-organization${personalView ? " hidden" : ""}>
+      ${renderUsageExportFeedback(canExport, exportState)}
+      ${renderTotals(summary.totals)}
+      ${renderBudgetOverview(budgetState)}
+    </div>
+    ${renderSummaryTables(summary, usageState.dimension ?? "overview", canReadPersonal ? renderOwnUsage(usageState) : null)}
   `;
 }
 
@@ -102,7 +106,7 @@ function renderPersonalUsagePanel(usageState) {
 
 function renderOwnUsage(usageState) {
   if (usageState.personalUsageError) {
-    return '<section class="usage-own-section" role="status"><h3>我的用量</h3><p>个人用量暂不可用，请稍后刷新。</p></section>';
+    return '<section class="usage-own-section" role="status"><h3 id="usage-own-title">我的用量</h3><p>个人用量暂不可用，请稍后刷新。</p></section>';
   }
   const totals = usageState.personalSummary?.totals ?? {};
   return `<section class="usage-own-section" aria-labelledby="usage-own-title">
@@ -332,15 +336,16 @@ function renderMetric(label, value, unit) {
 /**
  * 渲染按维度切换的聚合表；项目视图同时承载其下的应用明细。
  */
-function renderSummaryTables(summary = {}, activeDimension = "overview") {
+function renderSummaryTables(summary = {}, activeDimension = "overview", personalContent = null) {
   const dimensions = [
-    ["overview", "总览", "当前筛选范围的汇总指标。", ""],
+    ["overview", "组织总览", "上方指标汇总整个组织在当前筛选范围内的用量与成本。", ""],
     ["day", "按日期", "按日期查看请求量、令牌和成本变化。", renderDaySummary(summary.by_day ?? [])],
     ["consumer", "按使用者", "查看每位成员的请求量和成本。", renderConsumerSummary(summary.by_consumer ?? [])],
     ["model", "按模型", "查看各模型的请求量和成本。", renderModelSummary(summary.by_model ?? [])],
     ["project", "按项目", "查看项目总量，应用会缩进显示在所属项目下。", renderProjectSummary(summary.by_project ?? [], summary.by_application ?? [])],
     ["environment", "按环境", "查看各环境的请求量和成本。", renderEnvironmentSummary(summary.by_environment ?? [])],
   ];
+  if (personalContent) dimensions.push(["personal", "我的用量", "", personalContent]);
   const selected = dimensions.some(([value]) => value === activeDimension) ? activeDimension : "overview";
   return `
     <section class="usage-view-switcher" aria-labelledby="usage-view-label">
@@ -354,10 +359,10 @@ function renderSummaryTables(summary = {}, activeDimension = "overview") {
     </section>
     <div class="usage-summary-views">
       ${dimensions.map(([value, label, description, content]) => `
-        <section class="usage-summary-view" data-usage-dimension="${escapeAttribute(value)}"${value === selected && value !== "overview" ? "" : " hidden"} aria-labelledby="usage-dimension-${escapeAttribute(value)}">
-          <div class="usage-summary-view-heading">
+        <section class="usage-summary-view" data-usage-dimension="${escapeAttribute(value)}"${value === selected ? "" : " hidden"} aria-labelledby="${value === "personal" ? "usage-own-title" : `usage-dimension-${escapeAttribute(value)}`}">
+          ${value === "personal" ? "" : `<div class="usage-summary-view-heading">
             <div><h3 id="usage-dimension-${escapeAttribute(value)}">${escapeHtml(label)}</h3><p>${escapeHtml(description)}</p></div>
-          </div>
+          </div>`}
           ${content || (value === "overview" ? "" : `<div class="usage-summary-empty">当前筛选范围暂无${escapeHtml(label)}数据。</div>`)}
         </section>
       `).join("")}

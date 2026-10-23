@@ -2,8 +2,6 @@
 -- Permit more than one provider attempt to share a request id while keeping
 -- each stream/output-safety owner unique within its tenant.
 
-BEGIN;
-
 DROP INDEX IF EXISTS "idx_stream_sessions_tenant_request";
 DROP INDEX IF EXISTS "uq_output_safety_scans_tenant_id_request_id";
 
@@ -21,5 +19,3 @@ BEGIN
   RETURN NEW;
 END;
 $$;
-
-COMMIT;

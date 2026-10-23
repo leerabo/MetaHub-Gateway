@@ -91,12 +91,12 @@ def _freeze_delivery_intents(
                     continue
                 connection.execute(
                     """
-                    INSERT OR IGNORE INTO webhook_deliveries(
+                    INSERT INTO webhook_deliveries(
                       webhook_delivery_id,tenant_id,webhook_endpoint_id,event_id,event_type,
                       event_timestamp,payload_json,status,attempt_count,max_attempts,
                       secret_version,created_at,updated_at,payload_format,wire_body_text,
                       security_event_rate_limit_per_minute
-                    ) VALUES(?,?,?,?,?,?,?,'pending',0,?,?,?,?, 'json',?,?)
+                    ) VALUES(?,?,?,?,?,?,?,'pending',0,?,?,?,?, 'json',?,?) ON CONFLICT DO NOTHING
                     """,
                     (
                         f"whd_{uuid4().hex}",

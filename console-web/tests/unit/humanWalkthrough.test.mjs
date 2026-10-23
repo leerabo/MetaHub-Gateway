@@ -121,8 +121,8 @@ test("organization KEY list keeps active credentials actionable without employee
       { virtual_key_id: "old-key", consumer_id: "consumer_1", name: "旧 KEY", key_prefix: "mh_old", status: "disabled", environment: "prod", credential_revision: 1 },
     ],
   }, auth, {}, { state: "ok", environments: [{ environment_id: "env_prod", name: "生产", code: "prod", status: "active" }] }, progress());
-  assert.match(html, /data-virtual-key-form data-virtual-key-id="active-key"/u);
-  assert.match(html, />禁用<\/button>/u);
+  assert.match(html, /data-open-virtual-key-binding-dialog="active-key">编辑<\/button>/u);
+  assert.match(html, /data-virtual-key-binding-form data-virtual-key-id="active-key"/u);
   assert.doesNotMatch(html, /consumerId|发放给|员工 KEY/u);
 });
 
@@ -220,7 +220,7 @@ test("compact model and KEY records retain field meanings after column headers d
   }
   assert.doesNotMatch(models, /能力|上下文/u);
   const keys = renderVirtualKeyPanel({ state: "ok", virtual_keys: [{}] }, auth, {}, {});
-  for (const label of ["KEY 名称", "密钥前缀", "归属范围", "环境", "状态", "最近使用"]) {
+  for (const label of ["KEY 名称", "KEY", "使用者", "项目", "应用", "环境", "状态", "最近使用"]) {
     assert.ok(keys.includes(`<span class="virtual-key-field-label">${label}</span>`));
   }
 });
@@ -233,8 +233,8 @@ test("owner start flow puts model access before optional administration", () => 
     ["first_gateway_call", "workspace.developer.sdk"],
     ["model_catalog_ready", "workspace.gateway.models"],
   ].map(([task_code, action_route_code]) => ({ task_code, action_route_code, status: "ready", action_enabled: true })) });
-  assert.ok(html.indexOf("接入模型服务") < html.indexOf("配置可用模型"));
-  assert.ok(html.indexOf("配置可用模型") < html.indexOf("成员 KEY 已启用"));
+  assert.ok(html.indexOf("接入模型服务") < html.indexOf("配置模型目录"));
+  assert.ok(html.indexOf("配置模型目录") < html.indexOf("成员自助创建 KEY"));
   assert.match(html, /<details class="workspace-other-tasks">[\s\S]*组织资料/u);
   assert.equal((html.match(/aria-current="step"/gu) ?? []).length, 1);
 });
@@ -569,11 +569,15 @@ test("route dependency failure offers recovery instead of claiming configuration
 
 test("organization KEY limits stay collapsed and irrelevant project placeholders stay absent", () => {
   const html = renderVirtualKeyPanel({ state: "ok", virtual_keys: [{ virtual_key_id: "key_1", name: "组织 KEY", status: "active" }] }, auth, {}, {});
-  assert.match(html, /class="virtual-key-limit-open"[^>]*>调整限制/u);
-  assert.match(html, /class="virtual-key-limit-dialog"/u);
+  assert.match(html, /data-open-virtual-key-binding-dialog="key_1">编辑/u);
+  assert.match(html, /class="virtual-key-binding-dialog"/u);
+  for (const name of ["rpmLimit", "tpmLimit", "concurrencyLimit"]) assert.ok(html.includes(`name="${name}"`));
+  assert.doesNotMatch(html, />调整限制<\/button>|>调整归属<\/button>/u);
   assert.doesNotMatch(html, /class="virtual-key-limit-editor"/u);
   assert.match(html, /不限速/u);
-  assert.doesNotMatch(html, /未绑定项目|未绑定应用|>active</u);
+  assert.match(html, /class="virtual-key-project"[\s\S]*?未分配/u);
+  assert.match(html, /class="virtual-key-application"[\s\S]*?待分配应用/u);
+  assert.doesNotMatch(html, />active</u);
 });
 
 test("tool connection comes before optional programming examples and hides placeholder models", () => {

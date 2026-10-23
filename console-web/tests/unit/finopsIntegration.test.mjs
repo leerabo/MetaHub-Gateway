@@ -57,7 +57,7 @@ test("canonical internal FinOps mounts ledger and cost rates only with the match
   renderDeveloperStart(financeContainer, {
     authContext: withPermissionSnapshot(
       { user: { role: "finance_admin", display_name: "FinanceAdmin" }, tenant: { name: "Tenant" } },
-      [PERMISSIONS.BILLING_FINOPS_READ, PERMISSIONS.BILLING_FINOPS_WRITE],
+      [PERMISSIONS.BILLING_FINOPS_READ, PERMISSIONS.BILLING_FINOPS_WRITE, PERMISSIONS.REQUEST_LOG_READ],
     ),
     consoleShellState: { ...navigation, activeNavigationItemId: "internal-finops" },
     finOpsState,
@@ -77,6 +77,17 @@ test("canonical internal FinOps mounts ledger and cost rates only with the match
   assert.match(financeContainer.innerHTML, /data-finops-request-id="req_integration_051"/);
   assert.doesNotMatch(developerContainer.innerHTML, /finops-ledger-panel/);
   assert.doesNotMatch(developerContainer.innerHTML, /req_integration_051/);
+  const financeWithoutLogs = { innerHTML: "" };
+  renderDeveloperStart(financeWithoutLogs, {
+    authContext: withPermissionSnapshot(
+      { user: { role: "finance_admin" }, tenant: { name: "Tenant" } },
+      [PERMISSIONS.BILLING_FINOPS_READ, PERMISSIONS.BILLING_FINOPS_WRITE],
+    ),
+    consoleShellState: { ...navigation, activeNavigationItemId: "internal-finops" },
+    finOpsState,
+  });
+  assert.match(financeWithoutLogs.innerHTML, /finops-detail-title/);
+  assert.doesNotMatch(financeWithoutLogs.innerHTML, /data-finops-request-id/);
 });
 
 test("main loader requires FinOps read permission, backend navigation, current hash and refresh owner", async () => {

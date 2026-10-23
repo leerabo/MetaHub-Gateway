@@ -24,7 +24,7 @@ export async function listProjects({ controlApiUrl, authentication, token, signa
  * 创建项目归属。
  * 项目编码会进入日志、用量和预算筛选口径，前端只负责提交原始表单值，合法性由后端统一错误码裁决。
  */
-export async function createProject({ controlApiUrl, authentication, token, signal, projectCode, name, description }) {
+export async function createProject({ controlApiUrl, authentication, token, signal, projectCode, name, description, ownerUserId }) {
   return projectsRequest(`${controlApiUrl}/projects`, {
     method: "POST",
     authentication, token, signal,
@@ -36,6 +36,7 @@ export async function createProject({ controlApiUrl, authentication, token, sign
         ...(projectCode ? { project_code: projectCode } : {}),
         name,
         description,
+        owner_user_id: ownerUserId,
       }),
     ),
   });
@@ -52,15 +53,24 @@ export async function updateProject({ controlApiUrl, authentication, token, sign
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(
-      compactPayload({
+    body: JSON.stringify({
+      ...compactPayload({
         name,
         description,
-        owner_user_id: ownerUserId,
         status,
       }),
-    ),
+      // undefined 保持原负责人；显式 null 才清除负责人。
+      ...(ownerUserId !== undefined ? { owner_user_id: ownerUserId || null } : {}),
+    }),
   });
+}
+
+/** 负责人选择器按需搜索，不阻塞项目列表加载。 */
+export async function listProjectOwnerCandidates({ controlApiUrl, authentication, token, signal, search, limit = 50 } = {}) {
+  const url = new URL(`${controlApiUrl}/projects/owner-candidates`);
+  setOptionalParam(url, "search", search);
+  url.searchParams.set("limit", String(limit));
+  return projectsRequest(url.toString(), { authentication, token, signal });
 }
 
 export async function deleteProject({ controlApiUrl, authentication, token, signal, projectId }) {
@@ -133,11 +143,12 @@ export async function deleteApplication({ controlApiUrl, authentication, token, 
 }
 
 /** 读取应用成员选择器的分页候选和完整已选 ID。 */
-export async function listApplicationMembers({ controlApiUrl, authentication, token, signal, applicationId, search, limit = 25, offset = 0 } = {}) {
+export async function listApplicationMembers({ controlApiUrl, authentication, token, signal, applicationId, search, limit = 25, offset = 0, selectedOnly = false } = {}) {
   const url = new URL(`${controlApiUrl}/applications/${encodeURIComponent(applicationId)}/members`);
   setOptionalParam(url, "search", search);
   url.searchParams.set("limit", String(limit));
   url.searchParams.set("offset", String(offset));
+  if (selectedOnly) url.searchParams.set("selected_only", "true");
   return projectsRequest(url.toString(), { authentication, token, signal });
 }
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 import shutil
 import time
 from pathlib import Path
@@ -28,6 +29,7 @@ from metahub_control.workspace_access.constants import (
     WORKSPACE_SESSION_COOKIE,
 )
 from metahub_control.workspace_access.routes import router as workspace_access_router
+from metahub_control.workspace_navigation.routes import router as navigation_router
 from metahub_control.workspaces.routes import router as workspaces_router
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
 from metahub_shared.runtime.fastapi_app import create_service_app
@@ -44,8 +46,11 @@ GLOBAL_SESSION_COOKIE = "__Host-metahub-global-session"
 def migrated_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("prd094-api-migrated")
     database = root / "workspace-current.sqlite3"
+    supplied = os.environ.get("METAHUB_TEST_MIGRATED_BASELINE")
+    if supplied:
+        shutil.copyfile(Path(supplied).resolve(strict=True), database)
     result = apply_migrations(f"sqlite:///{database.as_posix()}")
-    assert "0086" in result.applied
+    assert "0086" in {*result.applied, *result.skipped}
     return database
 
 
@@ -142,7 +147,7 @@ async def test_partner_handoff_revokes_workspace_cookie_domain(
 ) -> None:
     _database_url, app = _prepare(monkeypatch, tmp_path, migrated_database)
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url=ORIGIN,
+        transport=ASGITransport(app=app), base_url="https://testserver",
     ) as client:
         await _global_login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
         workspaces = await client.get("/identity/workspaces")
@@ -160,8 +165,12 @@ async def test_partner_handoff_revokes_workspace_cookie_domain(
         assert handoff.status_code == 200, handoff.text
         assert handoff.json()["handed_off"] is True
         cookie_headers = handoff.headers.get_list("set-cookie")
-        assert any(WORKSPACE_SESSION_COOKIE in value and "Max-Age=0" in value for value in cookie_headers)
-        assert any(WORKSPACE_CSRF_COOKIE in value and "Max-Age=0" in value for value in cookie_headers)
+        assert any(
+            WORKSPACE_SESSION_COOKIE in value and "Max-Age=0" in value for value in cookie_headers
+        )
+        assert any(
+            WORKSPACE_CSRF_COOKIE in value and "Max-Age=0" in value for value in cookie_headers
+        )
 
         revoked = await client.get("/workspace/session")
         assert revoked.status_code == 401
@@ -413,7 +422,9 @@ async def test_global_login_clears_previous_account_workspace_session(
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="https://testserver") as owner:
         await _global_login(owner, ADMIN_EMAIL, ADMIN_PASSWORD)
-        workspace_id = (await owner.get("/identity/workspaces")).json()["workspaces"][0]["workspace_id"]
+        workspace_id = (await owner.get("/identity/workspaces")).json()["workspaces"][0][
+            "workspace_id"
+        ]
         await _switch(owner, workspace_id)
         created = await owner.post(
             "/membership-invitations",
@@ -723,6 +734,7 @@ async def test_membership_change_revokes_next_request_and_owner_transfer_is_atom
     migrated_database: Path,
 ) -> None:
     database_url, app = _prepare(monkeypatch, tmp_path, migrated_database)
+    app.include_router(navigation_router)
     target_email = "owner.target@example.com"
     await _legacy_invite_and_accept(app, email=target_email)
     transport = ASGITransport(app=app)
@@ -744,6 +756,33 @@ async def test_membership_change_revokes_next_request_and_owner_transfer_is_atom
             await _switch(target_client, workspace_id)
             assert (await target_client.get("/workspace/session")).status_code == 200
 
+            navigation = await target_client.get("/workspace/navigation")
+            assert navigation.status_code == 200, navigation.text
+            nav = navigation.json()
+            preference = await target_client.patch(
+                "/identity/preferences/navigation",
+                json={
+                    "workspace_id": workspace_id,
+                    "contract_snapshot_id": nav["contract_snapshot_id"],
+                    "sidebar_collapsed": True,
+                },
+                headers=_csrf_headers(
+                    target_client,
+                    GLOBAL_CSRF_COOKIE,
+                    **{
+                        "If-Match": f'"{nav["preference"]["revision"]}"',
+                        "Idempotency-Key": "membership-navigation-revocation-195",
+                    },
+                ),
+            )
+            assert preference.status_code == 200, preference.text
+            with connect_database(database_url) as connection:
+                assert connection.execute(
+                    "SELECT COUNT(*) FROM workspace_navigation_member_states "
+                    "WHERE workspace_membership_id=?",
+                    (target["membership_id"],),
+                ).fetchone()[0] == 1
+
             updated = await owner.patch(
                 f"/memberships/{target['membership_id']}",
                 json={"role": "viewer"},
@@ -754,6 +793,20 @@ async def test_membership_change_revokes_next_request_and_owner_transfer_is_atom
                 ),
             )
             assert updated.status_code == 200, updated.text
+            with connect_database(database_url) as connection:
+                stored = connection.execute(
+                    "SELECT status,revision FROM workspace_navigation_preferences "
+                    "WHERE workspace_membership_id=?",
+                    (target["membership_id"],),
+                ).fetchone()
+                assert tuple(stored) == (
+                    "membership_revoked", preference.json()["revision"] + 1,
+                )
+                assert connection.execute(
+                    "SELECT COUNT(*) FROM workspace_navigation_member_states "
+                    "WHERE workspace_membership_id=?",
+                    (target["membership_id"],),
+                ).fetchone()[0] == 0
             revoked = await target_client.get("/workspace/session")
             assert revoked.status_code == 401
             assert revoked.json()["code"] == "workspace_session.revoked"

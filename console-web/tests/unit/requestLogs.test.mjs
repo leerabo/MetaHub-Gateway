@@ -474,6 +474,7 @@ test("renderRequestLogPanel shows logs and details without leaking sensitive sam
   );
 
   assert.match(html, /request-log-filter-form/);
+  assert.match(html, /id="request-log-refresh"/);
   assert.match(html, /deepseek-chat/);
   assert.match(html, /账务核心/);
   assert.match(html, /账务 API/);
@@ -483,13 +484,36 @@ test("renderRequestLogPanel shows logs and details without leaking sensitive sam
   assert.match(html, /data-request-log-detail="req_prd016_success"/);
   assert.match(html, /request-log-detail-dialog/);
   assert.match(html, /request-log-technical-body-expanded/);
-  assert.doesNotMatch(html, /<details class="request-log-technical-details">/);
-  const visibleText = html.replace(/<[^>]*>/gu, " ");
+  assert.match(html, /<details class="request-log-technical-details">/);
+  assert.doesNotMatch(html, /<details class="request-log-technical-details"[^>]*\bopen\b/u);
+  assert.match(html, /&lt;script&gt;限流&lt;\/script&gt;/u);
+  const visibleText = html.replace(/<details class="request-log-technical-details">[\s\S]*?<\/details>/gu, " ").replace(/<[^>]*>/gu, " ");
   assert.doesNotMatch(visibleText, /request_id\s*[:：]|trace_id|RoutingPolicy ID|价格快照|质量评分|上游尝试|错误诊断|budget\.exhausted|rpol_1|rpe_1/u);
   assert.doesNotMatch(html, /sk-provider-secret/);
   assert.doesNotMatch(html, /<script>限流<\/script>/);
   assert.doesNotMatch(html, /raw_usage/);
   assert.doesNotMatch(html, /CANDIDATE_SUMMARY_MUST_NOT_RENDER|candidate_summary|unsafe_raw_value/);
+});
+
+test("request log dialog separates exhausted alert-only budgets from upstream failure", () => {
+  const detail = structuredClone(detailPayload);
+  Object.assign(detail.request_log.log, {
+    status: "failed",
+    budget_status: "exhausted",
+    budget_action: "allow",
+    budget_limit_cny: 1,
+    budget_current_cost_cny: 2.767557,
+    error_code: "gateway.upstream_stream_timeout",
+  });
+  detail.request_log.budget_evaluations = [];
+  const html = renderRequestLogPanel(
+    { state: "ok", ...requestLogPayload, detail },
+    withPermissionSnapshot({ user: { role: "developer" } }, [PERMISSIONS.REQUEST_LOG_READ]),
+  );
+  assert.match(html, /预算检查/);
+  assert.match(html, /仅告警.*本次调用仍被放行/);
+  assert.match(html, /2\.767557 CNY/);
+  assert.match(html, /失败说明/);
 });
 
 test("request log detail hides internal output safety integrity errors", async () => {
@@ -540,8 +564,11 @@ test("request log details show routed attempt and stream states without unknown 
 
   assert.match(html, /上游失败/);
   assert.match(html, /已超时/);
-  assert.doesNotMatch(html, /kimi-k2\.7-code/);
-  assert.doesNotMatch(html, /Kimi/);
+  const diagnostics = html.match(/<details class="request-log-technical-details">([\s\S]*?)<\/details>/u)?.[1];
+  assert.ok(diagnostics, "collapsed diagnostics retain the actual stream model and provider");
+  assert.match(diagnostics, /kimi-k2\.7-code/u);
+  assert.match(diagnostics, /Kimi/u);
+  assert.doesNotMatch(html.replace(/<details class="request-log-technical-details">[\s\S]*?<\/details>/gu, ""), /kimi-k2\.7-code|Kimi/u);
   assert.match(html, /无 Token 用量/);
   assert.match(html, /2 个模型失败，已停止/);
   assert.doesNotMatch(html, /status-mark[^>]*>未知</u);
@@ -582,7 +609,7 @@ test("request log never presents an unpriced zero placeholder as a real fee", ()
   ));
 
   assert.match(html, /价格未记录/);
-  assert.doesNotMatch(html, /0 CNY/);
+  assert.doesNotMatch(html, /<dd>0 CNY<\/dd>/);
 });
 
 test("request log renders frozen quality decision and candidate fields without current-score recomputation", () => {
@@ -665,7 +692,8 @@ test("request log snapshot rendering escapes policy fields and never invents v0 
     ),
   );
 
-  assert.doesNotMatch(html, /访问策略/);
+  assert.match(html, /<details class="request-log-technical-details">[\s\S]*?访问策略[\s\S]*?<\/details>/u);
+  assert.doesNotMatch(html, /<details class="request-log-technical-details"[^>]*\bopen\b/u);
   assert.doesNotMatch(html, /policy\.&lt;unsafe&gt;|&lt;script&gt;policy&lt;\/script&gt;|Policy ID|策略版本|快照版本|snapshotVersion/u);
   assert.doesNotMatch(html, /<script>policy<\/script>/);
   assert.doesNotMatch(html, /<strong>v0<|>v0</);

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { renderWorkspaceConsoleExperience } from "../../src/features/workspace-console-experience/renderWorkspaceConsoleExperience.js";
+import { renderWorkspaceOverview } from "../../src/features/workspace-console-experience/renderWorkspaceOverview.js";
 
 function section(source, values) {
   return { source_code: source, freshness: "fresh", source_revision: 1,
@@ -44,11 +45,26 @@ test("overview hides sources absent from the authorized projection", () => {
 test("time range selects matching projected totals without mixing periods", () => {
   const html = renderWorkspaceConsoleExperience({ status: "ready", overviewPeriod: "day", overview: {
     sections: [section("usage_cost", { day_requests: 9, day_tokens: 1000, month_requests: 99,
-      day_cny_micros: 0, day_usd_micros: 0 })],
+      day_cny_micros: 0, day_usd_micros: 0, day_estimated: 2, month_estimated: 7 })],
   } }, "overview", "owner");
   assert.match(html, /data-workspace-overview-period="day" aria-pressed="true"/);
   assert.match(html, /请求次数<\/span><strong>9<\/strong>/);
   assert.doesNotMatch(html, /<strong>99<\/strong>/);
+  assert.match(html, /今日包含 2 笔估算用量/);
+  assert.doesNotMatch(html, /包含 7 笔估算用量/);
+});
+
+test("estimate notice does not invent counts or reveal a hidden usage projection", () => {
+  for (const count of [undefined, 0, -1, "<img src=x onerror=alert(1)>", 1.5]) {
+    const html = renderWorkspaceConsoleExperience({ status: "ready", overview: {
+      sections: [section("usage_cost", { month_estimated: count })],
+    } }, "overview", "owner");
+    assert.doesNotMatch(html, /笔估算用量|<img/);
+  }
+  const html = renderWorkspaceOverview({ status: "ready", overview: {
+    sections: [section("usage_cost", { month_estimated: 9 })],
+  } }, { hiddenSources: ["usage_cost"] });
+  assert.doesNotMatch(html, /笔估算用量/);
 });
 
 test("approval page describes its current read-only behavior", () => {

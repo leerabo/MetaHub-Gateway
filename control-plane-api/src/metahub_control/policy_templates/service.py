@@ -24,6 +24,7 @@ from uuid import uuid4
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.config import AppConfig
+from metahub_shared.runtime.cost_rates import resolve_workspace_cost_rate
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.keypool import ManagedCredentialFact, evaluate_provider_key_pool
 from metahub_shared.runtime.policy_snapshot import (
@@ -41,7 +42,13 @@ from metahub_shared.runtime.provider_adapter_spec import (
     ProviderAdapterSpecError,
     provider_adapter_spec,
 )
+from metahub_shared.runtime.routing_policy import (
+    RoutingPriceFact,
+    TokenEstimate,
+    estimate_routing_candidate_cost,
+)
 from metahub_shared.runtime.webhooks import build_webhook_event
+from metahub_shared.runtime.workspace_fx import resolve_workspace_fx_rate
 
 from metahub_control.audit import (
     AuditRecord,
@@ -1349,7 +1356,8 @@ def _template_info(
         tenant_id=str(row["tenant_id"]),
         template_code=code,  # type: ignore[arg-type]
         name=str(row["name"]),
-        description=str(row["description"]),
+        description=("在保留安全检查的前提下，每次请求按最新生效价格和预计用量，自动选择当前合格模型中成本最低的模型。"
+                     if code == "low_cost_mode" else str(row["description"])),
         category=str(row["category"]),
         scenario=str(row["scenario"]),
         version=int(row["version"]),
@@ -1933,13 +1941,15 @@ def _plan_low_cost(
         # 能力 JSON 或 adapter 分类损坏时只淘汰该候选，不能猜测为可路由上游。
         except (TypeError, json.JSONDecodeError, ProviderAdapterSpecError):
             continue
-        if (spec.classification == MIGRATION_PLATFORM
-            or spec.classification not in {MODEL_VENDOR_CLOUD, LOCAL_COMPATIBLE, CUSTOMER_MANAGED}):
+        if spec.classification == MIGRATION_PLATFORM or spec.classification not in {
+            MODEL_VENDOR_CLOUD,
+            LOCAL_COMPATIBLE,
+            CUSTOMER_MANAGED,
+        }:
             continue
         # 模板用于低成本对话；向量调用仍由 Gateway 的目标模型能力校验独立拦截。
         if not isinstance(capabilities, dict) or any(
-            capabilities.get(name) is not True
-            for name in ("chat", "stream")
+            capabilities.get(name) is not True for name in ("chat", "stream")
         ):
             continue
         credential_rows = connection.execute(
@@ -1983,64 +1993,66 @@ def _plan_low_cost(
         # 新鲜 unhealthy 是硬阻断；unknown/stale 仅作为精确预览 warning 冻结。
         if health_warning == "provider_unhealthy":
             continue
-        price_row = connection.execute(
-            """
-             SELECT price_plan_id,
-                    CAST(input_price_per_1k AS TEXT) AS input_price_per_1k,
-                    CAST(output_price_per_1k AS TEXT) AS output_price_per_1k,
-                    CAST(cache_price_per_1k AS TEXT) AS cache_price_per_1k,
-                    currency,price_schema_version,effective_from,source
-            FROM model_price_plans
-            WHERE tenant_id=? AND model_id=? AND currency='CNY'
-              AND julianday(effective_from)<=julianday(?)
-            ORDER BY julianday(effective_from) DESC,created_at DESC,price_plan_id DESC
-            LIMIT 1
-            """,
-            (tenant_id, row["model_id"], _to_wire_time(as_of)),
-        ).fetchone()
+        price_row = None
         try:
-            if price_row is not None:
-                input_price = _stored_money(price_row["input_price_per_1k"])
-                output_price = _stored_money(price_row["output_price_per_1k"])
-                cache_price = _stored_money(price_row["cache_price_per_1k"])
-                price_identity = _resource_hash(
-                    "price_plan",
-                    {
-                        "input_price_per_1k": format(input_price, "f"),
-                        "output_price_per_1k": format(output_price, "f"),
-                        "cache_price_per_1k": format(cache_price, "f"),
-                        "currency": price_row["currency"],
-                        "schema": price_row["price_schema_version"],
-                        "effective_from": price_row["effective_from"],
-                        "source": price_row["source"],
-                    },
+            rate = resolve_workspace_cost_rate(
+                connection,
+                tenant_id=tenant_id,
+                model_id=str(row["model_id"]),
+                observed_at=_to_wire_time(as_of),
+            )
+            if rate is None:
+                continue
+            fx = (
+                resolve_workspace_fx_rate(
+                    connection,
+                    tenant_id=tenant_id,
+                    observed_at=_to_wire_time(as_of),
                 )
-            else:
-                # SQLite NUMERIC 列会把合法小数返回为 float；上方先 CAST 为数据库
-                # 十进制文本，再用 _stored_money 的定点语法验证，避免全部误判不可用。
-                # 目录价回退仍必须是带 schema 的 CNY 定点事实。
-                if row["currency"] != "CNY" or not row["price_schema_version"]:
-                    continue
-                input_price = _stored_money(row["input_price_per_1k"])
-                output_price = _stored_money(row["output_price_per_1k"])
-                cache_price = _stored_money(row["cache_price_per_1k"])
-                price_identity = _resource_hash(
-                    "model_catalog_price",
-                    {
-                        "input_price_per_1k": format(input_price, "f"),
-                        "output_price_per_1k": format(output_price, "f"),
-                        "cache_price_per_1k": format(cache_price, "f"),
-                        "currency": row["currency"],
-                        "schema": row["price_schema_version"],
-                    },
-                )
-        # 损坏或负数金额只淘汰当前候选，响应不得携带数据库价格原文。
-        except ValueError:
+                if rate.currency == "USD"
+                else None
+            )
+            price = RoutingPriceFact(
+                model_id=str(row["model_id"]),
+                source=rate.source,
+                input_price_per_1k=rate.input_price_per_1k,
+                output_price_per_1k=rate.output_price_per_1k,
+                cache_price_per_1k=rate.cache_price_per_1k,
+                currency=rate.currency,
+                price_schema_version=rate.price_schema_version,
+                comparison_currency="CNY" if rate.currency == "USD" else None,
+                comparison_fx_rate=(fx.usd_to_cny if fx else Decimal("7.2"))
+                if rate.currency == "USD"
+                else None,
+                comparison_fx_rate_version=(fx.version_id if fx else "legacy-deployment-v1")
+                if rate.currency == "USD"
+                else None,
+            )
+            # Preview uses a stated reference workload, never a permanent winner.
+            # Runtime repeats this quote with the real request's token estimate.
+            cost = estimate_routing_candidate_cost(price, TokenEstimate(1000, 1000, False))
+            if cost is None:
+                continue
+            price_identity = _resource_hash(
+                "cost_reference_price",
+                {
+                    "source": rate.source,
+                    "schema": rate.price_schema_version,
+                    "comparison_cost_cny": str(cost[1]),
+                },
+            )
+            if rate.source == "price_plan":
+                price_row = connection.execute(
+                    "SELECT price_plan_id FROM model_price_plans "
+                    "WHERE tenant_id=? AND price_plan_id=?",
+                    (tenant_id, rate.source_id),
+                ).fetchone()
+        except (ValueError, sqlite3.IntegrityError):
             continue
         warnings = (health_warning,) if health_warning is not None else ()
         candidates.append(
             (
-                input_price + output_price + cache_price,
+                cost[1],
                 str(row["model_id"]),
                 row,
                 price_row,
@@ -2115,7 +2127,6 @@ def _plan_low_cost(
             row["display_name"] or row["model_alias"] or row["upstream_model_name"]
         ),
     )
-
 
 def _plan_high_security(
     connection: sqlite3.Connection,

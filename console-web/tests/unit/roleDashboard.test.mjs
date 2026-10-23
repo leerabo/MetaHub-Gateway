@@ -438,7 +438,7 @@ test("developer shell uses PAGE-092 and does not render the legacy dashboard or 
     roleDashboardState: { state: "ok", ...sanitized },
   });
   assert.match(container.innerHTML, /workspace-console-experience-panel/);
-  assert.match(container.innerHTML, /workspace-console-overview-title/);
+  assert.match(container.innerHTML, /id="console-main-title"/);
   assert.doesNotMatch(container.innerHTML, /data-role-dashboard-root|角色首页|总览 Dashboard|Top 模型|provider-health-dashboard/);
 });
 

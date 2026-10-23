@@ -678,7 +678,7 @@ function renderPolicyRow(policy, activeModels, disabled, canWrite) {
   return `
     <div class="policy-row" role="row">
       <span data-label="优先级 / 名称" class="policy-row-name">
-        <strong>${escapeHtml(policy?.priority ?? "-")} · ${escapeHtml(policy?.name ?? "-")}</strong>
+        <strong>${escapeHtml(policy?.priority ?? "-")} · ${escapeHtml(displayPolicyName(policy?.name))}</strong>
         <em>${escapeHtml(policy?.description || "未填写说明")}</em>
       </span>
       <span data-label="状态">
@@ -695,6 +695,13 @@ function renderPolicyRow(policy, activeModels, disabled, canWrite) {
       </span>
     </div>
   `;
+}
+
+// 内置策略名称可能带有后端短 ID；页面保留业务名称，避免把实现细节当成规则名称。
+function displayPolicyName(value) {
+  const name = String(value ?? "").trim();
+  if (!name) return "-";
+  return name.replace(/\s*\[[a-f0-9]{6,16}\]\s*$/i, "").trim() || "-";
 }
 
 function renderPolicyConditionSummary(expression) {

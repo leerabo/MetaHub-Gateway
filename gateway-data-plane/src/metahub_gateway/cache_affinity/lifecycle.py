@@ -185,17 +185,23 @@ def recover_cache_affinity_state(config: AppConfig) -> dict[str, int]:
         "bindings_rebuilt": 0,
     }
     connection: sqlite3.Connection | None = None
+    failure_stage = "connect"
     try:
         connection = connect_database(config.database_url)
+        failure_stage = "reconcile"
         summary["reconciled"] += _reconcile_all_batches(connection)
+        failure_stage = "interrupt_attempts"
         summary["interrupted_attempts"] = _interrupt_all_attempts(connection)
+        failure_stage = "interrupt_streams"
         summary["interrupted_streams"] = _interrupt_all_streams(connection)
+        failure_stage = "reconcile_interrupted"
         summary["reconciled"] += _reconcile_all_batches(connection)
+        failure_stage = "rebuild_bindings"
         connection.execute("BEGIN IMMEDIATE")
         _assert_no_pending_selections(connection)
         summary["bindings_rebuilt"] = _rebuild_binding_activity(connection)
         connection.commit()
-    except Exception:
+    except Exception as error:
         # 启动恢复必须失败关闭，但外层只能看到固定错误，不能泄露数据库路径或 SQL 参数。
         if connection is not None:
             connection.rollback()
@@ -206,6 +212,13 @@ def recover_cache_affinity_state(config: AppConfig) -> dict[str, int]:
                 "request_id": "startup",
                 "trace_id": "startup",
                 "error_code": "gateway.cache_affinity_unavailable",
+                "exception_type": type(error).__name__,
+                "payload": {
+                    "failure_stage": failure_stage,
+                    "database_error_code": getattr(error, "code", None)
+                    if getattr(error, "code", None) in {"db.pool_exhausted", "db.connection_failed"}
+                    else None,
+                },
             },
         )
         # 启动异常不串联底层 cause，避免 ASGI 启动日志输出数据库路径或 SQL 参数。

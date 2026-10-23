@@ -17,6 +17,8 @@ import {
   availableSessionRiskActions,
   sessionRiskReasonCodes,
 } from "../../lib/sessionRisks.js";
+import { workspaceConsoleSessionFromShell } from "../../lib/workspaceConsoleSession.js";
+import { workspaceResourcePageOwner } from "../../lib/workspaceResourcePage.js";
 
 // 页面只保存冻结查询白名单；空 status 代表后端默认 high_risk,frozen，而不是“没有风险”。
 const NAVIGATION_ID = "session-risks";
@@ -41,6 +43,9 @@ export function sessionRiskPageOwner(
   consoleShellState,
   { requireManage = false } = {},
 ) {
+  if (consoleShellState?.workspaceNavigationContract === true) {
+    return workspaceSessionRiskOwner(authContext, consoleShellState, requireManage);
+  }
   const identity = authorizationIdentitySnapshot(authContext, PERMISSIONS.SESSION_RISK_READ);
   const tenantId = mirroredTenantId(authContext);
   const navigation = consoleShellState?.navigation;
@@ -87,6 +92,30 @@ export function sessionRiskPageOwner(
     navigation: NAVIGATION_ID,
     navigationOwner,
     canManage,
+  });
+}
+
+function workspaceSessionRiskOwner(authContext, shell, requireManage) {
+  const session = workspaceConsoleSessionFromShell(shell);
+  if (!session
+    || authContext?.permission_fingerprint !== session.context.permission_fingerprint
+    || authContext?.permission_revision !== session.context.permission_revision
+    || authContext?.membership_revision !== session.context.membership_revision
+    || JSON.stringify(permissionCodesFromAuthContext(authContext))
+      !== JSON.stringify(permissionCodesFromAuthContext(session.context))) return null;
+  const resource = workspaceResourcePageOwner(session, shell, {
+    navigationId: NAVIGATION_ID,
+    permissions: requireManage
+      ? [PERMISSIONS.SESSION_RISK_READ, PERMISSIONS.SESSION_RISK_MANAGE]
+      : [PERMISSIONS.SESSION_RISK_READ],
+  });
+  if (!resource) return null;
+  return Object.freeze({
+    identity: JSON.stringify([resource.key, PERMISSIONS.SESSION_RISK_READ]),
+    workspaceId: session.owner.workspaceId,
+    navigation: NAVIGATION_ID,
+    navigationOwner: resource.key,
+    canManage: hasPermission(session.context, PERMISSIONS.SESSION_RISK_MANAGE),
   });
 }
 
@@ -617,13 +646,13 @@ export function isSessionRiskAbortError(error) {
 function keyFromOwner(owner) {
   if (
     !owner?.identity
-    || !owner?.tenantId
+    || (!owner?.tenantId && !owner?.workspaceId)
     || owner?.navigation !== NAVIGATION_ID
     || !owner?.navigationOwner
   ) return "";
   return JSON.stringify([
     owner.identity,
-    owner.tenantId,
+    owner.workspaceId ? ["workspace", owner.workspaceId] : ["legacy", owner.tenantId],
     owner.navigation,
     owner.navigationOwner,
     owner.canManage === true,

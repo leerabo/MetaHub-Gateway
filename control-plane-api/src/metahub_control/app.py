@@ -99,6 +99,7 @@ from .platform_gateway import router as platform_gateway_router
 from .platform_growth import install_platform_growth_scheduler
 from .platform_growth import router as platform_growth_router
 from .platform_infrastructure import router as platform_infrastructure_router
+from .system_updates import router as system_updates_router
 from .platform_jobs import install_platform_job_supervisor
 from .platform_jobs import router as platform_jobs_router
 from .platform_jobs.supervisor import SchedulerInstallerBinding
@@ -344,6 +345,7 @@ app.include_router(platform_growth_router)
 app.include_router(platform_access_router)
 app.include_router(platform_billing_router)
 app.include_router(platform_infrastructure_router)
+app.include_router(system_updates_router)
 app.include_router(platform_gateway_router)
 app.include_router(platform_jobs_router)
 app.include_router(payment_commerce_router)

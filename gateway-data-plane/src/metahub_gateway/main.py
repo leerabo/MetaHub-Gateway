@@ -16,6 +16,10 @@ def main() -> None:
         host="0.0.0.0",
         port=8000,
         reload=False,
+        # Raw access URLs may contain user credentials or prompt query parameters.
+        # Business events already provide the redacted request/error trace.
+        access_log=False,
+        proxy_headers=False,
     )
 
 

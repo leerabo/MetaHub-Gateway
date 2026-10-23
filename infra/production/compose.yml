@@ -1,0 +1,169 @@
+name: metahub-trial
+x-logs: &logs
+  driver: journald
+  options: {tag: "metahub/{{.Name}}"}
+x-backend: &backend
+  image: metahub/backend:${METAHUB_RELEASE:-2.0.0-trial.45}
+  build:
+    context: ../..
+    dockerfile: infra/production/python.Dockerfile
+    args:
+      RELEASE_VERSION: ${METAHUB_RELEASE:-2.0.0-trial.45}
+      BUILD_COMMIT: ${METAHUB_BUILD_COMMIT:?Prepare the release configuration first}
+  restart: unless-stopped
+  read_only: true
+  tmpfs: ["/tmp:size=256m,mode=1777"]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  logging: *logs
+  networks: [private, ingress, egress]
+  volumes:
+    - ${METAHUB_STATE_DIR:?}/backend/runtime.env:/run/secrets/runtime.env:ro
+    - ${METAHUB_STATE_DIR}/backend/tls:/run/tls:ro
+    - files:/app/.data
+  depends_on:
+    postgres: {condition: service_healthy}
+services:
+  postgres:
+    image: postgres:17-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: metahub_admin
+      POSTGRES_DB: metahub
+      POSTGRES_PASSWORD_FILE: /run/secrets/admin-password
+      # Migration manifests use binary ordering; OS-default locales can change
+      # aggregate hashes. Applies only to a newly initialized data volume.
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --auth-local=trust --encoding=UTF8 --locale=C
+    command: [postgres, -c, timezone=UTC, -c, ssl=on, -c, ssl_cert_file=/run/tls/postgres.crt, -c, ssl_key_file=/run/tls/postgres.key, -c, hba_file=/etc/postgresql/pg_hba.conf, -c, ident_file=/etc/postgresql/pg_ident.conf, -c, password_encryption=scram-sha-256, -c, shared_buffers=128MB, -c, max_connections=60, -c, max_locks_per_transaction=2048, -c, log_statement=none, -c, log_min_error_statement=panic, -c, log_min_messages=panic]
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      - pg_socket:/var/run/postgresql
+      - ${METAHUB_STATE_DIR}/postgres/admin-password:/run/secrets/admin-password:ro
+      - ${METAHUB_STATE_DIR}/postgres/app-password:/run/secrets/app-password:ro
+      - ${METAHUB_STATE_DIR}/postgres/tls:/run/tls:ro
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/10-app-role.sh:ro
+      - ./pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./pg_ident.conf:/etc/postgresql/pg_ident.conf:ro
+    networks: [private]
+    healthcheck:
+      # The image's temporary initialization server accepts Unix-socket
+      # connections before roles/init scripts finish, then shuts down. TCP
+      # becomes available only when the final server starts.
+      test: [CMD, pg_isready, -h, "127.0.0.1", -U, metahub_admin, -d, metahub]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    logging: *logs
+    security_opt: [no-new-privileges:true]
+  migrate:
+    <<: *backend
+    command: [migrate]
+    restart: "no"
+    profiles: [tools]
+  import-sqlite:
+    image: metahub/backend:${METAHUB_RELEASE:-2.0.0-trial.45}
+    entrypoint: [python, /app/tools/sqlite-to-postgres.py]
+    command: [--source, /migration/source.sqlite3, --snapshot, /tmp/upgraded.sqlite3, --target-secret-file, /migration/target.env, --report, /migration/import-report.json]
+    user: "999:999"
+    restart: "no"
+    read_only: true
+    tmpfs: ["/tmp:size=256m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging: *logs
+    networks: [private]
+    profiles: [tools]
+    volumes:
+      - pg_socket:/var/run/postgresql
+      - ${METAHUB_STATE_DIR}/migration:/migration
+    depends_on:
+      postgres: {condition: service_healthy}
+  first-owner:
+    <<: *backend
+    entrypoint: [python, /app/tools/bootstrap-owner.py]
+    command: []
+    restart: "no"
+    profiles: [tools]
+    logging: {driver: none}
+  control-api:
+    <<: *backend
+    command: [control]
+    volumes:
+      - ${METAHUB_STATE_DIR}/backend/runtime.env:/run/secrets/runtime.env:ro
+      - ${METAHUB_STATE_DIR}/backend/tls:/run/tls:ro
+      - files:/app/.data
+      - ${METAHUB_STATE_DIR}/updates:/run/system-update:ro
+      - ${METAHUB_STATE_DIR}/updates/requests:/run/system-update/requests
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --show-error, --max-time, "8", --cacert, /run/tls/ca.crt, --output, /dev/null, "https://control-api:8001/health/ready"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 120s
+  gateway:
+    <<: *backend
+    command: [gateway]
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --show-error, --max-time, "8", --cacert, /run/tls/ca.crt, --output, /dev/null, "https://gateway:8000/health/ready"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 120s
+  console:
+    image: metahub/console:${METAHUB_RELEASE:-2.0.0-trial.45}
+    build:
+      context: ../..
+      dockerfile: infra/production/console.Dockerfile
+      args: {RELEASE_VERSION: "${METAHUB_RELEASE:-2.0.0-trial.45}"}
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - ${METAHUB_STATE_DIR}/backend/tls/ca.crt:/run/tls/ca.crt:ro
+    networks: [ingress]
+    logging: *logs
+    depends_on:
+      control-api: {condition: service_healthy}
+      gateway: {condition: service_healthy}
+    healthcheck:
+      test: [CMD-SHELL, "wget -q -O /dev/null http://127.0.0.1:8080/identity.html"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+  edge:
+    image: caddy:2-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    environment:
+      METAHUB_DOMAIN: ${METAHUB_DOMAIN:?}
+      METAHUB_TLS_POLICY: ${METAHUB_TLS_POLICY:-}
+    ports:
+      # Loopback-only until the operator explicitly publishes HTTPS.
+      - "${METAHUB_BIND_IP:-127.0.0.1}:${METAHUB_HTTP_PORT:-80}:80"
+      - "${METAHUB_BIND_IP:-127.0.0.1}:${METAHUB_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${METAHUB_STATE_DIR}/edge:/run/tls:ro
+      - ${METAHUB_STATE_DIR}/caddy-data:/data
+      - ${METAHUB_STATE_DIR}/caddy-config:/config
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    networks: [ingress, egress]
+    logging: *logs
+networks:
+  private: {internal: true}
+  ingress:
+    internal: true
+    ipam:
+      config: [{subnet: 172.30.94.0/24}]
+  egress: {}
+volumes:
+  postgres: {}
+  files: {}
+  pg_socket: {}

@@ -1204,13 +1204,16 @@ def list_memberships(
             touch=True,
         )
         manager = context.membership_role in _MANAGER_ROLES
-        # Removed members are revoked identities, not active organization
-        # members. Keep their immutable audit projection in storage, but never
-        # return it to the organization directory or invite workflow.
+        # Managers can inspect pending identities, including service accounts
+        # that cannot open a browser session. Removed identities remain in the
+        # immutable audit projection and stay out of the directory.
         owner_filter = (
-            "member.workspace_id=? AND member.status='active'"
+            "member.workspace_id=? AND member.status IN ('active','pending')"
             if manager
-            else ("member.workspace_id=? AND member.workspace_membership_id=? AND member.status='active'")
+            else (
+                "member.workspace_id=? AND member.workspace_membership_id=? "
+                "AND member.status='active'"
+            )
         )
         owner_values: tuple[object, ...] = (
             (context.workspace_id,) if manager else (context.workspace_id, context.membership_id)
@@ -1219,12 +1222,17 @@ def list_memberships(
         search_clause = ""
         search_values: tuple[object, ...] = ()
         if normalized_search:
-            search_clause = " AND (lower(account.display_name) LIKE ? OR lower(account.email_normalized) LIKE ?)"
+            search_clause = (
+                " AND (lower(account.display_name) LIKE ? "
+                "OR lower(account.email_normalized) LIKE ?)"
+            )
             pattern = f"%{normalized_search}%"
             search_values = (pattern, pattern)
         total = int(
             connection.execute(
-                f"SELECT COUNT(*) FROM workspace_memberships member JOIN global_accounts account ON account.account_id=member.account_id WHERE {owner_filter}{search_clause}",
+                "SELECT COUNT(*) FROM workspace_memberships member "
+                "JOIN global_accounts account ON account.account_id=member.account_id "
+                f"WHERE {owner_filter}{search_clause}",
                 (*owner_values, *search_values),
             ).fetchone()[0]
         )
@@ -1294,7 +1302,10 @@ def update_membership(
         if target["role_code"] == "owner" or target["role_code"] == "service_account":
             raise ApiError("membership.update_invalid")
         next_role = target["role_code"] if role is None else _delegable_role(role)
-        next_status = "disabled" if remove else (target["status"] if status is None else _membership_status(status))
+        next_status = (
+            "disabled" if remove
+            else (target["status"] if status is None else _membership_status(status))
+        )
         if context.membership_role == "admin" and next_role not in _DELEGABLE_ROLES:
             raise ApiError("workspace_session.permission_denied")
         # DELETE is an idempotent cleanup boundary. A previous release may have
@@ -2227,14 +2238,18 @@ def _authenticate_workspace(
         operational_select = "operational.status operational_status,"
         operational_join = (
             "LEFT JOIN workspace_operational_states operational "
-            "ON operational.workspace_id=member.workspace_id "
-            "AND operational.tenant_id=member.tenant_id"
+            "ON operational.workspace_id=session.membership_workspace_id "
+            "AND operational.tenant_id=session.membership_tenant_id"
         )
     else:
         operational_select = "'active' operational_status,"
         operational_join = ""
+    # Bound join planning to two small groups while retaining one statement snapshot
+    # and every live identity/revision check. The token filter materializes at most
+    # one session; no authentication or permission result is cached.
     row = connection.execute(
         f"""
+        WITH session_identity AS MATERIALIZED (
         SELECT session.*,
           member.revision current_membership_revision,member.role_code,
           member.status membership_status,member.account_id membership_account_id,
@@ -2242,8 +2257,17 @@ def _authenticate_workspace(
           member.legacy_user_id,legacy_user.status user_status,legacy_user.role legacy_role,
           legacy_user.email,legacy_user.display_name,workspace.status workspace_status,
           workspace.revision current_workspace_revision,workspace.kind,
-          organization.name workspace_name,
-          organization.slug_normalized,binding.status binding_status,
+          binding.status binding_status
+        FROM workspace_sessions session
+        JOIN workspace_memberships member ON member.workspace_membership_id=session.membership_id
+        JOIN users legacy_user ON legacy_user.tenant_id=member.tenant_id
+          AND legacy_user.user_id=member.legacy_user_id
+        JOIN workspaces workspace ON workspace.workspace_id=member.workspace_id
+        JOIN workspace_tenant_bindings binding
+          ON binding.workspace_id=member.workspace_id AND binding.tenant_id=member.tenant_id
+        WHERE session.token_hmac=?
+        )
+        SELECT session.*,organization.name workspace_name,organization.slug_normalized,
           account.status account_status,account.login_enabled,
           account.session_revision current_account_session_revision,
           global_session.status global_session_status,
@@ -2253,20 +2277,13 @@ def _authenticate_workspace(
           tenant.status tenant_status,tenant.slug tenant_slug,tenant.name tenant_name,
           {operational_select}
           1 operational_projection_version
-        FROM workspace_sessions session
-        JOIN workspace_memberships member ON member.workspace_membership_id=session.membership_id
-        JOIN users legacy_user ON legacy_user.tenant_id=member.tenant_id
-          AND legacy_user.user_id=member.legacy_user_id
-        JOIN workspaces workspace ON workspace.workspace_id=member.workspace_id
-        JOIN workspace_tenant_bindings binding
-          ON binding.workspace_id=member.workspace_id AND binding.tenant_id=member.tenant_id
-        JOIN global_accounts account ON account.account_id=member.account_id
+        FROM session_identity session
+        JOIN global_accounts account ON account.account_id=session.membership_account_id
         JOIN global_sessions global_session ON global_session.session_id=session.global_session_id
-        JOIN tenants tenant ON tenant.tenant_id=member.tenant_id
+        JOIN tenants tenant ON tenant.tenant_id=session.membership_tenant_id
         {operational_join}
         JOIN organization_profiles organization
-          ON organization.workspace_id=workspace.workspace_id
-        WHERE session.token_hmac=?
+          ON organization.workspace_id=session.membership_workspace_id
         """,
         (_session_hmac(config, "token", session_token),),
     ).fetchone()

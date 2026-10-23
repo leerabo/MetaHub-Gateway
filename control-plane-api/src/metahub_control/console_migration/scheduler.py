@@ -187,15 +187,17 @@ async def _coordinator_loop(
             # deliberately age based rather than cancellation based: scheduler
             # workers may be awaiting a database thread and must finish cleanup.
             now = monotonic()
-            retire_key = next(
-                (
-                    key for key, child in sorted(
-                        active.items(), key=lambda item: item[1].started_at
-                    )
-                    if now - child.started_at >= SQLITE_CONTEXT_MAX_AGE_SECONDS
-                ),
-                None,
-            )
+            retire_key = None
+            if _sqlite_scheduler_mode(config):
+                retire_key = next(
+                    (
+                        key for key, child in sorted(
+                            active.items(), key=lambda item: item[1].started_at
+                        )
+                        if now - child.started_at >= SQLITE_CONTEXT_MAX_AGE_SECONDS
+                    ),
+                    None,
+                )
             if retire_key is not None:
                 await _stop_active(app, replica_code, active, retire_key, stats)
             if bindings:
@@ -280,7 +282,12 @@ async def _coordinator_loop(
                     (index for index, queue in enumerate(queues) if queue.code == lease.queue_code),
                     0,
                 )
-                queue_cursors[binding.scheduler_code] = (queue_index + 1) % len(queues)
+                # queue_index is relative to this pass's rotated ordering. Keep
+                # advancing the original cursor after a lease is lost, otherwise
+                # repeated expiry can continually select the same few queues.
+                queue_cursors[binding.scheduler_code] = (
+                    queue_cursors.get(binding.scheduler_code, 0) + queue_index + 1
+                ) % len(queues)
                 stats.accepted_count += 1
                 stats.persisted_count += 1
             _publish_active_state(app, active)

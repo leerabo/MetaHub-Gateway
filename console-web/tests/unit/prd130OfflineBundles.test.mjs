@@ -246,7 +246,7 @@ test("Platform offline exchange loads, retries one intent, approves and rejects 
 
   assert.equal(await controller.mount(), true);
   assert.match(root.innerHTML, /Offline exchange/u);
-  assert.match(root.innerHTML, /2 pending/u);
+  assert.match(root.innerHTML, /2 条待处理/u);
   assert.match(root.innerHTML, /data-platform-offline-decision-form/u);
   assert.doesNotMatch(
     root.innerHTML,
@@ -264,7 +264,7 @@ test("Platform offline exchange loads, retries one intent, approves and rejects 
   assert.equal(await controller.decideOfflineBundle(approve), true);
   assert.equal(decisionCalls[0].idempotencyKey, decisionCalls[1].idempotencyKey);
   assert.equal(keySequence, 1);
-  assert.match(root.innerHTML, /1 pending/u);
+  assert.match(root.innerHTML, /1 条待处理/u);
 
   assert.equal(await controller.decideOfflineBundle({
     requestId: SECOND_REQUEST_ID,
@@ -275,7 +275,7 @@ test("Platform offline exchange loads, retries one intent, approves and rejects 
   }), true);
   assert.notEqual(decisionCalls[1].idempotencyKey, decisionCalls[2].idempotencyKey);
   assert.equal(keySequence, 2);
-  assert.match(root.innerHTML, /No offline exchange requests are pending/u);
+  assert.match(root.innerHTML, /暂无待处理的离线交换请求/u);
   assert.doesNotMatch(root.innerHTML, /data-platform-offline-decision-form/u);
 
   navigationEnabled = false;

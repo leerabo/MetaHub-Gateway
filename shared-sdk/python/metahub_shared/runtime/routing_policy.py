@@ -1459,6 +1459,26 @@ def _normalize_quality_prices(
     return prices, costs
 
 
+def estimate_routing_candidate_cost(
+    price: RoutingPriceFact,
+    token_estimate: TokenEstimate,
+) -> tuple[Decimal, Decimal] | None:
+    """Quote one candidate using the same token/currency contract as cost-first aliases.
+
+    Missing prices or conversion evidence are ineligible, never a free model. This
+    single-candidate entry point also lets project templates compare the entire
+    catalog before bounding the per-request fallback plan.
+    """
+    _validate_price_fact(price)
+    _validate_token_estimate(token_estimate)
+    if price.source == "missing":
+        return None
+    original = _estimated_cost(price, token_estimate)
+    costs, _details = _comparison_costs({price.model_id: price}, {price.model_id: original})
+    if costs is None:
+        return None
+    return original, costs[price.model_id]
+
 def _comparison_costs(
     prices: Mapping[str, RoutingPriceFact],
     costs: Mapping[str, Decimal],
@@ -1774,6 +1794,7 @@ __all__ = [
     "complete_cost_routing",
     "complete_quality_cost_routing",
     "estimate_request_tokens",
+    "estimate_routing_candidate_cost",
     "estimate_token_shape",
     "evaluate_routing_candidates_phase_one",
     "quality_component_bps",

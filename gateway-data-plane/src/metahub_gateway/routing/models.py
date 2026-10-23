@@ -1041,10 +1041,10 @@ def _load_routing_prices(
     model_ids: tuple[str, ...],
     as_of: datetime,
 ) -> tuple[RoutingPriceFact, ...]:
-    """只在 cost 至少两条候选阶段读取同一 as_of 的 Workspace ProviderCostRate。"""
+    """读取同一 as_of 的成本价格；项目模板也需要校验唯一候选是否有价。"""
 
-    # shared 只会在至少两条 cost eligible 候选时触发价格读取，单候选无需比较。
-    if len(model_ids) < 2:
+    # 普通别名仅在多候选时比较价格；动态模板也读取单候选价格以排除无价模型。
+    if not model_ids:
         raise ValueError("routing price candidate count invalid")
     facts: list[RoutingPriceFact] = []
     as_of_text = _to_db_time(as_of)

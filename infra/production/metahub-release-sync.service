@@ -1,0 +1,11 @@
+[Unit]
+Description=Check and verify MetaHub GitHub releases
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /opt/metahub/scripts/deploy/github-releases.py --config /etc/metahub/updater.json
+UMask=0077
+NoNewPrivileges=true

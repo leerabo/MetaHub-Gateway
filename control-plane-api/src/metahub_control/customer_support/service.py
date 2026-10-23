@@ -1135,8 +1135,9 @@ def process_attachment_scans(
         connection.close()
         raise ApiError("support.attachment_unavailable") from None
     finally:
-        if not connection.in_transaction:
-            connection.close()
+        # PostgreSQL opens a transaction for SELECT too. The scan jobs are
+        # materialized; retaining that read transaction leaks its pool checkout.
+        connection.close()
     handled = 0
     for job in jobs:
         outcome = "unavailable"

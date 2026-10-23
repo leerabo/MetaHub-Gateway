@@ -14,6 +14,7 @@ import {
   PERMISSIONS,
 } from "../../lib/permissions.js";
 import { workspaceResourcePageOwner } from "../../lib/workspaceResourcePage.js";
+import { workspaceConsoleSessionFromShell } from "../../lib/workspaceConsoleSession.js";
 
 // 导航 ID 同时进入后端 target_section 和页面 owner，手写其他 hash 不能复用文件状态。
 const NAVIGATION_ID = "files";
@@ -47,6 +48,18 @@ export function fileWriteIdentitySnapshot(authContext) {
  * 前端 owner 只阻止无权预取和迟到回写，GET/POST 仍由 Control API 独立执行 RBAC 与 tenant 条件。
  */
 export function filePageOwner(authContext, consoleShellState, { requireWrite = false, session } = {}) {
+  // Renderers receive the shell projection, while request handlers hold the live session.
+  // Resolve both through the same checked workspace owner; never fall back to a legacy identity.
+  if (session === undefined && consoleShellState?.workspaceNavigationContract === true) {
+    const current = workspaceConsoleSessionFromShell(consoleShellState);
+    if (!current
+      || authContext?.permission_fingerprint !== current.context.permission_fingerprint
+      || authContext?.permission_revision !== current.context.permission_revision
+      || authContext?.membership_revision !== current.context.membership_revision
+      || JSON.stringify(permissionCodesFromAuthContext(authContext))
+        !== JSON.stringify(permissionCodesFromAuthContext(current.context))) return null;
+    return filePageOwner(current.context, consoleShellState, { requireWrite, session: current });
+  }
   if (session !== undefined) {
     const permissions = [PERMISSIONS.FILE_READ, ...(requireWrite ? [PERMISSIONS.FILE_WRITE] : [])];
     const owner = workspaceResourcePageOwner(session, consoleShellState, { navigationId: NAVIGATION_ID, permissions });

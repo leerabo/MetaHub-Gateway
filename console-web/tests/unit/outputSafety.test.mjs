@@ -274,7 +274,7 @@ test("FinOps exposes only fixed dispute badge and trusts reversal eligibility fl
   }, auth);
 
   assert.match(html, /输出安全争议待复核 \/ 可冲正|输出安全争议待复核，可冲正/);
-  assert.match(html, new RegExp(entry.output_safety_dispute.output_safety_scan_id));
+  assert.doesNotMatch(html, new RegExp(entry.output_safety_dispute.output_safety_scan_id));
   assert.doesNotMatch(html, /MUST_NOT_RENDER_FINOPS_RULE/);
 
   const ineligibleHtml = renderFinOpsLedger({

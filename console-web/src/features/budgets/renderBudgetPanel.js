@@ -21,7 +21,7 @@ const PERIOD_LABELS = { day: "每日", month: "每月", year: "每年" };
 
 // 固定层级标签只负责展示，预算冲突顺序和 deny-wins 结论必须使用后端 aggregate。
 const SCOPE_LABELS = {
-  tenant: "租户",
+  tenant: "组织",
   project: "项目",
   application: "应用",
   virtual_key: "调用 KEY",
@@ -56,7 +56,8 @@ export function renderBudgetPanel(budgetState, authContext, virtualKeysState, pr
       ${renderFeedback(budgetState.feedback)}
     </div>
     ${canWrite ? renderBudgetForm(projectState, environmentState) : renderReadOnlyNotice()}
-    ${renderRuleTable(rules, canWrite, rulesPayload.total ?? rules.length, budgetState.ruleOffset ?? 0)}
+    ${renderBudgetAlerts(rules)}
+    ${renderBudgetTables(rules, canWrite, projectState)}
     ${renderPeoplePicker(budgetState)}
     ${budgetState.selectedPerson ? renderScopeChain(statuses, aggregate, budgetState.selectedPerson, budgetState.statusError) : ""}
   `;
@@ -361,6 +362,7 @@ function renderBudgetForm(projectState, environmentState) {
     <dialog class="budget-rule-dialog" id="budget-rule-dialog" aria-labelledby="budget-dialog-title">
       <div class="budget-dialog-header"><h3 id="budget-dialog-title">设置成本预算</h3><button type="button" data-budget-close-form aria-label="关闭预算设置">关闭</button></div>
       <p>选择适用对象和周期，再设置金额与启用时间。同一对象可分别设置日、月、年上限。</p>
+      <p class="budget-tree-hint">同一环境、同一周期内，组织预算不能小于项目预算之和，项目预算不能小于应用预算之和。仅告警允许超支；选择“阻断”会在后续调用前检查剩余额度。</p>
       <form class="budget-rule-form" id="budget-rule-form">
       <label>
         <span>环境</span>
@@ -373,7 +375,7 @@ function renderBudgetForm(projectState, environmentState) {
       <label>
         <span>维度</span>
         <select name="scopeType">
-          <option value="tenant">租户</option>
+          <option value="tenant">组织</option>
           <option value="project">项目</option>
           <option value="application">应用</option>
           <option value="virtual_key">员工调用凭证</option>
@@ -382,7 +384,7 @@ function renderBudgetForm(projectState, environmentState) {
       <label>
         <span>具体对象</span>
         <select name="scopeId">
-          <option value="" data-budget-scope-option="tenant">租户预算不需要选择</option>
+          <option value="" data-budget-scope-option="tenant">组织预算不需要选择</option>
           ${projects
             .map((item) => `<option value="${escapeAttribute(item.project_id)}" data-budget-scope-option="project" hidden disabled>项目 · ${escapeHtml(item.name)} (${escapeHtml(item.project_code ?? "-")})</option>`)
             .join("")}
@@ -462,26 +464,102 @@ function renderReadOnlyNotice() {
 /**
  * 渲染预算规则表，展示配置和今日状态的对应关系。
  */
-function renderRuleTable(rules, canWrite, total, offset) {
+function renderRuleTable(rules, canWrite, title, content = null, createScope = null) {
   return `
-    <section class="budget-rules-section" aria-label="已设置的预算">
-      <div class="budget-rules-heading"><h3>已设置的预算</h3><p>共 ${escapeHtml(total)} 条规则，每页最多 10 条；停用和待启用的规则不会限制调用。</p></div>
-    <div class="budget-rule-table" role="table" aria-label="预算规则">
+    <section class="budget-rules-section" aria-label="${escapeAttribute(title)}">
+      <div class="budget-rules-heading"><h3>${escapeHtml(title)}</h3><p>${rules.length} 条规则；停用和待启用的规则不会限制调用。</p>
+        ${canWrite && createScope ? `<button type="button" class="budget-add-button budget-section-add" data-budget-open-form="${escapeAttribute(createScope)}">＋ 新增人员预算</button>` : ""}
+      </div>
+    <div class="budget-rule-table" role="table" aria-label="预算规则" data-has-actions="${canWrite}">
       <div class="budget-rule-row budget-rule-head" role="row">
         <span>适用范围</span>
         <span>预算与使用</span>
         <span>启用时间 / 状态</span>
         <span>达到上限时</span>
+        ${canWrite ? '<span>操作</span>' : ''}
       </div>
-      ${rules.length ? rules.map((item) => renderRuleRow(item, canWrite)).join("") : renderEmptyRuleRow()}
+      ${content ?? (rules.length ? rules.map((item) => renderRuleRow(item, canWrite)).join("") : renderEmptyRuleRow())}
     </div>
-    ${total > 10 ? `<div class="budget-rule-pagination">
-      <button type="button" data-budget-rule-page="-1" ${offset === 0 ? "disabled" : ""}>上一页</button>
-      <span>${escapeHtml(offset + 1)}–${escapeHtml(Math.min(offset + 10, total))} / ${escapeHtml(total)}</span>
-      <button type="button" data-budget-rule-page="1" ${offset + 10 >= total ? "disabled" : ""}>下一页</button>
-    </div>` : ""}
     </section>
   `;
+}
+
+/** Group by authoritative environment and parent scopes, including parents without caps. */
+function renderBudgetAlerts(rules) {
+  const alerts = rules.filter((rule) => rule.status !== "disabled"
+    && ["threshold_reached", "exhausted"].includes(rule.today_status?.status));
+  if (!alerts.length) return "";
+  return `<section class="budget-visible-alerts" role="status" aria-label="预算告警">
+    <h3>预算告警 · ${alerts.length} 条</h3>
+    <ul>${alerts.map((rule) => `<li><strong>${escapeHtml(cleanScopeLabel(rule.scope_label))} · ${escapeHtml(PERIOD_LABELS[rule.budget_period] ?? "每日")}</strong>
+      <span>已用 ${escapeHtml(rule.today_status.effective_spend_cny ?? "-")} / ${escapeHtml(rule.daily_budget_cny)} CNY，${escapeHtml(STATUS_LABELS[rule.today_status.status])}；告警阈值 ${escapeHtml(rule.warning_threshold_percent)}%。</span>
+      <span>${rule.exhausted_action === "alert_only" ? "当前仅告警，超出上限仍允许调用；要限制后续调用，请编辑为“阻断”。" : "达到上限后阻断后续调用。"}</span></li>`).join("")}</ul>
+  </section>`;
+}
+
+function renderBudgetTables(rules, canWrite, projectState) {
+  const business = rules.filter((rule) => rule.scope_type !== "virtual_key");
+  const personal = rules.filter((rule) => rule.scope_type === "virtual_key");
+  const environments = new Map();
+  for (const rule of business) {
+    const environmentId = rule.environment_id ?? rule.environment ?? "default";
+    if (!environments.has(environmentId)) environments.set(environmentId, []);
+    environments.get(environmentId).push(rule);
+  }
+  const tree = [...environments.values()].map((environmentRules) => {
+    const organizationRules = environmentRules.filter((rule) => rule.scope_type === "tenant");
+    const projects = new Map();
+    for (const rule of environmentRules.filter((item) => item.scope_type !== "tenant")) {
+      const parentId = rule.scope_type === "project" ? rule.scope_id : rule.budget_scope?.parent_scope_id;
+      // Missing metadata is shown explicitly; never infer a binding from a shared name.
+      const projectId = parentId ?? "unresolved";
+      if (!projects.has(projectId)) projects.set(projectId, { rules: [], applications: new Map() });
+      const project = projects.get(projectId);
+      if (rule.scope_type === "project") project.rules.push(rule);
+      else {
+        if (!project.applications.has(rule.scope_id)) project.applications.set(rule.scope_id, []);
+        project.applications.get(rule.scope_id).push(rule);
+      }
+    }
+    for (const project of projectState?.projects ?? []) {
+      if (!projects.has(project.project_id)) {
+        projects.set(project.project_id, { rules: [], applications: new Map() });
+      }
+    }
+    const children = [...projects].map(([id, project]) => {
+      // Include configured resources without caps, so admins can see where budgets are missing.
+      for (const application of projectState?.applications ?? []) {
+        if (application.project_id === id && !project.applications.has(application.application_id)) {
+          project.applications.set(application.application_id, []);
+        }
+      }
+      const applications = [...project.applications].map(([applicationId, applicationRules]) => {
+        const application = projectState?.applications?.find((item) => item.application_id === applicationId);
+        const label = application?.name ?? cleanScopeLabel(applicationRules[0]?.scope_label ?? "应用");
+        return renderScopeNode(label, "应用", applicationRules, "", canWrite, 2);
+      }).join("");
+      const knownProject = projectState?.projects?.find((item) => item.project_id === id);
+      const label = knownProject?.name ?? project.rules[0]?.scope_label
+        ?? [...project.applications.values()].flat()[0]?.budget_scope?.parent_scope_label
+        ?? (id === "unresolved" ? "归属信息暂不可用" : "项目（未设置预算）");
+      return renderScopeNode(label, "项目", project.rules, applications, canWrite, 1);
+    }).join("");
+    const first = environmentRules[0];
+    const label = `${organizationRules[0]?.scope_label ?? "当前组织"} · ${first.environment_name ?? first.environment ?? "运行环境"}`;
+    return renderScopeNode(label, "组织", organizationRules, children, canWrite, 0);
+  }).join("");
+  return `${renderRuleTable(business, canWrite, "组织、项目与应用预算", tree || renderEmptyRuleRow())}
+    <p class="budget-tree-hint">点击组织、项目或应用名称展开预算。各层上限同时生效，剩余额度不相加。</p>
+    ${renderRuleTable(personal, canWrite, "人员预算", null, "virtual_key")}
+    <p class="budget-tree-hint">${canWrite ? "点击“新增人员预算”，查找员工并选择其调用 KEY，再设置日、月或年预算。" : ""}人员预算按员工的调用 KEY 分别设置；多把 KEY 需分别配置，姓名下方显示对应凭证和运行环境。</p>`;
+}
+
+function renderScopeNode(label, type, rules, children, canWrite, depth) {
+  return `<details class="budget-scope-node" data-budget-depth="${depth}" ${depth === 0 ? "open" : ""}>
+    <summary><span class="budget-scope-title"><strong>${escapeHtml(label)}</strong><small>${type}</small></span>
+      <span class="budget-scope-count">${rules.length ? `${rules.length} 条预算` : "本层未设置预算"}</span></summary>
+    <div class="budget-scope-content">${rules.map((item) => renderRuleRow(item, canWrite)).join("")}${children}</div>
+  </details>`;
 }
 
 /**
@@ -493,7 +571,7 @@ function renderRuleRow(item, canWrite) {
   const scopeName = item.scope_type === "virtual_key" && item.scope_owner_display_name
     ? `${item.scope_owner_display_name} · ${item.scope_owner_email ?? ""}`
     : cleanScopeLabel(item.scope_label ?? item.scope_id);
-  const scopeDetail = `${item.environment_name ?? item.environment ?? "-"} · ${item.name}`;
+  const scopeDetail = `${item.environment_name ?? item.environment ?? "-"} · ${item.scope_type === "virtual_key" ? `${cleanScopeLabel(item.scope_label ?? item.scope_id)} · ` : ""}${item.name}`;
   const activation = item.activation_at_utc
     ? `${today.status === "scheduled" ? "将于" : "自"} ${formatDateTime(item.activation_at_utc)} 启用（北京时间）`
     : "未设置定时启用";
@@ -515,8 +593,8 @@ function renderRuleRow(item, canWrite) {
       <span class="budget-rule-action" data-label="达到上限时">
         <strong>${escapeHtml(ACTION_LABELS[item.exhausted_action] ?? item.exhausted_action)}</strong>
         <small>${escapeHtml(item.warning_threshold_percent)}% 时告警</small>
-        ${canWrite ? `<button type="button" data-budget-edit-rule-id="${escapeAttribute(item.budget_rule_id)}">编辑</button>` : ""}
       </span>
+      ${canWrite ? `<span class="budget-rule-operations" data-label="操作"><button type="button" data-budget-edit-rule-id="${escapeAttribute(item.budget_rule_id)}">编辑</button></span>` : ""}
     </div>
   `;
 }

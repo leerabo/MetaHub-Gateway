@@ -6,7 +6,9 @@ import { createPlatformProviderEngineeringController } from "../../src/features/
 import { createPlatformProviderEngineeringStore } from "../../src/features/platform-provider-engineering/platformProviderEngineeringStore.js";
 import { renderPlatformProviderEngineering } from "../../src/features/platform-provider-engineering/renderPlatformProviderEngineering.js";
 import { createWorkspaceProviderEngineeringController } from "../../src/features/workspace-provider-engineering/workspaceProviderEngineeringController.js";
-import { createWorkspaceProviderEngineeringStore } from "../../src/features/workspace-provider-engineering/workspaceProviderEngineeringStore.js";
+import { createWorkspaceProviderEngineeringStore, workspaceProviderEngineeringOwner } from "../../src/features/workspace-provider-engineering/workspaceProviderEngineeringStore.js";
+import { workspaceNavigationOwner } from "../../src/features/workspace-navigation/workspaceNavigationStore.js";
+import { workspaceConsoleSessionFromShell } from "../../src/lib/workspaceConsoleSession.js";
 import {
   renderWorkspaceProviderEngineering,
   renderWorkspaceProviderErrorMaps,
@@ -800,6 +802,126 @@ function workspaceSession() {
     },
   };
 }
+
+function cookieEngineeringInput({ manage = true, navigation = "error-maps" } = {}) {
+  const expiry = "2099-01-01T00:00:00Z";
+  const authorization = {
+    permission_codes: [PERMISSIONS.WORKSPACE_PROVIDER_ERROR_OVERRIDE_READ,
+      ...(manage ? [PERMISSIONS.WORKSPACE_PROVIDER_ERROR_OVERRIDE_MANAGE] : []),
+      ...(navigation === "providers" ? [PERMISSIONS.PROVIDER_READ] : [])],
+    permission_revision: 2, membership_revision: 3, permission_fingerprint: "f".repeat(64),
+  };
+  const identity = { account: { status: "active" }, current_session: {
+    session_id: "global_provider_test", revoke_generation: 0, expires_at: expiry, is_current: true,
+  } };
+  const context = { workspace_id: WORKSPACE_ID, role: "owner", session_status: "active", expires_at: expiry };
+  const route = navigation === "providers" ? "workspace.gateway.providers" : "workspace.advanced.provider-errors";
+  const shell = { state: "ok", workspaceNavigationContract: true, workspaceIdentity: identity,
+    workspaceContext: context, workspaceAuthorization: authorization,
+    workspaceOwner: workspaceNavigationOwner(identity, { context, authorization }),
+    activeNavigationItemId: navigation, activeRouteCode: route,
+    navigation: { active_navigation_item_id: navigation, active_route_code: route,
+      permission_revision: 2, membership_revision: 3, permission_fingerprint: "f".repeat(64),
+      navigation_items: [{ id: navigation, route_code: route, target_section: navigation, visible: true, disabled: false }] },
+  };
+  const session = workspaceConsoleSessionFromShell(shell);
+  assert.ok(session);
+  return { authContext: session.context, session, consoleShellState: shell,
+    workspaceSession: { context: { ...context }, authorization: structuredClone(authorization) },
+    activeNavigationItemId: navigation, providerId: navigation === "providers" ? PROVIDER_ID : "" };
+}
+
+test("Workspace Cookie engineering reads without legacy tenant/user fields and preserves read-only controls", async () => {
+  for (const navigation of ["error-maps", "providers"]) for (const manage of [true, false]) {
+    const input = cookieEngineeringInput({ manage, navigation });
+    let reads = 0;
+    const controller = createWorkspaceProviderEngineeringController({ api: {
+      workspaceSession: async () => input.workspaceSession,
+      providerErrorOverrides: async (request) => {
+        reads += 1;
+        assert.equal(Object.hasOwn(request, "token"), false);
+        return workspaceList(PROVIDER_ID, { compatibility: navigation === "providers" ? compatibility() : null });
+      },
+    } });
+    assert.equal(await controller.open(input), true);
+    assert.equal(reads, 1);
+    assert.equal(controller.snapshot().canManage, manage);
+    assert.equal(input.authContext.user, undefined);
+    assert.equal(input.session.token, undefined);
+    if (navigation === "error-maps") {
+      const html = renderWorkspaceProviderErrorMaps(controller.snapshot());
+      assert.equal(html.includes("data-workspace-provider-override-create-form"), manage);
+      assert.doesNotMatch(html, /尚未加载/u);
+    }
+  }
+});
+
+test("Workspace engineering rejects missing, cross-workspace, revoked and mismatched Cookie ownership", () => {
+  const mutations = [
+    x => { delete x.session; },
+    x => { x.authContext = { ...x.authContext }; },
+    x => { x.session = { ...x.session, token: "forbidden" }; },
+    x => { x.workspaceSession.context.workspace_id = `wsp_${"9".repeat(32)}`; },
+    x => { x.workspaceSession.context.role = "developer"; },
+    x => { x.workspaceSession.context.session_status = "revoked"; },
+    x => { x.workspaceSession.context.expires_at = "2000-01-01T00:00:00Z"; },
+    x => { delete x.workspaceSession.authorization; },
+    x => { x.workspaceSession.authorization.permission_codes = []; },
+    x => { x.workspaceSession.authorization.permission_revision += 1; },
+    x => { x.workspaceSession.authorization.membership_revision += 1; },
+    x => { x.workspaceSession.authorization.permission_fingerprint = "a".repeat(64); },
+    x => { x.consoleShellState.workspaceIdentity.current_session.is_current = false; },
+    x => { x.consoleShellState.workspaceIdentity.current_session.revoke_generation += 1; },
+    x => { x.consoleShellState.workspaceIdentity.current_session.expires_at = "2000-01-01T00:00:00Z"; },
+    x => { x.consoleShellState.activeRouteCode = "workspace.home.overview"; },
+    x => { x.consoleShellState.navigation.navigation_items[0].visible = false; },
+    x => { x.consoleShellState.navigation.navigation_items[0].disabled = true; },
+    x => { x.consoleShellState.navigation.navigation_items.push({ ...x.consoleShellState.navigation.navigation_items[0] }); },
+    x => { x.activeNavigationItemId = "overview"; },
+    x => { x.providerId = "../invalid"; },
+  ];
+  for (const mutate of mutations) {
+    const input = cookieEngineeringInput();
+    assert.ok(workspaceProviderEngineeringOwner(input));
+    mutate(input);
+    assert.equal(workspaceProviderEngineeringOwner(input), "", mutate.toString());
+  }
+  const provider = cookieEngineeringInput({ navigation: "providers" });
+  provider.providerId = "";
+  assert.equal(workspaceProviderEngineeringOwner(provider), "");
+});
+
+test("Workspace engineering fences a late read when the shell session is revoked or navigation changes", () => {
+  for (const mutate of [
+    x => { x.consoleShellState.workspaceIdentity.current_session.is_current = false; },
+    x => { x.consoleShellState.activeNavigationItemId = "overview"; },
+  ]) {
+    const input = cookieEngineeringInput();
+    const store = createWorkspaceProviderEngineeringStore();
+    assert.equal(store.enter(input), true);
+    const late = store.begin("read");
+    mutate(input);
+    assert.equal(store.accept(late, { response: workspaceList(PROVIDER_ID) }), false);
+    assert.equal(store.snapshot().response, null);
+  }
+});
+
+test("Workspace engineering refresh retries failed session activation before reading overrides", async () => {
+  const input = cookieEngineeringInput();
+  let sessions = 0, reads = 0;
+  const controller = createWorkspaceProviderEngineeringController({ api: {
+    workspaceSession: async () => {
+      if (++sessions === 1) throw new AuthApiError({ status: 503, code: "workspace_session.unavailable" });
+      return input.workspaceSession;
+    },
+    providerErrorOverrides: async () => { reads += 1; return workspaceList(PROVIDER_ID, { compatibility: null }); },
+  } });
+  assert.equal(await controller.open(input), false);
+  assert.equal(reads, 0);
+  assert.equal(await controller.refresh(), true);
+  assert.equal(sessions, 2);
+  assert.equal(reads, 1);
+});
 
 function jsonResponse(payload, status = 200) {
   return new Response(JSON.stringify(payload), {

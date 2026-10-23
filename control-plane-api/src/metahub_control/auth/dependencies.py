@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import secrets
+import sqlite3
 import time
 from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING, Annotated
@@ -397,17 +398,32 @@ async def require_admin_assistant_authentication(request: Request) -> AsyncItera
                 attempt_owner=attempt_owner,
             )
             # 管理助手入口认证保持只读，Session 活跃时间由最终治理事务原子更新。
-            return authenticate_bearer(
-                request.app.state.config,
-                authorization,
-                monotonic_deadline=budget.source_deadline,
-                deadline_error_code="admin_assistant.source_unavailable",
-                connection=connection,
-                update_last_seen=False,
-                invalidate_connection=lambda current: (
-                    retire_admin_assistant_runtime_read_connection(runtime, current)
-                ),
-            )
+            try:
+                context = authenticate_bearer(
+                    request.app.state.config,
+                    authorization,
+                    monotonic_deadline=budget.source_deadline,
+                    deadline_error_code="admin_assistant.source_unavailable",
+                    connection=connection,
+                    update_last_seen=False,
+                    invalidate_connection=lambda current: (
+                        retire_admin_assistant_runtime_read_connection(runtime, current)
+                    ),
+                )
+            except BaseException:
+                if getattr(connection, "backend", None) == "postgresql":
+                    retire_admin_assistant_runtime_read_connection(runtime, connection)
+                raise
+            if getattr(connection, "backend", None) == "postgresql":
+                # PostgreSQL SELECT opens an implicit transaction. Authentication
+                # ends before the source stage establishes its own repeatable,
+                # read-only snapshot and revalidates the same actor's grants.
+                try:
+                    connection.rollback()
+                except sqlite3.Error:
+                    retire_admin_assistant_runtime_read_connection(runtime, connection)
+                    raise ApiError("admin_assistant.source_unavailable") from None
+            return context
 
         context = await run_admin_assistant_worker(
             authenticate_on_runtime_connection,
@@ -1480,7 +1496,7 @@ def require_session_risk_reader(
     """
 
     # 每次请求都读取当前租户的实时权限矩阵，避免撤权后旧 Session 继续看到高危会话。
-    return _require_request_permissions(request, authorization, ("session_risk.read",))
+    return require_workspace_or_legacy_permissions("session_risk.read")(request, authorization)
 
 
 def _approval_authorization(request: Request) -> str | None:
@@ -1588,11 +1604,9 @@ def require_session_risk_manager(
     """
 
     # manage 不隐含 read，两个权限必须同时由后端实时矩阵授予，不能依赖前端按钮可见性。
-    return _require_request_permissions(
-        request,
-        authorization,
-        ("session_risk.read", "session_risk.manage"),
-    )
+    return require_workspace_or_legacy_permissions(
+        "session_risk.read", "session_risk.manage",
+    )(request, authorization)
 
 
 def require_policy_reader(

@@ -285,7 +285,7 @@ test("Workspace and Platform render permission-pruned responsive controls withou
     newIdempotencyKey: () => IDEMPOTENCY,
   });
   assert.equal(await controller.mount(), true);
-  assert.match(root.innerHTML, /Fleet upgrades/u);
+  assert.match(root.innerHTML, /网关升级/u);
   assert.match(root.innerHTML, /data-platform-edge-release-decision-form/u);
   assert.match(root.innerHTML, /data-platform-edge-rollout-create-form/u);
   const secretCode = "482913";

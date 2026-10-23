@@ -111,6 +111,22 @@ def _snapshot(
     )
 
 
+def _empty_snapshot(version: int = 3, *, tenant_id: str = "tenant_cache") -> PolicySnapshotArtifact:
+    """构造已发布但不含规则的快照；空规则应明确放行配置路由。"""
+
+    return build_policy_snapshot_artifact(
+        tenant_id=tenant_id,
+        policy_snapshot_id=f"psnap_cache_{version}",
+        snapshot_version=version,
+        operation="rollback",
+        previous_snapshot_id=f"psnap_cache_{version - 1}",
+        previous_snapshot_version=version - 1,
+        rollback_source_snapshot_id="psnap_cache_1",
+        rollback_source_snapshot_version=1,
+        policies=(),
+    )
+
+
 def _etag(
     snapshot: PolicySnapshotArtifact | None,
     tenant_id: str = "tenant_cache",
@@ -355,6 +371,34 @@ async def test_no_head_baseline_remains_distinct_from_cold_unavailable(
         True,
     )
     assert (lkg.status, lkg.snapshot_version, lkg.executable) == ("lkg", None, True)
+    await cache.close()
+    await client.aclose()
+
+
+@pytest.mark.anyio
+async def test_published_empty_snapshot_is_executable_and_allows_configured_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回滚到 0 条规则的已发布版本仍应执行正常路由，而不是变成服务不可用。"""
+
+    config = _config(monkeypatch)
+    artifact = _empty_snapshot()
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=_response_payload("tenant_cache", artifact),
+            headers={"ETag": _etag(artifact)},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    cache = PolicySnapshotCache(config, client=client, monotonic=FakeMonotonic())
+    lease = await cache.acquire("tenant_cache")
+
+    assert lease.executable is True
+    assert lease.snapshot_version == 3
+    assert lease.snapshot is not None
+    assert lease.snapshot.policies == ()
     await cache.close()
     await client.aclose()
 

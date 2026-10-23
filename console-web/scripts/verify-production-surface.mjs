@@ -81,8 +81,14 @@ if (/^COPY\s+console-web\/src\s+/gmu.test(runtimeStage)) {
 if (!/RUN\s+npm\s+run\s+build/u.test(dockerfile)) {
   failures.push(`${manifest.production_dockerfile}: verified production build is not executed`);
 }
-if (!/COPY\s+--from=build\s+\/app\/console-web\/dist\s+\/app\/console-web/u.test(dockerfile)) {
+if (!/COPY\s+--from=build\s+\/build\/console-web\/dist\s+\/usr\/share\/nginx\/html/u.test(dockerfile)) {
   failures.push(`${manifest.production_dockerfile}: runtime image does not copy only verified dist output`);
+}
+if (!/^nginx:[^\s]+@sha256:[a-f0-9]{64}/u.test(runtimeStage.trimStart())) {
+  failures.push(`${manifest.production_dockerfile}: static runtime base is not immutable`);
+}
+if (/dev-server|npm\s+run\s+dev|node\s+scripts/u.test(runtimeStage)) {
+  failures.push(`${manifest.production_dockerfile}: development server remains in the runtime`);
 }
 
 if (failures.length > 0) {

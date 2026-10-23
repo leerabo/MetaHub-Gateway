@@ -21,6 +21,7 @@ from .models import (
     CreateApplicationRequest,
     CreateProjectRequest,
     ProjectListResponse,
+    ProjectOwnerCandidatesResponse,
     ProjectResponse,
     UpdateApplicationRequest,
     UpdateApplicationMembersRequest,
@@ -33,6 +34,7 @@ from .service import (
     delete_project,
     list_applications,
     list_projects,
+    list_project_owner_candidates,
     update_application,
     list_application_members,
     update_application_members,
@@ -40,6 +42,23 @@ from .service import (
 )
 
 router = APIRouter(tags=["projects"])
+
+
+@router.get("/projects/owner-candidates", response_model=ProjectOwnerCandidatesResponse)
+async def get_project_owner_candidates(
+    request: Request,
+    context: Annotated[
+        AuthContext, Depends(require_workspace_or_legacy_permissions("project.write", touch=False)),
+    ],
+    search: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> ProjectOwnerCandidatesResponse:
+    """项目编辑器的组织内负责人选择器。"""
+
+    return list_project_owner_candidates(
+        request.app.state.config, context, search=search, limit=limit,
+        request_id=_request_id(request), trace_id=_trace_id(request),
+    )
 
 
 @router.get("/projects", response_model=ProjectListResponse)
@@ -222,6 +241,7 @@ async def get_application_members(
     search: str | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     offset: Annotated[int, Query(ge=0)] = 0,
+    selected_only: bool = False,
 ) -> ApplicationMembersResponse:
     """读取应用成员选择器的分页候选。"""
 
@@ -232,6 +252,7 @@ async def get_application_members(
         search=search,
         limit=limit,
         offset=offset,
+        selected_only=selected_only,
         request_id=_request_id(request),
         trace_id=_trace_id(request),
     )

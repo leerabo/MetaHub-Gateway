@@ -147,7 +147,7 @@ export function createWorkspaceNavigationController({ api, createIdempotencyKey 
           if (!store.rejectPreference(ticket, error)) throw conflictError();
           const lostResponse = error?.code === "workspace_navigation.network_unavailable";
           if (lostResponse) preferenceNeedsReload = true;
-          if (attempt !== 0 || (!lostResponse && (Number(error?.status) !== 409
+          if (attempt !== 0 || (!lostResponse && (![409, 412].includes(Number(error?.status))
             || error?.code !== "identity.revision_conflict"))) throw error;
           await loadNavigation({ recoverPreference: true });
           if (store.snapshot().generation !== requestedGeneration) throw conflictError();

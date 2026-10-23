@@ -537,6 +537,10 @@ def expire_usage_exports(config: AppConfig) -> int:
         connection.close()
         # 清理或领取失败均不能暴露数据库实现，调度器仅依赖统一错误码重试。
         raise ApiError("usage.export_unavailable") from exc
+    finally:
+        # Lease/commit guards raise domain errors, not sqlite3.Error. They must
+        # return the checkout just as database failures and successful work do.
+        connection.close()
 
 
 def claim_next_usage_export(config: AppConfig) -> ClaimedUsageExport | None:
@@ -612,6 +616,8 @@ def claim_next_usage_export(config: AppConfig) -> ClaimedUsageExport | None:
         connection.close()
         # lease 写事务失败必须回滚完整状态，并隐藏 SQL 与租户任务元数据。
         raise ApiError("usage.export_unavailable") from exc
+    finally:
+        connection.close()
 
 
 def process_claimed_usage_export(config: AppConfig, claim: ClaimedUsageExport) -> bool:

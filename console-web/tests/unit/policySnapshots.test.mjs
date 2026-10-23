@@ -237,8 +237,8 @@ test("policy snapshot renderer shows drift and only permits the previous version
 
   assert.match(html, /当前 v3/);
   assert.match(html, /v3 &lt;- 回滚 v1/);
-  assert.match(html, /待上线配置.*与回滚版本不同/);
-  assert.match(html, /下一次发布会重新上线当前候选内容/);
+  assert.match(html, /待上线配置.*已完成回滚/);
+  assert.match(html, /线上当前已使用回滚后的配置/);
   assert.match(html, /data-policy-snapshot-rollback-open="psnap_v2"/);
   assert.doesNotMatch(html, /data-policy-snapshot-rollback-open="psnap_v1"/);
   assert.match(html, /data-policy-snapshot-rollback-form="psnap_v2"/);
@@ -247,6 +247,46 @@ test("policy snapshot renderer shows drift and only permits the previous version
   assert.match(html, /&lt;svg onload=alert\(1\)&gt;/);
   assert.doesNotMatch(html, /<script>|<svg|<img/);
   assert.doesNotMatch(html, /tenant_id|condition_expr|canonical_expression|prompt|response/i);
+  assert.doesNotMatch(html, /校验值|content_hash|[a-f0-9]{12,}/i);
+});
+
+test("policy snapshot action errors stay beside the open rollback form and use public wording", () => {
+  const html = renderPolicySnapshotsPanel({
+    state: "ok",
+    ...currentPayload,
+    ...historyPayload,
+    headEtag: '"3"',
+    candidateEtag: '"candidate"',
+    rollbackTargetId: "psnap_v2",
+    rollbackReason: "尝试恢复上一版",
+    operationStatus: "idle",
+    actionError: {
+      code: "policy_snapshot.rollback_target_invalid",
+      message: "policy snapshot rollback target is invalid",
+      requestId: "req_internal_should_not_render",
+    },
+  }, publisherContext);
+
+  assert.equal((html.match(/无法回滚这个版本/g) ?? []).length, 1);
+  assert.match(html, /这个历史版本已不可恢复/);
+  assert.doesNotMatch(html, /policy_snapshot\.rollback_target_invalid|req_internal_should_not_render|校验值|content_hash/);
+  assert.ok(html.indexOf("无法回滚这个版本") > html.indexOf("回滚到 v2 的内容"));
+});
+
+test("history marks withdrawn template versions without offering a rollback action", () => {
+  const withdrawn = renderPolicySnapshotsPanel({
+    state: "ok",
+    ...currentPayload,
+    ...historyPayload,
+    headEtag: '"3"',
+    candidateEtag: '"candidate"',
+    rollbackTargetId: null,
+    operationStatus: "idle",
+    policy_snapshots: [v3, { ...v2, rollback_unavailable_reason: "template_withdrawn" }, v1],
+  }, publisherContext);
+
+  assert.match(withdrawn, /已撤回/);
+  assert.doesNotMatch(withdrawn, /data-policy-snapshot-rollback-open="psnap_v2"/);
 });
 
 test("policy snapshot renderer fails closed for invalid candidate and missing publish permission", () => {
@@ -323,7 +363,7 @@ test("unknown write result locks the original operation and always exposes an ab
   );
 
   assert.match(html, /发布结果待确认/);
-  assert.match(html, /req_unknown_stable/);
+  assert.doesNotMatch(html, /req_unknown_stable|request_id/);
   assert.match(html, /readonly[^>]*>原始发布原因<\/textarea>/);
   assert.doesNotMatch(html, />被后续输入覆盖的原因<\/textarea>/);
   assert.match(html, /data-policy-snapshot-abandon/);

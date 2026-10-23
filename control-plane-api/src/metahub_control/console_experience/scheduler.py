@@ -890,10 +890,10 @@ def _project_workspace_approval(config: AppConfig) -> bool:
             ).fetchone()
             if current is not None and int(current["source_revision"]) > int(row["state_revision"]):
                 rejected = connection.execute(
-                    """INSERT OR IGNORE INTO workspace_domain_approval_rejections(
+                    """INSERT INTO workspace_domain_approval_rejections(
                          rejection_id,workspace_id,tenant_id,source_domain,source_type,
                          source_id_digest,source_revision,actor_domain,reason_code,created_at)
-                       VALUES(?,?,?,?,?,?,?,'service','source_revision_regressed',?)""",
+                       VALUES(?,?,?,?,?,?,?,'service','source_revision_regressed',?) ON CONFLICT DO NOTHING""",
                     (
                         _stable_id(
                             "war_",

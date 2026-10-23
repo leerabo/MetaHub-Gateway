@@ -725,11 +725,11 @@ def _insert_trial_expired_event(
     )
     inserted = connection.execute(
         """
-        INSERT OR IGNORE INTO quota_events(
+        INSERT INTO quota_events(
           quota_event_id,tenant_id,plan_id,quota_bucket_id,event_type,
           quota_generation,trial_cycle,source_request_id,source_trace_id,actor_id,
           payload_json,occurred_at
-        ) VALUES(?,?,?,NULL,'trial.expired',NULL,1,?,?,?,?,?)
+        ) VALUES(?,?,?,NULL,'trial.expired',NULL,1,?,?,?,?,?) ON CONFLICT DO NOTHING
         """,
         (
             event_id,

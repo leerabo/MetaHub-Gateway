@@ -12,7 +12,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 BudgetScopeType = Literal["tenant", "project", "application", "virtual_key"]
 
 
@@ -32,6 +31,7 @@ class BudgetScopeInfo(BaseModel):
     priority: int
     parent_scope_type: BudgetScopeType | None = None
     parent_scope_id: str | None = None
+    parent_scope_label: str | None = None
 
 
 class BudgetBlockInfo(BaseModel):

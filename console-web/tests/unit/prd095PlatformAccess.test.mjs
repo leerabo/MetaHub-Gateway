@@ -332,8 +332,8 @@ test("PRD-095 controller uses backend permissions and scrubs sensitive inputs", 
   assert.match(root.innerHTML, /账单与计量/u);
   assert.match(root.innerHTML, /客户成功/u);
   controller.selectView("workspaces");
-  assert.match(root.innerHTML, /<h1>Workspace 目录<\/h1>/u);
-  assert.match(root.innerHTML, /没有符合条件的 Workspace/u);
+  assert.match(root.innerHTML, /<h1>组织目录<\/h1>/u);
+  assert.match(root.innerHTML, /没有符合条件的组织/u);
   controller.selectView("not-authorized");
   assert.match(root.innerHTML, /class="platform-shell"/u);
   assert.equal(await controller.openSession("123456"), true);
@@ -349,6 +349,89 @@ test("PRD-095 controller uses backend permissions and scrubs sensitive inputs", 
   assert.doesNotMatch(root.innerHTML, /123456|654321/u);
   controller.destroy();
   assert.equal(root.innerHTML, "");
+});
+
+test("Platform hash navigation changes the actual view, enforces allowed routes and detaches on destroy", async () => {
+  const originalWindow = globalThis.window;
+  const navigationWindow = createNavigationWindow("#operators");
+  globalThis.window = navigationWindow;
+  const root = createRoot();
+  const controller = createPlatformPageController({ root, api: workingApi() });
+  try {
+    assert.equal(await controller.mount(), true);
+    navigationWindow.navigate("#workspaces");
+    assert.equal(controller.snapshot().view, "workspaces");
+    assert.match(root.innerHTML, /<h1>组织目录<\/h1>/u);
+    navigationWindow.navigate("#infrastructure");
+    assert.equal(controller.snapshot().view, "operators");
+    assert.equal(navigationWindow.location.hash, "#operators");
+    controller.destroy();
+    navigationWindow.navigate("#workspaces");
+    assert.equal(root.innerHTML, "");
+    assert.equal(controller.snapshot().view, "operators");
+  } finally {
+    controller.destroy();
+    globalThis.window = originalWindow;
+  }
+});
+
+test("Platform hash changes during authentication use the latest route only after backend permission checks", async () => {
+  const originalWindow = globalThis.window;
+  const navigationWindow = createNavigationWindow("#operators");
+  globalThis.window = navigationWindow;
+  let releaseSession;
+  const root = createRoot();
+  const controller = createPlatformPageController({ root, api: workingApi({
+    session: () => new Promise((resolve) => { releaseSession = resolve; }),
+  }) });
+  try {
+    const mounted = controller.mount();
+    navigationWindow.navigate("#workspaces");
+    assert.doesNotMatch(root.innerHTML, /<h1>组织目录<\/h1>/u);
+    releaseSession(sessionPayload());
+    assert.equal(await mounted, true);
+    assert.equal(controller.snapshot().view, "workspaces");
+    assert.match(root.innerHTML, /<h1>组织目录<\/h1>/u);
+  } finally {
+    controller.destroy();
+    globalThis.window = originalWindow;
+  }
+});
+
+test("Platform hash navigation aborts an old refresh without committing its protected data", async () => {
+  const originalWindow = globalThis.window;
+  const navigationWindow = createNavigationWindow("#operators");
+  globalThis.window = navigationWindow;
+  let operatorsCall = 0;
+  let releaseStale;
+  let staleSignal;
+  const root = createRoot();
+  const controller = createPlatformPageController({ root, api: workingApi({
+    operators: ({ signal }) => {
+      operatorsCall += 1;
+      if (operatorsCall === 1) return Promise.resolve(operatorListPayload());
+      staleSignal = signal;
+      return new Promise((resolve) => {
+        releaseStale = () => resolve(operatorListPayload({ display_name: "Stale operator" }));
+      });
+    },
+  }) });
+  try {
+    assert.equal(await controller.mount(), true);
+    const refresh = controller.refresh();
+    for (let attempt = 0; attempt < 10 && !releaseStale; attempt += 1) await Promise.resolve();
+    assert.equal(typeof releaseStale, "function");
+    navigationWindow.navigate("#workspaces");
+    assert.equal(staleSignal.aborted, true);
+    releaseStale();
+    assert.equal(await refresh, false);
+    assert.equal(controller.snapshot().view, "workspaces");
+    assert.match(root.innerHTML, /<h1>组织目录<\/h1>/u);
+    assert.doesNotMatch(root.innerHTML, /Stale operator/u);
+  } finally {
+    controller.destroy();
+    globalThis.window = originalWindow;
+  }
 });
 
 test("PRD-095 controller commits only the newest refresh snapshot", async () => {
@@ -500,6 +583,110 @@ test("Platform first navigation from overview hydrates core pages without a manu
   await controller.selectView("operators");
   assert.deepEqual(calls, ["operators", "workspaces", "audit"]);
   controller.destroy();
+});
+
+test("Platform mount and refresh isolate the active page from unrelated endpoint outages", async () => {
+  const originalWindow = globalThis.window;
+  globalThis.window = createNavigationWindow("#compliance");
+  const calls = [];
+  const session = sessionPayload();
+  session.context.permissions.push("platform.compliance.read", "platform.billing.read",
+    "platform.catalog.read", "platform.capacity.read", "platform.workspace.directory.read");
+  const unavailable = async () => { throw new Error("Unrelated endpoint is unavailable"); };
+  const controller = createPlatformPageController({ root: createRoot(), api: workingApi({
+    session: async () => session,
+    complianceControls: async () => { calls.push("compliance"); return { controls: [] }; },
+    operators: async () => { calls.push("operators"); return operatorListPayload(); },
+    grants: unavailable, audit: unavailable, plans: unavailable, billingSummary: unavailable,
+    refunds: unavailable, meteringState: unavailable, capacity: unavailable, workspaces: unavailable,
+  }) });
+  try {
+    assert.equal(await controller.mount(), true);
+    assert.equal(await controller.refresh(), true);
+    assert.deepEqual(calls, ["compliance", "compliance"]);
+    assert.equal(controller.snapshot().error, null);
+    assert.equal(await controller.selectView("operators"), true);
+    assert.deepEqual(calls, ["compliance", "compliance", "operators"]);
+    assert.equal(controller.snapshot().billing, null);
+    assert.equal(controller.snapshot().grants, null);
+  } finally {
+    controller.destroy();
+    globalThis.window = originalWindow;
+  }
+});
+
+test("Platform first navigation loads grants without ticket access and catalog without billing access", async () => {
+  const originalWindow = globalThis.window;
+  globalThis.window = createNavigationWindow("#operators");
+  const calls = [];
+  const session = sessionPayload();
+  session.context.permissions.push("platform.catalog.read");
+  const controller = createPlatformPageController({ root: createRoot(), api: workingApi({
+    session: async () => session,
+    grants: async () => { calls.push("grants"); return grantListPayload(); },
+    plans: async () => { calls.push("plans"); return { plans: [] }; },
+    supportTickets: async () => { throw new Error("Ticket access must not be requested"); },
+    billingSummary: async () => { throw new Error("Billing access must not be requested"); },
+    meteringState: async () => { throw new Error("Billing access must not be requested"); },
+    refunds: async () => { throw new Error("Billing access must not be requested"); },
+  }) });
+  try {
+    assert.equal(await controller.mount(), true);
+    assert.deepEqual(calls, []);
+    assert.equal(await controller.selectView("support"), true);
+    assert.deepEqual(controller.snapshot().grants, grantListPayload());
+    assert.equal(controller.snapshot().supportTickets, null);
+    assert.equal(await controller.selectView("billing"), true);
+    assert.deepEqual(calls, ["grants", "plans"]);
+    assert.deepEqual(controller.snapshot().plans, { plans: [] });
+    assert.equal(controller.snapshot().billing, null);
+    await controller.selectView("support");
+    await controller.selectView("billing");
+    assert.deepEqual(calls, ["grants", "plans"]);
+  } finally {
+    controller.destroy();
+    globalThis.window = originalWindow;
+  }
+});
+
+test("Platform first billing navigation loads every permitted resource and rejects late responses", async () => {
+  const originalWindow = globalThis.window;
+  globalThis.window = createNavigationWindow("#operators");
+  const calls = [];
+  const session = sessionPayload();
+  session.context.permissions.push("platform.catalog.read", "platform.billing.read");
+  let releaseBilling;
+  let billingSignal;
+  let delayed = true;
+  const controller = createPlatformPageController({ root: createRoot(), api: workingApi({
+    session: async () => session,
+    plans: async () => { calls.push("plans"); return { plans: [] }; },
+    billingSummary: ({ signal }) => {
+      calls.push("billing"); billingSignal = signal;
+      return delayed ? new Promise((resolve) => { releaseBilling = resolve; }) : Promise.resolve({ invoices: [] });
+    },
+    meteringState: async () => { calls.push("metering"); return { pending: 0 }; },
+    refunds: async () => { calls.push("refunds"); return { refunds: [] }; },
+  }) });
+  try {
+    assert.equal(await controller.mount(), true);
+    const stale = controller.selectView("billing");
+    assert.deepEqual(calls, ["plans", "billing", "metering", "refunds"]);
+    await controller.selectView("audit");
+    assert.equal(billingSignal.aborted, true);
+    releaseBilling({ invoices: ["stale"] });
+    assert.equal(await stale, false);
+    assert.equal(controller.snapshot().billing, null);
+    assert.equal(controller.snapshot().plans, null);
+    delayed = false;
+    assert.equal(await controller.selectView("billing"), true);
+    assert.deepEqual(controller.snapshot().billing, { invoices: [] });
+    assert.deepEqual(controller.snapshot().metering, { pending: 0 });
+    assert.deepEqual(controller.snapshot().refunds, { refunds: [] });
+  } finally {
+    controller.destroy();
+    globalThis.window = originalWindow;
+  }
 });
 
 test("Platform navigation clears old errors and cancels a late core-page response", async () => {
@@ -764,6 +951,17 @@ function pageState() {
     feedback: null,
     pendingAction: null,
   };
+}
+
+function createNavigationWindow(hash) {
+  const target = new EventTarget();
+  target.location = { hash };
+  target.history = { replaceState(_state, _title, nextHash) { target.location.hash = nextHash; } };
+  target.navigate = (nextHash) => {
+    target.location.hash = nextHash;
+    target.dispatchEvent(new Event("hashchange"));
+  };
+  return target;
 }
 
 function createRoot(sensitiveInputs = []) {

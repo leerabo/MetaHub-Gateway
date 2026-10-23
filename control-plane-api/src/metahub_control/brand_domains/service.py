@@ -788,10 +788,10 @@ def record_deployment_brand_ack(
         ack_id = _stable_id("dba", f"{edge_deployment_id}:{generation}")
         connection.execute(
             """
-            INSERT OR IGNORE INTO deployment_brand_acks(
+            INSERT INTO deployment_brand_acks(
               deployment_brand_ack_id,edge_deployment_id,deployment_brand_bundle_id,
               applied_generation,lkg_generation,manifest_sha256,status,observed_at)
-            VALUES(?,?,?,?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING
             """,
             (
                 ack_id,
@@ -2678,7 +2678,8 @@ def _platform_brand_id(row: sqlite3.Row) -> str:
 def _connect(config: AppConfig) -> sqlite3.Connection:
     try:
         connection = connect_database(config.database_url)
-        connection.execute("PRAGMA busy_timeout=5000")
+        if getattr(connection, "backend", "sqlite") == "sqlite":
+            connection.execute("PRAGMA busy_timeout=5000")
         return connection
     except DbError:
         raise ApiError("branding.unavailable") from None

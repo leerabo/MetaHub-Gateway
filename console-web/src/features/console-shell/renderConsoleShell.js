@@ -1,4 +1,5 @@
 import { icon } from "../public-home/icons.js";
+import { renderThemeToggle } from "../../lib/theme.js";
 import { localizeConsoleStaticHtml } from "../../i18n/localizeConsoleStaticHtml.js";
 
 // 默认导航定义控制控制台骨架的兜底菜单，后端返回的角色化导航仍是最终入口来源。
@@ -51,7 +52,7 @@ export function renderConsoleShell({
   const localizedContentHtml = localizeConsoleStaticHtml(contentHtml, i18n);
   const pageContentHtml = localizedContentHtml?.trim()
     ? localizedContentHtml
-    : ["quota-buckets", "policy-templates", "session-risks"].includes(
+    : ["quota-buckets", "policy-templates", "session-risks", "response-cache", "intent-security"].includes(
       consoleShellState?.activeNavigationItemId,
     )
       ? (consoleShellState?.activeNavigationItemId === "quota-buckets"
@@ -68,7 +69,11 @@ export function renderConsoleShell({
       ? { ...localized, sidebar_visible: false } : localized;
   });
   const activeItem = activeNavigationItem(consoleShellState, navigationItems);
-  const contentOwnsTitle = activeItem.id === "overview" && pageContentHtml?.includes('class="workspace-overview"');
+  // 业务页已经拥有自己的标题时，框架不再重复输出一个大标题。
+  // 这样模型、服务、项目、用量和 KEY 页面只保留一个视觉焦点，同时保留无标题
+  // 的状态页由框架提供可访问标题。
+  const contentOwnsTitle = (activeItem.id === "overview" && pageContentHtml?.includes('class="workspace-overview"'))
+    || /<(?:h1|h2)[^>]+id="(?:providers|models|model-aliases|virtual-keys|projects|usage|users|routing|budgets|request-logs)-title"/u.test(pageContentHtml ?? "");
   const shellCopy = workspaceRoleShellCopy(roleCode, i18n, consoleShellState?.workspaceContext?.kind);
   const homeItemOrder = ["owner", "admin"].includes(roleCode)
     ? ["overview", "quickstart"]
@@ -135,7 +140,7 @@ function renderBrandMark(branding) {
   if (logoUrl && branding?.logoPresent === true) {
     return `<div class="brand-mark brand-mark-image"><img class="brand-logo" src="${escapeAttribute(logoUrl)}" alt="${escapeAttribute(branding.product_name ?? "")}"></div>`;
   }
-  return `<div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>`;
+  return `<div class="brand-mark brand-mark-default" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none" focusable="false"><path d="M8 25V9l8 12 8-12v16" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg></div>`;
 }
 
 function safePublicBrandAssetPath(value) {
@@ -367,7 +372,6 @@ function renderNavigationItem(item, activeId, defaultVisible = item.sidebar_visi
     >
       <span class="sidebar-link-label">${escapeHtml(label)}</span>
       <span class="sidebar-link-short" aria-hidden="true">${escapeHtml(shortNavigationLabel(item))}</span>
-      <small>${escapeHtml(item.description ?? "")}</small>
     </button>
   `;
 }
@@ -425,6 +429,7 @@ function renderUserMenu(authContext, i18n, navigation, consoleShellState) {
     return `<div class="user-menu" aria-label="${escapeAttribute(t(i18n, "shell.user_menu_aria", "个人菜单"))}">
       <div><strong>${escapeHtml(identity.account.display_name || identity.account.email || "")}</strong>
         <span>${escapeHtml(workspace.name ?? "")}</span><small>${escapeHtml(workspaceRoleLabel(workspace.role, i18n))}</small></div>
+      ${renderThemeToggle()}
       <a class="user-menu-preferences" href="identity.html?view=account#security">${escapeHtml(t(i18n, "shell.account_settings", "账号设置"))}</a>
       <a class="user-menu-preferences" href="identity.html?view=workspaces">${escapeHtml(t(i18n, "shell.switch_workspace", "切换空间"))}</a>
       <button id="logout-button" type="button">${escapeHtml(t(i18n, "shell.logout", "登出"))}</button>
@@ -442,6 +447,7 @@ function renderUserMenu(authContext, i18n, navigation, consoleShellState) {
         <span>${escapeHtml(authContext.tenant?.name ?? authContext.user.tenant_id)}</span>
         <span>${escapeHtml(t(i18n, "shell.session_expires", "Session 到期：{value}", { value: expiresAt }))}</span>
       </div>
+      ${renderThemeToggle()}
       ${navigation?.account_action_codes?.includes("identity.preferences")
         ? `<a class="user-menu-preferences" href="identity.html#account-preferences">${escapeHtml(t(i18n, "shell.account_preferences", "账号偏好"))}</a>`
         : ""}

@@ -76,18 +76,18 @@ def ensure_budget_block(
 ) -> tuple[BudgetBlockRecord, bool]:
     """幂等创建当日 active BudgetBlock，并在首次创建时写入 `budget.blocked` 事件。
 
-    返回值第二项表示本调用是否真正创建；并发请求依靠部分唯一索引和 `INSERT OR IGNORE` 收敛为一条状态。
+    返回值第二项表示本调用是否真正创建；并发请求依靠部分唯一索引和冲突忽略收敛为一条状态。
     """
 
     budget_block_id = f"bb_{uuid4().hex}"
     cursor = connection.execute(
         """
-        INSERT OR IGNORE INTO budget_blocks(
+        INSERT INTO budget_blocks(
           budget_block_id, tenant_id, environment_id, budget_rule_id, scope_type, scope_id,
           budget_date, status, blocked_cost_cny, budget_cny, blocked_request_id,
           blocked_trace_id, blocked_at, created_at, updated_at
         )
-        VALUES(?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
+        VALUES(?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING
         """,
         (
             budget_block_id,
@@ -230,12 +230,12 @@ def _insert_block_event(
 
     connection.execute(
         """
-        INSERT OR IGNORE INTO budget_block_events(
+        INSERT INTO budget_block_events(
           budget_block_event_id, event_id, tenant_id, environment_id, budget_block_id,
           budget_rule_id, event_type, actor_id, request_id, trace_id, reason_code,
           current_cost_cny, budget_cny, created_at
         )
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING
         """,
         (
             f"bbe_{uuid4().hex}",

@@ -1,5 +1,6 @@
 // 平台渲染器只消费严格安全 DTO；所有服务端字符串转义后进入 DOM，不展示内部地址、Provider 或签名。
 import { NOTIFICATION_EVENT_PARAMETERS } from "../../lib/notifications.js";
+import { renderThemeToggle } from "../../lib/theme.js";
 import { icon } from "../public-home/icons.js";
 import { renderLaunchGates } from "../launch-gates/renderLaunchGates.js";
 import { renderGaLaunchGates } from "../launch-gates/renderGaLaunchGates.js";
@@ -36,7 +37,7 @@ const ROLE_OPTIONS = [
 ];
 
 const NAVIGATION_GROUPS = [
-  ["运营工作台", "activity", [["overview", "平台总览"], ["admin-assistant", "运营助手"], ["approvals", "审批队列"], ["workspaces", "组织目录"], ["customer-success", "客户成功"], ["support", "支持协作"]]],
+  ["运营工作台", "activity", [["overview", "平台总览"], ["approvals", "审批队列"], ["workspaces", "组织目录"], ["customer-success", "客户成功"], ["support", "支持协作"]]],
   ["网关与基础设施", "cpu", [["infrastructure", "基础设施"], ["gateway", "Gateway 集群"], ["edge-fleet", "私有 Gateway"], ["edge-upgrades", "网关升级"], ["edge-licenses", "网关许可证"], ["edge-backups", "网关备份"], ["offline-bundles", "离线交换"]]],
   ["服务运行", "activity", [["job-runtime", "任务运行时"], ["config-distribution", "配置分发"], ["observability", "可观测性"], ["status-incidents", "状态与事件"], ["capacity", "容量与韧性"], ["disaster-recovery", "灾难恢复"]]],
   ["账务与增长", "chart-no-axes-combined", [["billing", "账单与计量"], ["commercial-accounting", "商业账务"], ["channels", "渠道管理"], ["growth", "增长分析"]]],
@@ -50,7 +51,8 @@ export function renderPlatformGate(container, state = {}) {
     <div class="platform-gate">
       <header class="platform-gate-brand">
         <span class="platform-mark" aria-hidden="true">M</span>
-        <div><strong>MetaHub</strong><span>Platform Operations</span></div>
+        <div><strong>MetaHub</strong><span>平台管理</span></div>
+        ${renderThemeToggle()}
       </header>
       <section class="platform-gate-panel" aria-labelledby="platform-gate-title">
         <p>平台身份</p>
@@ -66,6 +68,12 @@ export function renderPlatformGate(container, state = {}) {
 }
 
 export function renderPlatformWorkspace(container, state) {
+  // Preserve a user's expanded group when an async refresh updates this view.
+  const previousView = container.querySelector?.('[data-platform-view][aria-current="page"]')?.dataset.platformView;
+  const expandedGroup = previousView === state.view
+    ? Array.from(container.querySelectorAll?.('.platform-nav-group[open]') ?? [])
+      .map((group) => group.querySelector('[data-platform-view]')?.dataset.platformView)
+    : null;
   const context = state.session?.context;
   const operator = context?.operator ?? {};
   const permissions = new Set(context?.permissions ?? []);
@@ -82,6 +90,7 @@ export function renderPlatformWorkspace(container, state) {
         <a class="platform-wordmark" href="platform.html"><span class="platform-mark" aria-hidden="true">M</span><strong>MetaHub</strong></a>
         <div class="platform-operator-summary"><span>${escapeHtml(operator.display_name ?? "-")}</span><strong>${escapeHtml((operator.roles ?? []).map(roleLabel).join(" · "))}</strong></div>
         <div class="platform-topbar-actions">
+          ${renderThemeToggle()}
           <button class="platform-icon-button platform-navigation-toggle" type="button" data-platform-action="toggle-navigation" aria-label="${state.navigationOpen ? "收起平台导航" : "展开平台导航"}" title="${state.navigationOpen ? "收起平台导航" : "展开平台导航"}" aria-expanded="${Boolean(state.navigationOpen)}" aria-controls="platform-navigation">${icon("layers")}</button>
           <button class="platform-icon-button" type="button" data-platform-action="refresh" title="刷新" aria-label="刷新" ${disasterRecoveryBusy ? "disabled" : ""}>${icon("rotate-cw")}</button>
           <a href="identity.html?view=account#security">账号安全</a>
@@ -98,10 +107,15 @@ export function renderPlatformWorkspace(container, state) {
         </section>
       </div>
     </div>`;
+  if (expandedGroup) {
+    container.querySelectorAll?.('.platform-nav-group').forEach((group) => {
+      group.open = expandedGroup.includes(group.querySelector('[data-platform-view]')?.dataset.platformView);
+    });
+  }
 }
 
 function renderView(state, permissions) {
-  if (new Set(["overview", "admin-assistant", "approvals"]).has(state.view)) {
+  if (new Set(["overview", "approvals"]).has(state.view)) {
     return renderPlatformConsoleExperience(state.consoleExperience, state.view);
   }
   if (state.view === "console-migration") {
@@ -178,7 +192,7 @@ function providerCatalogView(state, permissions) {
   return `
     <header class="platform-page-heading">
       <div><p>签名发布通道</p><h1>供应商目录</h1></div>
-      <span data-contract-label="${securityProjection ? "Security projection" : "Release management"}">${securityProjection ? "安全投影" : "发布管理"}</span>
+      <span>${securityProjection ? "安全投影" : "发布管理"}</span>
     </header>
     <section class="platform-metrics" aria-label="供应商目录发布摘要">
       ${metric("代数", current?.generation ?? 0, "不可变当前版本")}
@@ -189,40 +203,39 @@ function providerCatalogView(state, permissions) {
     <section class="platform-band platform-provider-catalog-head">
       <div class="platform-section-heading"><div><p>已验证发布</p><h2>当前版本</h2></div>${current ? status("active") : ""}</div>
       ${current ? `<dl>
-        <div><dt>Version</dt><dd>${escapeHtml(current.version)}</dd></div>
-        <div><dt>Generation</dt><dd>${number(current.generation)}</dd></div>
-        <div><dt>Manifest</dt><dd><code>${escapeHtml(shortHash(current.manifest_sha256))}</code></dd></div>
-        <div><dt>Signing key</dt><dd>${escapeHtml(current.key_id)}</dd></div>
-        <div><dt>Algorithm</dt><dd>${escapeHtml(current.signature_algorithm)}</dd></div>
-        <div><dt data-contract-label="Signature proof">签名证明</dt><dd><code>${escapeHtml(shortHash(current.signature_sha256))}</code></dd></div>
-        <div><dt>Published</dt><dd>${formatTime(current.published_at)}</dd></div>
-      </dl>` : '<p class="platform-empty">Provider catalog is unavailable.</p>'}
+        <div><dt>版本</dt><dd>${escapeHtml(current.version)}</dd></div>
+        <div><dt>发布代数</dt><dd>${number(current.generation)}</dd></div>
+        <div><dt>目录校验</dt><dd><details class="platform-audit-technical"><summary>技术信息</summary><code>${escapeHtml(shortHash(current.manifest_sha256))}</code></details></dd></div>
+        <div><dt>签名配置</dt><dd><details class="platform-audit-technical"><summary>技术信息</summary><code>${escapeHtml(current.key_id)}</code><code>${escapeHtml(current.signature_algorithm)}</code></details></dd></div>
+        <div><dt>签名证明</dt><dd><details class="platform-audit-technical"><summary>技术信息</summary><code>${escapeHtml(shortHash(current.signature_sha256))}</code></details></dd></div>
+        <div><dt>发布时间</dt><dd>${formatTime(current.published_at)}</dd></div>
+      </dl>` : '<p class="platform-empty">供应商目录暂不可用。</p>'}
     </section>
     <section class="platform-band platform-provider-catalog-history">
       <div class="platform-section-heading"><div><p>不可变历史</p><h2>最近版本</h2></div><span>${number(recent.length)} 个版本</span></div>
       <div class="platform-table-wrap"><table class="platform-provider-catalog-table">
-        <thead><tr><th>Version</th><th>Generation</th><th>Entries</th><th>Compatibility</th><th>Manifest</th><th>Published</th></tr></thead>
+        <thead><tr><th>版本</th><th>代数</th><th>条目</th><th>兼容性变更</th><th>目录校验</th><th>发布时间</th></tr></thead>
         <tbody>${recent.map((item) => `<tr>
-          <td data-label="Version"><strong>${escapeHtml(item.version)}</strong></td>
-          <td data-label="Generation">${number(item.generation)}</td>
-          <td data-label="Entries">${number(item.entry_count)}</td>
-          <td data-label="Compatibility">${number(item.compatibility_change_count)}</td>
-          <td data-label="Manifest"><code>${escapeHtml(shortHash(item.manifest_sha256))}</code></td>
-          <td data-label="Published">${formatTime(item.published_at)}</td>
+          <td data-label="版本"><strong>${escapeHtml(item.version)}</strong></td>
+          <td data-label="代数">${number(item.generation)}</td>
+          <td data-label="条目">${number(item.entry_count)}</td>
+          <td data-label="兼容性变更">${number(item.compatibility_change_count)}</td>
+          <td data-label="目录校验"><details class="platform-audit-technical"><summary>查看</summary><code>${escapeHtml(shortHash(item.manifest_sha256))}</code></details></td>
+          <td data-label="发布时间">${formatTime(item.published_at)}</td>
         </tr>`).join("") || emptyRow("暂无目录版本", 6)}</tbody>
       </table></div>
     </section>
-    ${canManage ? `<section class="platform-band platform-provider-catalog-release">
-      <div class="platform-section-heading"><div><p>内容寻址发布</p><h2 data-contract-label="Publish signed manifest">发布签名清单</h2></div><span>预期代数 ${number(current?.generation)}</span></div>
+    ${canManage ? `<details class="platform-band platform-collapsed-section platform-provider-catalog-release">
+      <summary>发布供应商目录 <span>只有目录内容或签名发生变化时展开</span></summary>
       <form data-platform-provider-catalog-form autocomplete="off">
         <label class="platform-provider-catalog-manifest" data-contract-label="Canonical manifest"><span>规范清单</span><textarea name="manifest" rows="12" maxlength="250000" spellcheck="false" required placeholder='{"schema_version":1,"version":"YYYY.MM.DD.N","entries":[]}'></textarea></label>
-        <label><span>Trusted key ID</span><input name="keyId" pattern="[A-Za-z0-9][A-Za-z0-9._:-]{2,127}" maxlength="128" required /></label>
-        <label><span>Detached Ed25519 signature</span><input name="signature" pattern="[A-Za-z0-9_-]{86}" minlength="86" maxlength="86" autocomplete="off" required /></label>
-        <label><span>Release reason</span><select name="reasonCode"><option value="catalog_release">Catalog release</option><option value="compliance_update">Compliance update</option><option value="endpoint_update">Endpoint update</option></select></label>
+        <label><span>签名密钥编号</span><input name="keyId" pattern="[A-Za-z0-9][A-Za-z0-9._:-]{2,127}" maxlength="128" required /></label>
+        <label><span>签名内容</span><input name="signature" pattern="[A-Za-z0-9_-]{86}" minlength="86" maxlength="86" autocomplete="off" required /></label>
+        <label><span>发布原因</span><select name="reasonCode"><option value="catalog_release">目录更新</option><option value="compliance_update">合规更新</option><option value="endpoint_update">服务地址更新</option></select></label>
         <label class="platform-check platform-provider-catalog-confirm"><input name="confirmed" type="checkbox" required /><span>确认版本、签名、区域与兼容变更已完成发布审核</span></label>
-        <button class="platform-primary" type="submit" ${state.loading || !current ? "disabled" : ""}>Publish version</button>
+        <button class="platform-primary" type="submit" ${state.loading || !current ? "disabled" : ""}>发布版本</button>
       </form>
-    </section>` : ""}
+    </details>` : ""}
   `;
 }
 
@@ -236,8 +249,8 @@ function dataResidencyView(state) {
   const page = state.residencyEvidenceCursorHistory.length + 1;
   return `
     <header class="platform-page-heading">
-      <div><p>Low-sensitivity evidence</p><h1>数据驻留</h1></div>
-      <span>Policy-bound observations</span>
+      <div><p>区域与数据位置</p><h1>数据驻留</h1></div>
+      <span>按组织策略记录</span>
     </header>
     <section class="platform-metrics" aria-label="当前页驻留证据摘要">
       ${metric("合规", compliant, "当前页")}
@@ -246,16 +259,16 @@ function dataResidencyView(state) {
     </section>
     <section class="platform-band platform-residency-evidence">
       <div class="platform-section-heading">
-        <div><p>Bounded evidence projection</p><h2>驻留观测</h2></div>
+        <div><p>已记录的区域与存储位置</p><h2>驻留观测</h2></div>
         <span>第 ${page} 页 · ${number(items.length)} 条</span>
       </div>
       <form class="platform-filter-form" data-platform-residency-filter-form autocomplete="off">
-        <label class="platform-filter-search"><span>Workspace ID</span><input name="workspaceId" value="${escapeAttribute(filters.workspaceId ?? "")}" pattern="wsp_[0-9a-f]{32}" maxlength="36" placeholder="留空查看全部" /></label>
+        <label class="platform-filter-search"><span>组织编号</span><input name="workspaceId" value="${escapeAttribute(filters.workspaceId ?? "")}" pattern="wsp_[0-9a-f]{32}" maxlength="36" placeholder="留空查看全部" /></label>
         <label><span>组件</span><select name="component">${filterOptions(filters.component ?? "", [
-          ["", "全部组件"], ["gateway", "Gateway"], ["database", "Database"],
-          ["object_storage", "Object storage"], ["backup", "Backup"],
-          ["job_runtime", "Job runtime"], ["disaster_recovery", "Disaster recovery"],
-          ["tenant_data", "Tenant data"],
+          ["", "全部组件"], ["gateway", "网关"], ["database", "数据库"],
+          ["object_storage", "对象存储"], ["backup", "备份"],
+          ["job_runtime", "后台任务"], ["disaster_recovery", "灾备"],
+          ["tenant_data", "组织数据"],
         ])}</select></label>
         <label><span>结论</span><select name="outcome">${filterOptions(filters.outcome ?? "", [
           ["", "全部结论"], ["compliant", "合规"], ["migration_required", "需要迁移"],
@@ -265,12 +278,12 @@ function dataResidencyView(state) {
       </form>
       <div class="platform-table-wrap">
         <table class="platform-residency-table">
-          <thead><tr><th>Workspace</th><th>组件</th><th>Region</th><th>策略</th><th>结论</th><th>观测水位</th><th>Manifest</th><th>时间</th></tr></thead>
+        <thead><tr><th>组织</th><th>组件</th><th>区域</th><th>策略</th><th>结论</th><th>观测进度</th><th>证明</th><th>时间</th></tr></thead>
           <tbody>${items.map(residencyEvidenceRow).join("") || emptyRow("当前筛选下没有驻留证据", 8)}</tbody>
         </table>
       </div>
       <div class="platform-pagination">
-        <span>只显示组件、区域、策略 generation、固定结论与证明摘要</span>
+        <span>显示组件、区域、策略版本和结论</span>
         <div>
           <button type="button" data-platform-action="residency-evidence-previous" ${page > 1 && !state.loading ? "" : "disabled"}>上一页</button>
           <button type="button" data-platform-action="residency-evidence-next" ${response.next_cursor && !state.loading ? "" : "disabled"}>下一页</button>
@@ -283,32 +296,32 @@ function dataResidencyView(state) {
 function residencyEvidenceRow(item) {
   const violation = item.violation_code ? residencyViolationLabel(item.violation_code) : "无";
   return `<tr>
-    <td data-label="Workspace"><strong>${escapeHtml(shortWorkspace(item.workspace_id))}</strong></td>
+    <td data-label="组织"><strong>${escapeHtml(shortWorkspace(item.workspace_id))}</strong><details class="platform-audit-technical"><summary>技术信息</summary><code>${escapeHtml(item.workspace_id)}</code></details></td>
     <td data-label="组件"><strong>${escapeHtml(residencyComponentLabel(item.component_code))}</strong><small>${escapeHtml(statusLabel(item.storage_class))}</small></td>
-    <td data-label="Region">${escapeHtml(item.region_code)}</td>
-    <td data-label="策略">Generation ${number(item.policy_generation)}</td>
+    <td data-label="区域">${escapeHtml(item.region_code)}</td>
+    <td data-label="策略">版本 ${number(item.policy_generation)}</td>
     <td data-label="结论">${status(item.outcome)}<small>${escapeHtml(violation)}</small></td>
-    <td data-label="观测水位">${number(item.observed_watermark)}</td>
-    <td data-label="Manifest"><code>${escapeHtml(shortHash(item.manifest_sha256))}</code></td>
+    <td data-label="观测进度">${number(item.observed_watermark)}</td>
+    <td data-label="证明"><details class="platform-audit-technical"><summary>查看</summary><code>${escapeHtml(item.manifest_sha256 ?? "-")}</code></details></td>
     <td data-label="时间">${formatTime(item.observed_at)}</td>
   </tr>`;
 }
 
 function residencyComponentLabel(value) {
   return ({
-    gateway: "Gateway",
-    database: "Database",
-    object_storage: "Object storage",
-    backup: "Backup",
-    job_runtime: "Job runtime",
-    disaster_recovery: "Disaster recovery",
-    tenant_data: "Tenant data",
-  })[value] ?? "Unknown";
+    gateway: "网关",
+    database: "数据库",
+    object_storage: "对象存储",
+    backup: "备份",
+    job_runtime: "后台任务",
+    disaster_recovery: "灾备",
+    tenant_data: "组织数据",
+  })[value] ?? "未知组件";
 }
 
 function residencyViolationLabel(value) {
   return ({
-    region_not_allowed: "Region 不在允许组",
+    region_not_allowed: "区域 不在允许组",
     generation_stale: "Generation 过期",
     policy_expired: "策略已过期",
     policy_unavailable: "策略不可用",
@@ -327,42 +340,42 @@ function statusIncidentsView(state, permissions) {
   const canApprove = permissions.has("platform.status.security_approve");
   return `
     <header class="platform-page-heading">
-      <div><p>Public projection / Private scope</p><h1>Status and incidents</h1></div>
+      <div><p>服务公开状态与故障记录</p><h1>服务状态</h1></div>
       <button class="platform-icon-button" type="button" data-platform-action="status-refresh"
-        title="Refresh status communications" aria-label="Refresh status communications"
+        title="刷新状态" aria-label="刷新状态"
         ${state.loading ? "disabled" : ""}>↻</button>
     </header>
-    <section class="platform-metrics" aria-label="Status communication summary">
-      ${metric("Components", components.length, "public catalog")}
-      ${metric("Active incidents", active.length, "authorized projection")}
-      ${metric("Maintenance", maintenance.filter((item) => item.status === "planned").length, "scheduled")}
-      ${metric("Bundle", response.bundle_generation ?? 0, response.bundle_generation ? "signed generation" : "not published")}
+    <section class="platform-metrics" aria-label="服务状态摘要">
+      ${metric("服务组件", components.length, "公开目录")}
+      ${metric("处理中故障", active.length, "当前记录")}
+      ${metric("维护安排", maintenance.filter((item) => item.status === "planned").length, "已排期")}
+      ${metric("状态版本", response.bundle_generation ?? 0, response.bundle_generation ? "已发布" : "暂无发布")}
     </section>
     <section class="platform-band">
-      <div class="platform-section-heading"><div><p>Public component codes</p><h2>Current component state</h2></div></div>
+      <div class="platform-section-heading"><div><p>对外展示的服务组件</p><h2>当前服务状态</h2></div></div>
       <div class="platform-table-wrap"><table class="platform-status-component-table">
-        <thead><tr><th>Component</th><th>Group</th><th>Status</th><th>Revision</th></tr></thead>
+        <thead><tr><th>组件</th><th>分组</th><th>状态</th><th>版本</th></tr></thead>
         <tbody>${components.map((item) => `<tr>
-          <td data-label="Component"><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.code)}</small></td>
-          <td data-label="Group">${escapeHtml(item.group)}</td>
-          <td data-label="Status">${status(item.status)}</td>
-          <td data-label="Revision">${number(item.revision)}</td>
-        </tr>`).join("") || '<tr><td colspan="4" class="platform-empty">No components available.</td></tr>'}</tbody>
+          <td data-label="组件"><strong>${escapeHtml(item.name)}</strong><details class="platform-audit-technical"><summary>技术信息</summary><code>${escapeHtml(item.code)}</code></details></td>
+          <td data-label="分组">${escapeHtml(platformServiceGroupLabel(item.group))}</td>
+          <td data-label="状态">${status(item.status)}</td>
+          <td data-label="版本">${number(item.revision)}</td>
+        </tr>`).join("") || '<tr><td colspan="4" class="platform-empty">暂无服务组件。</td></tr>'}</tbody>
       </table></div>
     </section>
     <section class="platform-band">
-      <div class="platform-section-heading"><div><p>Immutable public updates</p><h2>Incident timeline</h2></div><span>${number(incidents.length)} incidents</span></div>
+      <div class="platform-section-heading"><div><p>公开故障记录</p><h2>故障时间线</h2></div><span>${number(incidents.length)} 条记录</span></div>
       <div class="platform-status-incident-list">
         ${incidents.map((item) => statusIncidentItem(item, { canWrite, canApprove, loading: state.loading })).join("")
-          || '<p class="platform-empty">No incidents in this projection.</p>'}
+          || '<p class="platform-empty">暂无故障记录。</p>'}
       </div>
     </section>
     <section class="platform-band">
-      <div class="platform-section-heading"><div><p>Separate availability facts</p><h2>Maintenance windows</h2></div><span>${number(maintenance.length)} windows</span></div>
+      <div class="platform-section-heading"><div><p>计划内服务维护</p><h2>维护安排</h2></div><span>${number(maintenance.length)} 个安排</span></div>
       <div class="platform-status-maintenance-list">
         ${maintenance.map((item) => `<article><header><strong>${escapeHtml(item.title)}</strong>${status(item.status)}</header>
-          <small>${escapeHtml(item.reference)} · ${formatTime(item.starts_at)} → ${formatTime(item.ends_at)}</small>
-          <p>${escapeHtml(item.message)}</p></article>`).join("") || '<p class="platform-empty">No maintenance windows.</p>'}
+          <small>${formatTime(item.starts_at)} → ${formatTime(item.ends_at)}</small>
+          <p>${escapeHtml(item.message)}</p></article>`).join("") || '<p class="platform-empty">暂无维护安排。</p>'}
       </div>
     </section>
     ${canWrite ? statusIncidentCreateForm(state.loading) : ""}
@@ -372,81 +385,93 @@ function statusIncidentsView(state, permissions) {
 function statusIncidentItem(item, access) {
   const latest = item.updates.at(-1);
   const approval = access.canApprove && item.security_approval_available
-    ? statusIncidentMutationForm(item, "security-approval", "Approve disclosure", access.loading)
+    ? statusIncidentMutationForm(item, "security-approval", "通过公开审核", access.loading)
     : "";
   const update = access.canWrite && new Set(["published", "monitoring"]).has(item.status)
-    ? statusIncidentMutationForm(item, "update", "Publish update", access.loading)
+    ? statusIncidentMutationForm(item, "update", "更新故障状态", access.loading)
     : "";
   const postmortem = access.canWrite && item.status === "resolved" && item.postmortem === null
     ? statusPostmortemForm(item, access.loading) : "";
   return `<article class="platform-status-incident">
-    <header><div><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.reference)} · ${escapeHtml(item.classification)} · ${escapeHtml(item.visibility)}</small></div>${status(item.status)}</header>
-    <p>${latest ? escapeHtml(latest.message) : "Pending independent security review."}</p>
-    <small>Acknowledged ${formatTime(item.acknowledged_at)} · revision ${number(item.revision)}</small>
-    <details><summary>${number(item.updates.length)} timeline updates</summary>
+    <header><div><strong>${escapeHtml(item.title)}</strong><small>${incidentClassificationLabel(item.classification)} · ${incidentVisibilityLabel(item.visibility)}</small></div>${status(item.status)}</header>
+    <p>${latest ? escapeHtml(latest.message) : "等待安全复核。"}</p>
+    <small>确认于 ${formatTime(item.acknowledged_at)}</small>
+    <details><summary>${number(item.updates.length)} 条更新</summary>
       <ol>${item.updates.map((entry) => `<li><time>${formatTime(entry.published_at)}</time><p>${escapeHtml(entry.message)}</p></li>`).join("")}</ol>
     </details>${approval}${update}${postmortem}
   </article>`;
 }
 
 function statusIncidentMutationForm(item, action, label, loading) {
-  return `<form data-platform-status-incident-form>
+  return `<details class="platform-inline-technical-form"><summary>${escapeHtml(label)}</summary><form data-platform-status-incident-form>
     <input type="hidden" name="action" value="${escapeAttribute(action)}" />
     <input type="hidden" name="incidentId" value="${escapeAttribute(item.incident_id)}" />
     <input type="hidden" name="revision" value="${number(item.revision)}" />
-    ${action === "update" ? '<label><span>Next state</span><select name="status"><option value="monitoring">Monitoring</option><option value="resolved">Resolved</option></select></label>' : ""}
-    <label><span>Public update</span><textarea name="publicMessage" minlength="10" maxlength="2000" required></textarea></label>
-    <label><span>Component codes</span><input name="affectedComponents" placeholder="api-gateway" /></label>
-    <label><span>Public region codes</span><input name="affectedRegions" placeholder="cn-north-1" /></label>
-    <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>Confirm publication</span></label>
-    <button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>${escapeHtml(label)}</button>
-  </form>`;
+    ${action === "update" ? '<label><span>下一状态</span><select name="status"><option value="monitoring">持续观察</option><option value="resolved">已解决</option></select></label>' : ""}
+    <label><span>公开更新</span><textarea name="publicMessage" minlength="10" maxlength="2000" required></textarea></label>
+    <label><span>影响组件</span><input name="affectedComponents" placeholder="可留空" /></label>
+    <label><span>影响区域</span><input name="affectedRegions" placeholder="可留空" /></label>
+    <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>确认公开范围</span></label>
+    <button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>保存更新</button>
+  </form></details>`;
 }
 
 function statusPostmortemForm(item, loading) {
-  return `<details><summary>Publish postmortem</summary><form data-platform-status-postmortem-form>
+  return `<details><summary>填写复盘</summary><form data-platform-status-postmortem-form>
     <input type="hidden" name="incidentId" value="${escapeAttribute(item.incident_id)}" />
     <input type="hidden" name="revision" value="${number(item.revision)}" />
-    <label><span>Public summary</span><textarea name="summary" minlength="20" maxlength="4000" required></textarea></label>
-    <label><span>Timeline entries</span><textarea name="timeline" required></textarea></label>
-    <label><span>Cause category</span><select name="causeCategory">${["capacity", "dependency", "deployment", "configuration", "software", "network", "other"].map((value) => `<option value="${value}">${value}</option>`).join("")}</select></label>
-    <label><span>Corrective actions</span><textarea name="correctiveActions" required></textarea></label>
-    <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>Confirm publication</span></label>
-    <button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>Publish postmortem</button>
+    <label><span>公开总结</span><textarea name="summary" minlength="20" maxlength="4000" required></textarea></label>
+    <label><span>时间线</span><textarea name="timeline" required></textarea></label>
+    <label><span>原因分类</span><select name="causeCategory">${["capacity", "dependency", "deployment", "configuration", "software", "network", "other"].map((value) => `<option value="${value}">${statusLabel(value)}</option>`).join("")}</select></label>
+    <label><span>改进措施</span><textarea name="correctiveActions" required></textarea></label>
+    <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>确认公开范围</span></label>
+    <button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>发布复盘</button>
   </form></details>`;
 }
 
 function statusIncidentCreateForm(loading) {
-  return `<section class="platform-band"><div class="platform-section-heading"><div><p>Manual structured disclosure</p><h2>Create incident</h2></div></div>
+  return `<details class="platform-band platform-collapsed-section"><summary>登记服务故障 <span>仅在需要发布新的故障通知时展开</span></summary>
     <form data-platform-status-create-form>
-      <label><span>Owner Workspace ID</span><input name="ownerWorkspaceId" pattern="wsp_[0-9a-f]{32}" required /></label>
-      <label><span>Title</span><input name="title" minlength="5" maxlength="160" required /></label>
-      <label><span>Classification</span><select name="classification"><option value="reliability">Reliability</option><option value="security">Security</option></select></label>
-      <label><span>Visibility</span><select name="visibility"><option value="public">Public</option><option value="workspace">Workspace private</option></select></label>
-      <label><span>Severity</span><select name="severity"><option value="minor">Minor</option><option value="major">Major</option><option value="critical">Critical</option></select></label>
-      <label><span>Acknowledged at</span><input name="acknowledgedAt" type="datetime-local" required /></label>
-      <label><span>Initial public update</span><textarea name="initialUpdate" maxlength="2000"></textarea></label>
-      <label><span>Component codes</span><input name="affectedComponents" /></label>
-      <label><span>Public region codes</span><input name="affectedRegions" /></label>
-      <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>Confirm publication scope</span></label>
-      <button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>Create incident</button>
-    </form></section>`;
+      <label><span>组织编号</span><input name="ownerWorkspaceId" pattern="wsp_[0-9a-f]{32}" required /></label>
+      <label><span>标题</span><input name="title" minlength="5" maxlength="160" required /></label>
+      <label><span>类型</span><select name="classification"><option value="reliability">稳定性</option><option value="security">安全</option></select></label>
+      <label><span>可见范围</span><select name="visibility"><option value="public">公开</option><option value="workspace">组织内</option></select></label>
+      <label><span>严重程度</span><select name="severity"><option value="minor">一般</option><option value="major">重要</option><option value="critical">严重</option></select></label>
+      <label><span>确认时间</span><input name="acknowledgedAt" type="datetime-local" required /></label>
+      <label><span>首次公开说明</span><textarea name="initialUpdate" maxlength="2000"></textarea></label>
+      <label><span>影响组件</span><input name="affectedComponents" /></label>
+      <label><span>影响区域</span><input name="affectedRegions" /></label>
+      <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>确认公开范围</span></label>
+      <button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>发布故障通知</button>
+    </form></details>`;
 }
 
 function statusMaintenanceCreateForm(loading) {
-  return `<section class="platform-band"><div class="platform-section-heading"><div><p>Planned work</p><h2>Schedule maintenance</h2></div></div>
+  return `<details class="platform-band platform-collapsed-section"><summary>登记维护安排 <span>仅在需要发布维护通知时展开</span></summary>
     <form data-platform-maintenance-form>
-      <label><span>Owner Workspace ID</span><input name="ownerWorkspaceId" pattern="wsp_[0-9a-f]{32}" required /></label>
-      <label><span>Title</span><input name="title" minlength="5" maxlength="160" required /></label>
-      <label><span>Public message</span><textarea name="publicMessage" minlength="10" maxlength="2000" required></textarea></label>
-      <label><span>Visibility</span><select name="visibility"><option value="public">Public</option><option value="workspace">Workspace private</option></select></label>
-      <label><span>Starts</span><input name="startsAt" type="datetime-local" required /></label>
-      <label><span>Ends</span><input name="endsAt" type="datetime-local" required /></label>
-      <label><span>Component codes</span><input name="affectedComponents" /></label>
-      <label><span>Public region codes</span><input name="affectedRegions" /></label>
-      <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>Confirm maintenance window</span></label>
-      <button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>Schedule maintenance</button>
-    </form></section>`;
+      <label><span>组织编号</span><input name="ownerWorkspaceId" pattern="wsp_[0-9a-f]{32}" required /></label>
+      <label><span>标题</span><input name="title" minlength="5" maxlength="160" required /></label>
+      <label><span>公开说明</span><textarea name="publicMessage" minlength="10" maxlength="2000" required></textarea></label>
+      <label><span>可见范围</span><select name="visibility"><option value="public">公开</option><option value="workspace">组织内</option></select></label>
+      <label><span>开始时间</span><input name="startsAt" type="datetime-local" required /></label>
+      <label><span>结束时间</span><input name="endsAt" type="datetime-local" required /></label>
+      <label><span>影响组件</span><input name="affectedComponents" /></label>
+      <label><span>影响区域</span><input name="affectedRegions" /></label>
+      <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>确认维护安排</span></label>
+      <button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>发布维护通知</button>
+    </form></details>`;
+}
+
+function incidentClassificationLabel(value) {
+  return ({ reliability: "稳定性", security: "安全" })[value] ?? statusLabel(value);
+}
+
+function incidentVisibilityLabel(value) {
+  return ({ public: "公开", workspace: "组织内" })[value] ?? statusLabel(value);
+}
+
+function platformServiceGroupLabel(value) {
+  return ({ gateway: "网关", control: "管理控制台", identity: "身份服务", billing: "账务", integrations: "集成" })[value] ?? statusLabel(value);
 }
 
 function capacityView(state, permissions) {
@@ -468,56 +493,56 @@ function capacityView(state, permissions) {
   const canReadEconomics = permissions.has("platform.unit_economics.read");
   return `
     <header class="platform-page-heading">
-      <div><p>Headroom / Performance / Resilience</p><h1>Capacity and resilience</h1></div>
+      <div><p>服务容量、性能与稳定性</p><h1>容量与韧性</h1></div>
       <button class="platform-icon-button" type="button" data-platform-action="capacity-refresh"
-        title="Refresh capacity state" aria-label="Refresh capacity state"
+        title="刷新容量状态" aria-label="刷新容量状态"
         ${state.loading ? "disabled" : ""}>↻</button>
     </header>
     ${canRead ? `<section class="platform-metrics" aria-label="Capacity summary">
-      ${metric("Regions", services.length, "service projections")}
-      ${metric("Thresholds", services.filter((item) => item.threshold_reached).length, "currently reached")}
-      ${metric("Active runs", loadTests.filter((item) => new Set(["queued", "running"]).has(item.status)).length, "isolated runner")}
-      ${metric("Release blocks", blocks.filter((item) => item.status === "active").length, "performance regressions")}
+      ${metric("服务记录", services.length, "当前区域")}
+      ${metric("已达阈值", services.filter((item) => item.threshold_reached).length, "需要关注")}
+      ${metric("运行中的测试", loadTests.filter((item) => new Set(["queued", "running"]).has(item.status)).length, "隔离执行")}
+      ${metric("发布阻断", blocks.filter((item) => item.status === "active").length, "性能回退")}
     </section>
     <section class="platform-band">
-      <div class="platform-section-heading"><div><p>Low-cardinality aggregates</p><h2>Service headroom</h2></div></div>
+      <div class="platform-section-heading"><div><p>按服务和区域汇总</p><h2>服务余量</h2></div></div>
       <div class="platform-table-wrap"><table class="platform-capacity-table">
-        <thead><tr><th>Service / region</th><th>Demand</th><th>Capacity</th><th>Headroom</th><th>Threshold / SLO</th><th>Recommendation</th></tr></thead>
+        <thead><tr><th>服务 / 区域</th><th>当前需求</th><th>可用容量</th><th>剩余容量</th><th>阈值 / 目标</th><th>建议</th></tr></thead>
         <tbody>${services.map((item) => `<tr>
-          <td data-label="Service / region"><strong>${escapeHtml(item.service_code)}</strong><small>${escapeHtml(item.region_code)} · rev ${number(item.revision)}</small></td>
-          <td data-label="Demand"><strong>${number(item.demand_rps)} rps</strong><small>${basisPoints(item.utilization_bps)} utilized</small></td>
-          <td data-label="Capacity"><strong>${number(item.capacity_rps)} rps</strong></td>
-          <td data-label="Headroom"><strong>${number(item.headroom_rps)} rps</strong>${status(item.threshold_reached ? "threshold_reached" : "healthy")}</td>
-          <td data-label="Threshold / SLO"><strong>${basisPoints(item.threshold_bps)}</strong><small>p95 ≤ ${number(item.slo_p95_ms)} ms</small></td>
-          <td data-label="Recommendation">${status(item.recommendation_code)}</td>
-        </tr>`).join("") || emptyRow("No capacity projection available.", 6)}</tbody>
+          <td data-label="服务 / 区域"><strong>${escapeHtml(capacityServiceLabel(item.service_code))}</strong><small>${escapeHtml(item.region_code)} · 版本 ${number(item.revision)}</small></td>
+          <td data-label="当前需求"><strong>${number(item.demand_rps)} RPS</strong><small>已使用 ${basisPoints(item.utilization_bps)}</small></td>
+          <td data-label="可用容量"><strong>${number(item.capacity_rps)} RPS</strong></td>
+          <td data-label="剩余容量"><strong>${number(item.headroom_rps)} RPS</strong>${status(item.threshold_reached ? "threshold_reached" : "healthy")}</td>
+          <td data-label="阈值 / 目标"><strong>${basisPoints(item.threshold_bps)}</strong><small>P95 ≤ ${number(item.slo_p95_ms)} 毫秒</small></td>
+          <td data-label="建议">${status(capacityRecommendationLabel(item.recommendation_code))}</td>
+        </tr>`).join("") || emptyRow("暂无容量预测。", 6)}</tbody>
       </table></div>
     </section>
     <section class="platform-band">
-      <div class="platform-section-heading"><div><p>Immutable comparison sets</p><h2>Baselines and forecasts</h2></div><span>${number(baselines.length)} baselines · ${number(forecasts.length)} forecasts</span></div>
+      <div class="platform-section-heading"><div><p>历史测量与未来估算</p><h2>基线与预测</h2></div><span>${number(baselines.length)} 个基线 · ${number(forecasts.length)} 个预测</span></div>
       <div class="platform-capacity-split">
         <div class="platform-table-wrap"><table class="platform-baseline-table">
-          <thead><tr><th>Baseline</th><th>Latency</th><th>Throughput / error</th></tr></thead>
-          <tbody>${baselines.map((item) => `<tr><td data-label="Baseline"><strong>${escapeHtml(item.scenario_code)}</strong><small>${escapeHtml(item.environment_class)} · v${number(item.version)} · ${number(item.sample_count)} samples</small></td><td data-label="Latency"><strong>${number(item.p95_ms)} ms p95</strong><small>${number(item.p50_ms)} / ${number(item.p99_ms)} ms</small></td><td data-label="Throughput / error"><strong>${decimalRps(item.throughput_rps_milli)} rps</strong><small>${basisPoints(item.error_rate_bps)} error</small></td></tr>`).join("") || emptyRow("No baselines.", 3)}</tbody>
+          <thead><tr><th>基线</th><th>延迟</th><th>吞吐 / 错误率</th></tr></thead>
+        <tbody>${baselines.map((item) => `<tr><td data-label="基线"><strong>${escapeHtml(item.scenario_code)}</strong><small>${escapeHtml(capacityEnvironmentLabel(item.environment_class))} · 版本 ${number(item.version)} · ${number(item.sample_count)} 个样本</small></td><td data-label="延迟"><strong>${number(item.p95_ms)} 毫秒 P95</strong><small>${number(item.p50_ms)} / ${number(item.p99_ms)} 毫秒</small></td><td data-label="吞吐 / 错误率"><strong>${decimalRps(item.throughput_rps_milli)} RPS</strong><small>错误率 ${basisPoints(item.error_rate_bps)}</small></td></tr>`).join("") || emptyRow("暂无基线数据。", 3)}</tbody>
         </table></div>
         <div class="platform-table-wrap"><table class="platform-forecast-table">
-          <thead><tr><th>Forecast</th><th>Demand / capacity</th><th>Confidence</th><th>Job</th></tr></thead>
-          <tbody>${forecasts.map((item) => `<tr><td data-label="Forecast"><strong>${escapeHtml(item.service_code)} · ${number(item.horizon_days)} d</strong><small>${escapeHtml(item.region_code)}</small>${status(item.status)}</td><td data-label="Demand / capacity"><strong>${number(item.predicted_demand_rps ?? 0)} / ${number(item.predicted_capacity_rps ?? 0)} rps</strong></td><td data-label="Confidence"><strong>${item.confidence_bps === null ? "pending" : basisPoints(item.confidence_bps)}</strong><small>${escapeHtml(item.recommendation_code ?? "pending")}</small></td><td data-label="Job"><strong>${shortReference(item.job_id)}</strong><small>rev ${number(item.revision)}</small></td></tr>`).join("") || emptyRow("No forecasts.", 4)}</tbody>
+          <thead><tr><th>预测</th><th>需求 / 容量</th><th>可信度</th><th>任务</th></tr></thead>
+          <tbody>${forecasts.map((item) => `<tr><td data-label="预测"><strong>${escapeHtml(capacityServiceLabel(item.service_code))} · ${number(item.horizon_days)} 天</strong><small>${escapeHtml(item.region_code)}</small>${status(item.status)}</td><td data-label="需求 / 容量"><strong>${number(item.predicted_demand_rps ?? 0)} / ${number(item.predicted_capacity_rps ?? 0)} RPS</strong></td><td data-label="可信度"><strong>${item.confidence_bps === null ? "待计算" : basisPoints(item.confidence_bps)}</strong><small>${escapeHtml(capacityRecommendationLabel(item.recommendation_code ?? "pending"))}</small></td><td data-label="任务"><strong>${shortReference(item.job_id)}</strong><small>版本 ${number(item.revision)}</small></td></tr>`).join("") || emptyRow("暂无预测数据。", 4)}</tbody>
         </table></div>
       </div>
     </section>
     <section class="platform-band">
-      <div class="platform-section-heading"><div><p>Aggregate-only runner evidence</p><h2>Load and soak runs</h2></div><span>${number(loadTests.length)} runs</span></div>
+      <div class="platform-section-heading"><div><p>只记录汇总结果</p><h2>负载与稳定性测试</h2></div><span>${number(loadTests.length)} 次</span></div>
       <div class="platform-table-wrap"><table class="platform-load-table">
-        <thead><tr><th>Scenario</th><th>Bounded load</th><th>Checkpoint</th><th>Performance</th><th>Leak / fairness</th></tr></thead>
-        <tbody>${loadTests.map((item) => `<tr><td data-label="Scenario"><strong>${escapeHtml(item.scenario_code)}</strong><small>${escapeHtml(item.environment_class)} · ${escapeHtml(item.region_code)}</small>${status(item.status)}</td><td data-label="Bounded load"><strong>${number(item.synthetic_tenant_count)} synthetic · ${number(item.target_rps)} rps</strong><small>${number(item.duration_seconds)} s</small></td><td data-label="Checkpoint"><strong>${shortReference(item.job_id)}</strong><small>${escapeHtml(item.safe_outcome_code ?? "queued")}</small></td><td data-label="Performance"><strong>${item.p95_ms === null ? "pending" : `${number(item.p95_ms)} ms p95`}</strong><small>${escapeHtml(item.regression_status ?? "pending")}</small></td><td data-label="Leak / fairness"><strong>conn ${number(item.open_connection_delta ?? 0)} · handle ${number(item.handle_delta ?? 0)}</strong><small>Jain ${item.fairness_jain_millionths === null ? "pending" : basisPoints(Math.round(item.fairness_jain_millionths / 100))}</small></td></tr>`).join("") || emptyRow("No load or soak runs.", 5)}</tbody>
+        <thead><tr><th>场景</th><th>测试负载</th><th>进度</th><th>性能</th><th>连接与公平性</th></tr></thead>
+        <tbody>${loadTests.map((item) => `<tr><td data-label="场景"><strong>${escapeHtml(item.scenario_code)}</strong><small>${escapeHtml(capacityEnvironmentLabel(item.environment_class))} · ${escapeHtml(item.region_code)}</small>${status(item.status)}</td><td data-label="测试负载"><strong>${number(item.synthetic_tenant_count)} 个模拟组织 · ${number(item.target_rps)} RPS</strong><small>${number(item.duration_seconds)} 秒</small></td><td data-label="进度"><strong>${shortReference(item.job_id)}</strong><small>${escapeHtml(statusLabel(item.safe_outcome_code ?? "queued"))}</small></td><td data-label="性能"><strong>${item.p95_ms === null ? "待计算" : `${number(item.p95_ms)} 毫秒 P95`}</strong><small>${escapeHtml(statusLabel(item.regression_status ?? "pending"))}</small></td><td data-label="连接与公平性"><strong>连接 ${number(item.open_connection_delta ?? 0)} · 句柄 ${number(item.handle_delta ?? 0)}</strong><small>公平性 ${item.fairness_jain_millionths === null ? "待计算" : basisPoints(Math.round(item.fairness_jain_millionths / 100))}</small></td></tr>`).join("") || emptyRow("暂无负载测试记录。", 5)}</tbody>
       </table></div>
     </section>
     <section class="platform-band">
-      <div class="platform-section-heading"><div><p>Dual approval / Kill generation</p><h2>Chaos experiments</h2></div><span>${number(experiments.length)} experiments</span></div>
+      <div class="platform-section-heading"><div><p>需要双人确认的故障演练</p><h2>故障演练</h2></div><span>${number(experiments.length)} 次</span></div>
       <div class="platform-table-wrap"><table class="platform-chaos-table">
-        <thead><tr><th>Fault / scope</th><th>Objective</th><th>Approvals</th><th>Checkpoint</th><th>Controls</th></tr></thead>
-        <tbody>${experiments.map((item) => capacityChaosRow(item, { canChaos, loading: state.loading })).join("") || emptyRow("No chaos experiments.", 5)}</tbody>
+        <thead><tr><th>故障 / 范围</th><th>目标</th><th>审批</th><th>进度</th><th>操作</th></tr></thead>
+        <tbody>${experiments.map((item) => capacityChaosRow(item, { canChaos, loading: state.loading })).join("") || emptyRow("暂无故障演练记录。", 5)}</tbody>
       </table></div>
     </section>
     ${canTest ? capacityTestForms(services, scenarios, state.loading) : ""}
@@ -530,73 +555,82 @@ function capacityChaosRow(item, access) {
   const canApprove = access.canChaos && item.status === "pending_approval";
   const canKill = access.canChaos && !stopping && new Set(["pending_approval", "queued", "running"]).has(item.status);
   const approvalForm = canApprove ? `<form data-platform-capacity-chaos-form class="platform-capacity-inline-command">
-    <input type="hidden" name="action" value="approve" /><input type="hidden" name="experimentId" value="${escapeAttribute(item.chaos_experiment_id)}" /><input type="hidden" name="revision" value="${number(item.revision)}" /><input type="hidden" name="reasonCode" value="release_validation" /><label class="platform-check"><input type="checkbox" name="confirmed" required /><span>Confirm approval</span></label><button type="submit" ${access.loading ? "disabled" : ""}>Approve</button></form>` : "";
+    <input type="hidden" name="action" value="approve" /><input type="hidden" name="experimentId" value="${escapeAttribute(item.chaos_experiment_id)}" /><input type="hidden" name="revision" value="${number(item.revision)}" /><input type="hidden" name="reasonCode" value="release_validation" /><label class="platform-check"><input type="checkbox" name="confirmed" required /><span>确认审批</span></label><button type="submit" ${access.loading ? "disabled" : ""}>通过</button></form>` : "";
   const killForm = canKill ? `<form data-platform-capacity-chaos-form class="platform-capacity-inline-command">
-    <input type="hidden" name="action" value="kill" /><input type="hidden" name="experimentId" value="${escapeAttribute(item.chaos_experiment_id)}" /><input type="hidden" name="revision" value="${number(item.revision)}" /><select name="reasonCode" aria-label="Kill reason"><option value="operator_containment">Operator containment</option><option value="slo_containment">SLO containment</option></select><label class="platform-check"><input type="checkbox" name="confirmed" required /><span>Confirm kill</span></label><button class="platform-danger" type="submit" ${access.loading ? "disabled" : ""}>Kill</button></form>` : "";
+    <input type="hidden" name="action" value="kill" /><input type="hidden" name="experimentId" value="${escapeAttribute(item.chaos_experiment_id)}" /><input type="hidden" name="revision" value="${number(item.revision)}" /><select name="reasonCode" aria-label="终止原因"><option value="operator_containment">人工控制</option><option value="slo_containment">服务目标保护</option></select><label class="platform-check"><input type="checkbox" name="confirmed" required /><span>确认终止</span></label><button class="platform-danger" type="submit" ${access.loading ? "disabled" : ""}>终止</button></form>` : "";
   return `<tr>
-    <td data-label="Fault / scope"><strong>${escapeHtml(item.fault_code)}</strong><small>${escapeHtml(item.service_code)} · ${escapeHtml(item.environment_class)} · ${escapeHtml(item.region_code)} · ${number(item.blast_tenant_count)} synthetic</small>${status(stopping ? "stopping" : item.status)}</td>
-    <td data-label="Objective"><strong>p95 ${number(item.objective_p95_ms)} ms</strong><small>error ${basisPoints(item.objective_error_rate_bps)} · stop ${basisPoints(item.stop_error_rate_bps)}</small></td>
-    <td data-label="Approvals"><strong>${number(item.approvals.length)} / ${item.environment_class === "production" ? 2 : 0}</strong><small>distinct current authority</small></td>
-    <td data-label="Checkpoint"><strong>generation ${number(item.kill_generation)}</strong><small>${escapeHtml(item.stop_reason_code ?? "pending")} · ${item.objective_met === null ? "pending" : item.objective_met ? "objective met" : "objective missed"}</small></td>
-    <td data-label="Controls">${approvalForm}${killForm || (!approvalForm ? `<span class="platform-restricted">${stopping ? "Awaiting stop confirmation" : "Terminal"}</span>` : "")}</td>
+    <td data-label="故障 / 范围"><strong>${escapeHtml(item.fault_code)}</strong><small>${escapeHtml(item.service_code)} · ${escapeHtml(item.environment_class)} · ${escapeHtml(item.region_code)} · ${number(item.blast_tenant_count)} 个模拟组织</small>${status(stopping ? "stopping" : item.status)}</td>
+    <td data-label="目标"><strong>p95 ${number(item.objective_p95_ms)} 毫秒</strong><small>错误率 ${basisPoints(item.objective_error_rate_bps)} · 停止阈值 ${basisPoints(item.stop_error_rate_bps)}</small></td>
+    <td data-label="审批"><strong>${number(item.approvals.length)} / ${item.environment_class === "production" ? 2 : 0}</strong><small>当前授权人</small></td>
+    <td data-label="进度"><strong>第 ${number(item.kill_generation)} 代</strong><small>${escapeHtml(item.stop_reason_code ?? "待处理")} · ${item.objective_met === null ? "待确认" : item.objective_met ? "已达到目标" : "未达到目标"}</small></td>
+    <td data-label="操作">${approvalForm}${killForm || (!approvalForm ? `<span class="platform-restricted">${stopping ? "等待终止确认" : "已结束"}</span>` : "")}</td>
   </tr>`;
 }
 
 function capacityTestForms(services, scenarios, loading) {
   const activeScenarios = scenarios.filter((item) => item.status === "active");
-  return `<section class="platform-band"><div class="platform-section-heading"><div><p>Signed catalogs</p><h2>Forecast and performance test</h2></div></div>
+  return `<details class="platform-band platform-collapsed-section"><summary>运行容量测试 <span>需要安排压测或预测时展开</span></summary>
     <div class="platform-capacity-command-grid">
       <form data-platform-capacity-forecast-form>
-        <h3>Capacity forecast</h3>
-        <label><span>Service / region</span><select name="capacityTarget">${services.map((item) => `<option value="${escapeAttribute(`${item.service_code}|${item.region_code}|${item.revision}`)}">${escapeHtml(item.service_code)} · ${escapeHtml(item.region_code)} · rev ${number(item.revision)}</option>`).join("")}</select></label>
-        <label><span>Horizon</span><select name="horizonDays"><option value="30">30 days</option><option value="90">90 days</option></select></label>
-        <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>Confirm aggregate forecast</span></label><button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>Queue forecast</button>
+        <h3>容量预测</h3>
+        <label><span>服务 / 区域</span><select name="capacityTarget">${services.map((item) => `<option value="${escapeAttribute(`${item.service_code}|${item.region_code}|${item.revision}`)}">${escapeHtml(item.service_code)} · ${escapeHtml(item.region_code)} · rev ${number(item.revision)}</option>`).join("")}</select></label>
+        <label><span>预测周期</span><select name="horizonDays"><option value="30">30 天</option><option value="90">90 天</option></select></label>
+        <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>确认生成预测</span></label><button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>开始预测</button>
       </form>
       <form data-platform-capacity-load-form>
-        <h3>Load or soak test</h3>
-        <label><span>Scenario</span><select name="scenarioCode">${activeScenarios.map((item) => `<option value="${escapeAttribute(item.scenario_code)}">${escapeHtml(item.scenario_code)} · ${escapeHtml(item.run_kind)}</option>`).join("")}</select></label>
-        <label><span>Environment</span><select name="environmentClass"><option value="dev">Development</option><option value="staging">Staging</option><option value="production">Production</option></select></label>
-        <label><span>Region</span><select name="regionCode">${[...new Set(services.map((item) => item.region_code))].map((value) => `<option value="${escapeAttribute(value)}">${escapeHtml(value)}</option>`).join("")}</select></label>
-        <label><span>Synthetic tenants</span><input name="syntheticTenantCount" type="number" min="1" max="500" value="100" required /></label>
-        <label><span>Target RPS</span><input name="targetRps" type="number" min="1" max="100000" value="1600" required /></label>
-        <label><span>Duration seconds</span><input name="durationSeconds" type="number" min="10" max="259200" value="60" required /></label>
-        <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>Confirm isolated execution</span></label><button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>Queue test</button>
+        <h3>负载与稳定性测试</h3>
+        <label><span>场景</span><select name="scenarioCode">${activeScenarios.map((item) => `<option value="${escapeAttribute(item.scenario_code)}">${escapeHtml(item.scenario_code)} · ${escapeHtml(item.run_kind)}</option>`).join("")}</select></label>
+        <label><span>环境</span><select name="environmentClass"><option value="dev">开发</option><option value="staging">预发布</option><option value="production">生产</option></select></label>
+        <label><span>区域</span><select name="regionCode">${[...new Set(services.map((item) => item.region_code))].map((value) => `<option value="${escapeAttribute(value)}">${escapeHtml(value)}</option>`).join("")}</select></label>
+        <label><span>模拟组织数</span><input name="syntheticTenantCount" type="number" min="1" max="500" value="100" required /></label>
+        <label><span>目标 RPS</span><input name="targetRps" type="number" min="1" max="100000" value="1600" required /></label>
+        <label><span>持续时间（秒）</span><input name="durationSeconds" type="number" min="10" max="259200" value="60" required /></label>
+        <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>确认隔离执行</span></label><button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>开始测试</button>
       </form>
     </div>
-  </section>`;
+  </details>`;
 }
 
 function capacityChaosCreateForm(faults, services, loading) {
   const regions = [...new Set(services.map((item) => item.region_code))];
-  return `<section class="platform-band"><div class="platform-section-heading"><div><p>Bounded fault catalog</p><h2>Create chaos experiment</h2></div></div>
+  return `<details class="platform-band platform-collapsed-section"><summary>创建故障演练 <span>只有需要验证故障切换时展开</span></summary>
     <form data-platform-capacity-chaos-form class="platform-capacity-chaos-create">
       <input type="hidden" name="action" value="create" />
-      <label><span>Fault</span><select name="faultCode">${faults.filter((item) => item.status === "active").map((item) => `<option value="${escapeAttribute(item.fault_code)}">${escapeHtml(item.fault_code)}</option>`).join("")}</select></label>
-      <label><span>Service</span><select name="serviceCode"><option value="gateway">Gateway</option><option value="control">Control</option><option value="status">Status</option><option value="shared">Shared</option></select></label>
-      <label><span>Environment</span><select name="environmentClass"><option value="staging">Staging</option><option value="production">Production</option></select></label>
-      <label><span>Region</span><select name="regionCode">${regions.map((value) => `<option value="${escapeAttribute(value)}">${escapeHtml(value)}</option>`).join("")}</select></label>
-      <label><span>Blast tenants</span><input name="blastTenantCount" type="number" min="1" max="100" value="10" required /></label>
-      <label><span>Duration seconds</span><input name="durationSeconds" type="number" min="10" max="3600" value="60" required /></label>
-      <label><span>Objective p95 ms</span><input name="objectiveP95Ms" type="number" min="1" max="60000" value="2000" required /></label>
-      <label><span>Objective error bps</span><input name="objectiveErrorRateBps" type="number" min="0" max="10000" value="100" required /></label>
-      <label><span>Hard stop error bps</span><input name="stopErrorRateBps" type="number" min="1" max="10000" value="500" required /></label>
-      <label><span>Reason</span><select name="reasonCode"><option value="resilience_validation">Resilience validation</option><option value="release_validation">Release validation</option></select></label>
-      <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>Confirm bounded scope and stop limits</span></label><button class="platform-danger" type="submit" ${loading ? "disabled" : ""}>Create experiment</button>
+      <label><span>故障类型</span><select name="faultCode">${faults.filter((item) => item.status === "active").map((item) => `<option value="${escapeAttribute(item.fault_code)}">${escapeHtml(item.fault_code)}</option>`).join("")}</select></label>
+      <label><span>服务</span><select name="serviceCode"><option value="gateway">网关</option><option value="control">管理控制台</option><option value="status">状态服务</option><option value="shared">共享服务</option></select></label>
+      <label><span>环境</span><select name="environmentClass"><option value="staging">预发布环境</option><option value="production">生产环境</option></select></label>
+      <label><span>区域</span><select name="regionCode">${regions.map((value) => `<option value="${escapeAttribute(value)}">${escapeHtml(value)}</option>`).join("")}</select></label>
+      <label><span>影响组织数</span><input name="blastTenantCount" type="number" min="1" max="100" value="10" required /></label>
+      <label><span>持续时间（秒）</span><input name="durationSeconds" type="number" min="10" max="3600" value="60" required /></label>
+      <label><span>目标 P95（毫秒）</span><input name="objectiveP95Ms" type="number" min="1" max="60000" value="2000" required /></label>
+      <label><span>目标错误率</span><input name="objectiveErrorRateBps" type="number" min="0" max="10000" value="100" required /></label>
+      <label><span>停止错误率</span><input name="stopErrorRateBps" type="number" min="1" max="10000" value="500" required /></label>
+      <label><span>原因</span><select name="reasonCode"><option value="resilience_validation">稳定性验证</option><option value="release_validation">发布验证</option></select></label>
+      <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>确认影响范围和停止条件</span></label><button class="platform-danger" type="submit" ${loading ? "disabled" : ""}>创建演练</button>
     </form>
-  </section>`;
+  </details>`;
 }
 
 function capacityEconomicsView(items, total) {
-  return `<section class="platform-band"><div class="platform-section-heading"><div><p>Integer micros / Aggregate usage</p><h2>Unit economics</h2></div><span>${number(total ?? items.length)} snapshots</span></div>
+  return `<section class="platform-band"><div class="platform-section-heading"><div><p>汇总用量与成本</p><h2>单位成本</h2></div><span>${number(total ?? items.length)} 条记录</span></div>
     <div class="platform-table-wrap"><table class="platform-economics-table">
-      <thead><tr><th>Period / service</th><th>Requests</th><th>Tokens</th><th>Allocated cost</th><th>Unit costs</th><th>Watermark</th></tr></thead>
-      <tbody>${items.map((item) => `<tr><td data-label="Period / service"><strong>${escapeHtml(item.billing_period)} · ${escapeHtml(item.service_code)}</strong><small>allocation v${number(item.allocation_version)}</small></td><td data-label="Requests"><strong>${number(item.request_count)}</strong></td><td data-label="Tokens"><strong>${number(item.total_tokens)}</strong><small>${number(item.input_tokens)} in · ${number(item.output_tokens)} out</small></td><td data-label="Allocated cost"><strong>${number(item.allocated_cost_micros)} micros</strong><small>${escapeHtml(item.currency)}</small></td><td data-label="Unit costs"><strong>${number(item.cost_per_request_micros ?? 0)} / request</strong><small>${number(item.cost_per_million_tokens_micros ?? 0)} / 1M tokens</small></td><td data-label="Watermark"><strong>${shortHash(item.usage_watermark)}</strong><small>${formatTime(item.created_at)}</small></td></tr>`).join("") || emptyRow("No unit economics snapshots.", 6)}</tbody>
+      <thead><tr><th>周期 / 服务</th><th>请求数</th><th>Token</th><th>分摊成本</th><th>单位成本</th><th>记录时间</th></tr></thead>
+      <tbody>${items.map((item) => `<tr><td data-label="Period / service"><strong>${escapeHtml(item.billing_period)} · ${escapeHtml(item.service_code)}</strong><small>allocation v${number(item.allocation_version)}</small></td><td data-label="Requests"><strong>${number(item.request_count)}</strong></td><td data-label="Tokens"><strong>${number(item.total_tokens)}</strong><small>${number(item.input_tokens)} in · ${number(item.output_tokens)} out</small></td><td data-label="Allocated cost"><strong>${number(item.allocated_cost_micros)} micros</strong><small>${escapeHtml(item.currency)}</small></td><td data-label="Unit costs"><strong>${number(item.cost_per_request_micros ?? 0)} / request</strong><small>${number(item.cost_per_million_tokens_micros ?? 0)} / 1M tokens</small></td><td data-label="Watermark"><strong>${shortHash(item.usage_watermark)}</strong><small>${formatTime(item.created_at)}</small></td></tr>`).join("") || emptyRow("暂无单位成本记录。", 6)}</tbody>
     </table></div>
   </section>`;
 }
 
 function basisPoints(value) { return `${(Number(value ?? 0) / 100).toFixed(2)}%`; }
 function decimalRps(value) { return (Number(value ?? 0) / 1000).toFixed(3); }
+function capacityServiceLabel(value) {
+  return ({ gateway: "网关", control: "管理控制台", status: "状态服务", shared: "共享服务" })[value] ?? String(value ?? "未知服务").replaceAll("_", " ");
+}
+function capacityEnvironmentLabel(value) {
+  return ({ dev: "开发环境", staging: "预发布环境", production: "生产环境" })[value] ?? statusLabel(value);
+}
+function capacityRecommendationLabel(value) {
+  return ({ hold: "保持现状", scale_out: "扩容", scale_in: "缩容", investigate: "需要调查", pending: "待评估" })[value] ?? statusLabel(value);
+}
 
 function disasterRecoveryView(state, permissions) {
   const response = state.disasterRecoveryStatus ?? {};
@@ -611,32 +645,32 @@ function disasterRecoveryView(state, permissions) {
     && permissions.has("platform.dr.security_review");
   return `
     <header class="platform-page-heading">
-      <div><p>Regions / Backups / Fencing</p><h1>灾难恢复</h1></div>
+      <div><p>区域、备份与切换保护</p><h1>灾难恢复</h1></div>
       <button class="platform-icon-button" type="button" data-platform-action="dr-refresh"
         title="刷新灾难恢复状态" aria-label="刷新灾难恢复状态" ${state.loading ? "disabled" : ""}>↻</button>
     </header>
     <section class="platform-metrics platform-dr-metrics" aria-label="灾难恢复目标">
-      ${metric("Control RPO", Math.round(Number(objectives.control_rpo_seconds ?? 0) / 60), "分钟上限")}
-      ${metric("Control RTO", Math.round(Number(objectives.control_rto_seconds ?? 0) / 60), "分钟上限")}
-      ${metric("Gateway RTO", Math.round(Number(objectives.gateway_rto_seconds ?? 0) / 60), "分钟上限")}
-      ${metric("Recovery age", objectives.latest_recovery_age_seconds ?? 0,
+      ${metric("控制面 RPO", Math.round(Number(objectives.control_rpo_seconds ?? 0) / 60), "分钟上限")}
+      ${metric("控制面 RTO", Math.round(Number(objectives.control_rto_seconds ?? 0) / 60), "分钟上限")}
+      ${metric("网关 RTO", Math.round(Number(objectives.gateway_rto_seconds ?? 0) / 60), "分钟上限")}
+      ${metric("最近恢复点", objectives.latest_recovery_age_seconds ?? 0,
         objectives.recovery_ready ? "秒 · 可恢复" : "秒 · 未就绪")}
     </section>
     <section class="platform-band">
       <div class="platform-section-heading">
-        <div><p>Writer authority</p><h2>Region 与 fencing</h2></div>
-        <span>${number(regions.filter((item) => item.health_status === "healthy").length)} / ${number(regions.length)} healthy</span>
+        <div><p>当前写入区域与切换保护</p><h2>区域状态</h2></div>
+        <span>${number(regions.filter((item) => item.health_status === "healthy").length)} / ${number(regions.length)} 健康</span>
       </div>
       <div class="platform-table-wrap">
         <table class="platform-dr-region-table">
-          <thead><tr><th>Region</th><th>驻留组</th><th>健康</th><th>Writer</th><th>Epoch / Revision</th></tr></thead>
-          <tbody>${regions.map(drRegionRow).join("") || emptyRow("暂无 Region 状态", 5)}</tbody>
+          <thead><tr><th>区域</th><th>驻留组</th><th>健康</th><th>写入状态</th><th>切换版本</th></tr></thead>
+          <tbody>${regions.map(drRegionRow).join("") || emptyRow("暂无 区域 状态", 5)}</tbody>
         </table>
       </div>
     </section>
     <section class="platform-band">
       <div class="platform-section-heading">
-        <div><p>Signed immutable plans</p><h2>切换计划与审批</h2></div>
+        <div><p>经过确认的切换方案</p><h2>切换计划与审批</h2></div>
         <span>${canReview ? "安全复核权限" : canExecute ? "执行权限" : "只读"}</span>
       </div>
       <div class="platform-table-wrap">
@@ -653,7 +687,7 @@ function disasterRecoveryView(state, permissions) {
     </section>
     <section class="platform-band">
       <div class="platform-section-heading">
-        <div><p>Checkpoint handoff</p><h2>最近执行</h2></div>
+        <div><p>切换执行记录</p><h2>最近执行</h2></div>
         <span>${number(runs.length)} 次</span>
       </div>
       <div class="platform-table-wrap">
@@ -665,7 +699,7 @@ function disasterRecoveryView(state, permissions) {
     </section>
     <section class="platform-band">
       <div class="platform-section-heading">
-        <div><p>Verified public projection</p><h2>恢复点</h2></div>
+        <div><p>已验证的备份记录</p><h2>恢复点</h2></div>
         <span>${number(backupResponse.total ?? recoveryPoints.length)} 个</span>
       </div>
       <div class="platform-table-wrap">
@@ -679,7 +713,7 @@ function disasterRecoveryView(state, permissions) {
 
 function drRegionRow(item) {
   return `<tr>
-    <td data-label="Region"><strong>${escapeHtml(item.region_code)}</strong><small>${formatTime(item.updated_at)}</small></td>
+    <td data-label="区域"><strong>${escapeHtml(item.region_code)}</strong><small>${formatTime(item.updated_at)}</small></td>
     <td data-label="驻留组"><strong>${escapeHtml(item.residency_group)}</strong></td>
     <td data-label="健康">${status(item.health_status)}</td>
     <td data-label="Writer">${status(item.writer_status)}</td>
@@ -705,8 +739,8 @@ function drPlanRow(plan, regions, runs, access) {
   return `<tr>
     <td data-label="计划"><strong>${escapeHtml(plan.plan_code)}</strong><small>v${number(plan.version)} · ${escapeHtml(plan.component_profile)}</small>${status(plan.status)}<small>${shortHash(plan.manifest_sha256)}</small></td>
     <td data-label="路径 / 驻留"><strong>${escapeHtml(plan.source_region_code)} → ${escapeHtml(plan.target_region_code)}</strong><small>${escapeHtml(plan.residency_group)}</small></td>
-    <td data-label="目标"><strong>RPO ${number(plan.rpo_seconds / 60)} min</strong><small>Control ${number(plan.control_rto_seconds / 60)} min · Gateway ${number(plan.gateway_rto_seconds / 60)} min</small></td>
-    <td data-label="停止条件"><strong>Split brain / integrity</strong><small>${escapeHtml(plan.stop_condition_code)}</small></td>
+    <td data-label="目标"><strong>RPO ${number(plan.rpo_seconds / 60)} 分钟</strong><small>控制面 ${number(plan.control_rto_seconds / 60)} 分钟 · 网关 ${number(plan.gateway_rto_seconds / 60)} 分钟</small></td>
+    <td data-label="停止条件"><strong>脑裂 / 完整性保护</strong><small>${escapeHtml(statusLabel(plan.stop_condition_code))}</small></td>
     <td data-label="双人控制"><div class="platform-dr-actions">${controls.join("") || '<span class="platform-restricted">只读或等待状态收敛</span>'}</div></td>
   </tr>`;
 }
@@ -772,18 +806,18 @@ function abuseRiskView(state, permissions) {
   const canDecide = !support && permissions.has("platform.risk.decide");
   return `
     <header class="platform-page-heading">
-      <div><p>Abuse / Risk</p><h1>滥用与风险控制</h1></div>
+      <div><p>滥用与风险</p><h1>滥用与风险控制</h1></div>
       <span>${support ? "支持投影" : "安全投影"}</span>
     </header>
     <section class="platform-metrics" aria-label="风险案件概览">
-      ${metric("Cases", response.total ?? cases.length, "当前筛选")}
+      ${metric("用例数", response.total ?? cases.length, "当前筛选")}
       ${metric("Open", cases.filter((item) => item.status === "open").length, "待分诊")}
       ${metric("Restricted", cases.filter((item) => item.status === "restricted").length, "限制生效")}
       ${metric("Appeals", cases.reduce((total, item) => total + item.appeals.length, 0), "申诉记录")}
     </section>
     <section class="platform-band">
       <div class="platform-section-heading">
-        <div><p>Case queue</p><h2>风险案件</h2></div>
+        <div><p>风险处理队列</p><h2>风险案件</h2></div>
         <form class="platform-risk-filter" data-platform-risk-filter-form>
           <label><span>状态</span><select name="status">${riskStatusOptions(state.riskStatus)}</select></label>
           <button type="submit" ${state.loading ? "disabled" : ""}>筛选</button>
@@ -791,7 +825,7 @@ function abuseRiskView(state, permissions) {
       </div>
       <div class="platform-table-wrap">
         <table class="platform-risk-table">
-          <thead><tr><th>案件 / Workspace</th><th>状态 / 风险</th><th>信号</th><th>限制 / 申诉</th><th>决策</th></tr></thead>
+          <thead><tr><th>案件 / 组织</th><th>状态 / 风险</th><th>信号</th><th>限制 / 申诉</th><th>决策</th></tr></thead>
           <tbody>${cases.map((item) => riskCaseRow(item, { support, canDecide, loading: state.loading })).join("") || emptyRow("暂无风险案件", 5)}</tbody>
         </table>
       </div>
@@ -812,7 +846,7 @@ function riskCaseRow(item, { support, canDecide, loading }) {
       || '<span class="platform-restricted">无</span>';
   return `
     <tr>
-      <td data-label="案件 / Workspace"><strong>${escapeHtml(shortReference(item.risk_case_id))}</strong><span>${escapeHtml(shortWorkspace(item.workspace_id))} · rev ${number(item.revision)}</span><small>${escapeHtml(formatTime(item.updated_at))}</small></td>
+      <td data-label="案件 / 组织"><strong>${escapeHtml(shortReference(item.risk_case_id))}</strong><span>${escapeHtml(shortWorkspace(item.workspace_id))} · rev ${number(item.revision)}</span><small>${escapeHtml(formatTime(item.updated_at))}</small></td>
       <td data-label="状态 / 风险">${status(item.status)}<span>${escapeHtml(score)}</span><small>${escapeHtml(statusLabel(item.safe_reason_family))}</small></td>
       <td data-label="信号"><div class="platform-tag-list platform-risk-signals">${signals}</div></td>
       <td data-label="限制 / 申诉">${riskRestriction(item.restriction)}${riskAppealTimeline(item.appeals)}</td>
@@ -845,7 +879,7 @@ function riskDecisionControls(item, loading) {
   const review = item.status === "open" ? `
     <form data-platform-risk-decision-form>${hidden}<input type="hidden" name="decision" value="required_review" /><input type="hidden" name="reasonCode" value="manual_review" /><label class="platform-check"><input name="confirmed" type="checkbox" required /><span>确认复核</span></label><button type="submit" ${loading ? "disabled" : ""}>进入复核</button></form>` : "";
   const restrict = item.status !== "restricted" ? `
-    <form data-platform-risk-decision-form>${hidden}<input type="hidden" name="decision" value="restricted" /><input type="hidden" name="reasonCode" value="automation_confirmed" /><label><span>限制</span><select name="restrictionKind"><option value="api_calls">API 调用</option><option value="resource_creation">资源创建</option><option value="workspace_access">Workspace 访问</option></select></label><label><span>分钟</span><input name="restrictionMinutes" type="number" min="5" max="10080" value="30" required /></label><label class="platform-check"><input name="confirmed" type="checkbox" required /><span>确认限制</span></label><button class="platform-danger" type="submit" ${loading ? "disabled" : ""}>限制</button></form>` : "";
+    <form data-platform-risk-decision-form>${hidden}<input type="hidden" name="decision" value="restricted" /><input type="hidden" name="reasonCode" value="automation_confirmed" /><label><span>限制</span><select name="restrictionKind"><option value="api_calls">API 调用</option><option value="resource_creation">资源创建</option><option value="workspace_access">组织 访问</option></select></label><label><span>分钟</span><input name="restrictionMinutes" type="number" min="5" max="10080" value="30" required /></label><label class="platform-check"><input name="confirmed" type="checkbox" required /><span>确认限制</span></label><button class="platform-danger" type="submit" ${loading ? "disabled" : ""}>限制</button></form>` : "";
   const clear = `
     <form data-platform-risk-decision-form>${hidden}<input type="hidden" name="decision" value="cleared" /><label><span>清除原因</span><select name="reasonCode"><option value="false_positive">误报</option><option value="appeal_approved">申诉通过</option></select></label><label class="platform-check"><input name="confirmed" type="checkbox" required /><span>确认清除</span></label><button type="submit" ${loading ? "disabled" : ""}>清除</button></form>`;
   return `<div class="platform-risk-actions">${review}${restrict}${clear}</div>`;
@@ -860,7 +894,7 @@ function jobRuntimeView(state, permissions) {
   const canManageTypes = permissions.has("platform.job.type_manage");
   return `
     <header class="platform-page-heading">
-      <div><p>Scheduler / Worker</p><h1>任务运行时</h1></div>
+      <div><p>任务调度与执行</p><h1>任务运行时</h1></div>
       <span>${number(jobs.length)} 个任务</span>
     </header>
     <section class="platform-band platform-job-queues" aria-label="队列状态">
@@ -870,7 +904,7 @@ function jobRuntimeView(state, permissions) {
     </section>
     <section class="platform-band">
       <div class="platform-section-heading">
-        <div><p>Durable jobs</p><h2>任务</h2></div>
+        <div><p>后台任务</p><h2>任务</h2></div>
         <form class="platform-job-filter" data-platform-job-filter-form>
           <label><span>状态</span><select name="status">${jobStatusOptions(state.jobStatus)}</select></label>
           <button type="submit">筛选</button>
@@ -886,7 +920,7 @@ function jobRuntimeView(state, permissions) {
     ${state.selectedJob ? jobDetailView(state.selectedJob, canManage, state.loading) : ""}
     <section class="platform-band">
       <div class="platform-section-heading">
-        <div><p>Signed catalog</p><h2>任务类型</h2></div>
+        <div><p>任务目录</p><h2>任务类型</h2></div>
         <span>${number(types.length)} 个类型</span>
       </div>
       <div class="platform-table-wrap">
@@ -1016,18 +1050,18 @@ function featureRolloutsView(state, permissions) {
   const canKill = permissions.has("platform.feature.kill");
   return `
     <header class="platform-page-heading">
-      <div><p>Server-authoritative delivery</p><h1>功能开关与渐进发布</h1></div>
+      <div><p>服务端配置发布</p><h1>功能开关与渐进发布</h1></div>
       <span>${number(response.total ?? 0)} 个 Flag</span>
     </header>
     <section class="platform-metrics" aria-label="发布概览">
-      ${metric("Active", flags.filter((item) => item.status === "active").length, "可发布")}
+      ${metric("活跃功能", flags.filter((item) => item.status === "active").length, "可发布")}
       ${metric("P0", flags.filter((item) => item.risk_level === "p0").length, "双人审批")}
       ${metric("Paused", flags.filter((item) => item.latest_rollout?.status === "paused").length, "健康门禁")}
       ${metric("Exposures", flags.reduce((sum, item) => sum + item.exposure_count, 0), "不可变事实")}
     </section>
     <section class="platform-band">
       <div class="platform-section-heading">
-        <div><p>Immutable versions</p><h2>发布目录</h2></div>
+        <div><p>版本管理</p><h2>发布目录</h2></div>
         <form class="platform-feature-filter" data-platform-feature-filter-form>
           <label><span>状态</span><select name="status">${featureStatusOptions(state.featureStatus)}</select></label>
           <label><span>风险</span><select name="riskLevel">${featureRiskOptions(state.featureRiskLevel)}</select></label>
@@ -1058,22 +1092,22 @@ function configDistributionView(state, permissions) {
   ).length;
   return `
     <header class="platform-page-heading">
-      <div><p>DB-authoritative snapshots</p><h1>配置分发</h1></div>
+      <div><p>配置快照</p><h1>配置分发</h1></div>
       <span>${number(response.total ?? 0)} 个工作区</span>
     </header>
     <section class="platform-metrics" aria-label="配置分发概览">
-      ${metric("Workspaces", items.length, "已分配 Cell")}
+      ${metric("组织", items.length, "已分配 Cell")}
       ${metric("Gateways", gatewayCount, "已观测实例")}
       ${metric("ACK lag", laggingCount, "落后工作区")}
-      ${metric("Stale", staleCount, "显式 stale / LKG")}
+      ${metric("过期节点", staleCount, "需要重新同步")}
     </section>
     <section class="platform-band">
       <div class="platform-section-heading">
-        <div><p>Monotonic watermarks</p><h2>工作区水位</h2></div>
+        <div><p>配置同步进度</p><h2>工作区水位</h2></div>
       </div>
       <div class="platform-table-wrap">
         <table class="platform-config-table">
-          <thead><tr><th>工作区 / Cell</th><th>Head</th><th>ACK 水位</th><th>LKG / Stale</th><th>最近重建</th><th>操作</th></tr></thead>
+          <thead><tr><th>工作区 / 单元</th><th>当前版本</th><th>确认水位</th><th>最低可用 / 过期</th><th>最近重建</th><th>操作</th></tr></thead>
           <tbody>${items.map((item) => configDistributionRow(
     item,
     { canRebuild, loading: state.loading },
@@ -1088,11 +1122,11 @@ function configDistributionRow(item, access) {
   const ackLag = Math.max(0, item.generation - item.minimum_applied_generation);
   const stale = item.stale_gateway_count > 0;
   return `<tr>
-    <td data-label="工作区 / Cell"><strong>${escapeHtml(item.workspace_id)}</strong><small>${escapeHtml(item.cell_code)}</small><small>${number(item.gateway_count)} 个 Gateway</small></td>
-    <td data-label="Head"><strong>generation ${number(item.generation)}</strong><small>revocation ${number(item.revocation_watermark)}</small></td>
-    <td data-label="ACK 水位"><strong>${number(item.minimum_applied_generation)}</strong><small>lag ${number(ackLag)} · ${formatTime(item.latest_ack_at)}</small></td>
-    <td data-label="LKG / Stale"><strong>LKG ${number(item.minimum_lkg_generation)}</strong>${status(stale ? "stale" : "current")}<small>${number(item.stale_gateway_count)} 个 stale</small></td>
-    <td data-label="最近重建">${rebuild ? `<strong>generation ${number(rebuild.target_generation)}</strong>${status(rebuild.status)}<small>rev ${number(rebuild.revision)} · ${formatTime(rebuild.created_at)}</small><small>result ${rebuild.result_manifest_sha256 ? escapeHtml(rebuild.result_manifest_sha256.slice(0, 12)) : "-"}</small>` : '<span class="platform-restricted">尚无重建</span>'}</td>
+    <td data-label="工作区 / 单元"><strong>${escapeHtml(item.workspace_id)}</strong><small>${escapeHtml(item.cell_code)}</small><small>${number(item.gateway_count)} 个网关</small></td>
+    <td data-label="当前版本"><strong>版本 ${number(item.generation)}</strong><small>撤销水位 ${number(item.revocation_watermark)}</small></td>
+    <td data-label="确认水位"><strong>${number(item.minimum_applied_generation)}</strong><small>落后 ${number(ackLag)} · ${formatTime(item.latest_ack_at)}</small></td>
+    <td data-label="最低可用 / 过期"><strong>最低可用 ${number(item.minimum_lkg_generation)}</strong>${status(stale ? "过期" : "正常")}<small>${number(item.stale_gateway_count)} 个网关过期</small></td>
+    <td data-label="最近重建">${rebuild ? `<strong>版本 ${number(rebuild.target_generation)}</strong>${status(rebuild.status)}<small>修订 ${number(rebuild.revision)} · ${formatTime(rebuild.created_at)}</small><small>结果 ${rebuild.result_manifest_sha256 ? escapeHtml(rebuild.result_manifest_sha256.slice(0, 12)) : "-"}</small>` : '<span class="platform-restricted">尚无重建</span>'}</td>
     <td data-label="操作">${access.canRebuild ? `<form class="platform-config-rebuild" data-platform-config-rebuild-form>
       <input type="hidden" name="workspaceId" value="${escapeAttribute(item.workspace_id)}" />
       <label><span>原因</span><select name="reasonCode"><option value="operator_rebuild">运维重建</option><option value="consistency_repair">一致性修复</option></select></label>
@@ -1115,19 +1149,19 @@ function observabilityView(state, permissions) {
   const projection = serviceResponse.projection === "security" ? "安全投影" : "运维投影";
   return `
     <header class="platform-page-heading">
-      <div><p>Metrics / Logs / Traces</p><h1>服务可观测性</h1></div>
+      <div><p>服务运行</p><h1>服务可观测性</h1></div>
       <span>${escapeHtml(projection)}</span>
     </header>
     <section class="platform-metrics" aria-label="可观测性概览">
-      ${metric("Services", services.length, "服务目录")}
-      ${metric("Healthy", services.filter((item) => item.health_status === "healthy").length, "黄金信号")}
-      ${metric("SLO", slos.length, "当前版本")}
-      ${metric("Alerts", alerts.filter((item) => item.state !== "resolved").length, "待处理")}
+      ${metric("服务数", services.length, "服务目录")}
+      ${metric("健康服务", services.filter((item) => item.health_status === "healthy").length, "当前正常")}
+      ${metric("服务目标", slos.length, "已配置")}
+      ${metric("待处理告警", alerts.filter((item) => item.state !== "resolved").length, "需要关注")}
     </section>
     <section class="platform-band">
       <div class="platform-section-heading">
-        <div><p>Golden signals</p><h2>服务目录</h2></div>
-        <span>watermark ${number(Math.max(0, ...services.map((item) => item.source_watermark)))}</span>
+        <div><p>运行指标</p><h2>服务目录</h2></div>
+        <span>${number(services.length)} 项服务</span>
       </div>
       <div class="platform-table-wrap">
         <table class="platform-observability-table">
@@ -1138,7 +1172,7 @@ function observabilityView(state, permissions) {
     </section>
     <section class="platform-band">
       <div class="platform-section-heading">
-        <div><p>Immutable definitions</p><h2>SLO</h2></div>
+        <div><p>服务目标</p><h2>SLO</h2></div>
         <span>${number(sloResponse.total ?? 0)} 个定义</span>
       </div>
       <div class="platform-table-wrap">
@@ -1151,7 +1185,7 @@ function observabilityView(state, permissions) {
     ${canManage ? sloEditor(null, services, state.loading) : ""}
     <section class="platform-band">
       <div class="platform-section-heading">
-        <div><p>Integer error budgets</p><h2>错误预算</h2></div>
+        <div><p>可用额度</p><h2>错误预算</h2></div>
         <span>${number(budgets.length)} 个窗口</span>
       </div>
       <div class="platform-table-wrap">
@@ -1163,7 +1197,7 @@ function observabilityView(state, permissions) {
     </section>
     <section class="platform-band platform-alert-timeline">
       <div class="platform-section-heading">
-        <div><p>Append-only timeline</p><h2>告警时间线</h2></div>
+        <div><p>告警记录</p><h2>告警时间线</h2></div>
         <span>${number(alerts.length)} 条</span>
       </div>
       <ol>${alerts.map((item) => alertTimelineItem(item, canAck, state.loading)).join("")
@@ -1173,11 +1207,11 @@ function observabilityView(state, permissions) {
 
 function observableServiceRow(item) {
   return `<tr>
-    <td data-label="服务"><strong>${escapeHtml(item.display_name)}</strong><small>${escapeHtml(item.service_code)} · Tier ${number(item.service_tier)}</small><small>${escapeHtml(item.golden_signals.join(" · "))}</small></td>
-    <td data-label="健康">${status(item.health_status)}<small>${escapeHtml(item.owner_team_code)}</small></td>
+    <td data-label="服务"><strong>${escapeHtml(item.display_name)}</strong><details class="platform-audit-technical"><summary>技术信息</summary><code>${escapeHtml(item.service_code)}</code><code>Tier ${number(item.service_tier)}</code><code>${escapeHtml(item.golden_signals.join(" · "))}</code></details></td>
+    <td data-label="健康">${status(item.health_status)}</td>
     <td data-label="流量"><strong>${number(item.total_count)}</strong><small>当前分钟聚合</small></td>
     <td data-label="错误率"><strong>${bps(item.error_rate_bps)}</strong><small>${number(item.error_rate_bps)} bps</small></td>
-    <td data-label="P95 延迟"><strong>${number(item.latency_p95_ms)} ms</strong><small>watermark ${number(item.source_watermark)}</small></td>
+    <td data-label="P95 延迟"><strong>${number(item.latency_p95_ms)} ms</strong></td>
   </tr>`;
 }
 
@@ -1205,18 +1239,18 @@ function sloEditor(item, services, loading) {
     <label><span>名称</span><input name="displayName" value="${escapeAttribute(item?.display_name ?? "")}" maxlength="120" required /></label>
     <label><span>信号分类</span><select name="signalClass"><option value="reliability" ${item?.signal_class === "security" ? "" : "selected"}>可靠性</option><option value="security" ${item?.signal_class === "security" ? "selected" : ""}>安全</option></select></label>
     <label><span>SLI</span><select name="sliKind"><option value="availability" ${item?.sli_kind === "latency" ? "" : "selected"}>可用性</option><option value="latency" ${item?.sli_kind === "latency" ? "selected" : ""}>延迟</option></select></label>
-    <label><span>Operation</span><input name="operationCode" value="${escapeAttribute(item?.operation_code ?? "chat.completions")}" required /></label>
-    <label><span>Region</span><input name="regionCode" value="${escapeAttribute(item?.region_code ?? "global")}" required /></label>
+    <label><span>调用类型</span><input name="operationCode" value="${escapeAttribute(item?.operation_code ?? "chat.completions")}" required /></label>
+    <label><span>区域</span><input name="regionCode" value="${escapeAttribute(item?.region_code ?? "global")}" required /></label>
     <label><span>窗口分钟</span><input name="windowMinutes" type="number" min="5" max="43200" value="${Number(item?.window_minutes ?? 5)}" required /></label>
     <label><span>目标 bps</span><input name="targetBps" type="number" min="1" max="10000" value="${Number(item?.target_bps ?? 9990)}" required /></label>
     <label><span>延迟门限 ms</span><select name="latencyThresholdMs">${[10, 50, 100, 250, 500, 1000, 2500, 5000].map((value) => `<option value="${value}" ${value === item?.latency_threshold_ms ? "selected" : ""}>${value}</option>`).join("")}</select></label>
-    <label><span>Warning burn bps</span><input name="burnWarningBps" type="number" min="10000" value="${Number(item?.burn_warning_bps ?? 20000)}" required /></label>
-    <label><span>Critical burn bps</span><input name="burnCriticalBps" type="number" min="10001" value="${Number(item?.burn_critical_bps ?? 50000)}" required /></label>
+    <label><span>警告阈值</span><input name="burnWarningBps" type="number" min="10000" value="${Number(item?.burn_warning_bps ?? 20000)}" required /></label>
+    <label><span>严重阈值</span><input name="burnCriticalBps" type="number" min="10001" value="${Number(item?.burn_critical_bps ?? 50000)}" required /></label>
     <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>确认版本定义</span></label>
     <button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>${creating ? "创建 SLO" : "追加版本"}</button>
   </form>`;
   if (creating) {
-    return `<section class="platform-band platform-slo-editor"><div class="platform-section-heading"><div><p>CAS head</p><h2>创建 SLO</h2></div></div>${content}</section>`;
+    return `<details class="platform-band platform-collapsed-section platform-slo-editor"><summary>创建服务目标 <span>需要监控新的服务时展开</span></summary>${content}</details>`;
   }
   return `<details class="platform-slo-version-editor"><summary>追加版本</summary>${content}</details>`;
 }
@@ -1226,7 +1260,7 @@ function errorBudgetRow(item) {
   const value = Math.min(item.consumed_bad_count, max);
   return `<tr>
     <td data-label="SLO / 窗口"><strong>${escapeHtml(item.slo_code)} · v${number(item.slo_version)}</strong><small>${formatTime(item.window_started_at)} → ${formatTime(item.window_ended_at)}</small>${status(item.health_status)}</td>
-    <td data-label="请求"><strong>${number(item.good_count)} / ${number(item.total_count)} good</strong><small>watermark ${number(item.source_watermark)}</small></td>
+    <td data-label="请求"><strong>${number(item.good_count)} / ${number(item.total_count)} 成功</strong></td>
     <td data-label="允许 / 已消耗"><progress max="${max}" value="${value}" aria-label="预算消耗 ${number(item.consumed_bad_count)} / ${number(item.allowed_bad_count)}"></progress><small>${number(item.consumed_bad_count)} / ${number(item.allowed_bad_count)}</small></td>
     <td data-label="剩余"><strong>${number(item.remaining_bad_count)}</strong><small>错误请求额度</small></td>
     <td data-label="燃烧率"><strong>${bps(item.burn_rate_bps)}</strong><small>computed ${formatTime(item.computed_at)}</small></td>
@@ -1311,9 +1345,9 @@ function featureStartForm(flag, version, loading) {
   return `<form data-platform-feature-command-form>
     ${featureCommandFields(flag, null, "start", flag.revision)}
     <input type="hidden" name="versionNumber" value="${number(version.version_number)}" />
-    <label><span>阶梯 bps</span><input name="percentageBps" type="number" min="0" max="${number(rules.percentage_bps)}" step="100" value="${number(rules.percentage_bps)}" required /></label>
+      <label><span>阶梯 bps</span><input name="percentageBps" type="number" min="0" max="${escapeAttribute(String(rules.percentage_bps))}" step="100" value="${escapeAttribute(String(rules.percentage_bps))}" required /></label>
     <label><span>环境</span><select name="environmentCode">${rules.environments.map((item) => `<option value="${escapeAttribute(item)}">${escapeHtml(item)}</option>`).join("")}</select></label>
-    <label><span>Region</span><input name="regionCode" value="${escapeAttribute(rules.regions[0] ?? "global")}" required /></label>
+    <label><span>区域</span><input name="regionCode" value="${escapeAttribute(rules.regions[0] ?? "global")}" required /></label>
     ${featureConfirm("开始", loading, "platform-primary")}
   </form>`;
 }
@@ -1363,14 +1397,14 @@ function featureVersionForm(flag, version, loading) {
 
 function featureCreateForm() {
   return `<section class="platform-band platform-feature-create">
-    <div class="platform-section-heading"><div><p>Closed rule set</p><h2>创建功能开关</h2></div></div>
+    <div class="platform-section-heading"><div><p>受控配置</p><h2>创建功能开关</h2></div></div>
     <form data-platform-feature-create-form autocomplete="off">
       <input type="hidden" name="action" value="create" />
       <input type="hidden" name="flagId" value="" />
       <input type="hidden" name="revision" value="" />
       <label><span>Flag code</span><input name="flagCode" pattern="[a-z0-9][a-z0-9_.-]{2,79}" required /></label>
       <label><span>显示名称</span><input name="displayName" maxlength="120" required /></label>
-      <label><span>风险等级</span><select name="riskLevel"><option value="standard">Standard</option><option value="p0">P0</option></select></label>
+      <label><span>风险等级</span><select name="riskLevel"><option value="standard">标准</option><option value="p0">最高</option></select></label>
       ${featureRuleFields({ environments: ["production"], regions: [], cohort_code: null, percentage_bps: 10000, prerequisite_flag_code: null })}
       ${featureConfirm("创建", false, "platform-primary")}
     </form>
@@ -1379,24 +1413,24 @@ function featureCreateForm() {
 
 function featureRuleFields(rules) {
   return `<fieldset class="platform-feature-environments"><legend>环境</legend>${["development", "staging", "production"].map((environment) => `<label class="platform-check"><input type="checkbox" name="environments" value="${environment}" ${rules.environments.includes(environment) ? "checked" : ""} /><span>${environment}</span></label>`).join("")}</fieldset>
-    <label><span>Regions（逗号分隔）</span><input name="regions" value="${escapeAttribute(rules.regions.join(","))}" /></label>
-    <label><span>最大比例 bps</span><input name="percentageBps" type="number" min="0" max="10000" step="100" value="${number(rules.percentage_bps)}" required /></label>
+    <label><span>区域（逗号分隔）</span><input name="regions" value="${escapeAttribute(rules.regions.join(","))}" /></label>
+    <label><span>最大比例 bps</span><input name="percentageBps" type="number" min="0" max="10000" step="100" value="${escapeAttribute(String(rules.percentage_bps))}" required /></label>
     <label><span>Cohort code</span><input name="cohortCode" value="${escapeAttribute(rules.cohort_code ?? "")}" /></label>
     <label><span>前置 Flag</span><input name="prerequisiteFlagCode" value="${escapeAttribute(rules.prerequisite_flag_code ?? "")}" /></label>`;
 }
 
 function featureStatusOptions(selected) {
-  return [["", "全部"], ["active", "Active"], ["killed", "Killed"], ["disabled", "Disabled"]]
+  return [["", "全部"], ["active", "启用"], ["killed", "已停止"], ["disabled", "已停用"]]
     .map(([value, label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`).join("");
 }
 
 function featureRiskOptions(selected) {
-  return [["", "全部"], ["standard", "Standard"], ["p0", "P0"]]
+  return [["", "全部"], ["standard", "标准"], ["p0", "最高"]]
     .map(([value, label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`).join("");
 }
 
 function queueLabel(value) {
-  return ({ critical: "Critical", standard: "Standard", bulk: "Bulk" })[value] ?? "Unknown";
+  return ({ critical: "紧急", standard: "标准", bulk: "批量" })[value] ?? "未知";
 }
 
 function notificationTemplatesView(state, permissions) {
@@ -1411,7 +1445,7 @@ function notificationTemplatesView(state, permissions) {
     </header>
     <section class="platform-band">
       <div class="platform-section-heading">
-        <div><p>Immutable history</p><h2>模板版本</h2></div>
+        <div><p>历史版本</p><h2>模板版本</h2></div>
         <span>${number(templates.length)} 个版本</span>
       </div>
       <div class="platform-table-wrap">
@@ -1430,7 +1464,7 @@ function notificationTemplatesView(state, permissions) {
           <label><span>模板代码</span><input name="templateCode" pattern="[a-z0-9][a-z0-9_.-]{2,79}" maxlength="80" value="invoice_issued" required /></label>
           <label><span>事件</span><select name="eventType">${notificationEventOptions(defaultEvent)}</select></label>
           <label><span>渠道</span><select name="channel"><option value="in_app">站内</option><option value="email" selected>邮件</option><option value="webhook">Webhook</option></select></label>
-          <label><span>语言</span><select name="locale"><option value="en">English</option><option value="zh-CN">简体中文</option></select></label>
+          <label><span>语言</span><select name="locale"><option value="en">英语</option><option value="zh-CN">简体中文</option></select></label>
           <label class="platform-notification-parameters"><span>允许参数</span><output data-template-parameters>${escapeHtml(NOTIFICATION_EVENT_PARAMETERS[defaultEvent].join(", "))}</output></label>
           <label class="platform-notification-subject"><span>主题</span><input name="subjectTemplate" maxlength="200" value="Invoice {{invoice_number_masked}} issued" required /></label>
           <label class="platform-notification-body"><span>正文</span><textarea name="bodyTemplate" maxlength="4000" rows="6" required>Invoice {{invoice_number_masked}} for {{total}} {{currency}} was issued at {{issued_at}}.</textarea></label>
@@ -1444,12 +1478,12 @@ function notificationTemplatesView(state, permissions) {
 
 function notificationTemplateRow(template) {
   return `<tr>
-    <td data-label="模板"><strong>${escapeHtml(template.template_code)}</strong><small>${escapeHtml(template.notification_template_id)}</small></td>
-    <td data-label="事件"><strong>${escapeHtml(notificationEventLabel(template.event_type))}</strong><small>${escapeHtml(template.category)}</small></td>
+    <td data-label="模板"><strong>${escapeHtml(notificationEventLabel(template.event_type))}</strong></td>
+    <td data-label="事件">${escapeHtml(notificationEventLabel(template.event_type))}</td>
     <td data-label="渠道 / 语言"><strong>${escapeHtml(notificationChannelLabel(template.channel))}</strong><small>${escapeHtml(notificationLocaleLabel(template.locale))}</small></td>
-    <td data-label="版本"><strong>v${number(template.version)}</strong><small>rev ${number(template.revision)}</small></td>
+    <td data-label="版本"><strong>v${number(template.version)}</strong></td>
     <td data-label="状态">${status(template.status)}<small>${formatTime(template.published_at ?? template.created_at)}</small></td>
-    <td data-label="正文摘要"><strong>${escapeHtml(template.subject_template)}</strong><small>${escapeHtml(template.content_sha256.slice(0, 12))}</small></td>
+    <td data-label="正文摘要"><strong>${escapeHtml(template.subject_template)}</strong></td>
   </tr>`;
 }
 
@@ -1468,7 +1502,7 @@ function notificationEventLabel(value) {
     "invoice.issued": "发票开具",
     "invoice.reversed": "发票冲红",
     "infrastructure.backup_completed": "备份完成",
-    "gateway.health_changed": "Gateway 健康变更",
+    "gateway.health_changed": "网关健康变更",
   })[value] ?? "未知事件";
 }
 
@@ -1477,15 +1511,15 @@ function notificationChannelLabel(value) {
 }
 
 function notificationLocaleLabel(value) {
-  return ({ "zh-CN": "简体中文", en: "English" })[value] ?? String(value ?? "未知语言");
+  return ({ "zh-CN": "简体中文", en: "英语" })[value] ?? String(value ?? "未知语言");
 }
 
-/** 渲染企业认证审核队列，案件投影不显示 Workspace、主体明文或对象引用。 */
+/** 渲染企业认证审核队列，案件投影不显示 组织、主体明文或对象引用。 */
 function verificationView(state, permissions) {
   const cases = state.verification?.cases ?? [];
   const canReview = permissions.has("platform.verification.review");
   return `
-    <header class="platform-page-heading"><div><p>Business identity</p><h1>企业认证审核</h1></div><span>${number(state.verification?.total ?? 0)} 个案件</span></header>
+    <header class="platform-page-heading"><div><p>企业身份</p><h1>企业认证审核</h1></div><span>${number(state.verification?.total ?? 0)} 个案件</span></header>
     <section class="platform-band">
       <form class="platform-billing-filter" data-platform-verification-filter-form>
         <label><span>案件状态</span><select name="status"><option value="" ${state.verificationStatus ? "" : "selected"}>全部</option>${verificationStatusOptions(state.verificationStatus)}</select></label>
@@ -1504,11 +1538,11 @@ function verificationRow(item, canReview) {
   const active = new Set(["submitted", "in_review"]).has(item.status);
   const evidence = item.evidence_items ?? [];
   return `<tr>
-    <td data-label="案件"><strong>${escapeHtml(item.business_verification_intent_id)}</strong><small>Profile rev ${number(item.profile_revision)} · Case rev ${number(item.revision)}</small></td>
+    <td data-label="案件"><strong>${escapeHtml(item.business_verification_intent_id)}</strong><small>资料修订 ${number(item.profile_revision)} · 案件修订 ${number(item.revision)}</small></td>
     <td data-label="主体"><strong>${escapeHtml(item.country_code)}</strong><small>${escapeHtml(entityTypeLabel(item.entity_type))}</small></td>
     <td data-label="状态">${status(item.status)}<small>${formatTime(item.submitted_at)}</small></td>
     <td data-label="扫描"><strong>${escapeHtml(scanStateLabel(item.evidence))}</strong><small>${number(item.evidence?.evidence_count ?? 0)} 份</small></td>
-    <td data-label="证据"><div class="platform-evidence-list">${evidence.map((entry) => `<div><span>${escapeHtml(evidenceTypeLabel(entry.evidence_type))} · ${escapeHtml(entry.mime_type)} · ${number(entry.size_bytes)} B</span>${canReview && active ? `<button class="platform-icon-button" type="button" data-platform-action="verification-evidence-token" data-intent-id="${escapeAttribute(item.business_verification_intent_id)}" data-evidence-id="${escapeAttribute(entry.verification_evidence_id)}" title="签发证据授权" aria-label="签发证据授权">↓</button>` : ""}</div>`).join("") || '<span class="platform-restricted">无 active 证据</span>'}</div></td>
+    <td data-label="证据"><div class="platform-evidence-list">${evidence.map((entry) => `<div><span>${escapeHtml(evidenceTypeLabel(entry.evidence_type))} · ${escapeHtml(entry.mime_type)} · ${number(entry.size_bytes)} 字节</span>${canReview && active ? `<button class="platform-icon-button" type="button" data-platform-action="verification-evidence-token" data-intent-id="${escapeAttribute(item.business_verification_intent_id)}" data-evidence-id="${escapeAttribute(entry.verification_evidence_id)}" title="签发证据授权" aria-label="签发证据授权">↓</button>` : ""}</div>`).join("") || '<span class="platform-restricted">暂无有效证据</span>'}</div></td>
     <td data-label="操作">${canReview && active ? `<div class="platform-verification-actions"><button class="platform-primary" type="button" data-platform-action="verification-approve" data-intent-id="${escapeAttribute(item.business_verification_intent_id)}" data-revision="${number(item.revision)}">批准</button><form data-platform-verification-reject-form><input name="intentId" type="hidden" value="${escapeAttribute(item.business_verification_intent_id)}" /><input name="revision" type="hidden" value="${number(item.revision)}" /><select name="reasonCode"><option value="document_invalid">证件无效</option><option value="identity_mismatch">主体不一致</option><option value="scan_failed">扫描失败</option><option value="profile_changed">资料已变化</option></select><button type="submit">拒绝</button></form></div>` : '<span class="platform-restricted">只读</span>'}</td>
   </tr>`;
 }
@@ -1518,16 +1552,17 @@ function infrastructureView(state, permissions) {
   const resources = value?.resources ?? [];
   const backup = state.backup?.backup;
   return `
-    <header class="platform-page-heading"><div><p>Production runtime</p><h1>基础设施</h1></div><span>${status(value?.overall_status ?? "unavailable")}</span></header>
+    <header class="platform-page-heading"><div><p>平台运行</p><h1>基础设施</h1></div><span>${status(value?.overall_status ?? "unavailable")}</span></header>
     <section class="platform-metrics" aria-label="恢复目标">
       ${metric("组件", resources.length, "受控生产依赖")}
       ${metric("RPO", value?.rpo_minutes ?? 0, "分钟")}
       ${metric("RTO", value?.rto_minutes ?? 0, "分钟")}
     </section>
     <section class="platform-band platform-infrastructure-status">
-      <div class="platform-section-heading"><div><p>Health projection</p><h2>组件状态</h2></div><span>${number(resources.filter((item) => item.verified).length)} 个已验证</span></div>
+      <div class="platform-section-heading"><div><p>运行检查</p><h2>组件状态</h2></div><span>${number(resources.filter((item) => item.verified).length)} 个已验证</span></div>
       <div class="platform-table-wrap"><table><thead><tr><th>组件</th><th>后端</th><th>状态</th><th>延迟</th><th>最近验证</th></tr></thead><tbody>${resources.map(infrastructureResourceRow).join("") || emptyRow("暂无基础设施状态", 5)}</tbody></table></div>
     </section>
+    ${(state.session?.context?.operator?.roles ?? state.session?.context?.roles ?? []).includes("platform_owner") ? '<section class="platform-band" data-system-updates aria-label="系统升级">加载系统升级状态…</section>' : ""}
     ${permissions.has("platform.backup.create") ? backupForm() : ""}
     ${backup ? backupPanel(backup) : ""}`;
 }
@@ -1548,15 +1583,15 @@ function gatewayView(state, permissions) {
   const active = cells.filter((cell) => cell.status === "active" && cell.health_status === "healthy");
   const placement = state.gatewayPlacement?.placement;
   return `
-    <header class="platform-page-heading"><div><p>Regional data plane</p><h1>Gateway</h1></div><span>${number(active.length)} 个可用 Cell</span></header>
-    <section class="platform-metrics" aria-label="Gateway fleet summary">
-      ${metric("Cells", cells.length, "区域分片")}
+    <header class="platform-page-heading"><div><p>网关运行</p><h1>网关集群</h1></div><span>${number(active.length)} 个可用节点</span></header>
+    <section class="platform-metrics" aria-label="网关集群概览">
+      ${metric("节点", cells.length, "区域节点")}
       ${metric("可用", active.length, "健康且接流")}
       ${metric("配置水位", Math.max(0, ...cells.map((cell) => cell.config_watermark)), "最新 generation")}
     </section>
     <section class="platform-band platform-gateway-cells">
-      <div class="platform-section-heading"><div><p>Bounded fleet projection</p><h2>Cell 状态</h2></div><span>${number(cells.length)} 个 Cell</span></div>
-      <div class="platform-table-wrap"><table class="platform-gateway-table"><thead><tr><th>Cell</th><th>Region</th><th>容量</th><th>服务状态</th><th>健康</th><th>Release</th><th>Config</th></tr></thead><tbody>${cells.map(gatewayCellRow).join("") || emptyRow("暂无 Gateway Cell", 7)}</tbody></table></div>
+      <div class="platform-section-heading"><div><p>运行节点</p><h2>节点状态</h2></div><span>${number(cells.length)} 个节点</span></div>
+      <div class="platform-table-wrap"><table class="platform-gateway-table"><thead><tr><th>节点</th><th>区域</th><th>容量</th><th>服务状态</th><th>健康</th><th>版本</th><th>配置</th></tr></thead><tbody>${cells.map(gatewayCellRow).join("") || emptyRow("暂无 Gateway 节点", 7)}</tbody></table></div>
     </section>
     ${permissions.has("platform.gateway.manage") ? gatewayPlacementForm(active) : ""}
     ${placement ? gatewayPlacementResult(placement) : ""}`;
@@ -1569,11 +1604,11 @@ function edgeLicensesView(state, permissions) {
   const disabled = state.loading ? " disabled" : "";
   return `
     <header class="platform-page-heading">
-      <div><p>Commercial capacity</p><h1>Gateway licenses</h1></div>
+      <div><p>网关授权</p><h1>网关许可证</h1></div>
       <button type="button" class="platform-icon-button" data-platform-action="edge-licenses-refresh" title="刷新 License" aria-label="刷新 License"${disabled}>↻</button>
     </header>
     ${canIssue ? `<section class="platform-band platform-edge-license-issue">
-      <div class="platform-section-heading"><div><p>Issue or expand</p><h2>签发与扩容</h2></div><span>${state.edgeLicenseIntent ? "正在提交" : "Billing"}</span></div>
+      <div class="platform-section-heading"><div><p>授权管理</p><h2>签发与扩容</h2></div><span>${state.edgeLicenseIntent ? "正在提交" : "账务"}</span></div>
       <form data-platform-edge-license-issue-form autocomplete="off">
         <label><span>Deployment ID</span><input name="deploymentId" pattern="edp_[0-9a-f]{32}" maxlength="36" required${disabled}></label>
         <label><span>节点上限</span><input name="nodeLimit" type="number" min="1" max="100000" value="3" required${disabled}></label>
@@ -1591,8 +1626,8 @@ function edgeLicensesView(state, permissions) {
       </form>
     </section>` : ""}
     <section class="platform-band platform-edge-licenses">
-      <div class="platform-section-heading"><div><p>Safe summaries</p><h2>License 清单</h2></div><span>${number(licenses.length)} 项</span></div>
-      ${licenses.length ? `<div class="platform-table-wrap"><table class="platform-edge-license-table"><thead><tr><th>Deployment</th><th>状态</th><th>容量 / 用量</th><th>有效期 / 宽限</th><th>ACK</th><th>操作</th></tr></thead><tbody>${licenses.map((license) => edgeLicenseRow(license, canRevoke, state.loading)).join("")}</tbody></table></div>` : '<div class="platform-empty">尚无 Gateway License</div>'}
+      <div class="platform-section-heading"><div><p>安全摘要</p><h2>许可证清单</h2></div><span>${number(licenses.length)} 项</span></div>
+      ${licenses.length ? `<div class="platform-table-wrap"><table class="platform-edge-license-table"><thead><tr><th>部署</th><th>状态</th><th>容量 / 用量</th><th>有效期 / 宽限</th><th>确认状态</th><th>操作</th></tr></thead><tbody>${licenses.map((license) => edgeLicenseRow(license, canRevoke, state.loading)).join("")}</tbody></table></div>` : '<div class="platform-empty">尚无 Gateway 许可证</div>'}
     </section>`;
 }
 
@@ -1605,7 +1640,7 @@ function edgeBackupsView(state) {
   ).length, 0);
   return `
     <header class="platform-page-heading">
-      <div><p>Private Gateway resilience</p><h1>Gateway backups</h1></div>
+      <div><p>私有网关稳定性</p><h1>网关备份</h1></div>
       <button type="button" class="platform-icon-button" data-platform-action="edge-backups-refresh" title="刷新备份状态" aria-label="刷新备份状态"${state.loading ? " disabled" : ""}>↻</button>
     </header>
     <section class="platform-metrics" aria-label="Gateway backup summary">
@@ -1614,7 +1649,7 @@ function edgeBackupsView(state) {
       ${metric("Objective misses", missed, "季度隔离演练")}
     </section>
     <section class="platform-band platform-edge-backups">
-      <div class="platform-section-heading"><div><p>Cloud-safe metadata</p><h2>备份与演练摘要</h2></div><span>${number(backups.length)} 项</span></div>
+      <div class="platform-section-heading"><div><p>云端安全摘要</p><h2>备份与演练摘要</h2></div><span>${number(backups.length)} 项</span></div>
       ${state.loading && !state.edgeBackups ? '<div class="platform-empty" role="status">正在读取备份状态</div>' : backups.length ? `<div class="platform-table-wrap"><table class="platform-edge-backup-table"><thead><tr><th>Deployment</th><th>RPO</th><th>最近备份</th><th>验证 / 保留</th><th>季度演练</th></tr></thead><tbody>${backups.map(platformEdgeBackupRow).join("")}</tbody></table></div>` : '<div class="platform-empty">尚无 Gateway 备份状态</div>'}
     </section>`;
 }
@@ -1646,21 +1681,21 @@ function offlineBundlesView(state, permissions) {
   const canManage = permissions.has("platform.edge_offline_bundle.manage");
   return `
     <header class="platform-page-heading">
-      <div><p>Air-gapped operations</p><h1>Offline exchange</h1></div>
+      <div><p>离线环境操作</p><h1>离线交换</h1></div>
       <button type="button" class="platform-icon-button" data-platform-action="offline-bundles-refresh" title="刷新离线交换" aria-label="刷新离线交换"${state.loading ? " disabled" : ""}>↻</button>
     </header>
     <section class="platform-metrics" aria-label="Offline exchange summary">
-      ${metric("Pending approvals", pending.length, "dual control")}
-      ${metric("Unresolved conflicts", unresolved, "no last-write-wins")}
-      ${metric("Exchange records", bundles.length, `${number(items.length)} Deployments`)}
+      ${metric("待审批", pending.length, "双人复核")}
+      ${metric("未解决冲突", unresolved, "需要人工处理")}
+      ${metric("交换记录", bundles.length, `${number(items.length)} 个部署`)}
     </section>
     <section class="platform-band platform-offline-approvals">
-      <div class="platform-section-heading"><div><p>Dual control</p><h2>Approval queue</h2></div><span>${number(pending.length)} pending</span></div>
-      ${pending.length ? `<div class="platform-table-wrap"><table class="platform-offline-table"><thead><tr><th>Workspace / Deployment</th><th>Intent</th><th>Security summary</th><th>Decision</th></tr></thead><tbody>${pending.map(({ item, request }) => platformOfflineApprovalRow(item, request, canManage, state.loading)).join("")}</tbody></table></div>` : '<div class="platform-empty">No offline exchange requests are pending</div>'}
+      <div class="platform-section-heading"><div><p>双人控制</p><h2>审批队列</h2></div><span>${number(pending.length)} 条待处理</span></div>
+      ${pending.length ? `<div class="platform-table-wrap"><table class="platform-offline-table"><thead><tr><th>组织 / 部署</th><th>用途</th><th>安全摘要</th><th>决定</th></tr></thead><tbody>${pending.map(({ item, request }) => platformOfflineApprovalRow(item, request, canManage, state.loading)).join("")}</tbody></table></div>` : '<div class="platform-empty">暂无待处理的离线交换请求</div>'}
     </section>
     <section class="platform-band platform-offline-exchanges">
-      <div class="platform-section-heading"><div><p>Safe metadata only</p><h2>Exchange watermarks</h2></div><span>${number(bundles.length)} records</span></div>
-      ${bundles.length ? `<div class="platform-table-wrap"><table class="platform-offline-table"><thead><tr><th>Deployment</th><th>Direction / domains</th><th>Transfer</th><th>Manifest / expiry</th><th>Conflicts</th></tr></thead><tbody>${bundles.map(({ item, bundle }) => platformOfflineBundleRow(item, bundle)).join("")}</tbody></table></div>` : '<div class="platform-empty">No offline media exchanges have been recorded</div>'}
+      <div class="platform-section-heading"><div><p>安全摘要</p><h2>交换进度</h2></div><span>${number(bundles.length)} 条记录</span></div>
+      ${bundles.length ? `<div class="platform-table-wrap"><table class="platform-offline-table"><thead><tr><th>部署</th><th>方向 / 域</th><th>传输</th><th>清单 / 有效期</th><th>冲突</th></tr></thead><tbody>${bundles.map(({ item, bundle }) => platformOfflineBundleRow(item, bundle)).join("")}</tbody></table></div>` : '<div class="platform-empty">暂无离线介质交换记录</div>'}
     </section>`;
 }
 
@@ -1670,14 +1705,14 @@ function platformOfflineApprovalRow(item, request, canManage, loading) {
   ) ?? null;
   const disabled = loading ? " disabled" : "";
   return `<tr>
-    <td data-label="Workspace / Deployment"><strong>${escapeHtml(shortReference(item.workspace_id))}</strong><small>${escapeHtml(shortReference(request.deployment_id))}</small></td>
+    <td data-label="组织 / 部署"><strong>${escapeHtml(shortReference(item.workspace_id))}</strong><small>${escapeHtml(shortReference(request.deployment_id))}</small></td>
     <td data-label="Intent"><strong>${escapeHtml(platformOfflineOperationLabel(request.operation))}</strong><small>r${number(request.revision)} · ${formatTime(request.requested_at)}</small></td>
-    <td data-label="Security summary"><strong>${bundle ? `${escapeHtml(platformOfflineDirectionLabel(bundle.direction))} · ${bundle.domains.map(platformOfflineDomainLabel).join(" / ")}` : "Resolution package"}</strong><small>${bundle ? `${number(bundle.entry_count)} entries · ${formatBytes(bundle.encrypted_size_bytes)} · ${escapeHtml(bundle.manifest_sha256.slice(0, 16))}` : escapeHtml(shortReference(request.target_conflict_id ?? "-"))}</small></td>
-    <td data-label="Decision">${canManage ? `<form data-platform-offline-decision-form autocomplete="off">
+    <td data-label="安全摘要"><strong>${bundle ? `${escapeHtml(platformOfflineDirectionLabel(bundle.direction))} · ${bundle.domains.map(platformOfflineDomainLabel).join(" / ")}` : "处理包"}</strong><small>${bundle ? `${number(bundle.entry_count)} 项 · ${formatBytes(bundle.encrypted_size_bytes)} · ${escapeHtml(bundle.manifest_sha256.slice(0, 16))}` : escapeHtml(shortReference(request.target_conflict_id ?? "-"))}</small></td>
+    <td data-label="决定">${canManage ? `<form data-platform-offline-decision-form autocomplete="off">
       <input type="hidden" name="requestId" value="${escapeAttribute(request.request_id)}">
       <input type="hidden" name="expectedRevision" value="${number(request.revision)}">
       <label><span>Decision</span><select name="action"${disabled}><option value="approve">Approve</option><option value="reject">Reject</option></select></label>
-      <label><span>Reason</span><select name="reasonCode"${disabled}><option value="dual_control_approved">Dual control approved</option><option value="security_review_rejected">Security review rejected</option></select></label>
+      <label><span>原因</span><select name="reasonCode"${disabled}><option value="dual_control_approved">双人复核通过</option><option value="security_review_rejected">安全复核未通过</option></select></label>
       <label class="platform-edge-confirm"><input type="checkbox" name="confirmed" required${disabled}><span>Confirm owner, direction, domains and expiry</span></label>
       <button class="platform-primary" type="submit"${disabled}>Submit</button>
     </form>` : "Read only"}</td>
@@ -1708,15 +1743,15 @@ function platformOfflineDirectionLabel(value) {
 }
 
 function platformOfflineDomainLabel(value) {
-  return ({ desired_state: "Desired State", license: "License", release: "Release",
-    status: "Status", usage: "Usage", audit: "Audit", validation: "Validation" })[
+  return ({ desired_state: "Desired State", license: "License", release: "版本",
+    status: "状态", usage: "Usage", audit: "Audit", validation: "Validation" })[
     value
   ] ?? value;
 }
 
 function platformOfflineTransferLabel(value) {
   return ({ prepared: "Prepared", transferring: "Transferring", verified: "Verified",
-    applied: "Applied", conflict: "Conflict", failed: "Failed" })[value] ?? value;
+    applied: "Applied", conflict: "Conflict", failed: "失败" })[value] ?? value;
 }
 
 function platformOfflineResolutionLabel(value) {
@@ -1789,13 +1824,13 @@ function edgeUpgradesView(state, permissions) {
   const canReadRollout = permissions.has("platform.edge_rollout.read");
   return `
     <header class="platform-page-heading">
-      <div><p>Private Gateway delivery</p><h1>Fleet upgrades</h1></div>
+      <div><p>私有网关发布</p><h1>网关升级</h1></div>
       <button type="button" class="platform-icon-button" data-platform-action="edge-upgrades-refresh" title="刷新升级状态" aria-label="刷新升级状态"${state.loading ? " disabled" : ""}>↻</button>
     </header>
     <section class="platform-metrics" aria-label="Fleet upgrade summary">
-      ${metric("Released", released.length, `${releases.length} 个签名 Release`)}
-      ${metric("Active rollouts", active.length, `${rollouts.length} 个 rollout`)}
-      ${metric("Failed targets", rollouts.reduce((total, item) => total + item.failed_count, 0), "自动暂停计入")}
+      ${metric("已发布", released.length, `${releases.length} 个签名版本`)}
+      ${metric("进行中批次", active.length, `${rollouts.length} 个发布批次`)}
+      ${metric("失败目标", rollouts.reduce((total, item) => total + item.failed_count, 0), "达到阈值会自动暂停")}
     </section>
     ${state.loading && !state.gatewayReleases ? '<div class="platform-empty" role="status">正在读取 Fleet upgrade 状态</div>' : `
       ${canSubmit ? edgeReleaseSubmitForm(state.loading) : ""}
@@ -1807,9 +1842,9 @@ function edgeUpgradesView(state, permissions) {
 
 function edgeReleaseSubmitForm(loading) {
   return `<section class="platform-edge-upgrade-section" aria-labelledby="edge-release-submit-title">
-    <header><div><p>Immutable signed artifact</p><h2 id="edge-release-submit-title">提交 Release</h2></div></header>
+      <header><div><p>已签名发布包</p><h2 id="edge-release-submit-title">提交发布包</h2></div></header>
     <form class="platform-edge-upgrade-form" data-platform-edge-release-submit-form autocomplete="off">
-      <label><span>Installer Release ID</span><input name="installerReleaseId" pattern="irl_[0-9a-f]{32}" required /></label>
+      <label><span>安装包发布 ID</span><input name="installerReleaseId" pattern="irl_[0-9a-f]{32}" required /></label>
       <label><span>Channel</span><select name="releaseChannel"><option value="stable">Stable</option><option value="preview">Preview</option><option value="extended">Extended</option></select></label>
       <label><span>Schema from</span><input name="schemaFrom" type="number" min="1" max="9999" value="1" required /></label>
       <label><span>Schema to</span><input name="schemaTo" type="number" min="1" max="9999" value="1" required /></label>
@@ -1825,13 +1860,13 @@ function edgeReleaseSubmitForm(loading) {
 function edgeReleaseTable(releases, state, canApprove, canWithdraw) {
   const operatorId = String(state.session?.context?.operator?.operator_id ?? "");
   return `<section class="platform-edge-upgrade-section" aria-labelledby="edge-release-list-title">
-    <header><div><p>Two-person approval</p><h2 id="edge-release-list-title">Release 列表</h2></div></header>
+    <header><div><p>双人审批</p><h2 id="edge-release-list-title">发布列表</h2></div></header>
     <div class="platform-table-scroll"><table class="platform-table platform-edge-release-table">
-      <thead><tr><th>Release</th><th>Channel</th><th>Schema</th><th>状态</th><th>提交</th><th>操作</th></tr></thead>
+      <thead><tr><th>发布包</th><th>渠道</th><th>版本结构</th><th>状态</th><th>提交人</th><th>操作</th></tr></thead>
       <tbody>${releases.map((item) => {
         const selfSubmitted = operatorId && operatorId === item.submitted_by_operator_id;
         return `<tr>
-          <td data-label="Release"><strong>${escapeHtml(item.version)}</strong><small>${escapeHtml(item.release_id)} · ${number(item.artifact_count)} artifacts</small></td>
+    <td data-label="版本"><strong>${escapeHtml(item.version)}</strong><small>${escapeHtml(item.release_id)} · ${number(item.artifact_count)} 个文件</small></td>
           <td data-label="Channel">${escapeHtml(item.release_channel)}</td>
           <td data-label="Schema">${number(item.schema_from)} → ${number(item.schema_to)}${item.down_migration_supported ? " · N-1" : ""}</td>
           <td data-label="状态">${status(item.status)}</td>
@@ -1866,18 +1901,18 @@ function edgeRolloutControl(releases, state, canManage) {
   const releaseOptions = releases.map((item) => `<option value="${escapeAttribute(item.release_id)}">${escapeHtml(item.version)} · ${escapeHtml(item.release_channel)}</option>`).join("");
   const compatibility = state.fleetCompatibility;
   return `<section class="platform-edge-upgrade-section" aria-labelledby="edge-rollout-control-title">
-    <header><div><p>Compatibility and deterministic Canary</p><h2 id="edge-rollout-control-title">Rollout 控制</h2></div></header>
+    <header><div><p>兼容性与分批发布</p><h2 id="edge-rollout-control-title">分批发布控制</h2></div></header>
     <div class="platform-edge-rollout-controls">
       <form data-platform-edge-compatibility-form autocomplete="off">
         <h3>兼容性预检</h3>
-        <label><span>Release</span><select name="releaseId" required>${releaseOptions}</select></label>
+        <label><span>发布包</span><select name="releaseId" required>${releaseOptions}</select></label>
         <label><span>Deployment ID</span><input name="deploymentId" pattern="edp_[0-9a-f]{32}" required /></label>
         <button type="submit"${state.loading || !releaseOptions ? " disabled" : ""}>检查</button>
         ${compatibility ? `<div class="platform-edge-compatibility tone-${compatibility.compatible ? "applied" : "failed"}" role="status"><strong>${compatibility.compatible ? "兼容" : "已阻止"}</strong><span>${compatibility.reason_codes.length ? compatibility.reason_codes.map(escapeHtml).join(" / ") : "all_checks_passed"}</span><small>${escapeHtml(compatibility.deployment_id)} · ${escapeHtml(compatibility.current_version)} → ${escapeHtml(compatibility.release_version ?? "-")}</small></div>` : ""}
       </form>
       ${canManage ? `<form data-platform-edge-rollout-create-form autocomplete="off">
         <h3>创建 rollout</h3>
-        <label><span>Release</span><select name="releaseId" required>${releaseOptions}</select></label>
+        <label><span>发布包</span><select name="releaseId" required>${releaseOptions}</select></label>
         <label class="platform-edge-upgrade-wide"><span>Deployment IDs</span><textarea name="deploymentIds" rows="3" placeholder="edp_... , edp_..." required></textarea></label>
         <label><span>Canary bps</span><input name="canaryBasisPoints" type="number" min="100" max="10000" value="100" required /></label>
         <label><span>观察秒数</span><input name="observationSeconds" type="number" min="1800" max="86400" value="1800" required /></label>
@@ -1893,12 +1928,12 @@ function edgeRolloutControl(releases, state, canManage) {
 
 function edgeRolloutList(rollouts, state, canManage) {
   return `<section class="platform-edge-upgrade-section" aria-labelledby="edge-rollout-list-title">
-    <header><div><p>Generation-bound execution</p><h2 id="edge-rollout-list-title">Rollout 列表</h2></div></header>
+    <header><div><p>按版本执行</p><h2 id="edge-rollout-list-title">分批发布列表</h2></div></header>
     <div class="platform-edge-rollout-list">${rollouts.map((rollout) => `
       <article class="platform-edge-rollout">
         <header><div><strong>${escapeHtml(rollout.release_version)}</strong><code>${escapeHtml(rollout.rollout_id)}</code></div>${status(rollout.status)}</header>
         <dl class="platform-fact-grid">
-          <div><dt>Generation</dt><dd>${number(rollout.generation)} / cancel ${number(rollout.cancel_watermark)}</dd></div>
+          <div><dt>发布代数</dt><dd>${number(rollout.generation)} / cancel ${number(rollout.cancel_watermark)}</dd></div>
           <div><dt>Targets</dt><dd>${number(rollout.succeeded_count)} succeeded · ${number(rollout.failed_count)} failed · ${number(rollout.target_count)} total</dd></div>
           <div><dt>Canary</dt><dd>${basisPoints(rollout.canary_basis_points)} · ${number(rollout.observation_seconds)}s</dd></div>
           <div><dt>Pause reason</dt><dd>${escapeHtml(rollout.pause_reason_code ?? "-")}</dd></div>
@@ -1937,7 +1972,7 @@ function edgeFleetView(state, permissions) {
   const page = (state.edgeFleetCursorHistory?.length ?? 0) + 1;
   const canManage = permissions.has("platform.edge_fleet.manage");
   return `
-    <header class="platform-page-heading"><div><p>Customer-owned runtime</p><h1>Private Gateway fleet</h1></div><span>${number(items.length)} 个 Deployment</span></header>
+    <header class="platform-page-heading"><div><p>客户自有运行环境</p><h1>私有 Gateway 集群</h1></div><span>${number(items.length)} 个 Deployment</span></header>
     <section class="platform-band">
       <form class="platform-edge-fleet-filter" data-platform-edge-fleet-filter-form>
         <label><span>状态</span><select name="status">${edgeFleetStatusOptions(filters.status)}</select></label>
@@ -1947,7 +1982,7 @@ function edgeFleetView(state, permissions) {
       </form>
       ${state.loading && !state.edgeFleet ? '<div class="platform-empty" role="status">正在读取 Fleet 摘要</div>' : `
         <div class="platform-table-wrap"><table class="platform-edge-fleet-table">
-          <thead><tr><th>Deployment</th><th>区域 / 模式</th><th>状态</th><th>健康分</th><th>告警</th><th>证书</th><th>Agent</th><th>Desired / Applied / LKG</th><th>遥测延迟</th><th>投影版本</th></tr></thead>
+          <thead><tr><th>部署</th><th>区域 / 模式</th><th>状态</th><th>健康分</th><th>告警</th><th>证书</th><th>代理版本</th><th>目标 / 已应用 / 最近可用</th><th>遥测延迟</th><th>投影版本</th></tr></thead>
           <tbody>${items.map(edgeFleetRow).join("") || emptyRow("暂无私有 Gateway Deployment", 10)}</tbody>
         </table></div>
         <div class="platform-pagination"><span>第 ${number(page)} 页</span><div><button type="button" data-platform-action="edge-fleet-previous" ${(state.edgeFleetCursorHistory?.length ?? 0) ? "" : "disabled"}>上一页</button><button type="button" data-platform-action="edge-fleet-next" ${state.edgeFleet?.next_cursor ? "" : "disabled"}>下一页</button></div></div>`}
@@ -1973,7 +2008,7 @@ function edgeFleetRow(item) {
     <td data-label="告警">${status(item.alert_code)}</td>
     <td data-label="证书">${status(item.certificate_signal)}</td>
     <td data-label="Agent"><strong>${escapeHtml(item.agent_version ?? "-")}</strong></td>
-    <td data-label="Desired / Applied / LKG"><strong>${number(item.desired_generation)} / ${number(item.applied_generation)} / ${number(item.lkg_generation)}</strong></td>
+    <td data-label="期望 / 已应用 / 最低可用"><strong>${number(item.desired_generation)} / ${number(item.applied_generation)} / ${number(item.lkg_generation)}</strong></td>
     <td data-label="遥测延迟"><strong>${item.telemetry_lag_seconds === null ? "-" : `${number(item.telemetry_lag_seconds)} s`}</strong></td>
     <td data-label="投影版本"><strong>${number(item.index_revision)}</strong><small>health ${number(item.source_health_generation)}</small></td>
   </tr>`;
@@ -2002,7 +2037,7 @@ function edgeDiagnosticControlView(state, deployments) {
   const grant = state.edgeDiagnosticGrant;
   const command = state.edgeDiagnosticCommand;
   return `<section class="platform-band platform-edge-diagnostics">
-    <div class="platform-section-heading"><div><p>Controlled diagnostics</p><h2>受控远程诊断</h2></div><span>${state.edgeDiagnosticIntent ? "正在提交" : "待命"}</span></div>
+    <div class="platform-section-heading"><div><p>受控诊断</p><h2>受控远程诊断</h2></div><span>${state.edgeDiagnosticIntent ? "正在提交" : "待命"}</span></div>
     <div class="platform-edge-diagnostic-forms">
       <form data-platform-edge-diagnostic-request-form autocomplete="off">
         <h3>请求客户授权</h3>
@@ -2012,8 +2047,8 @@ function edgeDiagnosticControlView(state, deployments) {
           <legend>水位</legend>
           <label><input type="checkbox" name="watermarkCode" value="desired_generation" checked><span>Desired</span></label>
           <label><input type="checkbox" name="watermarkCode" value="applied_generation" checked><span>Applied</span></label>
-          <label><input type="checkbox" name="watermarkCode" value="lkg_generation" checked><span>LKG</span></label>
-          <label><input type="checkbox" name="watermarkCode" value="telemetry_health_sequence"><span>Health sequence</span></label>
+      <label><input type="checkbox" name="watermarkCode" value="lkg_generation" checked><span>最低可用版本</span></label>
+          <label><input type="checkbox" name="watermarkCode" value="telemetry_health_sequence"><span>健康状态 sequence</span></label>
           <label><input type="checkbox" name="watermarkCode" value="telemetry_failure_sequence"><span>Failure sequence</span></label>
         </fieldset>
         <label data-edge-command-parameter="runtime.disk_budget" hidden><span>卷</span><select name="volumeCode"><option value="runtime">Runtime</option><option value="state">State</option><option value="support_bundle">Support bundle</option></select></label>
@@ -2054,7 +2089,7 @@ function edgeDiagnosticCommandSummary(command, disabled) {
   const cancellable = new Set(["authorized", "leased", "running"]).has(command.status);
   return `<div class="platform-edge-diagnostic-command">
     <div class="platform-section-heading"><div><p>${escapeHtml(command.diagnostic_command_id)}</p><h3>${escapeHtml(edgeCommandLabel(command.command_code))}</h3></div><span>${escapeHtml(edgeDiagnosticStatusLabel(command.status))}</span></div>
-    <dl><div><dt>Generation</dt><dd>${number(command.generation)}</dd></div><div><dt>Deadline</dt><dd>${formatTime(command.deadline_at)}</dd></div><div><dt>Revision</dt><dd>${number(command.revision)}</dd></div></dl>
+    <dl><div><dt>发布代数</dt><dd>${number(command.generation)}</dd></div><div><dt>Deadline</dt><dd>${formatTime(command.deadline_at)}</dd></div><div><dt>修订号</dt><dd>${number(command.revision)}</dd></div></dl>
     ${cancellable ? `<form data-platform-edge-diagnostic-cancel-form>
       <input name="deploymentId" type="hidden" value="${escapeAttribute(command.deployment_id)}">
       <input name="commandId" type="hidden" value="${escapeAttribute(command.diagnostic_command_id)}">
@@ -2069,11 +2104,11 @@ function edgeDiagnosticCommandSummary(command, disabled) {
 function gatewayCellRow(cell) {
   return `<tr>
     <td data-label="Cell"><strong>${escapeHtml(cell.cell_code)}</strong><small>${escapeHtml(statusLabel(cell.capacity_class))}</small></td>
-    <td data-label="Region">${escapeHtml(cell.region_code)}</td>
+    <td data-label="区域">${escapeHtml(cell.region_code)}</td>
     <td data-label="容量">${status(cell.capacity_band)}</td>
     <td data-label="服务状态">${status(cell.status)}</td>
     <td data-label="健康">${status(cell.health_status)}</td>
-    <td data-label="Release">${number(cell.release_watermark)}</td>
+    <td data-label="版本">${number(cell.release_watermark)}</td>
     <td data-label="Config">${number(cell.config_watermark)}</td>
   </tr>`;
 }
@@ -2083,14 +2118,14 @@ function gatewayPlacementForm(cells) {
   const options = cells.map((cell) => `<option value="${escapeAttribute(cell.cell_code)}">${escapeHtml(cell.cell_code)} · ${escapeHtml(cell.region_code)}</option>`).join("");
   return `
     <section class="platform-band platform-gateway-placement">
-      <div class="platform-section-heading"><div><p>Signed placement</p><h2>发布 Workspace placement</h2></div><span>Workspace 路由</span></div>
+      <div class="platform-section-heading"><div><p>已签名的组织部署</p><h2>发布 组织 placement</h2></div><span>组织 路由</span></div>
       <form data-platform-gateway-placement-form autocomplete="off">
-        <label><span>Workspace ID</span><input name="workspaceId" pattern="wsp_[0-9a-f]{32}" maxlength="36" required /></label>
+        <label><span>组织 ID</span><input name="workspaceId" pattern="wsp_[0-9a-f]{32}" maxlength="36" required /></label>
         <label><span>当前 revision</span><input name="revision" type="number" min="0" value="0" required /></label>
         <label><span>Primary Cell</span><select name="primaryCellCode" required>${options}</select></label>
         <label><span>Failover Cell</span><select name="failoverCellCode"><option value="">禁止 failover</option>${options}</select></label>
         <label><span>Residency policy</span><input name="residencyPolicyVersion" value="" placeholder="cn-residency-v1" maxlength="80" required /></label>
-        <label><span>变更原因</span><select name="reasonCode"><option value="initial_placement">Initial placement</option><option value="capacity_rebalance">Capacity rebalance</option><option value="regional_recovery">Regional recovery</option></select></label>
+        <label><span>变更原因</span><select name="reasonCode"><option value="initial_placement">Initial placement</option><option value="capacity_rebalance">Capacity rebalance</option><option value="regional_recovery">区域al recovery</option></select></label>
         <label class="platform-check"><input name="confirmed" type="checkbox" required /><span>确认发布新 generation</span></label>
         <button class="platform-primary" type="submit">发布 placement</button>
       </form>
@@ -2101,12 +2136,12 @@ function gatewayPlacementForm(cells) {
 function gatewayPlacementResult(placement) {
   return `
     <section class="platform-band platform-gateway-result">
-      <div class="platform-section-heading"><div><p>Current response</p><h2>${escapeHtml(shortWorkspace(placement.workspace_id))}</h2></div>${status("active")}</div>
+      <div class="platform-section-heading"><div><p>当前状态</p><h2>${escapeHtml(shortWorkspace(placement.workspace_id))}</h2></div>${status("active")}</div>
       <dl class="platform-fact-grid">
         ${fact("Primary", `${placement.primary_cell_code} · ${placement.primary_region_code}`)}
         ${fact("Failover", placement.failover_cell_code ?? "禁止")}
-        ${fact("Revision", String(placement.revision))}
-        ${fact("Generation", String(placement.snapshot_generation))}
+        ${fact("修订号", String(placement.revision))}
+        ${fact("发布代数", String(placement.snapshot_generation))}
       </dl>
     </section>`;
 }
@@ -2114,7 +2149,7 @@ function gatewayPlacementResult(placement) {
 function backupForm() {
   return `
     <section class="platform-band platform-backup-create">
-      <div class="platform-section-heading"><div><p>Verified recovery</p><h2>创建备份</h2></div><span>隔离恢复门禁</span></div>
+      <div class="platform-section-heading"><div><p>已验证恢复</p><h2>创建备份</h2></div><span>隔离恢复门禁</span></div>
       <form data-platform-backup-form autocomplete="off">
         <label><span>备份类型</span><select name="backupType"><option value="full">完整备份</option><option value="incremental">增量备份</option></select></label>
         <label><span>保留天数</span><input name="retentionDays" type="number" min="1" max="3650" value="30" required /></label>
@@ -2128,7 +2163,7 @@ function backupPanel(backup) {
   const verification = backup.verification ?? {};
   return `
     <section class="platform-band platform-backup-detail">
-      <div class="platform-section-heading"><div><p>BackupSet</p><h2>${escapeHtml(backup.backup_id)}</h2></div><div class="platform-row-actions">${status(backup.status)}<button class="platform-icon-button" type="button" data-platform-action="backup-refresh" title="刷新备份状态" aria-label="刷新备份状态">↻</button></div></div>
+      <div class="platform-section-heading"><div><p>备份集</p><h2>${escapeHtml(backup.backup_id)}</h2></div><div class="platform-row-actions">${status(backup.status)}<button class="platform-icon-button" type="button" data-platform-action="backup-refresh" title="刷新备份状态" aria-label="刷新备份状态">↻</button></div></div>
       <dl>
         ${fact("来源", statusLabel(backup.source_backend))}
         ${fact("水位", backup.source_watermark ?? "-")}
@@ -2159,9 +2194,9 @@ function overviewView(state) {
 function operatorsView(state, permissions) {
   const operators = state.operators?.operators ?? [];
   return `
-    <header class="platform-page-heading"><div><p>Platform IAM</p><h1>操作员</h1></div><span>${operators.length} 个账号</span></header>
+    <header class="platform-page-heading"><div><p>平台身份与权限</p><h1>操作员</h1></div><span>${operators.length} 个账号</span></header>
     ${permissions.has("platform.operator.manage") ? registrationPolicyForm(state) + operatorForm() : ""}
-    <section class="platform-band"><div class="platform-table-wrap"><table><thead><tr><th>操作员</th><th>角色</th><th>状态</th><th>Revision</th><th><span class="platform-visually-hidden">操作</span></th></tr></thead><tbody>${operators.map(operatorRow).join("") || emptyRow("暂无操作员")}</tbody></table></div></section>`;
+    <section class="platform-band"><div class="platform-table-wrap"><table><thead><tr><th>操作员</th><th>角色</th><th>状态</th><th>修订号</th><th><span class="platform-visually-hidden">操作</span></th></tr></thead><tbody>${operators.map(operatorRow).join("") || emptyRow("暂无操作员")}</tbody></table></div></section>`;
 }
 
 function registrationPolicyForm(state) {
@@ -2200,21 +2235,21 @@ function workspacesView(state, permissions) {
   const items = state.workspaces?.items ?? [];
   const filters = state.workspaceFilters ?? {};
   return `
-    <header class="platform-page-heading"><div><p>Workspace operations</p><h1>Workspace 目录</h1></div><span>当前页 ${number(items.length)} 条</span></header>
+    <header class="platform-page-heading"><div><p>组织管理</p><h1>组织目录</h1></div><span>当前页 ${number(items.length)} 条</span></header>
     <section class="platform-band platform-workspace-tools">
       <form class="platform-filter-form" data-workspace-filter-form autocomplete="off">
-        <label class="platform-filter-search"><span>精确搜索</span><input name="search" value="${escapeAttribute(filters.search ?? "")}" placeholder="Workspace ID 或组织 slug" maxlength="80" /></label>
-        <label><span>状态</span><select name="operational_status">${filterOptions(filters.operational_status, [["", "全部"], ["active", "Active"], ["suspended", "Suspended"], ["deletion_pending", "Deletion pending"], ["deleted", "Deleted"], ["migration_conflict", "Migration conflict"]])}</select></label>
-        <label><span>Region</span><input name="region" value="${escapeAttribute(filters.region ?? "")}" placeholder="cn-north-1" maxlength="40" /></label>
-        <label><span>风险标签</span><select name="risk_tag">${filterOptions(filters.risk_tag, [["", "全部"], ["security_review", "Security review"], ["compliance_hold", "Compliance hold"], ["payment_attention", "Payment attention"], ["adoption_attention", "Adoption attention"]])}</select></label>
-        <label><span>健康状态</span><select name="health_status">${filterOptions(filters.health_status, [["", "全部"], ["fresh", "Fresh"], ["stale", "Stale"], ["not_ready", "Not ready"], ["unavailable", "Unavailable"]])}</select></label>
-        <label><span>健康风险</span><select name="health_risk">${filterOptions(filters.health_risk, [["", "全部"], ["healthy", "Healthy"], ["watch", "Watch"], ["at_risk", "At risk"], ["critical", "Critical"]])}</select></label>
-        <label><span>类型</span><select name="kind">${filterOptions(filters.kind, [["", "全部"], ["organization", "Organization"]])}</select></label>
+        <label class="platform-filter-search"><span>搜索组织</span><input name="search" value="${escapeAttribute(filters.search ?? "")}" placeholder="名称或组织标识" maxlength="80" /></label>
+        <label><span>状态</span><select name="operational_status">${filterOptions(filters.operational_status, [["", "全部"], ["active", "活跃"], ["suspended", "已暂停"], ["deletion_pending", "等待删除"], ["deleted", "已删除"], ["migration_conflict", "迁移异常"]])}</select></label>
+        <label><span>区域</span><input name="region" value="${escapeAttribute(filters.region ?? "")}" placeholder="cn-north-1" maxlength="40" /></label>
+        <label><span>风险标签</span><select name="risk_tag">${filterOptions(filters.risk_tag, [["", "全部"], ["security_review", "安全复核"], ["compliance_hold", "合规关注"], ["payment_attention", "账务关注"], ["adoption_attention", "使用关注"]])}</select></label>
+        <label><span>健康状态</span><select name="health_status">${filterOptions(filters.health_status, [["", "全部"], ["fresh", "正常"], ["stale", "数据滞后"], ["not_ready", "未就绪"], ["unavailable", "不可用"]])}</select></label>
+        <label><span>健康风险</span><select name="health_risk">${filterOptions(filters.health_risk, [["", "全部"], ["healthy", "健康"], ["watch", "需关注"], ["at_risk", "有风险"], ["critical", "严重"]])}</select></label>
+        <label><span>类型</span><select name="kind">${filterOptions(filters.kind, [["", "全部"], ["organization", "组织"]])}</select></label>
         <button class="platform-primary" type="submit">筛选</button>
       </form>
     </section>
     <section class="platform-band platform-workspace-directory">
-      <div class="platform-table-wrap"><table class="platform-workspace-table"><thead><tr><th>Workspace</th><th>状态</th><th>Region</th><th>健康</th><th>风险</th><th>成员 / Session</th><th><span class="platform-visually-hidden">操作</span></th></tr></thead><tbody>${items.map(workspaceRow).join("") || emptyRow("没有符合条件的 Workspace", 7)}</tbody></table></div>
+      <div class="platform-table-wrap"><table class="platform-workspace-table"><thead><tr><th>组织</th><th>状态</th><th>区域</th><th>健康</th><th>风险</th><th>成员 / 活跃会话</th><th><span class="platform-visually-hidden">操作</span></th></tr></thead><tbody>${items.map(workspaceRow).join("") || emptyRow("没有符合条件的组织", 7)}</tbody></table></div>
       <div class="platform-pagination"><span>第 ${number((state.workspaceCursorHistory?.length ?? 0) + 1)} 页</span><div><button type="button" data-platform-action="workspace-previous" ${state.workspaceCursorHistory?.length ? "" : "disabled"}>上一页</button><button type="button" data-platform-action="workspace-next" ${state.workspaces?.has_more ? "" : "disabled"}>下一页</button></div></div>
     </section>`;
 }
@@ -2223,9 +2258,9 @@ function workspaceRow(workspace) {
   const health = workspace.health ?? {};
   const tags = workspace.platform_risk_tags;
   return `<tr>
-    <td data-label="Workspace"><strong>${escapeHtml(workspace.display_name)}</strong><small>${escapeHtml(workspace.workspace_id)}${workspace.slug ? ` · ${escapeHtml(workspace.slug)}` : ""}</small></td>
+    <td data-label="组织"><strong>${escapeHtml(workspace.display_name)}</strong><details class="platform-audit-technical"><summary>技术信息</summary><code>${escapeHtml(workspace.workspace_id)}</code>${workspace.slug ? `<code>${escapeHtml(workspace.slug)}</code>` : ""}</details></td>
     <td data-label="状态">${status(workspace.operational_status)}<small>Rev ${number(workspace.operational_revision)}</small></td>
-    <td data-label="Region"><strong>${escapeHtml(workspace.region_code ?? "未配置")}</strong><small>${escapeHtml(kindLabel(workspace.kind))}</small></td>
+    <td data-label="区域"><strong>${escapeHtml(workspace.region_code ?? "未配置")}</strong><small>${escapeHtml(kindLabel(workspace.kind))}</small></td>
     <td data-label="健康">${status(health.score_band ?? health.status)}<small>${escapeHtml(statusLabel(health.status ?? "not_ready"))}</small></td>
     <td data-label="风险">${Array.isArray(tags) ? riskTagList(tags) : '<span class="platform-restricted">受限</span>'}</td>
     <td data-label="成员 / Session"><strong>${number(workspace.member_count)} / ${number(workspace.active_session_count)}</strong></td>
@@ -2243,11 +2278,11 @@ function workspaceDetailView(state, permissions) {
   const canContact = permissions.has("platform.workspace.lifecycle.manage")
     || permissions.has("platform.customer_success.read");
   return `
-    <header class="platform-page-heading platform-workspace-heading"><div><button class="platform-back-button" type="button" data-platform-action="close-workspace">← 返回目录</button><p>${escapeHtml(kindLabel(workspace.kind))}</p><h1>${escapeHtml(workspace.display_name)}</h1><small>${escapeHtml(workspace.workspace_id)}${workspace.slug ? ` · ${escapeHtml(workspace.slug)}` : ""}</small></div><div class="platform-detail-status">${status(workspace.operational_status)}<span>Operational rev ${number(workspace.operational_revision)}</span></div></header>
+    <header class="platform-page-heading platform-workspace-heading"><div><button class="platform-back-button" type="button" data-platform-action="close-workspace">← 返回目录</button><p>${escapeHtml(kindLabel(workspace.kind))}</p><h1>${escapeHtml(workspace.display_name)}</h1><small>${workspace.slug ? escapeHtml(workspace.slug) : "组织空间"}</small></div><div class="platform-detail-status">${status(workspace.operational_status)}<span>组织状态已更新 ${number(workspace.operational_revision)} 次</span></div></header>
     ${canLifecycle ? lifecycleCommands(workspace) : ""}
     ${canLifecycle ? privateGatewayCapabilityCommand(workspace) : ""}
     <section class="platform-band platform-workspace-summary">
-      <div class="platform-section-heading"><div><p>Operational facts</p><h2>运营摘要</h2></div><span>更新于 ${formatTime(workspace.updated_at)}</span></div>
+      <div class="platform-section-heading"><div><p>运营事实</p><h2>运营摘要</h2></div><span>更新于 ${formatTime(workspace.updated_at)}</span></div>
       <dl class="platform-fact-grid">
         ${fact("区域", workspace.region_code ?? "未配置")}
         ${fact("驻留策略", workspace.residency_policy_version ?? "未配置")}
@@ -2260,7 +2295,7 @@ function workspaceDetailView(state, permissions) {
       </dl>
     </section>
     <section class="platform-band platform-health-detail">
-      <div class="platform-section-heading"><div><p>Health projection</p><h2>健康投影</h2></div>${status(health.status)}</div>
+      <div class="platform-section-heading"><div><p>健康状态</p><h2>健康投影</h2></div>${status(health.status)}</div>
       <dl class="platform-fact-grid">
         ${fact("健康等级", statusLabel(health.score_band ?? "not_ready"))}
         ${fact("风险等级", statusLabel(health.risk_level ?? "not_ready"))}
@@ -2271,8 +2306,8 @@ function workspaceDetailView(state, permissions) {
     ${riskOptions.length && Array.isArray(workspace.platform_risk_tags) ? riskControls(workspace, riskOptions) : ""}
     ${canContact && workspace.owner_contact_status ? notificationControls(workspace) : ""}
     <section class="platform-band platform-detail-history">
-      <div class="platform-history-column"><div class="platform-section-heading"><div><p>Action intents</p><h2>最近动作</h2></div></div>${actionTimeline(actions)}</div>
-      <div class="platform-history-column"><div class="platform-section-heading"><div><p>Operational events</p><h2>事件时间线</h2></div></div>${eventTimeline(events)}</div>
+      <div class="platform-history-column"><div class="platform-section-heading"><div><p>最近动作</p><h2>最近动作</h2></div></div>${actionTimeline(actions)}</div>
+      <div class="platform-history-column"><div class="platform-section-heading"><div><p>事件时间线</p><h2>事件时间线</h2></div></div>${eventTimeline(events)}</div>
     </section>`;
 }
 
@@ -2286,21 +2321,21 @@ function lifecycleCommands(workspace) {
   const canRestore = workspace.operational_status === "suspended";
   if (!canSuspend && !canRestore) return "";
   const action = canSuspend ? "suspend" : "restore";
-  return `<section class="platform-command-bar"><div><strong>${canSuspend ? "冻结 Workspace" : "恢复 Workspace"}</strong><span>${canSuspend ? "保留客户数据并撤销活跃 WorkspaceSession" : "旧 Session 不会复活"}</span></div><button class="${canSuspend ? "platform-danger" : "platform-primary"}" type="button" data-platform-action="prepare-workspace-lifecycle" data-lifecycle-action="${action}">${canSuspend ? "⏸ 冻结" : "▶ 恢复"}</button></section>`;
+  return `<section class="platform-command-bar"><div><strong>${canSuspend ? "冻结组织" : "恢复组织"}</strong><span>${canSuspend ? "保留客户数据并撤销活跃组织会话" : "旧会话不会恢复"}</span></div><button class="${canSuspend ? "platform-danger" : "platform-primary"}" type="button" data-platform-action="prepare-workspace-lifecycle" data-lifecycle-action="${action}">${canSuspend ? "⏸ 冻结" : "▶ 恢复"}</button></section>`;
 }
 
 function riskControls(workspace, options) {
   const tags = workspace.platform_risk_tags ?? [];
   return `<section class="platform-band platform-operation-grid">
-    <div><div class="platform-section-heading"><div><p>Risk operations</p><h2>平台风险标签</h2></div><span>Risk rev ${number(workspace.risk_revision)}</span></div><div class="platform-active-risk-tags">${tags.map((tag) => `<span>${escapeHtml(statusLabel(tag))}<button type="button" data-platform-action="remove-workspace-risk" data-tag-code="${escapeAttribute(tag)}" data-reason-code="${escapeAttribute(riskReason(tag))}" title="移除标签" aria-label="移除 ${escapeAttribute(statusLabel(tag))}">×</button></span>`).join("") || '<span class="platform-restricted">暂无标签</span>'}</div></div>
-    <form data-workspace-risk-form autocomplete="off"><label><span>标签</span><select name="tagCode">${filterOptions("", options)}</select></label><label><span>原因</span><select name="reasonCode">${filterOptions("", [["security_review", "Security review"], ["compliance_review", "Compliance review"], ["payment_follow_up", "Payment follow up"], ["adoption_follow_up", "Adoption follow up"]])}</select></label><button class="platform-primary" type="submit">添加标签</button></form>
+    <div><div class="platform-section-heading"><div><p>风险处理</p><h2>平台风险标签</h2></div><span>风险版本 ${number(workspace.risk_revision)}</span></div><div class="platform-active-risk-tags">${tags.map((tag) => `<span>${escapeHtml(statusLabel(tag))}<button type="button" data-platform-action="remove-workspace-risk" data-tag-code="${escapeAttribute(tag)}" data-reason-code="${escapeAttribute(riskReason(tag))}" title="移除标签" aria-label="移除 ${escapeAttribute(statusLabel(tag))}">×</button></span>`).join("") || '<span class="platform-restricted">暂无标签</span>'}</div></div>
+    <form data-workspace-risk-form autocomplete="off"><label><span>标签</span><select name="tagCode">${filterOptions("", options)}</select></label><label><span>原因</span><select name="reasonCode">${filterOptions("", [["security_review", "安全复核"], ["compliance_review", "Compliance review"], ["payment_follow_up", "Payment follow up"], ["adoption_follow_up", "Adoption follow up"]])}</select></label><button class="platform-primary" type="submit">添加标签</button></form>
   </section>`;
 }
 
 function notificationControls(workspace) {
   const lastNotificationStatus = workspace.last_notification_status ?? "none";
   return `<section class="platform-band platform-operation-grid">
-    <div><div class="platform-section-heading"><div><p>联系负责人</p><h2>联系 Owner</h2></div></div><dl class="platform-fact-grid platform-fact-grid-compact">${fact("联系状态", statusLabel(workspace.owner_contact_status))}<div><dt>最近通知</dt><dd>${status(lastNotificationStatus)}</dd></div></dl></div>
+    <div><div class="platform-section-heading"><div><p>联系负责人</p><h2>联系 负责人</h2></div></div><dl class="platform-fact-grid platform-fact-grid-compact">${fact("联系状态", statusLabel(workspace.owner_contact_status))}<div><dt>最近通知</dt><dd>${status(lastNotificationStatus)}</dd></div></dl></div>
     <form data-workspace-notification-form autocomplete="off"><label><span>模板</span><select name="templateCode">${filterOptions("", [["workspace_operational_notice", "Operational notice"], ["workspace_risk_follow_up", "Risk follow up"], ["workspace_service_update", "Service update"]])}</select></label><label><span>原因</span><select name="reasonCode">${filterOptions("", [["operational_notice", "Operational notice"], ["risk_follow_up", "Risk follow up"], ["service_update", "Service update"]])}</select></label><button class="platform-primary" type="submit" ${workspace.owner_contact_status === "available" ? "" : "disabled"}>加入投递队列</button></form>
   </section>`;
 }
@@ -2319,20 +2354,20 @@ function supportView(state, permissions) {
   const selected = tickets.find((item) => item.ticket_id === state.selectedSupportTicketId)
     ?? tickets[0] ?? null;
   return `
-    <header class="platform-page-heading"><div><p>Customer support</p><h1>支持授权与协作</h1></div><span>${tickets.length} 个工单 · ${grants.length} 条授权</span></header>
+    <header class="platform-page-heading"><div><p>平台支持</p><h1>支持授权与协作</h1></div><span>${tickets.length} 个工单 · ${grants.length} 条授权</span></header>
     ${permissions.has("platform.support.ticket.read") ? platformSupportTicketQueue(state, tickets, selected, permissions) : ""}
     ${permissions.has("platform.support.request") ? supportForms(permissions, selected?.workspace_id) : ""}
     ${state.diagnostics ? diagnostics(state.diagnostics) : ""}
-    <section class="platform-band"><div class="platform-section-heading"><div><p>JIT grants</p><h2>诊断访问授权</h2></div><span>${grants.length} 条</span></div><div class="platform-table-wrap"><table><thead><tr><th>Workspace</th><th>状态</th><th>待审批</th><th>到期</th><th><span class="platform-visually-hidden">操作</span></th></tr></thead><tbody>${grants.map((grant) => grantRow(grant, permissions)).join("") || emptyRow("暂无支持授权")}</tbody></table></div></section>`;
+    <section class="platform-band"><div class="platform-section-heading"><div><p>支持授权</p><h2>诊断访问授权</h2></div><span>${grants.length} 条</span></div><div class="platform-table-wrap"><table><thead><tr><th>组织空间</th><th>状态</th><th>待审批</th><th>到期</th><th><span class="platform-visually-hidden">操作</span></th></tr></thead><tbody>${grants.map((grant) => grantRow(grant, permissions)).join("") || emptyRow("暂无支持授权")}</tbody></table></div></section>`;
 }
 
 function platformSupportTicketQueue(state, tickets, selected, permissions) {
   return `<section class="platform-band platform-support-tickets">
-    <div class="platform-section-heading"><div><p>Prioritized queue</p><h2>客户工单队列</h2></div><span>${tickets.filter((item) => item.severity === "p1").length} 个 P1</span></div>
+    <div class="platform-section-heading"><div><p>待处理事项</p><h2>客户工单队列</h2></div><span>${tickets.filter((item) => item.severity === "p1").length} 个高优先级</span></div>
     <form class="platform-support-ticket-filter" data-platform-support-ticket-filter-form>
       <label><span>状态</span><select name="status">${supportOptions(state.supportTicketFilters?.status, [["", "全部"], ["open", "待受理"], ["triaged", "已分诊"], ["waiting_customer", "待客户"], ["waiting_platform", "待平台"], ["resolved", "已解决"], ["closed", "已关闭"]])}</select></label>
       <label><span>优先级</span><select name="severity">${supportOptions(state.supportTicketFilters?.severity, [["", "全部"], ["p1", "P1"], ["p2", "P2"], ["p3", "P3"], ["p4", "P4"]])}</select></label>
-      <label><span>Workspace</span><input name="workspaceId" pattern="wsp_[0-9a-f]{32}" maxlength="36" value="${escapeAttribute(state.supportTicketFilters?.workspaceId ?? "")}" /></label>
+      <label><span>组织编号</span><input name="workspaceId" pattern="wsp_[0-9a-f]{32}" maxlength="36" value="${escapeAttribute(state.supportTicketFilters?.workspaceId ?? "")}" /></label>
       <button type="submit">筛选</button>
     </form>
     <div class="platform-support-ticket-layout">
@@ -2347,7 +2382,7 @@ function platformSupportTicketQueue(state, tickets, selected, permissions) {
 function platformSupportTicketButton(ticket, selectedId) {
   return `<button type="button" role="listitem" data-platform-action="support-ticket-select" data-ticket-id="${escapeAttribute(ticket.ticket_id)}" class="${ticket.ticket_id === selectedId ? "is-active" : ""}">
     <span><b data-severity="${escapeAttribute(ticket.severity)}">${escapeHtml(ticket.severity.toUpperCase())}</b><strong>${escapeHtml(ticket.subject)}</strong></span>
-    <small>${escapeHtml(ticket.workspace_id)} · ${escapeHtml(supportStatusLabel(ticket.status))}</small>
+    <small>组织空间 · ${escapeHtml(supportStatusLabel(ticket.status))}</small>
     <time>${formatTime(ticket.updated_at)}</time>
   </button>`;
 }
@@ -2356,7 +2391,7 @@ function platformSupportTicketDetail(ticket, permissions) {
   const canManage = permissions.has("platform.support.ticket.manage");
   const canManageSla = permissions.has("platform.support.sla.manage");
   return `<article>
-    <header><div><span>${escapeHtml(ticket.severity.toUpperCase())} · ${escapeHtml(ticket.category)}</span><h3>${escapeHtml(ticket.subject)}</h3><code>${escapeHtml(ticket.ticket_id)}</code></div>${status(ticket.status)}</header>
+    <header><div><span>${escapeHtml(ticket.severity.toUpperCase())} · ${escapeHtml(ticket.category)}</span><h3>${escapeHtml(ticket.subject)}</h3><details class="platform-audit-technical"><summary>技术信息</summary><code>${escapeHtml(ticket.ticket_id)}</code><code>${escapeHtml(ticket.workspace_id)}</code></details></div>${status(ticket.status)}</header>
     <dl class="platform-support-sla${ticket.sla.state === "running" && Date.parse(ticket.sla.risk_at) <= Date.now() ? " is-risk" : ""}">
       <div><dt>SLA</dt><dd>${escapeHtml(ticket.sla.state)}</dd></div><div><dt>风险阈值</dt><dd>${formatTime(ticket.sla.risk_at)}</dd></div><div><dt>解决时限</dt><dd>${formatTime(ticket.sla.resolution_deadline_at)}</dd></div><div><dt>升级</dt><dd>${number(ticket.sla.escalation_generation)} / ${number(ticket.sla.generation)}</dd></div>
     </dl>
@@ -2403,8 +2438,8 @@ function supportAttachmentLabel(value) { return ({ quarantined: "隔离扫描中
 
 function supportForms(permissions, workspaceId = "") {
   return `<section class="platform-band platform-form-split">
-    <form data-support-grant-form autocomplete="off"><div class="platform-section-heading"><div><p>JIT Grant</p><h2>申请诊断访问</h2></div></div><label><span>Workspace ID</span><input name="workspaceId" pattern="wsp_[0-9a-f]{32}" maxlength="36" value="${escapeAttribute(workspaceId)}" required /></label><label><span>原因代码</span><select name="reasonCode"><option value="workspace_diagnostics">Workspace diagnostics</option><option value="incident_response">Incident response</option></select></label><label><span>时限</span><input name="durationMinutes" type="number" min="1" max="30" value="15" required /></label><button class="platform-primary" type="submit">提交申请</button></form>
-    ${permissions.has("platform.break_glass.use") ? `<form data-break-glass-form autocomplete="off"><div class="platform-section-heading"><div><p>Emergency</p><h2>Break-glass</h2></div></div><label><span>Workspace ID</span><input name="workspaceId" pattern="wsp_[0-9a-f]{32}" maxlength="36" required /></label><label><span>原因代码</span><select name="reasonCode"><option value="incident_containment">Incident containment</option><option value="service_recovery">Service recovery</option></select></label><label><span>动态验证码</span><input name="totpCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required /></label><label class="platform-check"><input name="confirmed" type="checkbox" required /><span>确认启动紧急访问</span></label><button class="platform-danger" type="submit">启动 Break-glass</button></form>` : ""}
+    <form data-support-grant-form autocomplete="off"><div class="platform-section-heading"><div><p>临时授权</p><h2>申请诊断访问</h2></div></div><label><span>组织编号</span><input name="workspaceId" pattern="wsp_[0-9a-f]{32}" maxlength="36" value="${escapeAttribute(workspaceId)}" required /></label><label><span>申请原因</span><select name="reasonCode"><option value="workspace_diagnostics">组织诊断</option><option value="incident_response">故障处理</option></select></label><label><span>有效时长（分钟）</span><input name="durationMinutes" type="number" min="1" max="30" value="15" required /></label><button class="platform-primary" type="submit">提交申请</button></form>
+    ${permissions.has("platform.break_glass.use") ? `<form data-break-glass-form autocomplete="off"><div class="platform-section-heading"><div><p>紧急访问</p><h2>紧急诊断</h2></div></div><label><span>组织编号</span><input name="workspaceId" pattern="wsp_[0-9a-f]{32}" maxlength="36" required /></label><label><span>申请原因</span><select name="reasonCode"><option value="incident_containment">控制故障影响</option><option value="service_recovery">恢复服务</option></select></label><label><span>动态验证码</span><input name="totpCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required /></label><label class="platform-check"><input name="confirmed" type="checkbox" required /><span>确认启动紧急访问</span></label><button class="platform-danger" type="submit">启动紧急诊断</button></form>` : ""}
   </section>`;
 }
 
@@ -2412,16 +2447,16 @@ function grantRow(grant, permissions) {
   const canApprove = permissions.has("platform.support.approve") && grant.status === "pending_approvals" && grant.missing_approvals?.includes("platform");
   const canOpen = grant.status === "active";
   const canRevoke = ["active", "pending_approvals"].includes(grant.status);
-  return `<tr><td><strong>${escapeHtml(grant.workspace_id)}</strong><small>${escapeHtml(grant.grant_id)}</small></td><td>${status(grant.status)}</td><td>${escapeHtml((grant.missing_approvals ?? []).map(domainLabel).join("、") || "无")}</td><td>${formatTime(grant.expires_at)}</td><td><div class="platform-row-actions">${canApprove ? `<button type="button" data-platform-action="approve-grant" data-grant-id="${escapeAttribute(grant.grant_id)}">批准</button>` : ""}${canOpen ? `<button type="button" data-platform-action="open-support" data-grant-id="${escapeAttribute(grant.grant_id)}">打开诊断</button>` : ""}${canRevoke ? `<button class="is-danger" type="button" data-platform-action="prepare-revoke" data-grant-id="${escapeAttribute(grant.grant_id)}">撤销</button>` : ""}</div></td></tr>`;
+  return `<tr><td><strong>组织空间</strong><details class="platform-audit-technical"><summary>技术信息</summary><code>${escapeHtml(grant.workspace_id)}</code><code>${escapeHtml(grant.grant_id)}</code></details></td><td>${status(grant.status)}</td><td>${escapeHtml((grant.missing_approvals ?? []).map(domainLabel).join("、") || "无")}</td><td>${formatTime(grant.expires_at)}</td><td><div class="platform-row-actions">${canApprove ? `<button type="button" data-platform-action="approve-grant" data-grant-id="${escapeAttribute(grant.grant_id)}">批准</button>` : ""}${canOpen ? `<button type="button" data-platform-action="open-support" data-grant-id="${escapeAttribute(grant.grant_id)}">打开诊断</button>` : ""}${canRevoke ? `<button class="is-danger" type="button" data-platform-action="prepare-revoke" data-grant-id="${escapeAttribute(grant.grant_id)}">撤销</button>` : ""}</div></td></tr>`;
 }
 
 function diagnostics(value) {
-  return `<section class="platform-band platform-diagnostics"><div class="platform-section-heading"><div><p>SupportSession</p><h2>Workspace 诊断</h2></div><span>${status(value.operational_status)}</span></div><dl><div><dt>Workspace</dt><dd>${escapeHtml(value.workspace_id)}</dd></div><div><dt>Region</dt><dd>${escapeHtml(value.region_code ?? "-")}</dd></div><div><dt>Provisioning</dt><dd>${escapeHtml(value.provisioning_status)}</dd></div><div><dt>Health</dt><dd>${escapeHtml(value.health_band ?? "-")}</dd></div><div><dt>Active memberships</dt><dd>${number(value.active_memberships)}</dd></div></dl></section>`;
+  return `<section class="platform-band platform-diagnostics"><div class="platform-section-heading"><div><p>支持会话</p><h2>组织诊断</h2></div><span>${status(value.operational_status)}</span></div><dl><div><dt>组织</dt><dd>${escapeHtml(value.workspace_id)}</dd></div><div><dt>区域</dt><dd>${escapeHtml(value.region_code ?? "-")}</dd></div><div><dt>开通状态</dt><dd>${escapeHtml(value.provisioning_status)}</dd></div><div><dt>健康状态</dt><dd>${escapeHtml(value.health_band ?? "-")}</dd></div><div><dt>有效成员数</dt><dd>${number(value.active_memberships)}</dd></div></dl></section>`;
 }
 
 function auditView(state) {
   const entries = state.audit?.entries ?? [];
-  return `<header class="platform-page-heading"><div><p>Immutable Audit</p><h1>平台审计</h1></div><span>${entries.length} 条记录</span></header><section class="platform-band"><ol class="platform-timeline">${entries.map((entry) => `<li><time>${formatTime(entry.occurred_at)}</time><div><strong>${escapeHtml(actionLabel(entry.action))}</strong><span>${escapeHtml(entry.object_type)} · ${escapeHtml(entry.object_id)}</span><small>${escapeHtml(entry.reason_code)}</small></div></li>`).join("") || '<li class="platform-empty">暂无审计记录</li>'}</ol></section>`;
+  return `<header class="platform-page-heading"><div><p>操作记录</p><h1>平台审计</h1></div><span>${entries.length} 条记录</span></header><section class="platform-band"><ol class="platform-timeline">${entries.map((entry) => `<li><time>${formatTime(entry.occurred_at)}</time><div><strong>${escapeHtml(actionLabel(entry.action))}</strong><span>${escapeHtml(auditObjectLabel(entry.object_type))}</span><small>${escapeHtml(auditReasonLabel(entry.reason_code))}</small><details class="platform-audit-technical"><summary>技术信息</summary><code>${escapeHtml(entry.object_id ?? "-")}</code><code>${escapeHtml(entry.reason_code ?? "-")}</code></details></div></li>`).join("") || '<li class="platform-empty">暂无审计记录</li>'}</ol></section>`;
 }
 
 function billingView(state, permissions) {
@@ -2435,7 +2470,7 @@ function billingView(state, permissions) {
     catalog_status: catalog.status,
   })));
   return `
-    <header class="platform-page-heading"><div><p>SaaS billing</p><h1>${canReadBilling ? "平台账单" : "套餐目录"}</h1></div><span>${canReadBilling ? `${number(state.billing?.cycles?.length ?? 0)} 个周期` : `${number(catalogs.length)} 个目录 · ${number(versions.length)} 个版本`}</span></header>
+    <header class="platform-page-heading"><div><p>平台计费</p><h1>${canReadBilling ? "平台账单" : "套餐目录"}</h1></div><span>${canReadBilling ? `${number(state.billing?.cycles?.length ?? 0)} 个周期` : `${number(catalogs.length)} 个目录 · ${number(versions.length)} 个版本`}</span></header>
     ${canReadBilling ? platformMetering(state, permissions) : ""}
     ${canReadBilling ? platformBillingCycles(state, permissions) : ""}
     ${canReadBilling ? platformRefundQueue(state, permissions) : ""}
@@ -2502,21 +2537,21 @@ function complianceView(state, permissions) {
     || item.report_outcome === "evidence_stale").length;
   return `
     <header class="platform-page-heading">
-      <div><p>Compliance evidence</p><h1>合规复核</h1></div>
+      <div><p>合规证据</p><h1>合规复核</h1></div>
       <button class="platform-icon-button" type="button" data-platform-action="compliance-refresh"
         title="刷新控制证据" aria-label="刷新控制证据" ${state.loading ? "disabled" : ""}>&#8635;</button>
     </header>
     <p class="platform-compliance-disclaimer">仅展示控制与证据事实，不代表外部认证结论。</p>
     <section class="platform-metrics platform-compliance-metrics" aria-label="控制证据摘要">
-      ${metric("Controls", controls.length, response?.control_set_version ?? "not loaded")}
-      ${metric("Gaps", gaps, "partial, missing or stale")}
-      ${metric("Failures", failures, "failed samples")}
-      ${metric("Stale", stale, "expired evidence")}
+      ${metric("控制项", controls.length, response?.control_set_version ?? "尚未读取")}
+      ${metric("缺口", gaps, "部分实施、缺失或过期")}
+      ${metric("失败", failures, "失败样本")}
+      ${metric("过期", stale, "已过期证据")}
     </section>
     <section class="platform-band platform-compliance-controls">
-      <div class="platform-section-heading"><div><p>Owner-qualified projection</p><h2>控制覆盖与恢复状态</h2></div><span>${response?.workspace_id ? shortWorkspace(response.workspace_id) : "控制目录"}</span></div>
+      <div class="platform-section-heading"><div><p>负责人确认的状态</p><h2>控制覆盖与恢复状态</h2></div><span>${response?.workspace_id ? shortWorkspace(response.workspace_id) : "控制目录"}</span></div>
       <form class="platform-compliance-filter" data-platform-compliance-filter-form autocomplete="off">
-        <label><span>Workspace ID</span><input name="workspaceId" value="${escapeAttribute(state.complianceWorkspaceId ?? "")}" pattern="wsp_[0-9a-f]{32}" placeholder="留空查看控制目录" /></label>
+        <label><span>组织 ID</span><input name="workspaceId" value="${escapeAttribute(state.complianceWorkspaceId ?? "")}" pattern="wsp_[0-9a-f]{32}" placeholder="留空查看控制目录" /></label>
         <button type="submit" ${state.loading ? "disabled" : ""}>筛选</button>
       </form>
       <div class="platform-table-wrap"><table class="platform-compliance-table">
@@ -2565,7 +2600,7 @@ function complianceOutcome(value) {
 }
 
 function complianceEvidence(evidence) {
-  if (!evidence) return '<span class="platform-restricted">无 Workspace 证据</span>';
+  if (!evidence) return '<span class="platform-restricted">无 组织 证据</span>';
   return `<strong>${escapeHtml(statusLabel(evidence.outcome))} · ${escapeHtml(statusLabel(evidence.freshness))}</strong>
     <small>${number(evidence.failed_count)} / ${number(evidence.sample_count)} 失败样本</small>
     <small>${escapeHtml(evidence.collector_version)} · ${escapeHtml(shortReference(evidence.collector_service_account_id))}</small>
@@ -2592,12 +2627,12 @@ function platformBillingCycles(state, permissions) {
   ));
   return `
     <section class="platform-band platform-billing-cycles">
-      <div class="platform-section-heading"><div><p>Cycle reconciliation</p><h2>周期与差异状态</h2></div><span>${number(cycles.filter((cycle) => cycle.status === "reconciliation_required").length)} 个待对账</span></div>
+      <div class="platform-section-heading"><div><p>周期对账</p><h2>周期与差异状态</h2></div><span>${number(cycles.filter((cycle) => cycle.status === "reconciliation_required").length)} 个待对账</span></div>
       <form class="platform-billing-filter" data-platform-billing-filter-form>
         <label><span>周期状态</span><select name="status"><option value="" ${state.billingStatus ? "" : "selected"}>全部</option>${billingStatusOptions(state.billingStatus)}</select></label>
         <button type="submit">筛选</button>
       </form>
-      <div class="platform-table-wrap"><table class="platform-billing-table"><thead><tr><th>Workspace</th><th>周期</th><th>状态</th><th>请求</th><th>Token</th><th>有效金额</th><th>更新</th></tr></thead><tbody>${cycles.map(platformBillingCycleRow).join("") || emptyRow("暂无账单周期", 7)}</tbody></table></div>
+      <div class="platform-table-wrap"><table class="platform-billing-table"><thead><tr><th>组织</th><th>周期</th><th>状态</th><th>请求</th><th>Token</th><th>有效金额</th><th>更新</th></tr></thead><tbody>${cycles.map(platformBillingCycleRow).join("") || emptyRow("暂无账单周期", 7)}</tbody></table></div>
       <div class="platform-pagination"><span>第 ${number((state.billingCursorHistory?.length ?? 0) + 1)} 页</span><div><button type="button" data-platform-action="billing-previous" ${state.billingCursorHistory?.length ? "" : "disabled"}>上一页</button><button type="button" data-platform-action="billing-next" ${state.billing?.next_cursor ? "" : "disabled"}>下一页</button></div></div>
     </section>
     ${permissions.has("platform.billing.adjust") ? platformBillingAdjustmentForm(adjustable) : ""}
@@ -2608,7 +2643,7 @@ function platformBillingCycleRow(cycle) {
   const requests = cycle.meters.find((meter) => meter.meter_code === "api_requests");
   const tokens = cycle.meters.find((meter) => meter.meter_code === "total_tokens");
   return `<tr>
-    <td data-label="Workspace"><strong>${escapeHtml(cycle.workspace_id)}</strong><small>${escapeHtml(cycle.billing_cycle_id)}</small></td>
+    <td data-label="组织"><strong>${escapeHtml(cycle.workspace_id)}</strong><small>${escapeHtml(cycle.billing_cycle_id)}</small></td>
     <td data-label="周期"><strong>${formatDate(cycle.period_started_at)} - ${formatDate(cycle.period_ends_at)}</strong><small>Rev ${number(cycle.revision)} · watermark ${number(cycle.source_watermark)}</small></td>
     <td data-label="状态">${status(cycle.status)}</td>
     <td data-label="请求"><strong>${number(requests?.usage_quantity)} / ${number(requests?.allocated_quantity)}</strong><small>超额 ${number(requests?.overage_quantity)}</small></td>
@@ -2619,9 +2654,9 @@ function platformBillingCycleRow(cycle) {
 }
 
 function platformBillingAdjustmentForm(targets) {
-  return `
+  const content = `
     <section class="platform-band platform-billing-adjustment">
-      <div class="platform-section-heading"><div><p>Append-only adjustment</p><h2>追加账单调整</h2></div><span>摘要哈希 CAS</span></div>
+      <div class="platform-section-heading"><div><p>账单调整</p><h2>追加账单调整</h2></div><span>保留历史记录</span></div>
       ${targets.length ? `<form data-platform-billing-adjustment-form autocomplete="off">
         <label class="platform-billing-target"><span>账单摘要</span><select name="targetKey" required>${targets.map(({ cycle, meter }) => `<option value="${escapeAttribute(`${cycle.billing_cycle_id}:${meter.meter_code}`)}">${escapeHtml(shortWorkspace(cycle.workspace_id))} · ${escapeHtml(meterLabel(meter.meter_code))} · ${escapeHtml(billingStatusLabel(cycle.status))}</option>`).join("")}</select></label>
         <label><span>方向</span><select name="reasonCode"><option value="manual_credit">贷记</option><option value="manual_debit">借记</option></select></label>
@@ -2631,14 +2666,15 @@ function platformBillingAdjustmentForm(targets) {
       </form>` : '<p class="platform-empty">当前页没有可调整的已冻结摘要。</p>'}
     </section>
   `;
+  return targets.length ? content : `<details class="platform-collapsed-section"><summary>账单调整 <span>当前没有待调整账单</span></summary>${content}</details>`;
 }
 
 function platformRefundQueue(state, permissions) {
   const refunds = state.refunds?.refunds ?? [];
   const canReview = permissions.has("platform.billing.adjust");
-  return `
+  const content = `
     <section class="platform-band platform-refund-queue">
-      <div class="platform-section-heading"><div><p>Refund review</p><h2>退款审核队列</h2></div><span>${number(refunds.length)} 笔</span></div>
+      <div class="platform-section-heading"><div><p>退款处理</p><h2>退款审核队列</h2></div><span>${number(refunds.length)} 笔</span></div>
       <form class="platform-billing-filter" data-platform-refund-filter-form>
         <label><span>退款状态</span><select name="status">${refundStatusOptions(state.refundStatus)}</select></label>
         <button type="submit">查询</button>
@@ -2651,6 +2687,7 @@ function platformRefundQueue(state, permissions) {
       </div>
     </section>
   `;
+  return refunds.length ? content : `<details class="platform-collapsed-section"><summary>退款审核 <span>当前没有待审核退款</span></summary>${content}</details>`;
 }
 
 function platformRefundRow(refund, canReview) {
@@ -2688,7 +2725,7 @@ function platformInvoiceReconciliation(state, permissions) {
   const reversal = state.reversal?.reversal ?? null;
   return `
     <section class="platform-band platform-reconciliation">
-      <div class="platform-section-heading"><div><p>Frozen watermarks</p><h2>订单、支付、Meter 与发票对账</h2></div>${run ? status(run.status) : ""}</div>
+      <div class="platform-section-heading"><div><p>已冻结的对账进度</p><h2>订单、支付、Meter 与发票对账</h2></div>${run ? status(run.status) : ""}</div>
       ${run ? renderReconciliationRun(run) : `<form class="platform-reconciliation-create" data-platform-reconciliation-form>
         <label class="platform-check"><input name="confirmed" type="checkbox" required /><span>确认冻结当前五类事实水位并启动对账</span></label>
         <button class="platform-primary" type="submit">创建对账</button>
@@ -2696,7 +2733,7 @@ function platformInvoiceReconciliation(state, permissions) {
       ${run ? renderReconciliationDifferences(state, differences) : ""}
     </section>
     <section class="platform-band platform-invoice-reversal">
-      <div class="platform-section-heading"><div><p>Dual-domain approval</p><h2>发票红字冲销</h2></div>${reversal ? status(reversal.status) : ""}</div>
+      <div class="platform-section-heading"><div><p>双域审批</p><h2>发票红字冲销</h2></div>${reversal ? status(reversal.status) : ""}</div>
       <div class="platform-reversal-forms">
         <form data-platform-reversal-form autocomplete="off">
           <label><span>发票申请 ID</span><input name="invoiceId" pattern="ivr_[0-9a-f]{32}" maxlength="36" required /></label>
@@ -2751,9 +2788,9 @@ function renderReconciliationDifferences(state, differences) {
 
 function platformCatalog(catalogs, versions, permissions) {
   return `
-    ${permissions.has("platform.catalog.write") ? platformPlanForm() : ""}
+    ${permissions.has("platform.catalog.write") ? `<details class="platform-collapsed-section"><summary>创建套餐版本 <span>只有需要新增套餐时展开</span></summary>${platformPlanForm()}</details>` : ""}
     <section class="platform-band platform-plan-versions">
-      <div class="platform-section-heading"><div><p>Immutable versions</p><h2>套餐版本记录</h2></div><span>${number(catalogs.length)} 个目录 · ${number(versions.length)} 个版本</span></div>
+      <div class="platform-section-heading"><div><p>历史版本</p><h2>套餐版本记录</h2></div><span>${number(catalogs.length)} 个目录 · ${number(versions.length)} 个版本</span></div>
       <div class="platform-table-wrap"><table class="platform-plan-table"><thead><tr><th>套餐</th><th>版本</th><th>状态</th><th>价格</th><th>试用</th><th>权益</th></tr></thead><tbody>${versions.map(platformPlanRow).join("") || emptyRow("暂无套餐版本", 6)}</tbody></table></div>
     </section>
   `;
@@ -2762,7 +2799,7 @@ function platformCatalog(catalogs, versions, permissions) {
 function platformPlanForm() {
   return `
     <section class="platform-band platform-plan-publisher">
-      <div class="platform-section-heading"><div><p>Version publisher</p><h2>创建套餐版本</h2></div></div>
+      <div class="platform-section-heading"><div><p>套餐管理</p><h2>创建套餐版本</h2></div></div>
       <form data-platform-plan-form autocomplete="off">
         <label><span>Plan code</span><input name="planCode" pattern="[a-z0-9][a-z0-9_-]{1,39}" maxlength="40" required /></label>
         <label><span>展示名称</span><input name="displayName" maxlength="80" required /></label>
@@ -2772,7 +2809,7 @@ function platformPlanForm() {
         <label><span>单价</span><input name="unitPrice" inputmode="decimal" pattern="(?:0|[1-9][0-9]{0,10})\.[0-9]{2}" value="0.00" required /></label>
         <label><span>试用天数</span><input name="trialDays" type="number" min="0" max="90" value="0" required /></label>
         <label><span>月请求数</span><input name="gatewayRequests" type="number" min="0" max="1000000000" value="10000" required /></label>
-        <label><span>Workspace 席位</span><input name="workspaceSeats" type="number" min="1" max="100000" value="5" required /></label>
+        <label><span>组织 席位</span><input name="workspaceSeats" type="number" min="1" max="100000" value="5" required /></label>
         <label><span>模型别名</span><input name="modelAliases" type="number" min="1" max="100000" value="10" required /></label>
         <label><span>留存天数</span><input name="retentionDays" type="number" min="1" max="3650" value="30" required /></label>
         <fieldset class="platform-plan-switches"><legend>发布选项</legend><label class="platform-check"><input name="prioritySupport" type="checkbox" /><span>优先支持</span></label><label class="platform-check"><input name="publish" type="checkbox" /><span>立即发布</span></label></fieldset>
@@ -2805,24 +2842,24 @@ function securityAssuranceView(state, permissions) {
   const canRemediate = permissions.has("platform.assurance.remediate");
   return `
     <header class="platform-page-heading">
-      <div><p>Fixed profile / owner-qualified evidence</p><h1>Security assurance</h1></div>
+      <div><p>固定规则与负责人确认</p><h1>安全复核</h1></div>
       ${assessment ? `<button class="platform-icon-button" type="button"
         data-platform-action="assurance-refresh" title="Refresh assessment"
         aria-label="Refresh assessment" ${state.loading ? "disabled" : ""}>&#8635;</button>` : ""}
     </header>
     <section class="platform-band platform-assurance-lookup">
-      <div class="platform-section-heading"><div><p>Immutable assessment ID</p><h2>Assessment lookup</h2></div></div>
+      <div class="platform-section-heading"><div><p>评估编号</p><h2>查找评估</h2></div></div>
       <form data-platform-assurance-lookup-form autocomplete="off">
-        <label><span>Assessment ID</span><input name="assessmentId"
+        <label><span>评估编号</span><input name="assessmentId"
           value="${escapeAttribute(state.securityAssuranceLookup ?? "")}"
           pattern="sas_[0-9a-f]{32}" maxlength="36" required /></label>
-        <button type="submit" ${state.loading ? "disabled" : ""}>Lookup</button>
+        <button type="submit" ${state.loading ? "disabled" : ""}>查询</button>
       </form>
     </section>
     ${canRun ? securityAssuranceStartForm(state.loading) : ""}
     ${assessment ? `
       <section class="platform-metrics platform-assurance-metrics" aria-label="Assessment summary">
-        ${metric("Generation", assessment.generation, assessment.profile_code.replaceAll("_", " "))}
+        ${metric("发布代数", assessment.generation, assessment.profile_code.replaceAll("_", " "))}
         ${metric("Scenarios", runs.length, `${number(failed)} non-passing`)}
         ${metric("Open findings", open, `${number(findings.length)} total`)}
         ${metric("Cleanup receipts", cleaned, `${number(runs.length)} scenario runs`)}
@@ -2830,27 +2867,27 @@ function securityAssuranceView(state, permissions) {
       ${securityAssessmentSummary(assessment)}
       ${securityAssuranceRuns(runs)}
       ${securityAssuranceFindings(findings, canRemediate, state.loading)}
-    ` : '<section class="platform-band platform-domain-empty"><strong>No assessment selected</strong></section>'}
+    ` : '<section class="platform-band platform-domain-empty"><strong>尚未选择评估</strong></section>'}
   `;
 }
 
 function securityAssuranceStartForm(loading) {
   const disabled = loading ? " disabled" : "";
   return `<section class="platform-band platform-assurance-start">
-    <div class="platform-section-heading"><div><p>Signed scenario registry</p><h2>Start assessment</h2></div><span>Profile v1</span></div>
+    <div class="platform-section-heading"><div><p>已签名场景目录</p><h2>开始评估</h2></div><span>评估配置 v1</span></div>
     <form data-platform-assurance-start-form autocomplete="off">
-      <label><span>Workspace ID</span><input name="workspaceId" pattern="wsp_[0-9a-f]{32}" maxlength="36" required${disabled} /></label>
-      <fieldset class="platform-assurance-profiles"><legend>Profile</legend>
-        <label><input type="radio" name="profileCode" value="incremental_release" checked${disabled} /><span>Incremental release</span></label>
-        <label><input type="radio" name="profileCode" value="quarterly_full"${disabled} /><span>Quarterly full</span></label>
+      <label><span>组织 ID</span><input name="workspaceId" pattern="wsp_[0-9a-f]{32}" maxlength="36" required${disabled} /></label>
+      <fieldset class="platform-assurance-profiles"><legend>评估配置</legend>
+        <label><input type="radio" name="profileCode" value="incremental_release" checked${disabled} /><span>增量发布</span></label>
+        <label><input type="radio" name="profileCode" value="quarterly_full"${disabled} /><span>季度全面评估</span></label>
       </fieldset>
-      ${assuranceDigestInput("codeTreeSha256", "Code tree SHA-256", disabled)}
-      ${assuranceDigestInput("migrationSetSha256", "Migration set SHA-256", disabled)}
-      ${assuranceDigestInput("contractSetSha256", "Contract set SHA-256", disabled)}
-      ${assuranceDigestInput("artifactSha256", "Artifact SHA-256", disabled)}
+      ${assuranceDigestInput("codeTreeSha256", "代码校验值", disabled)}
+      ${assuranceDigestInput("migrationSetSha256", "迁移集 SHA-256", disabled)}
+      ${assuranceDigestInput("contractSetSha256", "契约集 SHA-256", disabled)}
+      ${assuranceDigestInput("artifactSha256", "产物 SHA-256", disabled)}
       ${assuranceStepUpFields(disabled)}
-      <label class="platform-check platform-assurance-confirm"><input type="checkbox" name="confirmed" required${disabled} /><span>Confirm signed profile execution</span></label>
-      <button class="platform-primary" type="submit"${disabled}>Start assessment</button>
+      <label class="platform-check platform-assurance-confirm"><input type="checkbox" name="confirmed" required${disabled} /><span>确认执行已签名评估配置</span></label>
+      <button class="platform-primary" type="submit"${disabled}>开始评估</button>
     </form>
   </section>`;
 }
@@ -2861,19 +2898,19 @@ function assuranceDigestInput(name, label, disabled) {
 }
 
 function assuranceStepUpFields(disabled) {
-  return `<label><span>Step-up method</span><select name="method"${disabled}>
-      <option value="totp">Authenticator code</option><option value="webauthn">Security key</option>
+  return `<label><span>再次验证方式</span><select name="method"${disabled}>
+      <option value="totp">动态验证码</option><option value="webauthn">安全密钥</option>
     </select></label>
-    <label data-platform-step-up-code><span>Verification code</span><input name="verificationCode"
+    <label data-platform-step-up-code><span>验证码</span><input name="verificationCode"
       type="password" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}"
       maxlength="6" data-platform-sensitive required${disabled} /></label>`;
 }
 
 function securityAssessmentSummary(assessment) {
   return `<section class="platform-band platform-assurance-summary">
-    <div class="platform-section-heading"><div><p>${escapeHtml(assessment.security_assessment_id)}</p><h2>Assessment state</h2></div>${status(assessment.status)}</div>
+    <div class="platform-section-heading"><div><p>${escapeHtml(assessment.security_assessment_id)}</p><h2>评估状态</h2></div>${status(assessment.status)}</div>
     <dl>
-      <div><dt>Workspace</dt><dd><code>${escapeHtml(assessment.workspace_id)}</code></dd></div>
+      <div><dt>组织</dt><dd><code>${escapeHtml(assessment.workspace_id)}</code></dd></div>
       <div><dt>Profile</dt><dd>${escapeHtml(assessment.profile_code.replaceAll("_", " "))} v${number(assessment.profile_version)}</dd></div>
       <div><dt>Requested</dt><dd>${formatTime(assessment.requested_at)}</dd></div>
       <div><dt>Finished</dt><dd>${assessment.finished_at ? formatTime(assessment.finished_at) : "Pending"}</dd></div>
@@ -2887,15 +2924,15 @@ function securityAssessmentSummary(assessment) {
 
 function securityAssuranceRuns(runs) {
   return `<section class="platform-band platform-assurance-runs">
-    <div class="platform-section-heading"><div><p>Owner registry v1</p><h2>Scenario runs</h2></div><span>${number(runs.length)} runs</span></div>
+    <div class="platform-section-heading"><div><p>负责人目录</p><h2>场景运行</h2></div><span>${number(runs.length)} runs</span></div>
     <div class="platform-table-wrap"><table>
-      <thead><tr><th>Scenario</th><th>Owner / target</th><th>Contract</th><th>Outcome</th><th>Duration</th><th>Evidence / cleanup</th></tr></thead>
+      <thead><tr><th>Scenario</th><th>负责人 / target</th><th>契约测试</th><th>Outcome</th><th>耗时</th><th>Evidence / cleanup</th></tr></thead>
       <tbody>${runs.map((item) => `<tr>
         <td data-label="Scenario"><strong>${escapeHtml(item.scenario_code.replaceAll("_", " "))}</strong><small>${escapeHtml(item.weakness_code)}</small></td>
-        <td data-label="Owner / target"><strong>${escapeHtml(item.owner_kind.replaceAll("_", " "))}</strong><small>${escapeHtml(item.target_kind.replaceAll("_", " "))}</small></td>
-        <td data-label="Contract"><code>${escapeHtml(item.contract_code)}</code></td>
+        <td data-label="负责人 / target"><strong>${escapeHtml(item.owner_kind.replaceAll("_", " "))}</strong><small>${escapeHtml(item.target_kind.replaceAll("_", " "))}</small></td>
+        <td data-label="契约测试"><code>${escapeHtml(item.contract_code)}</code></td>
         <td data-label="Outcome">${status(item.outcome)}</td>
-        <td data-label="Duration">${number(item.duration_ms)} ms</td>
+        <td data-label="耗时">${number(item.duration_ms)} ms</td>
         <td data-label="Evidence / cleanup"><code>${escapeHtml(shortHash(item.evidence_sha256))}</code><small>cleanup ${escapeHtml(shortHash(item.cleanup_receipt_sha256))}</small></td>
       </tr>`).join("") || emptyRow("No scenario runs", 6)}</tbody>
     </table></div>
@@ -2904,7 +2941,7 @@ function securityAssuranceRuns(runs) {
 
 function securityAssuranceFindings(findings, canRemediate, loading) {
   return `<section class="platform-band platform-assurance-findings">
-    <div class="platform-section-heading"><div><p>Immutable evidence references</p><h2>Findings and remediation</h2></div><span>${number(findings.length)} findings</span></div>
+    <div class="platform-section-heading"><div><p>不可变证据</p><h2>问题与改进</h2></div><span>${number(findings.length)} findings</span></div>
     <div class="platform-assurance-finding-list">
       ${findings.map((item) => securityAssuranceFinding(item, canRemediate, loading)).join("")
         || '<p class="platform-empty">No findings.</p>'}
@@ -2923,10 +2960,10 @@ function securityAssuranceFinding(item, canRemediate, loading) {
     : '<li><span>No risk acceptance</span></li>';
   return `<article class="platform-assurance-finding is-${escapeAttribute(item.severity)}">
     <header><div><strong>${escapeHtml(item.weakness_code.replaceAll("_", " "))}</strong><small>${escapeHtml(item.pen_test_finding_id)} · ${escapeHtml(item.contract_code)}</small></div><div>${status(item.severity)}${status(item.status)}</div></header>
-    <dl><div><dt>Owner</dt><dd>${escapeHtml(item.owner_kind.replaceAll("_", " "))}</dd></div>
+    <dl><div><dt>负责人</dt><dd>${escapeHtml(item.owner_kind.replaceAll("_", " "))}</dd></div>
       <div><dt>SLA</dt><dd class="${overdue ? "is-overdue" : ""}">${formatTime(item.sla_deadline_at)}</dd></div>
-      <div><dt>Evidence</dt><dd><code>${escapeHtml(shortHash(item.evidence_sha256))}</code></dd></div>
-      <div><dt>Revision</dt><dd>${number(item.revision)}</dd></div></dl>
+      <div><dt>验证证据</dt><dd><code>${escapeHtml(shortHash(item.evidence_sha256))}</code></dd></div>
+      <div><dt>修订号</dt><dd>${number(item.revision)}</dd></div></dl>
     <div class="platform-assurance-related"><div><h3>Remediation history</h3><ul>${history}</ul></div><div><h3>Risk acceptance</h3><ul>${risks}</ul></div></div>
     ${canRemediate && new Set(["open", "risk_accepted"]).has(item.status)
       ? securityRemediationForm(item, "propose", null, loading) : ""}
@@ -2962,61 +2999,61 @@ function developerContractsView(state, permissions) {
   const pending = versions.filter((item) => item.status === "pending_approval");
   return `
     <header class="platform-page-heading">
-      <div><p>Public API release control</p><h1>Contracts and SDKs</h1></div>
-      <span>${canManage ? "Release management" : "Read only"}</span>
+      <div><p>发布管理</p><h1>接口与 SDK 发布</h1></div>
+      <span>${canManage ? "可管理" : "只读"}</span>
     </header>
-    <section class="platform-metrics" aria-label="Developer contract release summary">
-      ${metric("API versions", versions.length, `${pending.length} pending approval`)}
-      ${metric("Signed SDKs", releases.filter((item) => item.status === "published").length, `${releases.length} immutable builds`)}
-      ${metric("Deprecations", notices.filter((item) => !new Set(["sunset", "withdrawn"]).has(item.status)).length, `${notices.length} retained notices`)}
-      ${metric("Security gates", releases.filter((item) => supplyChain[item.sdk_release_id]?.report?.gate_outcome === "passed").length, `${releases.filter((item) => item.status === "published").length} published artifacts`)}
+    <section class="platform-metrics" aria-label="发布概览">
+      ${metric("接口版本", versions.length, `${pending.length} 个待审批`)}
+      ${metric("SDK 发布", releases.filter((item) => item.status === "published").length, `${releases.length} 个构建`)}
+      ${metric("弃用通知", notices.filter((item) => !new Set(["sunset", "withdrawn"]).has(item.status)).length, `${notices.length} 条记录`)}
+      ${metric("安全检查", releases.filter((item) => supplyChain[item.sdk_release_id]?.report?.gate_outcome === "passed").length, `${releases.filter((item) => item.status === "published").length} 个已发布`)}
     </section>
-    ${workspace ? "" : `<section class="platform-band"><p class="platform-empty">Contract workspace is loading.</p></section>`}
+    ${workspace ? "" : `<section class="platform-band"><p class="platform-empty">正在读取发布目录…</p></section>`}
     ${canManage ? developerContractBuildForm(state.loading) : ""}
     <section class="platform-band platform-developer-contract-versions">
-      <div class="platform-section-heading"><div><p>Canonical diff and approval</p><h2>API versions</h2></div><span>${number(versions.length)} versions</span></div>
-      ${versions.length ? developerContractVersionTable(versions, canApprove, state.loading) : '<p class="platform-empty">No contract builds.</p>'}
+      <div class="platform-section-heading"><div><p>版本目录</p><h2>接口版本</h2></div><span>${number(versions.length)} 个版本</span></div>
+      ${versions.length ? developerContractVersionTable(versions, canApprove, state.loading) : '<p class="platform-empty">暂无接口版本。</p>'}
     </section>
     <section class="platform-band platform-developer-contract-sdks">
-      <div class="platform-section-heading"><div><p>Reproducible artifact proof</p><h2>SDK releases</h2></div><span>${number(releases.length)} artifacts</span></div>
-      ${releases.length ? developerContractSdkTable(releases, canManage, state.loading, supplyChain) : '<p class="platform-empty">No SDK builds.</p>'}
+      <div class="platform-section-heading"><div><p>客户端发布</p><h2>SDK 版本</h2></div><span>${number(releases.length)} 个版本</span></div>
+      ${releases.length ? developerContractSdkTable(releases, canManage, state.loading, supplyChain) : '<p class="platform-empty">暂无 SDK 版本。</p>'}
     </section>
     <section class="platform-band platform-supply-chain">
-      <div class="platform-section-heading"><div><p>SBOM / attestation / provenance</p><h2>Release security gates</h2></div><span>${number(Object.keys(supplyChain).length)} reports</span></div>
+      <div class="platform-section-heading"><div><p>发布安全检查</p><h2>安全检查结果</h2></div><span>${number(Object.keys(supplyChain).length)} 份报告</span></div>
       ${platformSupplyChainEvidence(releases, supplyChain, permissions, state.loading)}
     </section>
     <section class="platform-band platform-developer-contract-deprecations">
-      <div class="platform-section-heading"><div><p>Notice and adoption gates</p><h2>Deprecation lifecycle</h2></div><span>${number(notices.length)} notices</span></div>
+      <div class="platform-section-heading"><div><p>版本生命周期</p><h2>弃用通知</h2></div><span>${number(notices.length)} 条通知</span></div>
       ${canManage && published.length >= 2 ? developerDeprecationCreateForm(published, state.loading) : ""}
-      ${notices.length ? developerDeprecationTable(notices, canManage, canApprove, state.loading) : '<p class="platform-empty">No deprecation notices.</p>'}
+      ${notices.length ? developerDeprecationTable(notices, canManage, canApprove, state.loading) : '<p class="platform-empty">暂无弃用通知。</p>'}
     </section>`;
 }
 
 function developerContractBuildForm(loading) {
   const disabled = loading ? " disabled" : "";
   return `
-    <section class="platform-band platform-developer-contract-build">
-      <div class="platform-section-heading"><div><p>Reproducible build</p><h2>Build release candidate</h2></div></div>
+    <details class="platform-band platform-collapsed-section platform-developer-contract-build">
+      <summary>创建发布版本 <span>准备新接口或 SDK 版本时展开</span></summary>
       <form data-platform-developer-contract-build-form class="platform-developer-contract-form">
         <label><span>API version</span><input name="apiVersion" inputmode="decimal" placeholder="1.2.0" pattern="(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)" required${disabled} /></label>
-        <label><span>Python SDK</span><input name="pythonSdkVersion" inputmode="decimal" placeholder="1.2.0" pattern="(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)" required${disabled} /></label>
-        <label><span>JavaScript SDK</span><input name="javascriptSdkVersion" inputmode="decimal" placeholder="1.2.0" pattern="(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)" required${disabled} /></label>
-        <label><span>Producer revision</span><input name="producerRevision" type="number" min="1" step="1" value="1" required${disabled} /></label>
-        <label class="platform-check"><input name="confirmed" type="checkbox" required${disabled} /><span>Confirm canonical registry build</span></label>
-        <button class="platform-primary" type="submit"${disabled}>Build</button>
+        <label><span>Python SDK 版本</span><input name="pythonSdkVersion" inputmode="decimal" placeholder="1.2.0" pattern="(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)" required${disabled} /></label>
+        <label><span>JavaScript SDK 版本</span><input name="javascriptSdkVersion" inputmode="decimal" placeholder="1.2.0" pattern="(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)" required${disabled} /></label>
+        <label><span>构建序号</span><input name="producerRevision" type="number" min="1" step="1" value="1" required${disabled} /></label>
+        <label class="platform-check"><input name="confirmed" type="checkbox" required${disabled} /><span>确认使用当前发布目录</span></label>
+        <button class="platform-primary" type="submit"${disabled}>创建版本</button>
       </form>
-    </section>`;
+    </details>`;
 }
 
 function developerContractVersionTable(versions, canApprove, loading) {
   return `<div class="platform-table-wrap"><table class="platform-developer-contract-table">
-    <thead><tr><th>Version</th><th>State</th><th>Compatibility</th><th>Contract proof</th><th>Approval</th></tr></thead>
+    <thead><tr><th>版本</th><th>状态</th><th>兼容性</th><th>校验结果</th><th>审批</th></tr></thead>
     <tbody>${versions.map((item) => `<tr>
-      <td data-label="Version"><strong>${escapeHtml(item.version)}</strong><small>registry r${number(item.registry_revision)} · state r${number(item.revision)}</small></td>
-      <td data-label="State">${status(item.status)}<small>${formatTime(item.published_at ?? item.created_at)}</small></td>
-      <td data-label="Compatibility"><strong>${escapeHtml(item.compatibility_outcome)}</strong><small>${escapeHtml(item.breaking_reasons.join(", ") || "No breaking changes")}</small></td>
-      <td data-label="Contract proof"><code>${escapeHtml(shortHash(item.contract_sha256))}</code><small>baseline ${escapeHtml(shortHash(item.compatibility_baseline_sha256))}</small></td>
-      <td data-label="Approval">${item.status === "pending_approval" && canApprove ? developerContractApproveForm(item, loading) : '<span class="platform-restricted">No action</span>'}</td>
+      <td data-label="版本"><strong>${escapeHtml(item.version)}</strong><details class="platform-audit-technical"><summary>技术信息</summary><code>registry r${number(item.registry_revision)}</code><code>state r${number(item.revision)}</code></details></td>
+      <td data-label="状态">${status(item.status)}<small>${formatTime(item.published_at ?? item.created_at)}</small></td>
+      <td data-label="兼容性"><strong>${escapeHtml(item.compatibility_outcome)}</strong><small>${escapeHtml(item.breaking_reasons.join(", ") || "无破坏性变更")}</small></td>
+      <td data-label="校验结果"><details class="platform-audit-technical"><summary>查看校验</summary><code>${escapeHtml(shortHash(item.contract_sha256))}</code><code>${escapeHtml(shortHash(item.compatibility_baseline_sha256))}</code></details></td>
+      <td data-label="审批">${item.status === "pending_approval" && canApprove ? developerContractApproveForm(item, loading) : '<span class="platform-restricted">无需操作</span>'}</td>
     </tr>`).join("")}</tbody>
   </table></div>`;
 }
@@ -3033,14 +3070,14 @@ function developerContractApproveForm(item, loading) {
 
 function developerContractSdkTable(releases, canManage, loading, supplyChain) {
   return `<div class="platform-table-wrap"><table class="platform-developer-contract-table">
-    <thead><tr><th>SDK</th><th>Contract</th><th>Smoke</th><th>Signature summary</th><th>Security gate</th><th>Action</th></tr></thead>
+    <thead><tr><th>SDK</th><th>契约测试</th><th>Smoke</th><th>Signature summary</th><th>Security gate</th><th>Action</th></tr></thead>
     <tbody>${releases.map((item) => `<tr>
       <td data-label="SDK"><strong>${escapeHtml(developerLanguage(item.language))} ${escapeHtml(item.sdk_version)}</strong><small>${escapeHtml(item.runtime_version)} · ${status(item.status)}</small></td>
-      <td data-label="Contract"><span>API ${escapeHtml(item.api_version)}</span><small><code>${escapeHtml(shortHash(item.contract_sha256))}</code></small></td>
+      <td data-label="契约测试"><span>API ${escapeHtml(item.api_version)}</span><small><code>${escapeHtml(shortHash(item.contract_sha256))}</code></small></td>
       <td data-label="Smoke"><strong>Windows ${escapeHtml(item.smoke_matrix.windows)}</strong><small>Linux ${escapeHtml(item.smoke_matrix.linux)} · N/N-1</small></td>
-      <td data-label="Signature summary"><code>${escapeHtml(shortHash(item.signature_sha256))}</code><small>receipt ${escapeHtml(shortHash(item.artifact_receipt_sha256))} · ${escapeHtml(item.signing_key_id ?? "pending")}</small></td>
+      <td data-label="签名摘要"><code>${escapeHtml(shortHash(item.signature_sha256))}</code><small>凭据 ${escapeHtml(shortHash(item.artifact_receipt_sha256))} · ${escapeHtml(item.signing_key_id ?? "待生成")}</small></td>
       <td data-label="Security gate">${platformSupplyChainCell(item, supplyChain[item.sdk_release_id])}</td>
-      <td data-label="Action">${item.status === "published" && canManage ? developerSdkWithdrawForm(item, loading) : '<span class="platform-restricted">No action</span>'}</td>
+      <td data-label="操作">${item.status === "published" && canManage ? developerSdkWithdrawForm(item, loading) : '<span class="platform-restricted">无需操作</span>'}</td>
     </tr>`).join("")}</tbody>
   </table></div>`;
 }
@@ -3055,7 +3092,7 @@ function platformSupplyChainCell(release, evidence) {
 
 function platformSupplyChainEvidence(releases, supplyChain, permissions, loading) {
   const published = releases.filter((item) => item.status === "published");
-  if (!published.length) return '<p class="platform-empty">No published artifacts.</p>';
+  if (!published.length) return '<p class="platform-empty">暂无已发布产物。</p>';
   const canRequest = permissions.has("platform.supply_chain.exception");
   const canApprove = permissions.has("platform.supply_chain.approve");
   return `<div class="platform-supply-chain-list">${published.map((release) => {
@@ -3076,7 +3113,7 @@ function platformSupplyChainEvidence(releases, supplyChain, permissions, loading
         <div><dt>Provenance</dt><dd>${provenance.builder_verified ? "verified" : "unverified"} · ${provenance.reproducible ? "reproducible" : "not reproducible"}</dd></div>
         <div><dt>Gate</dt><dd>${number(report.blocking_finding_count)} blocking findings</dd></div>
       </dl>
-      ${report.vulnerabilities.length ? `<div class="platform-supply-chain-findings">${report.vulnerabilities.map((item) => platformSupplyChainFinding(item, canRequest, canApprove, loading)).join("")}</div>` : '<p class="platform-empty">No active findings.</p>'}
+      ${report.vulnerabilities.length ? `<div class="platform-supply-chain-findings">${report.vulnerabilities.map((item) => platformSupplyChainFinding(item, canRequest, canApprove, loading)).join("")}</div>` : '<p class="platform-empty">暂无待处理项。</p>'}
     </article>`;
   }).join("")}</div>`;
 }
@@ -3104,8 +3141,8 @@ function platformSupplyChainFinding(item, canRequest, canApprove, loading) {
     <form data-platform-supply-chain-exception-form autocomplete="off">
       <input name="operation" type="hidden" value="request" />
       <input name="findingId" type="hidden" value="${escapeAttribute(item.vulnerability_finding_id)}" />
-      <label><span>Workspace ID</span><input name="workspaceId" pattern="wsp_[0-9a-f]{32}" required${disabled} /></label>
-      <label><span>Reason</span><select name="reasonCode" required${disabled}><option value="vendor_fix_pending">Vendor fix pending</option><option value="mitigated_exposure">Mitigated exposure</option><option value="emergency_continuity">Emergency continuity</option></select></label>
+      <label><span>组织 ID</span><input name="workspaceId" pattern="wsp_[0-9a-f]{32}" required${disabled} /></label>
+      <label><span>原因</span><select name="reasonCode" required${disabled}><option value="vendor_fix_pending">等待供应商修复</option><option value="mitigated_exposure">风险已缓解</option><option value="emergency_continuity">保障业务连续性</option></select></label>
       <fieldset><legend>Compensating controls</legend><label class="platform-check"><input name="controls" type="checkbox" value="network_isolation"${disabled} /><span>Network isolation</span></label><label class="platform-check"><input name="controls" type="checkbox" value="runtime_detection"${disabled} /><span>Runtime detection</span></label><label class="platform-check"><input name="controls" type="checkbox" value="feature_disablement"${disabled} /><span>Feature disablement</span></label></fieldset>
       <label><span>Starts at</span><input name="startsAt" type="datetime-local" required${disabled} /></label>
       <label><span>Expires at</span><input name="expiresAt" type="datetime-local" required${disabled} /></label>
@@ -3165,7 +3202,7 @@ function developerDeprecationActions(item, canManage, canApprove, loading) {
     actions.push(["withdraw", "Withdraw"]);
   }
   if (item.status === "sunset_scheduled" && canApprove) actions.push(["sunset", "Sunset"]);
-  if (!actions.length) return '<span class="platform-restricted">No action</span>';
+  if (!actions.length) return '<span class="platform-restricted">无需操作</span>';
   return `<div class="platform-developer-contract-actions">${actions.map(([action, label]) => {
     const disabled = loading ? " disabled" : "";
     const gates = action === "sunset" ? `
@@ -3195,7 +3232,7 @@ function privacyView(state) {
   const overdue = active.filter((item) => Date.parse(item.deadline_at) < Date.now()).length;
   return `
     <header class="platform-page-heading">
-      <div><p>Privacy operations</p><h1>隐私请求队列</h1></div>
+      <div><p>隐私处理</p><h1>隐私请求队列</h1></div>
       <button class="platform-icon-button" type="button" data-platform-action="privacy-refresh"
         title="刷新隐私请求队列" aria-label="刷新隐私请求队列" ${state.loading ? "disabled" : ""}>&#8635;</button>
     </header>
@@ -3206,7 +3243,7 @@ function privacyView(state) {
       ${metric("Queue", items.length, "minimal projections")}
     </section>
     <section class="platform-band platform-privacy-queue">
-      <div class="platform-section-heading"><div><p>Minimal processing view</p><h2>分域处理进度</h2></div><span>${number(items.length)} 项</span></div>
+      <div class="platform-section-heading"><div><p>最小化处理视图</p><h2>分域处理进度</h2></div><span>${number(items.length)} 项</span></div>
       <div class="platform-table-wrap"><table class="platform-privacy-table">
         <thead><tr><th>请求</th><th>状态</th><th>期限</th><th>分域进度</th><th>法律结果</th></tr></thead>
         <tbody>${items.map(privacyQueueRow).join("") || emptyRow("当前没有隐私请求", 5)}</tbody>
@@ -3246,7 +3283,7 @@ function privacyOwnerLabel(value) {
 function domainPlaceholderView(state) {
   const item = (state.navigation ?? []).find((candidate) => candidate.id === state.view);
   return `
-    <header class="platform-page-heading"><div><p>Platform domain</p><h1>${escapeHtml(item?.label ?? "平台域")}</h1></div></header>
+    <header class="platform-page-heading"><div><p>平台域</p><h1>${escapeHtml(item?.label ?? "平台域")}</h1></div></header>
     <section class="platform-band platform-domain-empty" role="status">
       <strong>暂无数据</strong>
       <p>当前职责域还没有可验证的记录。返回平台总览查看待处理事项，或稍后刷新本页。</p>
@@ -3261,7 +3298,7 @@ function pendingConfirmation(state) {
     const reasons = suspend
       ? [["security_containment", "Security containment"], ["terms_enforcement", "Terms enforcement"], ["operational_protection", "Operational protection"]]
       : [["security_cleared", "Security cleared"], ["terms_resolved", "Terms resolved"], ["operational_recovery", "Operational recovery"]];
-    return `<section class="platform-confirm platform-lifecycle-confirm" role="alert"><div><strong>${suspend ? "确认冻结 Workspace" : "确认恢复 Workspace"}</strong><span>${escapeHtml(state.pendingAction.id)} · Rev ${number(state.pendingAction.revision)}</span></div><form data-workspace-lifecycle-form autocomplete="off"><label><span>原因</span><select name="reasonCode">${filterOptions("", reasons)}</select></label><button type="button" data-platform-action="cancel-confirm">取消</button><button class="${suspend ? "platform-danger" : "platform-primary"}" type="submit">${suspend ? "确认冻结" : "确认恢复"}</button></form></section>`;
+    return `<section class="platform-confirm platform-lifecycle-confirm" role="alert"><div><strong>${suspend ? "确认冻结组织" : "确认恢复组织"}</strong><span>${escapeHtml(state.pendingAction.id)} · Rev ${number(state.pendingAction.revision)}</span></div><form data-workspace-lifecycle-form autocomplete="off"><label><span>原因</span><select name="reasonCode">${filterOptions("", reasons)}</select></label><button type="button" data-platform-action="cancel-confirm">取消</button><button class="${suspend ? "platform-danger" : "platform-primary"}" type="submit">${suspend ? "确认冻结" : "确认恢复"}</button></form></section>`;
   }
   return `<section class="platform-confirm" role="alert"><div><strong>撤销支持授权</strong><span>${escapeHtml(state.pendingAction.id)}</span></div><div><button type="button" data-platform-action="cancel-confirm">取消</button><button class="platform-danger" type="button" data-platform-action="confirm-revoke" data-grant-id="${escapeAttribute(state.pendingAction.id)}">确认撤销</button></div></section>`;
 }
@@ -3271,7 +3308,10 @@ function feedback(state) {
     const conflict = /platform\.workspace_(?:revision|risk)_conflict/u.test(state.error.code ?? "")
       ? "状态已被其他操作更新，请刷新后重试。"
       : "";
-    return `<div class="platform-feedback is-error" role="alert"><strong>${escapeHtml(state.error.message)}</strong>${conflict ? `<span>${escapeHtml(conflict)}</span>` : ""}<span>Request ID ${escapeHtml(state.error.requestId ?? "-")}</span></div>`;
+    const message = state.error.code === "platform.permission_denied"
+      ? "当前账号没有平台管理权限，请使用 SaaS 管理员账号登录。"
+      : state.error.message;
+    return `<div class="platform-feedback is-error" role="alert"><strong>${escapeHtml(message)}</strong>${conflict ? `<span>${escapeHtml(conflict)}</span>` : ""}${state.error.requestId ? `<details><summary>诊断信息</summary><span>请求编号 ${escapeHtml(state.error.requestId)}</span></details>` : ""}</div>`;
   }
   if (state.loading) return '<div class="platform-feedback" role="status">正在刷新…</div>';
   if (state.feedback) return `<div class="platform-feedback is-ok" role="status">${escapeHtml(state.feedback)}</div>`;
@@ -3287,9 +3327,15 @@ function renderNavigation(items, current, disabled) {
       remaining.delete(id);
       return [navItem({ ...item, label: name }, current, disabled, symbol)];
     });
-    return links.length ? `<div class="platform-nav-group"><h2>${label}</h2>${links.join("")}</div>` : "";
+    if (!links.length) return "";
+    const isCurrentGroup = entries.some(([id]) => id === current);
+    return `<details class="platform-nav-group"${isCurrentGroup ? " open" : ""}>
+      <summary>${icon(symbol)}<span>${label}</span><span class="platform-nav-chevron" aria-hidden="true">⌄</span></summary>
+      <div class="platform-nav-group-items">${links.join("")}</div>
+    </details>`;
   });
-  return groups.join("") + [...remaining.values()].map((item) => navItem(item, current, disabled)).join("");
+  const leftovers = [...remaining.values()].map((item) => navItem(item, current, disabled)).join("");
+  return groups.join("") + (leftovers ? `<details class="platform-nav-group" open><summary>${icon("layers")}<span>其他</span><span class="platform-nav-chevron" aria-hidden="true">⌄</span></summary><div class="platform-nav-group-items">${leftovers}</div></details>` : "");
 }
 
 function navItem(item, current, disabled = false, symbol = "layers") {
@@ -3303,12 +3349,12 @@ function metric(label, value, detail) {
 
 function status(value) {
   const text = String(value ?? "unknown");
-  const kind = /active|healthy|ready|reviewed|fresh|verified|compliant/u.test(text)
-    ? "is-ok"
-    : /pending|watch|stale|at_risk|not_configured|migration_required/u.test(text)
+  const kind = /(?:^|_)(?:revoked|expired|disabled|critical|suspended|deleted|conflict|unavailable|unhealthy|failed|fenced|blocked|violation)(?:$|_)/u.test(text)
+    ? "is-danger"
+    : /(?:^|_)(?:pending|watch|stale|at_risk|not_ready|not_verified|not_configured|inactive|migration_required)(?:$|_)/u.test(text)
       ? "is-warn"
-      : /revoked|expired|disabled|critical|suspended|deleted|conflict|unavailable|fenced|blocked|violation/u.test(text)
-        ? "is-danger"
+      : /(?:^|_)(?:active|healthy|ready|reviewed|fresh|verified|compliant)(?:$|_)/u.test(text)
+        ? "is-ok"
         : "";
   return `<span class="platform-status ${kind}" data-status-code="${escapeAttribute(text)}">${escapeHtml(statusLabel(text))}</span>`;
 }
@@ -3319,13 +3365,20 @@ function statusLabel(value) {
   const text = String(value ?? "unknown");
   return ({
     active: "活跃",
+    published: "已发布",
+    draft: "草稿",
     available: "可用",
     healthy: "健康",
     ready: "就绪",
+    not_ready: "未就绪",
+    not_verified: "未验证",
+    inactive: "未启用",
+    unhealthy: "不健康",
     pending: "待处理",
     pending_approval: "待审批",
     pending_approvals: "待审批",
     connected: "已连接",
+    operational: "正常",
     disconnected: "未连接",
     offline: "离线",
     degraded: "需关注",
@@ -3345,6 +3398,13 @@ function statusLabel(value) {
     at_risk: "有风险",
     objective_met: "达到目标",
     objective_missed: "未达到目标",
+    threshold_reached: "已达阈值",
+    operator_kill: "人工停止",
+    stopping: "停止中",
+    hold: "保持现状",
+    scale_out: "扩容",
+    scale_in: "缩容",
+    investigate: "需要调查",
   })[text] ?? text.replaceAll("_", " ");
 }
 function riskStatusOptions(current) { return [["", "全部"], ["open", "待处理"], ["under_review", "复核中"], ["restricted", "已限制"], ["cleared", "已清除"], ["closed", "已关闭"]].map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join(""); }
@@ -3374,11 +3434,44 @@ function scanStateLabel(value) {
   return "扫描失败";
 }
 function meterLabel(value) { return ({ api_requests: "API 请求", input_tokens: "输入 Token", output_tokens: "输出 Token", total_tokens: "总 Token" })[value] ?? statusLabel(value); }
-function actionLabel(value) { return String(value).replaceAll("_", " ").replaceAll(".", " / "); }
-function kindLabel(value) { return value === "organization" ? "Organization" : value; }
+function actionLabel(value) {
+  const normalized = String(value ?? "").replaceAll("_", " ").replaceAll(".", " ").replaceAll("/", " ").replace(/\s+/g, " ").trim().toLowerCase();
+  const labels = {
+    "platform session issued": "登录成功",
+    "session issued": "登录成功",
+    "session revoked": "登录失效",
+    "status read": "查看服务状态",
+    "status updated": "更新服务状态",
+    "workspace created": "创建组织",
+    "workspace updated": "更新组织",
+    "billing adjusted": "调整账务",
+  };
+  return labels[normalized] ?? (normalized || "操作");
+}
+
+function auditObjectLabel(value) {
+  return ({
+    platform_session: "平台登录",
+    status_projection: "服务状态",
+    workspace: "组织",
+    workspace_member: "组织成员",
+    billing_cycle: "账务周期",
+    gateway: "网关",
+  })[value] ?? String(value ?? "系统对象");
+}
+
+function auditReasonLabel(value) {
+  return ({
+    mfa_verified: "已完成安全验证",
+    public_communication: "公开状态更新",
+    user_action: "用户操作",
+    system: "系统操作",
+  })[value] ?? (value ? String(value).replaceAll("_", " ") : "无附加说明");
+}
+function kindLabel(value) { return value === "organization" ? "组织" : value; }
 function infrastructureKindLabel(value) { return ({ database_cluster: "数据库集群", cache_cluster: "缓存集群", object_store: "对象存储", key_ring: "密钥环" })[value] ?? statusLabel(value); }
 function shortHash(value) { const text = String(value ?? ""); return text.length === 64 ? `${text.slice(0, 12)}…${text.slice(-8)}` : "-"; }
-function emptyRow(label, columns = 5) { return `<tr><td colspan="${number(columns)}" class="platform-empty">${escapeHtml(label)}</td></tr>`; }
+function emptyRow(label, columns = 5) { return `<tr><td colspan="${number(columns)}" class="platform-empty"><span class="platform-empty-label">${escapeHtml(label)}</span></td></tr>`; }
 function number(value) { return Number.isFinite(Number(value)) ? new Intl.NumberFormat("zh-CN").format(Number(value)) : "0"; }
 function signedNumber(value) { const amount = Number(value); return `${amount > 0 ? "+" : ""}${number(amount)}`; }
 function formatDate(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? "-" : new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" }).format(date); }
@@ -3391,8 +3484,8 @@ function filterOptions(current, options) { return options.map(([value, label]) =
 function riskTagList(tags) { return tags.length ? `<div class="platform-tag-list">${tags.map((tag) => `<span>${escapeHtml(statusLabel(tag))}</span>`).join("")}</div>` : '<span class="platform-restricted">无</span>'; }
 function allowedRiskOptions(permissions) {
   const options = [];
-  if (permissions.has("platform.workspace.risk.manage")) options.push(["security_review", "Security review"], ["compliance_hold", "Compliance hold"]);
-  if (permissions.has("platform.customer_success.read")) options.push(["payment_attention", "Payment attention"], ["adoption_attention", "Adoption attention"]);
+  if (permissions.has("platform.workspace.risk.manage")) options.push(["security_review", "安全复核"], ["compliance_hold", "Compliance hold"]);
+  if (permissions.has("platform.customer_success.read")) options.push(["payment_attention", "账务待跟进"], ["adoption_attention", "使用情况待改善"]);
   return options;
 }
 function riskReason(tag) { return ({ security_review: "security_review", compliance_hold: "compliance_review", payment_attention: "payment_follow_up", adoption_attention: "adoption_follow_up" })[tag] ?? "security_review"; }

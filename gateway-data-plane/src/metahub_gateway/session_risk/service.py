@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
+from metahub_shared.db.schema import tables_exist
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.webhooks import WebhookEvent, build_webhook_event
@@ -846,15 +847,8 @@ def _log_event_enqueue_failure(
 def _session_risk_tables_exist(connection: sqlite3.Connection) -> bool:
     """确认 0062 的 score/freeze 两张权威表同时存在。"""
 
-    rows = connection.execute(
-        """
-        SELECT name FROM sqlite_master
-        WHERE type='table' AND name IN ('session_risk_scores','session_risk_freezes')
-        ORDER BY name
-        """
-    ).fetchall()
     # 两张权威表必须同时存在才视为迁移完成，半迁移状态不能被当成空风险数据。
-    return [str(row["name"]) for row in rows] == ["session_risk_freezes", "session_risk_scores"]
+    return tables_exist(connection, ("session_risk_scores", "session_risk_freezes"))
 
 
 def _has_any_active_overlay_for_key(

@@ -41,7 +41,7 @@ export function renderWorkspaceProviderErrorMaps(state = {}) {
     ${notice(state)}
     ${response
       ? overrideWorkspace(state, overrides, head, { globalScope: true })
-      : '<div class="empty-state">正在读取模型服务错误规则。</div>'}
+      : loadingState(state)}
   </section>`;
 }
 
@@ -138,7 +138,7 @@ function createForm(providerId, headRevision, busy, globalScope = false) {
       <input type="hidden" name="headRevision" value="${number(headRevision)}" />
       ${conditionFields({ priority: 500, http_statuses: [], output_error_code: "provider_error" })}
       ${stepUpFields()}
-      <button type="submit" ${busy ? "disabled" : ""}>Create override</button>
+      <button type="submit" ${busy ? "disabled" : ""}>创建规则</button>
     </form></details>`;
 }
 
@@ -163,6 +163,7 @@ function stepUpFields() {
 function loadingState(state) {
   if (state.phase === "loading") return '<div class="empty-state">正在读取模型服务设置。</div>';
   if (state.phase === "permission_revoked") return '<div class="empty-state error-state">当前组织职责无权读取模型服务错误规则。</div>';
+  if (state.phase === "error" || state.error) return `<div class="empty-state error-state" role="alert">${escapeHtml(state.error?.message ?? "模型服务错误规则读取失败，请刷新重试")}</div>`;
   return '<div class="empty-state">模型服务设置尚未加载。</div>';
 }
 

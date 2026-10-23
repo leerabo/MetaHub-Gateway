@@ -6,8 +6,9 @@ export function renderPlatformCommercialAccounting(state = {}, permissions = new
   const subscriptions = state.subscriptions?.subscriptions ?? [];
   const canManagePlans = permissions.has("platform.commercial.plan.manage");
   const canDecide = permissions.has("platform.commercial.dispute.decide");
-  return '<div class="platform-commercial-accounting" data-platform-commercial-root>'
-    + '<header class="platform-page-heading"><div><p>Commercial accounting</p>'
+  return '<div class="platform-commercial-accounting" data-platform-commercial-root aria-busy="'
+    + (state.loading?.length > 0 ? 'true' : 'false') + '">'
+    + '<header class="platform-page-heading"><div><p>商业账务管理</p>'
       + '<h1>平台商业账务</h1></div><div class="platform-commercial-heading-actions">'
       + '<span>' + escapeHtml(phaseLabel(state.phase)) + '</span>'
       + '<button class="platform-icon-button" type="button"'
@@ -16,11 +17,11 @@ export function renderPlatformCommercialAccounting(state = {}, permissions = new
     + stateMessage(state)
     + planFilters(state)
     + '<section class="platform-band platform-commercial-band">'
-      + sectionHeading("套餐 release", String(plans.length) + " 条")
+      + sectionHeading("套餐版本", String(plans.length) + " 条")
       + commercialTable(
         '<tr><th>套餐</th><th>周期与价格</th><th>状态</th><th>版本事实</th><th>操作</th></tr>',
         plans.map((item) => planRow(item, canManagePlans)).join("")
-          || emptyRow(state.loading?.includes("plans") ? "正在读取套餐" : "暂无套餐 release", 5),
+          || emptyRow(state.loading?.includes("plans") ? "正在读取套餐" : "暂无套餐版本", 5),
       )
       + pagination(
         state.planHistory?.length > 0,
@@ -32,7 +33,7 @@ export function renderPlatformCommercialAccounting(state = {}, permissions = new
     + '<section class="platform-band platform-commercial-band">'
       + sectionHeading("官方参考成本", String(references.length) + " 条")
       + commercialTable(
-        '<tr><th>Provider / 模型</th><th>币种</th><th>输入成本</th><th>缓存命中成本</th><th>输出成本</th>'
+        '<tr><th>模型服务 / 模型</th><th>币种</th><th>输入成本</th><th>缓存命中成本</th><th>输出成本</th>'
           + '<th>生效区间</th><th>状态</th><th>操作</th></tr>',
         references.map((item) => referenceRow(item, canManagePlans)).join("")
           || emptyRow(state.loading?.includes("plans") ? "正在读取参考成本" : "暂无参考成本", 8),
@@ -41,7 +42,7 @@ export function renderPlatformCommercialAccounting(state = {}, permissions = new
     + (canManagePlans ? createReferenceForm(state) : "")
     + subscriptionFilters(state)
     + '<section class="platform-band platform-commercial-band">'
-      + sectionHeading("Workspace 订阅投影", String(subscriptions.length) + " 条")
+    + sectionHeading("组织订阅", String(subscriptions.length) + " 条")
       + subscriptionRows(subscriptions, canDecide)
       + pagination(
         state.subscriptionHistory?.length > 0,
@@ -77,7 +78,7 @@ function subscriptionFilters(state) {
     + '<form data-platform-commercial-subscription-filter-form autocomplete="off">'
       + field("status", "订阅状态", filters.status)
       + field("planCatalogId", "套餐目录 ID", filters.plan_catalog_id)
-      + select("projectionState", "投影状态", filters.projection_state, [
+      + select("projectionState", "同步状态", filters.projection_state, [
         ["", "全部"], ["current", "当前"], ["partial", "部分"], ["stale", "过期"],
         ["reconciliation_required", "需要对账"], ["unknown", "未知"],
       ])
@@ -119,7 +120,7 @@ function planActions(item) {
 
 function createPlanForm(state) {
   return '<section class="platform-band platform-commercial-command">'
-    + sectionHeading("新建套餐候选", "step-up")
+    + sectionHeading("新建套餐候选", "需要验证")
     + '<form data-platform-commercial-plan-create-form autocomplete="off">'
       + field("planCode", "套餐代码", "", true)
       + field("displayName", "显示名称", "", true)
@@ -175,9 +176,9 @@ function referenceActions(item) {
 
 function createReferenceForm(state) {
   return '<section class="platform-band platform-commercial-command">'
-    + sectionHeading("新建官方参考成本候选", "Platform owner")
+    + sectionHeading("新建官方参考成本候选", "平台管理员")
     + '<form data-platform-commercial-reference-create-form autocomplete="off">'
-      + field("providerId", "Provider ID", "", true)
+      + field("providerId", "服务商", "", true)
       + field("modelId", "模型 ID", "", true)
       + select("currency", "币种", "CNY", [["CNY", "CNY"], ["USD", "USD"]])
       + numberField("inputRate", "输入微单位 / 百万 Token", 0, 0)
@@ -307,7 +308,7 @@ function stateMessage(state) {
     + escapeHtml(state.error.requestId ?? "-") + '</code></div>';
 }
 function sectionHeading(title, meta) {
-  return '<div class="platform-section-heading"><div><p>Owner-qualified facts</p><h2>'
+  return '<div class="platform-section-heading"><div><p>账务记录</p><h2>'
     + escapeHtml(title) + '</h2></div><span>' + escapeHtml(meta) + '</span></div>';
 }
 function field(name, label, value, required = false) {
@@ -340,7 +341,7 @@ function fact(label, value) {
 }
 function emptyRow(message, columns) {
   return '<tr><td colspan="' + columns + '" class="platform-empty">'
-    + escapeHtml(message) + '</td></tr>';
+    + '<span class="platform-empty-label">' + escapeHtml(message) + '</span></td></tr>';
 }
 function status(value) {
   return '<span class="platform-status" data-status="' + escapeAttribute(value ?? "unknown")

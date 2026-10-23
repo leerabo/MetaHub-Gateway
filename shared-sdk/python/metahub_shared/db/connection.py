@@ -253,7 +253,8 @@ class _PostgresConnection:
         cursor = None
         try:
             budgeted = _DATABASE_OPERATION_DEADLINE.get() is not None and not re.fullmatch(
-                r"\s*(?:BEGIN(?: IMMEDIATE)?|ROLLBACK|SET TRANSACTION READ ONLY)\s*;?\s*",
+                r"\s*(?:BEGIN(?: IMMEDIATE| ISOLATION LEVEL REPEATABLE READ READ ONLY)?"
+                r"|ROLLBACK|SET TRANSACTION READ ONLY)\s*;?\s*",
                 sql, re.I,
             )
             # Flush the setting and its statement together, retaining their server order.
@@ -288,7 +289,7 @@ class _PostgresConnection:
                 (milliseconds, milliseconds),
             )
 
-    def executescript(self, sql: str) -> None:
+    def executescript(self, sql: str, *, statement_timeout_ms: int | None = None) -> None:
         """Run a reviewed bootstrap script containing explicit transaction batches."""
 
         if self._closed:
@@ -297,11 +298,24 @@ class _PostgresConnection:
             raise sqlite3.ProgrammingError(
                 "PostgreSQL bootstrap requires an idle connection."
             )
+        if statement_timeout_ms is not None and (
+            type(statement_timeout_ms) is not int or not 1 <= statement_timeout_ms <= 900000
+        ):
+            raise ValueError("Bootstrap statement timeout must be between 1 and 900000 ms.")
         previous_autocommit = self._connection.autocommit
+        previous_timeout = None
+        failure = None
         cursor = None
         try:
             self._connection.autocommit = True
             cursor = self._connection.cursor()
+            if statement_timeout_ms is not None:
+                cursor.execute("SHOW statement_timeout")
+                previous_timeout = cursor.fetchone()[0]
+                cursor.execute(
+                    "SELECT set_config('statement_timeout', %s, false)",
+                    (str(statement_timeout_ms),),
+                )
             cursor.execute(sql, prepare=False)
         except Exception as exc:
             try:
@@ -309,15 +323,27 @@ class _PostgresConnection:
             except Exception:
                 pass
             failure = exc
-        else:
-            failure = None
         finally:
+            if previous_timeout is not None:
+                try:
+                    # Explicit BEGIN batches may leave a failed transaction.
+                    # Reset the session before returning this loan to the pool.
+                    self._connection.rollback()
+                    cursor.execute(
+                        "SELECT set_config('statement_timeout', %s, false)", (previous_timeout,),
+                    )
+                except Exception as exc:
+                    # Never reuse a connection carrying an offline timeout.
+                    self._connection.close()
+                    if failure is None:
+                        failure = exc
             if cursor is not None:
                 try:
                     cursor.close()
                 except Exception:
                     pass
-            self._connection.autocommit = previous_autocommit
+            if not self._connection.closed:
+                self._connection.autocommit = previous_autocommit
         if failure is not None:
             _raise_postgres_error(failure)
 
@@ -958,7 +984,10 @@ def _open_sqlite_connection(
             # finish the promotion; reads and writes remain valid in rollback
             # journal mode in the meantime.
             lock_timeout = None if remaining is None else max(0.0, remaining)
-            acquired = _SQLITE_WAL_LOCK.acquire(timeout=lock_timeout) if lock_timeout is not None else _SQLITE_WAL_LOCK.acquire()
+            acquired = (
+                _SQLITE_WAL_LOCK.acquire(timeout=lock_timeout)
+                if lock_timeout is not None else _SQLITE_WAL_LOCK.acquire()
+            )
             if acquired:
                 try:
                     if database not in _SQLITE_WAL_DATABASES:

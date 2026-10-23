@@ -1520,12 +1520,12 @@ def _insert_difference(
     )
     connection.execute(
         """
-        INSERT OR IGNORE INTO reconciliation_differences(
+        INSERT INTO reconciliation_differences(
           reconciliation_difference_id,reconciliation_run_id,workspace_id,tenant_id,
           difference_type,left_source_type,left_source_id,right_source_type,right_source_id,
           currency,amount_difference_minor,status,adjustment_reference,state_revision,
           detected_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,? ,?,'open',NULL,1,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,? ,?,'open',NULL,1,?,?) ON CONFLICT DO NOTHING
         """,
         (
             difference_id,

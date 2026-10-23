@@ -139,7 +139,7 @@ test("platform status clients enforce closed DTOs, CSRF, CAS, and idempotency", 
 test("renderer independently prunes write and security approval controls", () => {
   const readOnly = fakeRoot();
   renderPlatformWorkspace(readOnly, platformState(["platform.status.read"]));
-  assert.match(readOnly.innerHTML, /Status and incidents/u);
+  assert.match(readOnly.innerHTML, /状态与事件/u);
   assert.doesNotMatch(
     readOnly.innerHTML,
     /data-platform-status-create-form|data-platform-maintenance-form|data-platform-status-incident-form/u,

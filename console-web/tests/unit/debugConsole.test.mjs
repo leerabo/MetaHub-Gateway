@@ -151,7 +151,7 @@ test("renderDebugConsolePanel hides plain key input and escapes result", () => {
   );
 
   assert.match(html, /debug-console-form/);
-  assert.match(html, /mhv_dev_abcd/);
+  assert.match(html, /<option value="vk_1" selected>Dev Key \/ dev<\/option>/);
   assert.match(html, /company-default/);
   assert.match(html, /req_debug/);
   assert.match(html, /data-debug-log-request-id="req_debug"/);
@@ -177,7 +177,7 @@ test("renderDebugConsolePanel shows escaped diagnosis fields", () => {
   );
 
   assert.match(html, /错误诊断/);
-  assert.match(html, /upstream_rate_limited/);
+  assert.match(html, /Upstream provider is rate limited/);
   assert.match(html, /上游 &lt;script&gt;限流&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>限流<\/script>/);
 });

@@ -309,15 +309,15 @@ test("PAGE-091 renders summary, segments, list and provider-grouped detail witho
     can_next: false,
     refreshing: false,
   }, contractAuth());
-  assert.match(html, /Adapter 契约测试报告/);
+  assert.match(html, /接入质量检查/);
   assert.match(html, /最新合并门禁摘要/);
   assert.match(html, /data-adapter-contract-suite="merge_gate"/);
   assert.match(html, /data-adapter-contract-suite="probe"/);
-  assert.match(html, /合并门禁/);
-  assert.match(html, /真实探测/);
+  assert.match(html, /发布前检查/);
+  assert.match(html, /线上检查/);
   assert.match(html, /DeepSeek/);
   assert.match(html, /错误归一|非流式/);
-  assert.match(html, /req_contract_source_1/);
+  assert.doesNotMatch(html, /req_contract_source_1/);
   assert.doesNotMatch(html, /运行真实探测|data-adapter-contract-run-probe|method="post"|tenant_contract_a/iu);
 });
 
@@ -330,6 +330,7 @@ test("PAGE-091 escapes every dynamic field and keeps sensitive extras out of DOM
     adapter_contract_runs: [{
       ...makeRun(),
       source_request_id: canary,
+      adapter_contract_run_id: canary,
       catalog_version: canary,
       catalog_hash: CATALOG_HASH,
     }],
@@ -565,7 +566,8 @@ test("page state preserves only sanitized history as partial after backend 503",
     /token-storage|tenant_contract|opaque_storage|response-body-storage/,
   );
   const html = renderAdapterContractRuns(snapshot, contractAuth());
-  assert.match(html, /role="alert"[\s\S]*req_contract_storage_503/);
+  assert.match(html, /role="alert"[\s\S]*契约测试运行暂不可用/);
+  assert.doesNotMatch(html, /req_contract_storage_503/);
   assert.match(html, /adapter-contract-run-table/);
   assert.match(html, /data-adapter-contract-refresh/);
   assert.match(html, /data-adapter-contract-detail/);

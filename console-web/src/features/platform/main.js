@@ -1,4 +1,9 @@
 // 平台入口只装配受权限约束的 API 与页面控制器；不得在全局状态持有 Session、TOTP 或 Gateway 签名材料。
+import { initializeTheme } from "../../lib/theme.js";
+import { initializeDialogs } from "../../lib/dialogs.js";
+import { initializeSystemUpdates } from "./systemUpdates.js";
+initializeTheme();
+initializeDialogs();
 import {
   addPlatformWorkspaceRiskTag,
   approveSupportGrant,
@@ -264,6 +269,7 @@ const root = globalThis.document?.querySelector("#platform-app");
 if (root) installUserFacingTextGuard(root);
 if (root) {
   const controlApiUrl = serviceOrigin(globalThis.window.location, 8001);
+  initializeSystemUpdates(root, controlApiUrl);
   createPlatformPageController({
     root,
     api: {

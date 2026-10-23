@@ -80,7 +80,7 @@ test("Gateway renderer prunes management and never renders signatures or provide
 
   const readonly = { innerHTML: "" };
   renderPlatformWorkspace(readonly, platformState(["platform.gateway.read"]));
-  assert.match(readonly.innerHTML, /Cell 状态/u);
+  assert.match(readonly.innerHTML, /服务状态/u);
   assert.doesNotMatch(readonly.innerHTML, /data-platform-gateway-placement-form/u);
 });
 

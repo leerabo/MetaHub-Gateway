@@ -756,10 +756,10 @@ def record_feature_exposure_in_transaction(
     now = _utcnow()
     inserted = connection.execute(
         """
-        INSERT OR IGNORE INTO feature_exposures(
+        INSERT INTO feature_exposures(
           feature_exposure_id,feature_flag_id,feature_flag_version_id,workspace_id,
           tenant_id,subject_pseudonym,request_sha256,exposed_at)
-        VALUES(?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING
         """,
         (
             _id("fex_"),

@@ -49,7 +49,6 @@ from .models import (
     WorkspacePageVisitResponse,
 )
 
-
 _CONTRACT_VERSION = "workspace-navigation-v1"
 _SOURCE_CATALOG_VERSION = "console-navigation-0137"
 # Page-view telemetry is best-effort and must never hold an authentication
@@ -781,9 +780,10 @@ def record_workspace_page_visit(
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise sqlite3.OperationalError("page visit writer deadline exceeded")
-                connection.execute(
-                    f"PRAGMA busy_timeout = {max(1, min(250, int(remaining * 1000)))}"
-                )
+                if getattr(connection, "backend", "sqlite") != "postgresql":
+                    connection.execute(
+                        f"PRAGMA busy_timeout = {max(1, min(250, int(remaining * 1000)))}"
+                    )
                 try:
                     connection.execute("BEGIN IMMEDIATE")
                     break
@@ -825,7 +825,8 @@ def record_workspace_page_visit(
                 ) VALUES(?,?,?,NULL,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     final_event_id, final_actor.tenant_id, final_actor.legacy_user_id, event_type,
-                    final_spec.source_id, final_spec.source_id, f"/#{final_spec.source_id}", request_id, trace_id,
+                    final_spec.source_id, final_spec.source_id,
+                    f"/#{final_spec.source_id}", request_id, trace_id,
                     _json({"hash": f"#{final_spec.source_id}", "source": payload.source,
                            "viewport_class": payload.viewport_class}),
                     _db_time(_now()), final_actor.workspace_session_id, request_sha256,
@@ -1173,7 +1174,10 @@ def _visible_specs(
         if row["source_navigation_id"] in _LEGACY_INTERNAL_SOURCE_IDS
         and row["placement"] == "primary"
     ]
-    if len(legacy_rows) > len(_LEGACY_INTERNAL_SOURCE_IDS) or len(rows) - len(legacy_rows) != len(expected):
+    if (
+        len(legacy_rows) > len(_LEGACY_INTERNAL_SOURCE_IDS)
+        or len(rows) - len(legacy_rows) != len(expected)
+    ):
         raise ApiError("workspace_session.unavailable")
     visible: list[ContractSpec] = []
     for row in rows:

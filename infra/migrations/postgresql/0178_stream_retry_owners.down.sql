@@ -1,5 +1,4 @@
 -- metahub:expected-version-rollback-v1
-BEGIN;
 
 CREATE UNIQUE INDEX "idx_stream_sessions_tenant_request"
   ON "stream_sessions"("tenant_id","request_id");
@@ -21,5 +20,3 @@ BEGIN
   RETURN NEW;
 END;
 $$;
-
-COMMIT;

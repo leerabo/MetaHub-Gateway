@@ -506,6 +506,7 @@ def _write_budget_rule(
         if row is None:
             # 写后回读缺失表示事务事实不完整，必须回滚且禁止产生成功副作用。
             raise ApiError("budget.status_unavailable")
+        _validate_budget_allocations(connection, row)
         if existing is None or ("activation_at_utc" in provided and row["activation_at_utc"] is None):
             row = _set_partial_period_start_if_needed(connection, row, now)
         if existing is not None:
@@ -592,6 +593,62 @@ def _write_budget_rule(
         request_id=request_id,
         trace_id=trace_id,
     )
+
+
+def _validate_budget_allocations(connection: sqlite3.Connection, changed: sqlite3.Row) -> None:
+    """Validate affected parent allocations atomically, within one environment and period.
+
+    Disabled caps do not allocate funds. Existing caps in other periods/environments,
+    and personal key caps, are independent. Missing parent caps remain unconfigured.
+    """
+    if changed["scope_type"] == "virtual_key":
+        return
+    tenant_id = changed["tenant_id"]
+    rows = connection.execute(
+        """SELECT br.*, a.project_id AS application_project_id
+           FROM budget_rules br LEFT JOIN applications a
+             ON a.tenant_id=br.tenant_id AND br.scope_type='application'
+            AND a.application_id=br.scope_id
+           WHERE br.tenant_id=? AND br.environment_id=? AND br.budget_period=?
+             AND br.status='active'""",
+        (tenant_id, changed["environment_id"], changed["budget_period"]),
+    ).fetchall()
+    parents = []
+    if changed["scope_type"] in {"tenant", "project"}:
+        parents.extend(row for row in rows if row["scope_type"] == "tenant")
+    if changed["scope_type"] == "project":
+        project_id = changed["scope_id"]
+    elif changed["scope_type"] == "application":
+        project_id = _load_application_project(connection, tenant_id, changed["scope_id"])
+    else:
+        project_id = None
+    parents.extend(
+        row for row in rows if row["scope_type"] == "project" and row["scope_id"] == project_id
+    )
+    for parent in parents:
+        children = [
+            row
+            for row in rows
+            if (
+                parent["scope_type"] == "tenant"
+                and row["scope_type"] == "project"
+                or parent["scope_type"] == "project"
+                and row["scope_type"] == "application"
+                and row["application_project_id"] == parent["scope_id"]
+            )
+        ]
+        allocated = sum((_decimal_value(row["daily_budget_cny"]) for row in children), Decimal(0))
+        if allocated > _decimal_value(parent["daily_budget_cny"]):
+            label = "组织" if parent["scope_type"] == "tenant" else "项目"
+            child_label = "项目" if parent["scope_type"] == "tenant" else "应用"
+            raise ApiError(
+                "budget.rule_invalid",
+                message=(
+                    f"{label}预算不能低于同环境、同周期下所有已启用"
+                    f"{child_label}预算之和（{allocated:f} CNY）。"
+                ),
+                suggestion="请先增加上级预算，或减少下级预算，再保存。日、月、年预算分别比较。",
+            )
 
 
 def update_budget_mode(
@@ -1579,6 +1636,10 @@ def _scope_info(
         priority=priority,
         parent_scope_type=parent_scope_type,
         parent_scope_id=parent_scope_id,
+        parent_scope_label=(
+            _scope_label(connection, tenant_id, parent_scope_type, parent_scope_id)
+            if parent_scope_type and parent_scope_id else None
+        ),
     )
 
 

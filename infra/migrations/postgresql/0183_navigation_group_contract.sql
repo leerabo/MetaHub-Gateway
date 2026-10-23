@@ -1,8 +1,6 @@
 -- metahub: navigation-group-contract-v1
 -- Replace the last persisted pre-split projection. Runtime navigation accepts
 -- only the current Governance/System group contract.
-
-BEGIN;
 ALTER TABLE workspace_navigation_projection_items DISABLE TRIGGER USER;
 UPDATE workspace_navigation_projection_items
    SET group_code=CASE source_navigation_id
@@ -16,4 +14,3 @@ UPDATE workspace_navigation_projection_items
    END
  WHERE group_code='observability';
 ALTER TABLE workspace_navigation_projection_items ENABLE TRIGGER USER;
-COMMIT;

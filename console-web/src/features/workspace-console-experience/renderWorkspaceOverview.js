@@ -10,6 +10,9 @@ export function renderWorkspaceOverview(state, { hiddenSources = [], roleCode = 
   const period = ["day", "month", "all"].includes(state?.overviewPeriod) ? state.overviewPeriod : "month";
   const periodLabel = { day: "今日", month: "本月", all: "累计" }[period];
   const usage = (code) => metric("usage_cost", `usage_cost.${period}_${code}`);
+  const estimatedCount = Number(usage("estimated"));
+  const estimateNote = Number.isSafeInteger(estimatedCount) && estimatedCount > 0
+    ? `${periodLabel}包含 ${formatCount(estimatedCount)} 笔估算用量，成本可能在实际用量入账后更新。` : "";
   const updated = overview?.observed_at && Number.isFinite(Date.parse(overview.observed_at))
     ? new Date(overview.observed_at).toLocaleString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" }) : "";
   const isManager = ["owner", "admin"].includes(roleCode);
@@ -47,8 +50,7 @@ export function renderWorkspaceOverview(state, { hiddenSources = [], roleCode = 
           <a class="workspace-overview-card" href="#workspace.finance.usage"><span>人民币消费</span><strong class="is-money">${formatMoney(usage("cny_micros"), "CNY")}</strong><small>${periodLabel}已入账调用成本</small></a>
           <a class="workspace-overview-card" href="#workspace.finance.usage"><span>美元消费</span><strong class="is-money">${formatMoney(usage("usd_micros"), "USD")}</strong><small>${periodLabel}已入账调用成本</small></a>
         </div>
-        <p class="workspace-overview-footnote">按北京时间统计，消费按币种分别汇总。${Number(usage("estimated")) > 0 ? `包含 ${formatCount(usage("estimated"))} 笔估算用量。` : ""}
-          <a href="#workspace.finance.usage">查看用量与消费明细 →</a></p>
+        <p class="workspace-overview-footnote">${estimateNote ? `<span>${estimateNote}</span> ` : ""}<a href="#workspace.finance.usage">查看用量与消费明细 →</a></p>
       </section>` : ""}
       <div class="workspace-overview-lower">
         <section class="workspace-overview-panel"><h2>需要关注</h2>
@@ -56,7 +58,7 @@ export function renderWorkspaceOverview(state, { hiddenSources = [], roleCode = 
             `<li><span>${title}</span><strong>${formatCount(value)}</strong><a href="#${route}">查看 →</a></li>`).join("")}</ul>`
             : `<p>${sections.has("usage_cost") || sections.has("provider_health") ? "已读取的数据中没有发现失败请求或待检查服务。" : "暂无可查看的运行数据。"}</p>`}
         </section>
-        <section class="workspace-overview-panel"><h2>常用管理</h2><nav class="workspace-overview-links" aria-label="组织常用入口">
+        <section class="workspace-overview-panel"><h2>下一步</h2><nav class="workspace-overview-links" aria-label="组织常用入口">
           ${isManager ? `<a href="#workspace.gateway.aliases">模型路由 <span>候选顺序与故障切换 →</span></a>` : ""}
           ${sections.has("usage_cost") && (isManager || roleCode === "finance_admin") ? `<a href="#workspace.finance.budgets">预算管理 <span>设置调用成本上限 →</span></a>` : ""}
           ${sections.has("role_tasks") ? `<a href="#workspace.settings.members">成员管理 <span>邀请成员与分配权限 →</span></a>` : ""}

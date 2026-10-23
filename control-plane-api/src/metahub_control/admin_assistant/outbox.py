@@ -70,14 +70,18 @@ def claim_next_assistant_event(
     # 误判为坏数据并触发隔离。
     owner = _worker_id(worker_id)
     connection = _connect(config)
+    postgresql = getattr(connection, "backend", None) == "postgresql"
+    skip_table = "pg_temp.prd077_bad_source_skip" if postgresql else "temp.prd077_bad_source_skip"
+    source_key = "audit.assistant_audit_id" if postgresql else "audit.rowid"
     try:
         connection.execute("BEGIN IMMEDIATE")
         connection.execute(
             "CREATE TEMP TABLE IF NOT EXISTS prd077_bad_source_skip"
-            "(source_rowid INTEGER PRIMARY KEY)"
+            + ("(source_rowid TEXT PRIMARY KEY)" if postgresql
+               else "(source_rowid INTEGER PRIMARY KEY)")
         )
         # A warm handle can outlive this claim; skip state belongs only to this iteration.
-        connection.execute("DELETE FROM temp.prd077_bad_source_skip")
+        connection.execute(f"DELETE FROM {skip_table}")
         # 第十次 attempt 若在终态提交前崩溃，租约过期后必须直接失败关闭，不能发生
         # 第十一次网络调用；同事务还会终结该 source 已创建的 original pending intent。
         _finish_one_exhausted_source(connection, timestamp=timestamp)
@@ -85,8 +89,8 @@ def claim_next_assistant_event(
         # keyset 游标保证该行即使无法原子终结，也只在本轮被跳过，后续 tenant 仍能被领取。
         while True:
             row = connection.execute(
-                """
-                SELECT audit.rowid AS source_rowid,audit.*,query.query_type
+                f"""
+                SELECT {source_key} AS source_rowid,audit.*,query.query_type
                 FROM assistant_audits audit
                 JOIN assistant_queries query
                   ON query.tenant_id=audit.tenant_id
@@ -97,8 +101,8 @@ def claim_next_assistant_event(
                         AND unixepoch(audit.event_next_attempt_at)<=unixepoch(?))
                     OR (audit.event_dispatch_status='processing'
                         AND unixepoch(audit.event_lease_expires_at)<=unixepoch(?)))
-                  AND audit.rowid NOT IN(
-                    SELECT source_rowid FROM temp.prd077_bad_source_skip
+                  AND {source_key} NOT IN(
+                    SELECT source_rowid FROM {skip_table}
                   )
                 ORDER BY audit.created_at,audit.assistant_audit_id LIMIT 1
                 """,
@@ -111,7 +115,7 @@ def claim_next_assistant_event(
             if row is None:
                 connection.commit()
                 return None
-            source_rowid = _rowid(row["source_rowid"])
+            source_rowid = _text(row["source_rowid"]) if postgresql else _rowid(row["source_rowid"])
             try:
                 status = _text(row["event_dispatch_status"])
                 attempts = _int(row["event_dispatch_attempts"]) + 1
@@ -145,7 +149,7 @@ def claim_next_assistant_event(
                 # 损坏若无法安全更新，也仍通过 keyset 游标隔离，不能阻断后续租户。
                 _try_quarantine_bad_source(connection, row, timestamp=timestamp)
                 connection.execute(
-                    "INSERT INTO temp.prd077_bad_source_skip(source_rowid) VALUES(?)",
+                    f"INSERT INTO {skip_table}(source_rowid) VALUES(?)",
                     (source_rowid,),
                 )
                 continue
@@ -231,18 +235,24 @@ def _try_quarantine_bad_source(
     except (TypeError, ValueError):
         return False
     connection.execute("SAVEPOINT prd077_bad_source")
+    timestamp_expression = (
+        "to_char(to_timestamp(greatest("
+        "coalesce(unixepoch(updated_at)+1,unixepoch(created_at)+1,unixepoch(?)),unixepoch(?)"
+        ")) AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')"
+        if getattr(connection, "backend", None) == "postgresql" else
+        "strftime('%Y-%m-%dT%H:%M:%SZ',max("
+        "coalesce(unixepoch(updated_at)+1,unixepoch(created_at)+1,unixepoch(?)),unixepoch(?)"
+        "),'unixepoch')"
+    )
     try:
         quarantined = connection.execute(
-            """
+            f"""
             UPDATE assistant_audits
             SET event_dispatch_status='failed',event_dispatch_attempts=10,
                 event_next_attempt_at=NULL,event_dispatched_at=NULL,event_claim_token=NULL,
                 event_lease_owner_id=NULL,event_lease_expires_at=NULL,
                 event_last_error_code='admin_assistant.event_unavailable',
-                updated_at=strftime('%Y-%m-%dT%H:%M:%SZ',max(
-                  coalesce(unixepoch(updated_at)+1,unixepoch(created_at)+1,unixepoch(?)),
-                  unixepoch(?)
-                ),'unixepoch')
+                updated_at={timestamp_expression}
             WHERE assistant_audit_id=? AND event_dispatch_status=?
               AND event_dispatch_attempts=?
             RETURNING tenant_id,assistant_event_id,updated_at
@@ -281,14 +291,17 @@ def _finish_one_exhausted_source(
 ) -> bool:
     """终结一个过期第十次 claim，并跳过无法安全解释的坏行。"""
 
+    postgresql = getattr(connection, "backend", None) == "postgresql"
+    skip_table = "pg_temp.prd077_bad_source_skip" if postgresql else "temp.prd077_bad_source_skip"
+    source_key = "assistant_audit_id" if postgresql else "rowid"
     while True:
         row = connection.execute(
-            """
-            SELECT rowid AS source_rowid,* FROM assistant_audits
+            f"""
+            SELECT {source_key} AS source_rowid,* FROM assistant_audits
             WHERE event_dispatch_status='processing' AND event_dispatch_attempts=10
               AND unixepoch(event_lease_expires_at)<=unixepoch(?)
-              AND rowid NOT IN(
-                SELECT source_rowid FROM temp.prd077_bad_source_skip
+              AND {source_key} NOT IN(
+                SELECT source_rowid FROM {skip_table}
               )
             ORDER BY event_lease_expires_at,created_at,assistant_audit_id LIMIT 1
             """,
@@ -296,7 +309,7 @@ def _finish_one_exhausted_source(
         ).fetchone()
         if row is None:
             return False
-        source_rowid = _rowid(row["source_rowid"])
+        source_rowid = _text(row["source_rowid"]) if postgresql else _rowid(row["source_rowid"])
         try:
             assistant_audit_id = _text(row["assistant_audit_id"])
             tenant_id = _text(row["tenant_id"])
@@ -308,7 +321,7 @@ def _finish_one_exhausted_source(
         except (TypeError, ValueError):
             _try_quarantine_bad_source(connection, row, timestamp=timestamp)
             connection.execute(
-                "INSERT INTO temp.prd077_bad_source_skip(source_rowid) VALUES(?)",
+                f"INSERT INTO {skip_table}(source_rowid) VALUES(?)",
                 (source_rowid,),
             )
             continue

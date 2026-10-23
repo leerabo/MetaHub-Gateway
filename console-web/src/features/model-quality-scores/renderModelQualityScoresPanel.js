@@ -519,7 +519,7 @@ function renderScoreEditor(row) {
       <div class="model-quality-buttons">
         <button type="submit" ${cannotSave ? "disabled" : ""}>${row.busy ? "保存中" : "保存"}</button>
         <button type="button" data-model-quality-clear ${row.busy || row.conflicted || row.draftManualQualityBps === null ? "disabled" : ""}>清除评分</button>
-        <button type="button" data-model-quality-cancel ${!row.dirty && !row.busy && !row.conflicted ? "disabled" : ""}>取消</button>
+        <button type="button" data-model-quality-cancel ${!row.dirty && !row.busy && !row.conflicted ? "hidden disabled" : ""}>取消</button>
         ${row.conflicted && row.sideAuthoritativeSnapshot ? `<button type="button" data-model-quality-rebase>载入最新版本</button>` : ""}
       </div>
     </form>

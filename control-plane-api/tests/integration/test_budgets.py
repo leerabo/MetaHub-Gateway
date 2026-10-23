@@ -588,3 +588,64 @@ async def test_budget_mode_and_raise_release_active_block(
             (third_block.budget_block_id, "budget.unblocked"),
         ]
     )
+
+
+@pytest.mark.anyio
+async def test_budget_parent_allocations_are_atomic_and_period_specific(monkeypatch, tmp_path):
+    database_url, tenant_id, _ = prepare_database(monkeypatch, tmp_path)
+    from metahub_control.projects.routes import router as projects_router
+
+    app = build_control_app()
+    app.include_router(projects_router)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://control"
+    ) as client:
+        auth = {
+            "Authorization": f"Bearer {await login(client, 'admin@metahub.local', ADMIN_PASSWORD)}"
+        }
+        created = await client.post(
+            "/projects", headers=auth, json={"project_code": "allocation", "name": "Allocation"}
+        )
+        assert created.status_code == 201, created.text
+        project = created.json()["project"]["project_id"]
+        created_app = await client.post(
+            "/applications", headers=auth,
+            json={"project_id": project, "application_code": "child", "name": "Child"},
+        )
+        assert created_app.status_code == 201, created_app.text
+        app_id = created_app.json()["application"]["application_id"]
+
+        async def write(scope, amount, scope_id=None, period="day", **extra):
+            return await client.patch(
+                "/budgets",
+                headers=auth,
+                json={
+                    "scope_type": scope,
+                    "daily_budget_cny": amount,
+                    "budget_period": period,
+                    **({"scope_id": scope_id} if scope_id else {}),
+                    **extra,
+                },
+            )
+
+        assert (await write("tenant", "10")).status_code == 200
+        assert (await write("project", "6", project)).status_code == 200
+        second = await client.post(
+            "/projects", headers=auth, json={"project_code": "second", "name": "Second"}
+        )
+        second_project = second.json()["project"]["project_id"]
+        assert (await write("project", "4", second_project)).status_code == 200
+        assert (await write("project", "5", second_project)).status_code == 422
+        invalid = await write("application", "7", app_id)
+        assert invalid.status_code == 422
+        assert "项目预算不能低于" in invalid.json()["message"]
+        assert (await write("application", "5", app_id)).status_code == 200
+        assert (await write("tenant", "5")).status_code == 422
+        assert (await write("project", "4", project)).status_code == 422
+        assert (await write("project", "100", project, period="month")).status_code == 200
+        assert (await write("project", "11", project)).status_code == 422
+        assert (await write("application", "20", app_id, status="disabled")).status_code == 200
+        assert (await write("application", "20", app_id, status="active")).status_code == 422
+        listed = (await client.get("/budgets", headers=auth)).json()["budget_rules"]
+        assert next(r for r in listed if r["scope_type"] == "tenant")["daily_budget_cny"] == "10"
+        assert next(r for r in listed if r["scope_type"] == "application")["status"] == "disabled"

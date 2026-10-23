@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from metahub_shared.db.connection import connect_database
+from metahub_shared.db.schema import table_columns, table_exists
 from metahub_shared.db.security import verify_password
 from metahub_shared.identity import (
     MfaCryptoError,
@@ -312,12 +313,13 @@ def _record_failure(
           account_id,factor_id,device_hmac,failed_count,locked_until,updated_at)
         VALUES(?,?,?,1,NULL,?)
         ON CONFLICT(account_id,factor_id,device_hmac) DO UPDATE SET
-          failed_count=MIN(account_mfa_attempt_guards.failed_count+1,20),
+          failed_count=CASE WHEN account_mfa_attempt_guards.failed_count<20
+            THEN account_mfa_attempt_guards.failed_count+1 ELSE 20 END,
           locked_until=CASE WHEN account_mfa_attempt_guards.failed_count+1>=5
-            THEN datetime(?, '+5 minutes') ELSE account_mfa_attempt_guards.locked_until END,
+            THEN ? ELSE account_mfa_attempt_guards.locked_until END,
           updated_at=excluded.updated_at
         """,
-        (account_id, factor_id, device_hmac, _db_time(now), _db_time(now)),
+        (account_id, factor_id, device_hmac, _db_time(now), _db_time(now + timedelta(minutes=5))),
     )
 
 
@@ -352,20 +354,12 @@ def _clear_failures(connection: sqlite3.Connection, account_id: str, factor_id: 
 
 
 def _require_capability(connection: sqlite3.Connection) -> None:
-    if (
-        connection.execute(
-            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='account_mfa_factors'"
-        ).fetchone()
-        is None
-    ):
+    if not table_exists(connection, "account_mfa_factors"):
         raise ApiError("identity.mfa_unavailable")
 
 
 def _column_exists(connection: sqlite3.Connection, table: str, column: str) -> bool:
-    return connection.execute(
-        "SELECT 1 FROM pragma_table_info(?) WHERE name=?",
-        (table, column),
-    ).fetchone() is not None
+    return column in table_columns(connection, table)
 
 
 def _write_prd116_event_if_available(
@@ -379,9 +373,7 @@ def _write_prd116_event_if_available(
     trace_id: str,
     now: datetime,
 ) -> None:
-    if connection.execute(
-        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='identity_security_events'"
-    ).fetchone() is None:
+    if not table_exists(connection, "identity_security_events"):
         return
     from .security_service import _write_security_event
 

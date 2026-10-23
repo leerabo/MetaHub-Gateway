@@ -9,8 +9,10 @@ import { createEnvironment, listEnvironments, updateEnvironment } from "../../sr
 import { PERMISSIONS, withPermissionSnapshot } from "./permissionTestContext.mjs";
 
 /** 构造环境页面的显式读写授权快照。 */
-function environmentContext(permissionCodes, role = "ops_admin") {
-  return withPermissionSnapshot({ user: { role } }, permissionCodes);
+function environmentContext(permissionCodes, role = "ops_admin", platformRoles = []) {
+  return withPermissionSnapshot({ user: { role },
+    platform_context: { operator: { roles: platformRoles } },
+  }, permissionCodes);
 }
 
 // 主应用源码断言固定 viewer 预取边界，避免隐藏面板后仍在每轮刷新触发后端 403。
@@ -105,7 +107,7 @@ test("environment client preserves unified permission error", async () => {
   );
 });
 
-test("environment panel renders admin controls and escapes tenant data", () => {
+test("environment panel renders authorized platform controls and escapes tenant data", () => {
   const html = renderEnvironmentPanel(
     {
       state: "ok",
@@ -121,6 +123,7 @@ test("environment panel renders admin controls and escapes tenant data", () => {
     environmentContext(
       [PERMISSIONS.ENVIRONMENT_READ, PERMISSIONS.ENVIRONMENT_WRITE],
       "admin",
+      ["platform_admin"],
     ),
   );
 
@@ -131,20 +134,26 @@ test("environment panel renders admin controls and escapes tenant data", () => {
   assert.doesNotMatch(html, /<script>/);
 });
 
-test("environment panel is readonly for developer and hidden for viewer", () => {
-  const developerHtml = renderEnvironmentPanel(
+test("environment panel is readonly for a platform reader and hidden from workspace-only identities", () => {
+  const readerHtml = renderEnvironmentPanel(
     { state: "ok", ...environmentPayload },
-    environmentContext([PERMISSIONS.ENVIRONMENT_READ], "developer"),
+    environmentContext([PERMISSIONS.ENVIRONMENT_READ], "ops_admin", ["platform_ops"]),
   );
   const viewerHtml = renderEnvironmentPanel(
     { state: "ok", ...environmentPayload },
     environmentContext([PERMISSIONS.CONSOLE_BASIC_READ], "viewer"),
   );
 
-  assert.match(developerHtml, /开发环境/);
-  assert.doesNotMatch(developerHtml, /create-environment-form/);
-  assert.doesNotMatch(developerHtml, /data-environment-status-form/);
+  assert.match(readerHtml, /开发环境/);
+  assert.doesNotMatch(readerHtml, /create-environment-form/);
+  assert.doesNotMatch(readerHtml, /data-environment-status-form/);
   assert.equal(viewerHtml, "");
+  for (const role of ["owner", "admin", "developer"]) {
+    assert.equal(renderEnvironmentPanel({ state: "ok", ...environmentPayload },
+      environmentContext([PERMISSIONS.ENVIRONMENT_READ, PERMISSIONS.ENVIRONMENT_WRITE], role)), "");
+  }
+  assert.equal(renderEnvironmentPanel({ state: "ok", ...environmentPayload },
+    environmentContext([PERMISSIONS.ENVIRONMENT_WRITE], "ops_admin", ["platform_admin"])), "");
 });
 
 test("environment loader does not prefetch without environment read permission", () => {

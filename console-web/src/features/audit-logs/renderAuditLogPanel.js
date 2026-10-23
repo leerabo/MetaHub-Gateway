@@ -336,7 +336,7 @@ function renderAuditRow(item) {
       <span data-label="操作者" class="audit-cell-value"><strong>${escapeHtml(item.actor_email ?? "管理员")}</strong></span>
       <span data-label="动作" class="audit-cell-value">${escapeHtml(ACTION_LABELS[item.action] ?? "已完成管理操作")}</span>
       <span data-label="对象" class="audit-cell-value">
-        <span class="audit-object"><strong>${escapeHtml(`${OBJECT_LABELS[item.object_type] ?? "对象"}${item.object_name ? ` / ${item.object_name}` : ""}`)}</strong></span>
+        <span class="audit-object"><strong>${escapeHtml(`${OBJECT_LABELS[item.object_type] ?? "对象"}${displayObjectName(item) ? ` / ${displayObjectName(item)}` : ""}`)}</strong></span>
       </span>
       <span data-label="变更字段" class="audit-cell-value"><span class="audit-changed-fields">${renderChangedFields(item.changed_fields)}</span></span>
       <details data-label="摘要" class="audit-log-summary">
@@ -348,6 +348,16 @@ function renderAuditRow(item) {
       </details>
     </article>
   `;
+}
+
+// 对象名称有时由后端附带短 ID 便于排障；业务页面只显示名称，避免把内部标识误当成业务字段。
+function displayObjectName(item) {
+  const value = String(item?.object_name ?? "").trim();
+  if (!value) return "";
+  return value
+    .replace(/\s*\[[a-f0-9]{6,16}\]\s*$/i, "")
+    .replace(/\s*\([a-f0-9]{6,16}\)\s*$/i, "")
+    .trim();
 }
 
 /**
@@ -393,7 +403,8 @@ function renderChangedFields(fields) {
     return "-";
   }
   const labels = { status: "状态", name: "名称", role: "职责", amount: "金额", limit: "限制", configuration: "配置" };
-  return fields.map((field) => `<span>${escapeHtml(labels[field] ?? "已更新")}</span>`).join("、");
+  const known = [...new Set(fields.map((field) => labels[field]).filter(Boolean))];
+  return known.length ? known.map((label) => `<span>${escapeHtml(label)}</span>`).join("、") : "已更新";
 }
 
 /**

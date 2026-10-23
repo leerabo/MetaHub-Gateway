@@ -51,9 +51,9 @@ test("renderSystemStatusPanel displays service readiness and escapes text", () =
     ],
   });
 
-  assert.match(html, /not ready/);
+  assert.match(html, /暂不可用/);
   assert.match(html, /database/);
-  assert.match(html, /trc_ready/);
+  assert.doesNotMatch(html, /trc_ready/);
   assert.doesNotMatch(html, /<Gateway>/);
   assert.match(html, /&lt;Gateway&gt;/);
 });

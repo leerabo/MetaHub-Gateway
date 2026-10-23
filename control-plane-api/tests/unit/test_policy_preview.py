@@ -178,3 +178,31 @@ def test_budget_preview_prices_cache_hits_separately() -> None:
         ),
     )
     assert result.estimated_cost_cny == Decimal("0.000280")
+
+
+def test_budget_preview_converts_usd_with_the_frozen_fx_rate() -> None:
+    """成本优先使用的 USD 价格在有汇率时应与 CNY 一样可计价。"""
+
+    price = PriceFact(
+        input_price_per_1k=Decimal("2"),
+        output_price_per_1k=Decimal("4"),
+        cache_price_per_1k=Decimal("0.5"),
+        currency="USD",
+        comparison_currency="CNY",
+        comparison_fx_rate=Decimal("7.2"),
+        comparison_fx_rate_version="fx-v3",
+    )
+    result = preview_budget(
+        400,
+        0,
+        price,
+        (),
+        token_estimate=TokenEstimate(
+            input_tokens=100,
+            output_tokens=0,
+            truncated=False,
+            cache_tokens=80,
+        ),
+    )
+    assert result.price_available is True
+    assert result.estimated_cost_cny == Decimal("0.000576")

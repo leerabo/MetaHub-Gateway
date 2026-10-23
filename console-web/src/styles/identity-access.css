@@ -39,7 +39,7 @@
 .identity-is-access .identity-login-form label { font-size: 12px; font-weight: 500; color: #657063; gap: 10px; }
 .identity-is-access .identity-login-form input { height: 48px; padding: 0 14px; border: 1px solid #dde3da; border-radius: 4px; background: #fafbf9; font-size: 13px; color: #354231; }
 .identity-is-access .identity-login-form input::placeholder { color: #a0a89b; font-size: 12px; }
-.identity-is-access .identity-login-form input:focus { border-color: var(--identity-accent); outline: 2px solid color-mix(in srgb, var(--identity-accent) 12%, transparent); outline-offset: 1px; background: #fff; }
+.identity-is-access .identity-login-form input:focus { border-color: var(--identity-accent); outline: 2px solid color-mix(in srgb, var(--identity-accent) 12%, transparent); outline-offset: 1px; background: var(--glass-input, #fff); }
 .identity-is-access .identity-login-form .identity-consent input { height: 18px; padding: 0; }
 .identity-is-access .identity-login-form .identity-primary { display: flex; justify-content: space-between; align-items: center; width: 100%; min-height: 48px; border-radius: 4px; padding: 0 16px; background: #29392f; border-color: #29392f; font-size: 13px; font-weight: 500; margin-top: 4px; }
 .identity-is-access .identity-login-form .identity-primary:hover { background: var(--identity-accent); border-color: var(--identity-accent); }
@@ -212,7 +212,7 @@ body:has(.identity-is-access) {
   height: 48px;
   border-color: var(--identity-line);
   border-radius: 6px;
-  background: #fff;
+  background: var(--glass-input, #fff);
   color: var(--identity-ink);
   font-size: 15px;
 }

@@ -421,19 +421,15 @@ test("PAGE-082 renders attempt and stream facts without raw Provider body", () =
       },
     },
   }, auth);
-  assert.match(html, /错误归一事实/);
+  assert.match(html, /模型服务结果/);
   assert.match(html, /data-provider-error-fact-owner="attempt"/);
   assert.match(html, /data-provider-error-fact-owner="stream_session"/);
   assert.doesNotMatch(html, /#error-maps|data-provider-error-map|data-provider-error-catalog-jump/);
-  assert.match(html, /pem_11111111111111111111111111111111/);
-  assert.match(html, /builtin_model_not_found_signal/);
-  assert.match(html, /provider-error-builtin-v1/);
-  assert.match(html, /&lt;script&gt;NORMALIZED&lt;\/script&gt;/);
+  assert.equal((html.match(/<dt>处理结果<\/dt>\s*<dd>已统一处理<\/dd>/gu) ?? []).length, 2);
+  assert.match(html, /<dt>可重试<\/dt>\s*<dd>否<\/dd>/u);
+  assert.match(html, /<dt>连接状态<\/dt>\s*<dd>服务已响应<\/dd>/u);
   assert.doesNotMatch(html, /sk-provider-secret|RAW_RESPONSE_MUST_NOT_RENDER|PROMPT_MUST_NOT_RENDER|<script>/);
-  assert.match(html, /pef_0123456789abcdef0123456789abcdef/);
-  assert.match(html, /compound/);
-  assert.match(html, />v2</);
-  assert.match(html, /JSON · 未截断/);
+  assert.doesNotMatch(html, /pem_1111|pef_012345|builtin_model_not_found_signal|provider-error-builtin-v1|NORMALIZED/);
   assert.match(html, /2026/);
 });
 

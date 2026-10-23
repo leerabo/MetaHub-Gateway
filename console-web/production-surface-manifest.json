@@ -21,10 +21,13 @@
     "src/styles/brand-domains.css",
     "src/styles/console-experience.css",
     "src/styles/console-migration.css",
+    "src/styles/design-system.css",
     "src/styles/edge-operations.css",
     "src/styles/identity.css",
     "src/styles/identity-access.css",
+    "src/styles/identity-design.css",
     "src/styles/public-home.css",
+    "src/styles/public-design.css",
     "src/styles/main.css",
     "src/styles/partner.css",
     "src/styles/platform.css",
@@ -121,7 +124,7 @@
     "/subscriptions/current",
     "/user/preferences"
   ],
-  "production_dockerfile": "../infra/docker/console.Dockerfile",
-  "production_asset_set_sha256": "e2eb6d0a6c642dac8cbf020581f486d28a5bdfc07d6fd25d96c444bee53911b4",
+  "production_dockerfile": "../infra/production/console.Dockerfile",
+  "production_asset_set_sha256": "eb7c3b3b85afa5f51270c6a5ce722645e6ba526081eec09b4b3a5a691c634031",
   "output_directory": "dist"
 }

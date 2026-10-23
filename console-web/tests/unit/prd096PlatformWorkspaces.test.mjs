@@ -233,17 +233,17 @@ test("PRD-096 controller filters, opens details, and reloads every snapshot afte
   assert.match(root.innerHTML, /运营摘要/u);
   assert.match(root.innerHTML, /健康投影/u);
   assert.match(root.innerHTML, /事件时间线/u);
-  assert.match(root.innerHTML, /冻结 Workspace/u);
+  assert.match(root.innerHTML, /冻结组织/u);
 
   assert.equal(controller.prepareWorkspaceLifecycle("suspend"), true);
-  assert.match(root.innerHTML, /确认冻结 Workspace/u);
+  assert.match(root.innerHTML, /确认冻结组织/u);
   assert.equal(await controller.confirmWorkspaceLifecycle("security_containment"), true);
   const suspend = seen.find((entry) => entry[0] === "suspend")[1];
   assert.equal(suspend.revision, 3);
   assert.equal(suspend.reasonCode, "security_containment");
   assert.equal(suspend.signal.aborted, true);
   assert.match(root.innerHTML, /Workspace 已冻结/u);
-  assert.match(root.innerHTML, /恢复 Workspace/u);
+  assert.match(root.innerHTML, /恢复组织/u);
 
   assert.equal(await controller.addWorkspaceRiskTag("security_review", "security_review"), true);
   assert.match(root.innerHTML, /security review/u);
@@ -321,6 +321,28 @@ test("PRD-096 renderer keeps role-specific controls and mobile rows bounded", as
     "utf8",
   );
   assert.doesNotMatch(controllerSource, /localStorage|sessionStorage|history\.|location\./u);
+});
+
+test("workspace health never presents negated or failed readiness as healthy", () => {
+  for (const [code, kind, label] of [
+    ["not_ready", "is-warn", "未就绪"],
+    ["not_verified", "is-warn", "未验证"],
+    ["unhealthy", "is-danger", "不健康"],
+    ["failed", "is-danger", "失败"],
+    ["ready", "is-ok", "就绪"],
+    ["healthy", "is-ok", "健康"],
+  ]) {
+    const root = createRoot();
+    const state = detailState(["platform.workspace.directory.read"], {
+      health: { ...healthSummary(), status: code, score_band: code },
+    });
+    state.workspaceHealth.health = { ...healthSummary(), status: code, score_band: code };
+    renderPlatformWorkspace(root, state);
+    assert.ok(root.innerHTML.includes(`class="platform-status ${kind}" data-status-code="${code}">${label}</span>`), code);
+    if (kind !== "is-ok") {
+      assert.ok(!root.innerHTML.includes(`class="platform-status is-ok" data-status-code="${code}"`), code);
+    }
+  }
 });
 
 function workspaceApi(overrides = {}) {

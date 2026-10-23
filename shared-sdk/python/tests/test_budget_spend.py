@@ -30,6 +30,8 @@ def _connection() -> sqlite3.Connection:
           tenant_id TEXT NOT NULL,
           entry_type TEXT NOT NULL,
           direction TEXT NOT NULL,
+          amount_micros,
+          currency TEXT NOT NULL DEFAULT 'CNY',
           normalized_cny_micros,
           cny_normalization_status TEXT NOT NULL,
           price_evidence_status TEXT NOT NULL,
@@ -54,9 +56,27 @@ def _connection() -> sqlite3.Connection:
           tenant_id TEXT NOT NULL,
           request_id TEXT NOT NULL
         );
+        CREATE TABLE workspace_tenant_bindings (
+          workspace_id TEXT NOT NULL,
+          tenant_id TEXT NOT NULL,
+          status TEXT NOT NULL
+        );
+        CREATE TABLE workspace_fx_rate_versions (
+          workspace_fx_rate_version_id TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          tenant_id TEXT NOT NULL,
+          version_number INTEGER NOT NULL,
+          usd_to_cny TEXT NOT NULL,
+          effective_from TEXT NOT NULL,
+          created_by_membership_id TEXT,
+          created_at TEXT
+        );
         """
     )
     return connection
+
+
+_MISSING = object()
 
 
 def _insert_entry(
@@ -73,6 +93,8 @@ def _insert_entry(
     direction: str = "debit",
     normalization_status: str = "normalized",
     evidence_status: str = "priced",
+    normalized_micros: object = _MISSING,
+    currency: str = "CNY",
     status: str = "posted",
     created_at: str = "2026-07-27T00:00:00Z",
 ) -> None:
@@ -81,16 +103,18 @@ def _insert_entry(
     connection.execute(
         """
         INSERT INTO finops_ledger_entries(
-          tenant_id, entry_type, direction, normalized_cny_micros,
+          tenant_id, entry_type, direction, amount_micros, currency, normalized_cny_micros,
           cny_normalization_status, price_evidence_status, source_request_id,
           environment_id, project_id, application_id, virtual_key_id, status, created_at
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             tenant_id,
             entry_type,
             direction,
             amount_micros,
+            currency,
+            amount_micros if normalized_micros is _MISSING else normalized_micros,
             normalization_status,
             evidence_status,
             request_id,
@@ -264,6 +288,40 @@ def test_spend_fails_closed_for_unknown_or_invalid_usage_amount(
 
     with pytest.raises(BudgetSpendUnavailableError):
         _load(connection, scope_type="tenant", scope_id="tenant_a")
+
+
+def test_spend_converts_legacy_priced_usd_using_rate_at_charge_time() -> None:
+    """旧版 USD 分录虽未写入 CNY 快照，预算读取仍按发生时汇率计入。"""
+
+    connection = _connection()
+    connection.execute(
+        "INSERT INTO workspace_tenant_bindings(workspace_id, tenant_id, status) VALUES(?, ?, ?)",
+        ("workspace_a", "tenant_a", "active"),
+    )
+    connection.execute(
+        """
+        INSERT INTO workspace_fx_rate_versions(
+          workspace_fx_rate_version_id, workspace_id, tenant_id, version_number,
+          usd_to_cny, effective_from, created_by_membership_id, created_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("fx_1", "workspace_a", "tenant_a", 1, "7.2", "1970-01-01T00:00:00Z", "member_a", "1970-01-01T00:00:00Z"),
+    )
+    _insert_entry(
+        connection,
+        amount_micros=144,
+        request_id="req_usd_legacy",
+        currency="USD",
+        normalized_micros=None,
+        normalization_status="unavailable",
+        evidence_status="priced",
+    )
+
+    amounts = _load(connection, scope_type="tenant", scope_id="tenant_a")
+
+    # 0.000144 USD × 7.2 = 0.0010368 CNY，按六位微元量化为 0.001037。
+    assert amounts.posted_cny_micros == 1_037
+    assert amounts.effective_cny_micros == 1_037
 
 
 def test_spend_fails_closed_when_python_integer_total_exceeds_budget_bound() -> None:

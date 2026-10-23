@@ -70,9 +70,9 @@ test("renderer independently prunes rebuild and never renders manifest material"
     "platform.config_distribution.rebuild",
   ]));
   assert.match(writable.innerHTML, /配置分发/u);
-  assert.match(writable.innerHTML, /ACK 水位/u);
+  assert.match(writable.innerHTML, /确认水位/u);
   assert.match(writable.innerHTML, /data-platform-config-rebuild-form/u);
-  assert.match(writable.innerHTML, /result [0-9a-f]{12}/u);
+  assert.match(writable.innerHTML, /结果 [0-9a-f]{12}/u);
   assert.doesNotMatch(writable.innerHTML, /manifest_sha256|provider_key_refs|secret|token/iu);
 
   const readonly = { innerHTML: "" };

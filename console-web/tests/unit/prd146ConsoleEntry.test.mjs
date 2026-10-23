@@ -159,7 +159,10 @@ function harness() {
     workspaceProviderEngineeringController: { snapshot: () => ({}), close() {} },
     workspaceCommercialAccountingController: { close() {} },
     workspaceConsoleExperienceController: { leave: () => effects.push("experience-leave") },
-    workspaceNavigationController: { leave: () => effects.push("navigation-leave") },
+    workspaceNavigationController: {
+      leave: () => effects.push("navigation-leave"),
+      snapshot: () => ({ setupComplete: true }),
+    },
     deploymentBrandingController: { clear: () => effects.push("branding-clear") },
     gatewayDebugLifecycle: { leave: () => effects.push("debug-leave") },
     migrationGuideVisitTracker: { leave() {} }, providerStatusVisitTracker: { leave() {} },
@@ -544,7 +547,7 @@ for (const origin of ["https://console.example.test", "https://console.example.t
   });
 }
 
-for (const [origin, expected] of [["http://[::1]:5173", "http://[::1]:8001"], ["https://localhost:5173", "https://localhost:8001"]]) {
+for (const [origin, expected] of [["http://[::1]:5173", "http://[::1]:8001"], ["https://localhost:5173", "https://localhost:5173"]]) {
   test(`PRD-147 local Console preserves protocol and IPv6 ${origin}`, () => {
     const location = new URL(origin);
     const origins = runInNewContext(`${section("const controlPage =", "const consoleUrl =")}
@@ -646,7 +649,10 @@ test("PRD-146 unavailable route fallback does not claim a role denial or a fixed
   let cleared = false;
   const scope = { readNavigationHashState: () => navigationHash("#unknown"),
     WORKSPACE_ROUTE_REGISTRY, resolveWorkspaceNavigationRoute, projectWorkspaceNavigationForConsole,
-    workspaceNavigationController: { loadNavigation: async () => ({ ...loaded, navigation: loaded.navigation }) },
+    workspaceNavigationController: {
+      loadNavigation: async () => ({ ...loaded, navigation: loaded.navigation }),
+      snapshot: () => ({ setupComplete: true }),
+    },
     replaceNavigationHash: (value) => { assert.equal(value, "workspace.observability.feedback"); cleared = true; },
     consoleShellActionError: null, expandedConsoleGroupKey: null,
   };
@@ -655,7 +661,7 @@ test("PRD-146 unavailable route fallback does not claim a role denial or a fixed
   const result = await load();
   assert.equal(result.state, "ok");
   assert.equal(result.activeNavigationItemId, "feedback-summary");
-  assert.equal(result.sidebarExpandedGroupKey, "observability");
+  assert.equal(result.sidebarExpandedGroupKey, "system");
   assert.equal(cleared, true);
   assert.match(result.warning, /职责|权限|角色/);
   assert.match(result.warning, /可访问页面|accessible page/);

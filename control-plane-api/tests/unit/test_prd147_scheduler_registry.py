@@ -879,6 +879,51 @@ async def test_coordinator_checks_renewals_between_context_installations(monkeyp
 
 
 @pytest.mark.anyio
+async def test_expiring_contexts_do_not_starve_other_queues(monkeypatch):
+    """After lease loss, every dashboard/outbox queue must still get its turn."""
+    app = FastAPI()
+    app.state.config = SimpleNamespace(console_migration_scheduler_poll_seconds=0.05)
+    stop = asyncio.Event()
+    queues = SCHEDULER_QUEUES_BY_SCHEDULER["console-experience"]
+    claimed = []
+
+    async def renew(_app, _replica, active, _stats, _seconds):
+        for key, child in tuple(active.items()):
+            await child.manager.__aexit__(None, None, None)
+            del active[key]
+
+    def claim(_config, *, scheduler_code, queue_code, **_kwargs):
+        claimed.append(queue_code)
+        if len(claimed) == len(queues):
+            stop.set()
+        queue = next(item for item in queues if item.code == queue_code)
+        return scheduler_module.SchedulerLeaseProof(
+            scheduler_code, queue_code, queue.partition_code, "test-proof", 1, 1,
+            datetime.now(UTC) + timedelta(seconds=45),
+        )
+
+    @asynccontextmanager
+    async def child(_app):
+        yield
+
+    async def observe(*_args):
+        pass
+
+    def release(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(scheduler_module, "_renew_active", renew)
+    monkeypatch.setattr(scheduler_module, "claim_scheduler_lease", claim)
+    monkeypatch.setattr(scheduler_module, "release_scheduler_leases", release)
+    monkeypatch.setattr(scheduler_module, "_observe", observe)
+    await scheduler_module._coordinator_loop(
+        app, (SchedulerContextBinding("console-experience", child),),
+        "expiring-queue-fairness", stop,
+    )
+    assert set(claimed) == {queue.code for queue in queues}
+
+
+@pytest.mark.anyio
 async def test_expired_context_cleanup_does_not_delay_other_lease_renewals(monkeypatch):
     events = []
     app = FastAPI()
@@ -904,6 +949,65 @@ async def test_expired_context_cleanup_does_not_delay_other_lease_renewals(monke
     await scheduler_module._renew_active(app, "test-replica", active,
         scheduler_module._CoordinatorStats(), 15)
     assert events == ["renew:status-publication", "renew:admin-assistant", "stop:status-publication"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("backend, expected_starts", [("sqlite", 2), ("postgresql", 1)])
+async def test_only_sqlite_time_slices_healthy_scheduler_contexts(
+    monkeypatch, backend, expected_starts,
+):
+    """A healthy PostgreSQL worker must survive the local SQLite rotation age."""
+    app = FastAPI()
+    app.state.config = SimpleNamespace(
+        database_url=f"{backend}:///independent-coordinator-test",
+        console_migration_scheduler_poll_seconds=0.05,
+    )
+    stop = asyncio.Event()
+    clock = [100.0]
+    starts, exits = [], []
+    aged_renewals = 0
+    queue = SCHEDULER_QUEUES_BY_SCHEDULER["status-publication"][0]
+    proof = SimpleNamespace(
+        scheduler_code=queue.scheduler_code, queue_code=queue.code,
+        partition_code=queue.partition_code, deadline=datetime.now(UTC) + timedelta(hours=1),
+    )
+
+    @asynccontextmanager
+    async def child(_app):
+        starts.append(clock[0])
+        try:
+            yield
+        finally:
+            exits.append(clock[0])
+
+    async def renew(_app, _replica, active, _stats, _seconds):
+        nonlocal aged_renewals
+        if active and clock[0] > 100.0 + scheduler_module.SQLITE_CONTEXT_MAX_AGE_SECONDS:
+            aged_renewals += 1
+            if aged_renewals == 2:
+                stop.set()
+
+    async def database_call(_app, operation, *_args, **_kwargs):
+        if operation is scheduler_module.claim_scheduler_lease:
+            return proof
+        assert operation is scheduler_module.release_scheduler_leases
+        return True
+
+    async def observe(*_args):
+        # Advance past the local time slice after the first context has entered.
+        # No real sleep or database connection is needed to cross the 90 s age.
+        clock[0] = 100.0 + scheduler_module.SQLITE_CONTEXT_MAX_AGE_SECONDS + 1
+
+    monkeypatch.setattr(scheduler_module, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(scheduler_module, "_renew_active", renew)
+    monkeypatch.setattr(scheduler_module, "_coordinator_database_call", database_call)
+    monkeypatch.setattr(scheduler_module, "_observe", observe)
+    await asyncio.wait_for(scheduler_module._coordinator_loop(
+        app, (SchedulerContextBinding("status-publication", child),), "own-test", stop,
+    ), timeout=2)
+    assert len(starts) == expected_starts
+    assert len(exits) == expected_starts
+    assert app.state.scheduler_active_contexts == ()
 
 
 @pytest.mark.anyio

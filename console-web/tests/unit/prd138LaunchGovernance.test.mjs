@@ -261,13 +261,13 @@ test("PRD-138 renderer exposes dense gate, signer, wave, rollback, and RC states
   ]);
   const collecting = renderLaunchGates(platformState(candidate()), permissions);
   assert.match(collecting, /data-platform-launch-root/u);
-  assert.match(collecting, /Gate registry/u);
+  assert.match(collecting, /门禁清单/u);
   assert.match(collecting, /data-platform-launch-create-form/u);
   assert.match(collecting, /data-platform-launch-evidence-form/u);
   assert.match(collecting, /20 policies/u);
 
   const signing = renderLaunchGates(platformState(candidate({ status: "signing" })), permissions);
-  assert.match(signing, /Go \/ no-go decisions/u);
+  assert.match(signing, /发布审批/u);
   assert.match(signing, /data-platform-launch-decision-form/u);
 
   const launching = candidate({
@@ -282,7 +282,7 @@ test("PRD-138 renderer exposes dense gate, signer, wave, rollback, and RC states
   });
   const root = fakeRoot();
   renderPlatformWorkspace(root, shellState(launching, permissions));
-  assert.match(root.innerHTML, /Launch waves/u);
+  assert.match(root.innerHTML, /发布批次/u);
   assert.match(root.innerHTML, /data-platform-launch-wave-form/u);
   assert.match(root.innerHTML, /data-platform-launch-rollback-request-form/u);
   assert.doesNotMatch(root.innerHTML,
@@ -296,7 +296,7 @@ test("PRD-138 renderer exposes dense gate, signer, wave, rollback, and RC states
     }]))),
   })), permissions);
   assert.match(reviewHtml, /data-platform-launch-review-form/u);
-  assert.match(reviewHtml, /release candidate conclusion/u);
+  assert.match(reviewHtml, /确认候选版本结论/u);
 });
 
 test("PRD-138 controller consumes step-up, reuses retry idempotency, and honors revocation", async (t) => {

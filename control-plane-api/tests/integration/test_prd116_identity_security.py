@@ -44,18 +44,10 @@ def _local_seed_admin() -> tuple[str, str]:
 @pytest.fixture(scope="module")
 def migrated_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("prd116-api-migrated")
-    migrations = root / "migrations"
-    migrations.mkdir()
-    for source in MIGRATIONS_DIR.glob("*.sql"):
-        if source.name[:4].isdigit() and int(source.name[:4]) <= 108:
-            shutil.copy2(source, migrations / source.name)
     database = root / "identity-security.sqlite3"
-    assert (
-        apply_migrations(
-            f"sqlite:///{database.as_posix()}", migrations_dir=migrations
-        ).applied[-1]
-        == "0108"
-    )
+    # Runtime RBAC validates the current complete catalog. A fixture frozen at
+    # PRD-116's historical schema cannot exercise today's workspace permissions.
+    apply_migrations(f"sqlite:///{database.as_posix()}", migrations_dir=MIGRATIONS_DIR)
     return database
 
 
@@ -205,6 +197,52 @@ async def _workspace_step_up(
     )
     assert response.status_code == 200
     return str(response.json()["grant"])
+
+
+@pytest.mark.anyio
+async def test_security_overview_matches_active_device_sessions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    migrated_database: Path,
+) -> None:
+    database_url, app, owner_email, clock = _prepare(
+        monkeypatch, tmp_path, migrated_database
+    )
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="https://testserver") as owner:
+        await _login(owner, owner_email)
+        current = (await owner.get("/identity/me")).json()["current_session"]
+        other_ids = []
+        for _ in range(4):
+            async with AsyncClient(transport=transport, base_url="https://testserver") as device:
+                await _login(device, owner_email)
+                session = (await device.get("/identity/me")).json()["current_session"]
+                other_ids.append(session["session_id"])
+        stamp = clock[0].isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        with connect_database(database_url) as connection:
+            connection.execute(
+                "UPDATE global_sessions SET expires_at=? WHERE session_id=?",
+                (stamp, other_ids[0]),
+            )
+            connection.execute(
+                "UPDATE global_sessions SET idle_expires_at=? WHERE session_id=?",
+                (stamp, other_ids[1]),
+            )
+            connection.execute(
+                "UPDATE global_sessions SET status='revoked',revoked_at=?,"
+                "revoked_reason='user_requested' WHERE session_id=?",
+                (stamp, other_ids[2]),
+            )
+            connection.commit()
+        expected = {current["session_id"], other_ids[3]}
+        listed = await owner.get("/identity/sessions")
+        overview = await owner.get("/identity/security")
+        assert listed.status_code == overview.status_code == 200
+        assert {row["session_id"] for row in listed.json()["sessions"]} == expected
+        assert {row["session_id"] for row in overview.json()["sessions"]} == expected
+        assert overview.json()["sessions"][0]["is_current"] is True
+        with connect_database(database_url) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM global_sessions").fetchone()[0] == 5
 
 
 @pytest.mark.anyio

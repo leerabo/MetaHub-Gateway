@@ -15,7 +15,9 @@ import re
 from secrets import token_bytes
 
 _ARGON2ID_HASH_RE = re.compile(
-    r"^\$argon2id\$v=19\$m=65536,t=3,p=2\$[A-Za-z0-9+/]{22}\$[A-Za-z0-9+/]{43}$"
+    # Initialization used argon2-cffi's default parallelism (4); new credentials
+    # use 2. Both retain the same bounded 64 MiB memory and three iterations.
+    r"^\$argon2id\$v=19\$m=65536,t=3,p=[24]\$[A-Za-z0-9+/]{22}\$[A-Za-z0-9+/]{43}$"
 )
 
 

@@ -17,11 +17,11 @@ export function createWorkspaceProviderEngineeringController({
   let activationContext = null;
   let workspaceSession = null;
 
-  async function open({ authContext, activeNavigationItemId, providerId }) {
+  async function open({ authContext, activeNavigationItemId, providerId, session, consoleShellState }) {
     const currentActivation = ++activation;
     activationController?.abort();
     activationController = new AbortController();
-    activationContext = { authContext, activeNavigationItemId, providerId };
+    activationContext = { authContext, activeNavigationItemId, providerId, session, consoleShellState };
     workspaceSession = null;
     store.prepare(providerId, activeNavigationItemId);
     try {
@@ -51,8 +51,8 @@ export function createWorkspaceProviderEngineeringController({
   }
 
   async function refresh() {
-    if (!workspaceSession || !activationContext) return false;
-    return load();
+    if (!activationContext) return false;
+    return open(activationContext);
   }
 
   async function configure(filters = {}) {

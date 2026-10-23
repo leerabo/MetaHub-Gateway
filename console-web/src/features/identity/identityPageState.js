@@ -2915,6 +2915,14 @@ export function createIdentityPageController({
         ...account,
         mfa_configured: result.factors.some((factor) => factor.status === "active"),
       };
+      // The login response is authoritative as soon as the account security
+      // projection is available. Render it before the workspace directory and
+      // authorization probes finish so a slow scheduler/database cannot make a
+      // successful login look like a failed or stuck form submission.
+      renderSecurity({
+        feedback: feedback || "登录成功，正在加载空间信息…",
+        error: previousError,
+      });
       return continueLoad ? loadPlatformAccess(ticket, feedback, previousError) : true;
     } catch (error) {
       if (!isCurrent(ticket) || isAbort(error)) return false;
@@ -4995,6 +5003,8 @@ function safePageError(error) {
   if (error instanceof IdentityApiError || error instanceof PlatformApiError
     || error instanceof PrivacyApiError || error instanceof ComplianceApiError) {
     const messages = {
+      "identity.login_invalid": "邮箱或密码不正确，请重试或选择“忘记密码”。",
+      "auth.login_invalid": "邮箱或密码不正确，请重试或选择“忘记密码”。",
       "workspace.account_unverified": "此账号尚未完成邮箱验证，请先通过登录页的“忘记密码”验证邮箱，再创建组织。你在现有组织中的员工职责不影响创建自己的组织。",
       "identity.delivery_unavailable": "邮箱验证服务尚未配置，请联系平台管理员。",
       "identity.registration_invalid": "注册信息不完整或格式不正确，请检查后重试。",

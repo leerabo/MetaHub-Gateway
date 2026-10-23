@@ -20,6 +20,7 @@ import {
 } from "../../src/features/session-risks/sessionRiskPageState.js";
 import { renderSessionRisks } from "../../src/features/session-risks/renderSessionRisks.js";
 import { PERMISSIONS, withPermissionSnapshot } from "./permissionTestContext.mjs";
+import { workspaceNavigationOwner } from "../../src/features/workspace-navigation/workspaceNavigationStore.js";
 
 // 资源常量全部符合后端 canonical wire 形状，负例在各测试中单独构造。
 const SCORE_ID = `srs_${"1".repeat(32)}`;
@@ -27,6 +28,106 @@ const FREEZE_ID = `srf_${"2".repeat(32)}`;
 const ACTION_ID = `sra_${"3".repeat(32)}`;
 const CHAT_SESSION_ID = `chs_${"4".repeat(32)}`;
 const VIRTUAL_KEY_ID = "55555555-5555-4555-8555-555555555555";
+
+function workspaceRiskShell(codes = [PERMISSIONS.SESSION_RISK_READ, PERMISSIONS.SESSION_RISK_MANAGE]) {
+  const identity = { account: { status: "active" }, current_session: {
+    session_id: "risk_global_session", is_current: true, revoke_generation: 1,
+    expires_at: "2099-01-01T00:00:00Z",
+  } };
+  const context = { workspace_id: `wsp_${"7".repeat(32)}`, role: "owner",
+    session_status: "active", expires_at: "2099-01-01T00:00:00Z" };
+  const authorization = { permission_codes: [...codes].sort(), permission_revision: 1,
+    membership_revision: 1, permission_fingerprint: "a".repeat(64) };
+  return { state: "ok", workspaceNavigationContract: true, workspaceIdentity: identity,
+    workspaceContext: context, workspaceAuthorization: authorization,
+    workspaceOwner: workspaceNavigationOwner(identity, { context, authorization }),
+    activeNavigationItemId: "session-risks", activeRouteCode: "workspace.governance.session-risks",
+    navigation: { ...authorization, active_navigation_item_id: "session-risks",
+      active_route_code: "workspace.governance.session-risks", navigation_items: [{
+        id: "session-risks", route_code: "workspace.governance.session-risks",
+        target_section: "session-risks", visible: true, disabled: false,
+      }] } };
+}
+
+test("Workspace risks render populated state and discard responses from a replaced session", () => {
+  const shell = workspaceRiskShell();
+  const owner = sessionRiskPageOwner(shell.workspaceAuthorization, shell);
+  assert.equal(owner?.workspaceId, shell.workspaceContext.workspace_id);
+  assert.equal(Object.hasOwn(owner, "tenantId"), false);
+  const state = createSessionRiskPageState();
+  assert.equal(state.enter(owner), true);
+  const read = state.beginListOperation(owner, 1);
+  assert.equal(state.acceptPage(read, normalizeSessionRiskListResponse(listFixture()), owner, 1), true);
+  state.selectRisk(SCORE_ID);
+  assert.match(renderSessionRisks(state.snapshot(), shell.workspaceAuthorization, shell), /data-session-risk-action="freeze_session"/u);
+  const late = state.beginListOperation(owner, 2);
+  const next = workspaceRiskShell();
+  next.workspaceIdentity.current_session.session_id = "replacement_global_session";
+  next.workspaceOwner = workspaceNavigationOwner(next.workspaceIdentity, {
+    context: next.workspaceContext, authorization: next.workspaceAuthorization,
+  });
+  const nextOwner = sessionRiskPageOwner(next.workspaceAuthorization, next);
+  assert.equal(state.enter(nextOwner), true);
+  assert.equal(late.controller.signal.aborted, true);
+  assert.equal(state.acceptPage(late, normalizeSessionRiskListResponse(listFixture()), nextOwner, 2), false);
+  assert.equal(state.snapshot().session_risks.length, 0);
+});
+
+test("Workspace risk owners reject expiry, navigation drift and manage-only authority", () => {
+  for (const change of [
+    s => { s.workspaceContext.expires_at = "2000-01-01T00:00:00Z"; },
+    s => { s.workspaceIdentity.current_session.expires_at = "2000-01-01T00:00:00Z"; },
+    s => { s.workspaceIdentity.current_session.revoke_generation += 1; },
+    s => { s.navigation.permission_fingerprint = "b".repeat(64); },
+    s => { s.activeRouteCode = "workspace.home.overview"; },
+    s => { s.navigation.navigation_items[0].disabled = true; },
+  ]) {
+    const shell = workspaceRiskShell();
+    change(shell);
+    assert.equal(sessionRiskPageOwner(shell.workspaceAuthorization, shell), null);
+  }
+  const shell = workspaceRiskShell();
+  assert.equal(sessionRiskPageOwner({ ...shell.workspaceAuthorization, membership_revision: 2 }, shell), null);
+  for (const codes of [[], [PERMISSIONS.SESSION_RISK_MANAGE]]) {
+    const denied = workspaceRiskShell(codes);
+    assert.equal(sessionRiskPageOwner(denied.workspaceAuthorization, denied), null);
+  }
+  const readOnly = workspaceRiskShell([PERMISSIONS.SESSION_RISK_READ]);
+  assert.equal(sessionRiskPageOwner(readOnly.workspaceAuthorization, readOnly).canManage, false);
+  assert.equal(sessionRiskPageOwner(readOnly.workspaceAuthorization, readOnly, { requireManage: true }), null);
+});
+
+test("Workspace risk clients use Cookie reads and exact CSRF writes without a Bearer", async (t) => {
+  const previousFetch = globalThis.fetch;
+  const previousDocument = globalThis.document;
+  t.after(() => { globalThis.fetch = previousFetch; globalThis.document = previousDocument; });
+  const csrf = "W".repeat(43);
+  globalThis.document = { cookie: `__Host-metahub-workspace-csrf=${csrf}` };
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return jsonResponse(listFixture());
+  };
+  await listSessionRisks({ controlApiUrl: "https://control.test", authentication: "workspace" });
+  assert.equal(calls[0].options.credentials, "include");
+  assert.equal(calls[0].options.headers.Authorization, undefined);
+  const action = { controlApiUrl: "https://control.test", authentication: "workspace",
+    sessionRiskScoreId: SCORE_ID, action: "freeze_session", reasonCode: "confirmed_attack",
+    expectedRevision: 3, idempotencyKey: "workspace-risk-action-0001" };
+  // A malformed server response must still be rejected after the correct authenticated request.
+  await assert.rejects(applySessionRiskAction(action), e => e.code === "session_risk.response_invalid");
+  assert.equal(calls[1].options.credentials, "include");
+  assert.equal(calls[1].options.headers["X-CSRF-Token"], csrf);
+  assert.equal(new Headers(calls[1].options.headers).get("Idempotency-Key"), action.idempotencyKey);
+  assert.equal(calls[1].options.headers.Authorization, undefined);
+  assert.deepEqual(JSON.parse(calls[1].options.body), {
+    action: "freeze_session", reason_code: "confirmed_attack", expected_revision: 3,
+  });
+  globalThis.document.cookie = "";
+  await assert.rejects(applySessionRiskAction(action));
+  await assert.rejects(listSessionRisks({ controlApiUrl: "https://control.test", authentication: "workspace", token: "mixed" }));
+  assert.equal(calls.length, 2);
+});
 
 /** 构造 fetch 可用 JSON 响应。 */
 function jsonResponse(payload, { ok = true, status = 200 } = {}) {
@@ -287,7 +388,7 @@ test("PRD-070 action client emits POST exact body and validates returned state m
   assert.equal(result.session_risk.status, "frozen");
   assert.equal(calls[0].url, `http://control.local/security/session-risks/${SCORE_ID}/action`);
   assert.equal(calls[0].options.method, "POST");
-  assert.equal(calls[0].options.headers["Idempotency-Key"], "sr_action_12345678");
+  assert.equal(new Headers(calls[0].options.headers).get("Idempotency-Key"), "sr_action_12345678");
   assert.deepEqual(JSON.parse(calls[0].options.body), {
     action: "freeze_session",
     reason_code: "confirmed_attack",

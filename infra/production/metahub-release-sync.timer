@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically check GitHub for MetaHub releases
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1h
+RandomizedDelaySec=5min
+Unit=metahub-release-sync.service
+
+[Install]
+WantedBy=timers.target

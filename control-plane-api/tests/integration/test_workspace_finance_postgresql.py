@@ -1,6 +1,9 @@
 """Native PostgreSQL organization-session budget and internal ledger acceptance."""
 
 import secrets
+import sqlite3
+from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 import test_postgresql_native_migrations as native_migrations
@@ -20,7 +23,11 @@ from metahub_control.workspace_access.service import (
     switch_workspace,
 )
 from metahub_control.workspaces.service import create_workspace
+from metahub_gateway.budgets.models import BudgetDecision, BudgetRule
+from metahub_gateway.budgets.service import _insert_alert_event
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
+from metahub_shared.runtime.budget_blocks import ensure_budget_block
+from metahub_shared.runtime.budget_reservations import ensure_budget_reservation
 from metahub_shared.runtime.config import load_app_config
 from metahub_shared.runtime.errors import ApiError
 
@@ -88,6 +95,61 @@ def test_native_workspace_budget_and_finops_transaction_contracts(
     )
     rule = create_budget_rule(config, context, payload, **chain).budget_rule
     assert rule.daily_budget_cny == "12.345678"
+    # These production writes previously used SQLite-only INSERT OR IGNORE.
+    # Exercise real native constraints, deduplication and returned rowcount.
+    stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with connect_database(native_business_database) as connection:
+        shared = dict(tenant_id=rule.tenant_id, environment_id=rule.environment_id,
+                      budget_rule_id=rule.budget_rule_id, scope_type="tenant",
+                      scope_id=rule.tenant_id, budget_date=stamp[:10], now=stamp)
+        reservation_args = dict(**shared, request_id="native-reservation",
+                                trace_id="native-reservation", reserved_cost_cny="0.123456")
+        first, created = ensure_budget_reservation(connection, **reservation_args)
+        repeated, repeated_created = ensure_budget_reservation(connection, **reservation_args)
+        assert created and not repeated_created
+        assert first.budget_reservation_id == repeated.budget_reservation_id
+        assert Decimal(repeated.reserved_cost_cny) == Decimal("0.123456")
+        connection.execute("SAVEPOINT invalid_reservation")
+        with pytest.raises(sqlite3.IntegrityError):
+            ensure_budget_reservation(connection, **{
+                **reservation_args, "reserved_cost_cny": "-1",
+            })
+        connection.execute("ROLLBACK TO SAVEPOINT invalid_reservation")
+        connection.execute("RELEASE SAVEPOINT invalid_reservation")
+        block_args = dict(**shared, request_id="native-block", trace_id="native-block",
+                          blocked_cost_cny="12.345678", budget_cny="12.345678")
+        block, created = ensure_budget_block(connection, **block_args)
+        repeated_block, repeated_created = ensure_budget_block(connection, **block_args)
+        assert created and not repeated_created
+        assert block.budget_block_id == repeated_block.budget_block_id
+        assert connection.execute(
+            "SELECT COUNT(*) FROM budget_block_events WHERE budget_block_id=?",
+            (block.budget_block_id,),
+        ).fetchone()[0] == 1
+        runtime_rule = BudgetRule(
+            budget_rule_id=rule.budget_rule_id, tenant_id=rule.tenant_id,
+            environment_id=rule.environment_id, scope_type="tenant", scope_id=rule.tenant_id,
+            daily_budget_cny=Decimal("12.345678"), warning_threshold_percent=80,
+            exhausted_action="block",
+        )
+        warning = BudgetDecision(
+            budget_rule_id=rule.budget_rule_id, scope_type="tenant", scope_id=rule.tenant_id,
+            budget_status="warning", action_taken="warn", reason_code="budget.warning",
+            current_cost_cny=Decimal("10"), budget_limit_cny=Decimal("12.345678"),
+        )
+        for _ in range(2):
+            _insert_alert_event(
+                connection, runtime_rule, warning, budget_date=stamp[:10],
+                spent_before=Decimal("10"), request_id="native-warning",
+                trace_id="native-warning", threshold_percent=80,
+                event_type="budget.threshold_reached",
+            )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM budget_alert_events WHERE budget_rule_id=?",
+            (rule.budget_rule_id,),
+        ).fetchone()[0] == 1
+        # Roll back the synthetic gateway facts; the actual rule remains intact.
+        connection.rollback()
     with pytest.raises(ApiError) as conflict:
         create_budget_rule(config, context, payload, **chain)
     assert conflict.value.code == "budget.rule_conflict"

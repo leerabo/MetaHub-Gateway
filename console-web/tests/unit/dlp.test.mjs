@@ -294,10 +294,10 @@ test("request log detail renders dlp hash only and never plaintext match", () =>
     ),
   );
 
-  assert.match(html, /DLP 命中/);
-  assert.match(html, /gateway.dlp_blocked/);
-  assert.match(html, /hash_only_no_plaintext/);
-  assert.match(html, /dlp.keyword_matched/);
+  assert.match(html, /内容安全检查/);
+  assert.match(html, /已阻断|阻断/);
+  assert.doesNotMatch(html, /hash_only_no_plaintext/);
+  assert.doesNotMatch(html, /dlp.keyword_matched/);
   assert.doesNotMatch(html, /敏感词/);
   assert.doesNotMatch(html, /用户输入明文/);
 });

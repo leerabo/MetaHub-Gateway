@@ -24,6 +24,11 @@ JOIN personal_removal_tables p ON p.oid=t.tgrelid WHERE NOT t.tgisinternal;
 DO $purge$
 DECLARE item record; fk record; joins text; changed bigint; added bigint;
 BEGIN
+  -- A new database has no retired personal workspaces. Avoid dropping and
+  -- rebuilding every FK when there are no rows to remove.
+  IF NOT EXISTS(SELECT 1 FROM retired_personal_workspaces) THEN
+    RETURN;
+  END IF;
   -- Locks keep ctid row identities stable while the closure is collected.
   FOR item IN SELECT * FROM personal_removal_tables ORDER BY oid LOOP
     EXECUTE format('LOCK TABLE %s IN ACCESS EXCLUSIVE MODE',item.oid::regclass);

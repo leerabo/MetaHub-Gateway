@@ -45,6 +45,8 @@ from .models import (
     CreateProjectRequest,
     ProjectInfo,
     ProjectListResponse,
+    ProjectOwnerCandidate,
+    ProjectOwnerCandidatesResponse,
     ProjectResponse,
     UpdateApplicationRequest,
     UpdateApplicationMembersRequest,
@@ -61,6 +63,36 @@ MAX_DESCRIPTION_LENGTH = 500
 MAX_SEARCH_LENGTH = 160
 PROJECT_EDITABLE_FIELDS = {"name", "description", "owner_user_id", "status"}
 APPLICATION_EDITABLE_FIELDS = {"project_id", "name", "description", "status"}
+
+
+def list_project_owner_candidates(
+    config: AppConfig, context: AuthContext, *, search: str | None,
+    limit: int, request_id: str, trace_id: str,
+) -> ProjectOwnerCandidatesResponse:
+    """按需读取当前组织的启用用户；负责人校验仍在写入事务内执行。"""
+
+    normalized_search = _normalize_optional_search(search)
+    connection = _connect(config)
+    try:
+        clauses = ["tenant_id=?", "status='active'"]
+        params: list[object] = [context.user.tenant_id]
+        if normalized_search:
+            clauses.append("lower(display_name) LIKE ?")
+            params.append(f"%{normalized_search.lower()}%")
+        where = " AND ".join(clauses)
+        total = connection.execute(
+            f"SELECT COUNT(*) FROM users WHERE {where}", params,
+        ).fetchone()[0]
+        rows = connection.execute(
+            f"SELECT user_id, display_name FROM users WHERE {where} "
+            "ORDER BY display_name, user_id LIMIT ?", [*params, limit],
+        ).fetchall()
+        return ProjectOwnerCandidatesResponse(
+            candidates=[ProjectOwnerCandidate(**dict(row)) for row in rows],
+            total=total, request_id=request_id, trace_id=trace_id,
+        )
+    finally:
+        connection.close()
 
 
 def list_projects(
@@ -445,7 +477,14 @@ def list_applications(
               a.application_id, a.tenant_id, a.project_id, p.project_code,
               p.name AS project_name, a.application_code, a.name, a.description,
               a.status, a.created_at, a.updated_at,
-              COUNT(DISTINCT vk.virtual_key_id) AS virtual_key_count
+              COUNT(DISTINCT vk.virtual_key_id) AS virtual_key_count,
+              (SELECT COUNT(*) FROM application_memberships am
+               JOIN workspace_memberships wm
+                 ON wm.tenant_id=am.tenant_id
+                AND wm.workspace_membership_id=am.workspace_membership_id
+               WHERE am.tenant_id=a.tenant_id AND am.application_id=a.application_id
+                 AND am.status='active' AND wm.status='active'
+                 AND wm.role_code!='service_account') AS member_count
             FROM applications a
             JOIN projects p ON p.tenant_id=a.tenant_id AND p.project_id=a.project_id
             LEFT JOIN virtual_keys vk
@@ -758,6 +797,7 @@ def list_application_members(
     offset: int,
     request_id: str,
     trace_id: str,
+    selected_only: bool = False,
 ) -> ApplicationMembersResponse:
     """读取应用成员选择器，候选成员分页，已选 ID 单独完整返回。"""
 
@@ -771,6 +811,14 @@ def list_application_members(
             "member.role_code!='service_account'",
         ]
         params: list[object] = [context.user.tenant_id]
+        if selected_only:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM application_memberships selected "
+                "WHERE selected.tenant_id=member.tenant_id AND selected.application_id=? "
+                "AND selected.workspace_membership_id=member.workspace_membership_id "
+                "AND selected.status='active')"
+            )
+            params.append(application_id)
         if normalized_search:
             clauses.append("(lower(account.display_name) LIKE ? OR lower(account.email_normalized) LIKE ?)")
             pattern = f"%{normalized_search.lower()}%"
@@ -805,10 +853,14 @@ def list_application_members(
         ).fetchall()
         selected_rows = connection.execute(
             """
-            SELECT workspace_membership_id
-            FROM application_memberships
-            WHERE tenant_id=? AND application_id=? AND status='active'
-            ORDER BY workspace_membership_id
+            SELECT am.workspace_membership_id
+            FROM application_memberships am
+            JOIN workspace_memberships wm
+              ON wm.tenant_id=am.tenant_id
+             AND wm.workspace_membership_id=am.workspace_membership_id
+            WHERE am.tenant_id=? AND am.application_id=? AND am.status='active'
+              AND wm.status='active' AND wm.role_code!='service_account'
+            ORDER BY am.workspace_membership_id
             """,
             (context.user.tenant_id, application_id),
         ).fetchall()
@@ -1118,7 +1170,14 @@ def _load_application(connection: sqlite3.Connection, tenant_id: str, applicatio
         SELECT
           a.application_id, a.tenant_id, a.project_id, p.project_code, p.name AS project_name,
           a.application_code, a.name, a.description, a.status, a.created_at, a.updated_at,
-          COUNT(DISTINCT vk.virtual_key_id) AS virtual_key_count
+          COUNT(DISTINCT vk.virtual_key_id) AS virtual_key_count,
+              (SELECT COUNT(*) FROM application_memberships am
+               JOIN workspace_memberships wm
+                 ON wm.tenant_id=am.tenant_id
+                AND wm.workspace_membership_id=am.workspace_membership_id
+               WHERE am.tenant_id=a.tenant_id AND am.application_id=a.application_id
+                 AND am.status='active' AND wm.status='active'
+                 AND wm.role_code!='service_account') AS member_count
         FROM applications a
         JOIN projects p ON p.tenant_id=a.tenant_id AND p.project_id=a.project_id
         LEFT JOIN virtual_keys vk ON vk.tenant_id=a.tenant_id AND vk.application_id=a.application_id
@@ -1166,6 +1225,7 @@ def _application_info(row: sqlite3.Row) -> ApplicationInfo:
         description=row["description"],
         status=row["status"],
         virtual_key_count=_int_value(row["virtual_key_count"]),
+        member_count=_int_value(row["member_count"]),
         created_at=_parse_db_time(row["created_at"]),
         updated_at=_parse_db_time(row["updated_at"]),
     )

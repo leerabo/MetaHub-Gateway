@@ -78,6 +78,7 @@ def _prepare(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, migrated_database:
         "METAHUB_SUPPORT_SESSION_SECRET": "test-support-session-secret-0123456789abcdef01",
         "METAHUB_IDENTITY_MFA_ENCRYPTION_SECRET": "test-mfa-encryption-secret-0123456789abcdef0",
         "METAHUB_PLATFORM_BOOTSTRAP_ENABLED": "true",
+        "METAHUB_DEV_PLATFORM_NO_MFA": "false",
         "METAHUB_PLATFORM_BOOTSTRAP_RECOVERY_SECRET": RECOVERY_SECRET,
         "METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE": "test_capture",
         "METAHUB_ALLOWED_ORIGINS": ORIGIN,

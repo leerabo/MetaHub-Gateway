@@ -207,7 +207,7 @@ test("Platform license view authorizes issue and revoke without retaining commer
     newIdempotencyKey: () => IDEMPOTENCY,
   });
   assert.equal(await controller.mount(), true);
-  assert.match(root.innerHTML, /Gateway licenses/u);
+  assert.match(root.innerHTML, /网关许可证/u);
   assert.match(root.innerHTML, /data-platform-edge-license-issue-form/u);
   assert.match(root.innerHTML, /data-platform-edge-license-revoke-form/u);
 

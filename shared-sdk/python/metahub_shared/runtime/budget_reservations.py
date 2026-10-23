@@ -213,11 +213,11 @@ def ensure_budget_reservation(
     reservation_id = f"bres_{uuid4().hex}"
     cursor = connection.execute(
         """
-        INSERT OR IGNORE INTO budget_reservations(
+        INSERT INTO budget_reservations(
           budget_reservation_id, tenant_id, environment_id, budget_rule_id, scope_type,
           scope_id, budget_date, request_id, trace_id, reserved_cost_cny, created_at
         )
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING
         """,
         (
             reservation_id,

@@ -1079,8 +1079,9 @@ def get_identity_security_overview(
             _global_session_summary(row, identity.session_id)
             for row in connection.execute(
                 """SELECT * FROM global_sessions WHERE account_id=?
+                       AND status='active' AND expires_at>? AND idle_expires_at>?
                      ORDER BY CASE WHEN session_id=? THEN 0 ELSE 1 END,created_at DESC""",
-                (identity.account_id, identity.session_id),
+                (identity.account_id, stamp, stamp, identity.session_id),
             )
         )
         connection.commit()
@@ -1492,7 +1493,7 @@ def _pending_challenge(
         _secret_hmac(config, "mfa-challenge", raw_challenge),
     ):
         connection.execute(
-            """UPDATE mfa_challenges SET attempt_count=MIN(attempt_count+1,8),
+            """UPDATE mfa_challenges SET attempt_count=CASE WHEN attempt_count<8 THEN attempt_count+1 ELSE 8 END,
                  status=CASE WHEN attempt_count+1>=8 THEN 'exhausted' ELSE status END,
                  updated_at=? WHERE mfa_challenge_id=?""",
             (_db_time(now), challenge_id),
@@ -1561,7 +1562,7 @@ def _record_recovery_failure(
     connection: sqlite3.Connection, challenge_id: str, now: datetime
 ) -> None:
     connection.execute(
-        """UPDATE mfa_challenges SET attempt_count=MIN(attempt_count+1,8),
+        """UPDATE mfa_challenges SET attempt_count=CASE WHEN attempt_count<8 THEN attempt_count+1 ELSE 8 END,
              status=CASE WHEN attempt_count+1>=8 THEN 'exhausted' ELSE status END,
              updated_at=? WHERE mfa_challenge_id=? AND status='pending'""",
         (_db_time(now), challenge_id),

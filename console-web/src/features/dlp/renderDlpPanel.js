@@ -42,7 +42,7 @@ export function renderDlpPanel(dlpState, authContext) {
   if (!dlpState) {
     return renderLoadingPanel();
   }
-  // DLP API 错误必须展示 request_id，方便安全负责人把控制台提示和后端审计日志串起来。
+  // 诊断编号保留在状态对象和后端日志中，普通用户只看到可执行的提示。
   if (dlpState.state === "error") {
     return renderErrorPanel(dlpState);
   }
@@ -55,12 +55,12 @@ export function renderDlpPanel(dlpState, authContext) {
         <h2 id="dlp-rules-title">DLP 规则</h2>
         <p>按租户配置输入、输出或双向关键词和正则规则；普通调用日志只展示命中摘要，不展示正文。</p>
       </div>
-      <span class="dlp-count">${escapeHtml(rules.length)} 条规则</span>
+      <div class="dlp-heading-actions"><span class="dlp-count">${escapeHtml(rules.length)} 条规则</span>${canWrite ? '<button type="button" data-dlp-create-open>新增规则</button>' : ""}</div>
     </div>
     ${renderActionError(dlpState.actionError)}
     ${renderFeedback(dlpState.feedback)}
     ${renderScopeFilter(dlpState.scanScopeFilter)}
-    ${canWrite ? renderCreateForm() : renderReadOnlyNotice()}
+    ${canWrite ? `<dialog class="dlp-create-dialog" data-dlp-create-dialog aria-labelledby="dlp-create-title"${dlpState.actionError ? " data-dlp-auto-open" : ""}>${renderCreateForm()}</dialog>` : renderReadOnlyNotice()}
     ${renderRuleTable(rules, canWrite)}
   `;
 }
@@ -98,7 +98,7 @@ function renderLoadingPanel() {
 }
 
 /**
- * 渲染 DLP API 错误状态，并保留 request_id 便于排查权限、正则校验或数据库异常。
+ * 渲染 DLP API 错误状态，避免把内部追踪编号直接暴露给普通用户。
  */
 function renderErrorPanel(state) {
   return `
@@ -107,7 +107,7 @@ function renderErrorPanel(state) {
       <p>DLP 规则暂不可用。</p>
     </div>
     <div class="empty-state error-state">
-      ${escapeHtml(state.message ?? "DLP 规则读取失败")} request_id: ${escapeHtml(state.requestId ?? "-")}
+      ${escapeHtml(state.message ?? "DLP 规则读取失败，请稍后重试。以下提示仍无法解决时，请联系管理员。")}
     </div>
   `;
 }
@@ -119,7 +119,7 @@ function renderErrorPanel(state) {
 function renderCreateForm() {
   return `
     <form class="dlp-rule-form" id="dlp-rule-form">
-      <h3>新增规则</h3>
+      <div class="dlp-dialog-heading"><h3 id="dlp-create-title">新增规则</h3><button type="button" class="icon-button" data-dlp-create-close aria-label="关闭">×</button></div>
       <label>
         <span>名称</span>
         <input name="name" placeholder="例如：高风险关键词" required />
@@ -168,7 +168,7 @@ function renderCreateForm() {
       </label>
       <div class="dlp-actions">
         <button type="submit">保存规则</button>
-        <span>建议先使用 log_only 观察误拦截，再切换为 block。</span>
+        <button type="button" data-dlp-create-close>取消</button>
       </div>
     </form>
   `;
@@ -214,7 +214,6 @@ function renderRuleRow(rule, canWrite) {
     <div class="dlp-rule-row" role="row">
       <span class="dlp-rule-name">
         <strong>${escapeHtml(rule.name)}</strong>
-        <em>${escapeHtml(rule.dlp_rule_id)}</em>
       </span>
       <span>${escapeHtml(RULE_TYPE_LABELS[rule.rule_type] ?? rule.rule_type)}</span>
       <span><mark class="dlp-scope-${escapeAttribute(rule.scan_scope)}">${escapeHtml(SCAN_SCOPE_LABELS[rule.scan_scope] ?? rule.scan_scope)}</mark></span>
@@ -260,13 +259,13 @@ function renderUpdateForm(rule) {
 function renderEmptyRuleRow() {
   return `
     <div class="dlp-rule-row dlp-rule-empty" role="row">
-      <span>当前租户尚未配置 DLP 规则，建议先创建 log_only 规则观察命中情况。</span>
+      <span>暂无规则。</span>
     </div>
   `;
 }
 
 /**
- * 渲染 DLP 操作错误，错误信息只展示统一错误码派生的安全消息和 request_id。
+ * 渲染 DLP 操作错误，只展示用户可以采取的处理提示。
  */
 function renderActionError(error) {
   if (!error) {
@@ -274,7 +273,7 @@ function renderActionError(error) {
   }
   return `
     <div class="dlp-action-error" role="alert">
-      ${escapeHtml(error.message ?? "DLP 操作失败")} request_id: ${escapeHtml(error.requestId ?? "-")}
+      ${escapeHtml(error.message ?? "DLP 操作失败，请检查输入后重试。")}
     </div>
   `;
 }

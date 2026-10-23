@@ -109,7 +109,7 @@ test("renderTenantPanel displays tenant form and escapes unsafe values", () => {
   assert.match(html, /admin@metahub.local/);
 });
 
-test("renderTenantPanel shows errors with request id", () => {
+test("renderTenantPanel escapes errors without exposing internal request identifiers", () => {
   const html = renderTenantPanel(
     {
       state: "error",
@@ -121,7 +121,7 @@ test("renderTenantPanel shows errors with request id", () => {
 
   assert.doesNotMatch(html, /<script>/);
   assert.match(html, /&lt;script&gt;/);
-  assert.match(html, /req_tenant/);
+  assert.doesNotMatch(html, /req_tenant/);
 });
 
 test("renderTenantPanel fails closed when a signed-in user lacks tenant settings permission", () => {

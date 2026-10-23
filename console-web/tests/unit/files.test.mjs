@@ -25,6 +25,7 @@ import {
   fileReadIdentitySnapshot,
   fileWriteIdentitySnapshot,
 } from "../../src/features/files/filePageState.js";
+import { workspaceNavigationOwner } from "../../src/features/workspace-navigation/workspaceNavigationStore.js";
 import { renderFiles } from "../../src/features/files/renderFiles.js";
 import { renderDeveloperStart } from "../../src/features/developer-start/renderDeveloperStart.js";
 import {
@@ -452,4 +453,69 @@ test("PRD-072 main lifecycle and responsive CSS cover cleanup, permissions, and 
   assert.match(css, /\.file-name\s*\{[\s\S]*font-size:\s*13px/);
   assert.match(css, /\.file-upload-button > span:first-child[\s\S]*width:\s*18px;[\s\S]*height:\s*18px/);
   assert.equal((css.match(/{/g) ?? []).length, (css.match(/}/g) ?? []).length);
+});
+
+function workspaceFileShell(codes = [PERMISSIONS.FILE_READ, PERMISSIONS.FILE_WRITE]) {
+  const identity = { account: { status: "active" }, current_session: {
+    session_id: "risk_global_session", is_current: true, revoke_generation: 1,
+    expires_at: "2099-01-01T00:00:00Z",
+  } };
+  const context = { workspace_id: `wsp_${"7".repeat(32)}`, role: "owner",
+    session_status: "active", expires_at: "2099-01-01T00:00:00Z" };
+  const authorization = { permission_codes: [...codes].sort(), permission_revision: 1,
+    membership_revision: 1, permission_fingerprint: "a".repeat(64) };
+  return { state: "ok", workspaceNavigationContract: true, workspaceIdentity: identity,
+    workspaceContext: context, workspaceAuthorization: authorization,
+    workspaceOwner: workspaceNavigationOwner(identity, { context, authorization }),
+    activeNavigationItemId: "files", activeRouteCode: "workspace.applications.files",
+    navigation: { ...authorization, active_navigation_item_id: "files",
+      active_route_code: "workspace.applications.files", navigation_items: [{
+        id: "files", route_code: "workspace.applications.files",
+        target_section: "files", visible: true, disabled: false,
+      }] } };
+}
+
+test("Workspace file rendering shares the request owner and retains populated records", () => {
+  const shell = workspaceFileShell();
+  const owner = filePageOwner(shell.workspaceAuthorization, shell);
+  assert.equal(owner?.workspaceId, shell.workspaceContext.workspace_id);
+  assert.equal(Object.hasOwn(owner, "tenantId"), false);
+  const state = createFilePageState();
+  assert.equal(state.enter(owner), true);
+  const operation = state.beginListOperation(owner, 1);
+  assert.equal(state.acceptPage(operation, normalizeFileListResponse(listFixture()), owner, 1), true);
+  const html = renderFiles(state.snapshot(), shell.workspaceAuthorization, shell);
+  assert.match(html, /file-upload-form/);
+  assert.match(html, /企业方案.docx/);
+  assert.doesNotMatch(html, /signed.cursor/);
+});
+
+test("Workspace file renders read-only and service failures without offering upload", () => {
+  const shell = workspaceFileShell([PERMISSIONS.FILE_READ]);
+  const owner = filePageOwner(shell.workspaceAuthorization, shell);
+  const state = createFilePageState();
+  state.enter(owner);
+  const operation = state.beginListOperation(owner, 1);
+  state.rejectPage(operation, { status: 503, code: "file.unavailable" }, owner, 1);
+  const html = renderFiles(state.snapshot(), shell.workspaceAuthorization, shell);
+  assert.match(html, /只读文件视图/);
+  assert.match(html, /file.unavailable/);
+  assert.doesNotMatch(html, /file-upload-form/);
+});
+
+test("Workspace file rendering rejects revoked sessions, permission drift and write-only roles", () => {
+  for (const change of [
+    s => { s.workspaceIdentity.current_session.expires_at = "2000-01-01T00:00:00Z"; },
+    s => { s.workspaceContext.expires_at = "2000-01-01T00:00:00Z"; },
+    s => { s.workspaceIdentity.current_session.revoke_generation += 1; },
+    s => { s.activeRouteCode = "workspace.home.overview"; },
+    s => { s.navigation.navigation_items[0].disabled = true; },
+  ]) {
+    const shell = workspaceFileShell();change(shell);
+    assert.equal(renderFiles(null, shell.workspaceAuthorization, shell), "");
+  }
+  const shell = workspaceFileShell();
+  assert.equal(renderFiles(null, { ...shell.workspaceAuthorization, membership_revision: 2 }, shell), "");
+  const writeOnly = workspaceFileShell([PERMISSIONS.FILE_WRITE]);
+  assert.equal(renderFiles(null, writeOnly.workspaceAuthorization, writeOnly), "");
 });

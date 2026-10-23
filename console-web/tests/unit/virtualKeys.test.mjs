@@ -206,9 +206,12 @@ test("renderVirtualKeyPanel displays developer controls and one-time secret", ()
   assert.match(html, /data-dismiss-virtual-key-secret/);
   assert.doesNotMatch(html, /这里创建的是你自己的调用 KEY/u);
   assert.match(html, /data-virtual-key-form/);
-  assert.match(html, /data-virtual-key-limits-form/);
-  assert.match(html, /data-open-virtual-key-limit-dialog/);
-  assert.match(html, /class="virtual-key-limit-dialog"/);
+  assert.doesNotMatch(html, /data-virtual-key-limits-form/);
+  assert.doesNotMatch(html, /data-open-virtual-key-limit-dialog/);
+  assert.match(html, /class="virtual-key-binding-dialog"/);
+  assert.match(html, />编辑 KEY</u);
+  assert.match(html, /name="name"/u);
+  assert.match(html, /name="concurrencyLimit"/u);
   assert.match(html, />保存</u);
   assert.doesNotMatch(html, /class="virtual-key-limit-editor"/);
   assert.match(html, /data-open-virtual-key-binding-dialog="vk_1"/u);
@@ -308,7 +311,7 @@ test("unassigned developer key is visibly pending and remains copyable", () => {
   );
 
   assert.match(html, />待分配<\/mark>/u);
-  assert.match(html, /加入项目和应用后启用/u);
+  assert.match(html, /管理员分配应用后启用/u);
   assert.match(html, /data-copy-saved-virtual-key/u);
 });
 

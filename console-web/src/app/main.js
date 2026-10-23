@@ -607,10 +607,12 @@ import {
   listApplications,
   listApplicationMembers,
   listProjects,
+  listProjectOwnerCandidates,
   updateApplicationMembers,
   updateApplication,
   updateProject,
 } from "../lib/projects.js";
+import { bindProjectExpansion } from "../features/projects/renderProjectApplicationPanel.js";
 import { discoverProviderModels, probeProvider, selectRepresentativeProbeAttempt } from "../lib/providerHealth.js";
 import { bindModelDiscovery } from "../features/models/bindModelDiscovery.js";
 import { listProviderStatuses } from "../lib/providerStatus.js";
@@ -790,6 +792,13 @@ import { createInvitationPageState } from "../features/invitations/invitationPag
 import { renderInvitationAcceptancePage } from "../features/invitations/renderInvitationAcceptancePage.js";
 import { gatewayServiceOrigin, serviceOrigin } from "../lib/runtimeOrigins.js";
 import { installUserFacingTextGuard } from "../lib/userFacingTextGuard.js";
+import { initializeTheme } from "../lib/theme.js";
+import { initializeDialogs } from "../lib/dialogs.js";
+import { initializeActionMenus } from "../lib/actionMenus.js";
+
+initializeTheme();
+initializeDialogs();
+initializeActionMenus();
 
 // 非浏览器单测只导入生命周期管理器，不启动应用；真实页面仍要求存在 #app 根节点。
 const app = globalThis.document?.querySelector("#app") ?? null;
@@ -939,10 +948,10 @@ const workspaceProviderEngineeringController = createWorkspaceProviderEngineerin
   },
   onChange: renderCurrentWorkspaceProviderEngineering,
   onSessionInvalid() {
-    if (authSession.token) void refresh();
+    if (hasWorkspaceConsoleSession(authSession)) void refresh();
   },
   onPermissionRevoked() {
-    if (authSession.token) void refresh();
+    if (hasWorkspaceConsoleSession(authSession)) void refresh();
   },
 });
 const workspaceNavigationController = createWorkspaceNavigationController({
@@ -1056,6 +1065,7 @@ let consoleNavigationSideEffectTimer = null;
 const providerStatusPageState = createProviderStatusPageState();
 let projectActionError = null;
 let projectFeedback = "";
+const expandedProjectIds = new Set();
 let environmentActionError = null;
 let environmentFeedback = "";
 // RequestLog 列表和详情共享完整身份 owner；登出、换租户或离页会同步 abort 并销毁全部事实。
@@ -2010,6 +2020,8 @@ async function loadAndRenderActiveNavigation({
     case "error-maps":
       await workspaceProviderEngineeringController.open({
         authContext: authSession.context,
+        session: authSession,
+        consoleShellState,
         activeNavigationItemId: activeNavigationId,
         providerId: "",
       });
@@ -2080,15 +2092,10 @@ async function loadAndRenderActiveNavigation({
       await load("projectState", loadProjectState);
       break;
     case "virtual-keys":
-      state.virtualKeysState = await loadVirtualKeysState();
-      if (hasPermission(authSession.context, PERMISSIONS.PROJECT_READ)) {
-        [state.projectState, state.environmentState] = await Promise.all([
-          loadProjectState(), loadEnvironmentState(),
-        ]);
-        state.workspaceTaskHomeState = hasPermission(authSession.context, PERMISSIONS.USER_MANAGE)
-          ? await loadWorkspaceConnectionProgress()
-          : null;
-      } else {
+      {
+        // Key metadata already contains attribution names. Load assignment options
+        // only when editing, rather than blocking the directory on three catalogs.
+        state.virtualKeysState = await loadVirtualKeysState();
         state.projectState = null;
         state.environmentState = null;
         state.workspaceTaskHomeState = null;
@@ -2440,6 +2447,7 @@ function clearBasicResourceFeedback() {
   providerStatusVisitTracker.leave();
   environmentActionError = projectActionError = providerActionError = modelActionError = virtualKeyActionError = null;
   environmentFeedback = projectFeedback = providerFeedback = modelFeedback = virtualKeyFeedback = "";
+  expandedProjectIds.clear();
   providerLastTestResult = virtualKeyCreatedSecret = null;
   keyCreateOpen = false;
   providerCatalogActiveTab = "providers";
@@ -3289,6 +3297,50 @@ function bindAuthenticatedEvents(consoleShellState) {
     });
   }
 
+  bindProjectExpansion(document, (projectId, expanded) => {
+    if (expanded) expandedProjectIds.add(projectId);
+    else expandedProjectIds.delete(projectId);
+  });
+  document.querySelectorAll("[data-project-owner-picker]").forEach((picker) => {
+    const search = picker.querySelector("[data-project-owner-search]");
+    const select = picker.querySelector("[data-project-owner-select]");
+    const hint = picker.querySelector("[data-project-owner-hint]");
+    const binding = bindResourceElement(picker, [PERMISSIONS.PROJECT_READ, PERMISSIONS.PROJECT_WRITE], "projects");
+    let request = null;
+    let timer = null;
+    let loaded = false;
+    const loadOwners = async () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
+      request?.abort();
+      const currentRequest = new AbortController();
+      request = currentRequest;
+      hint.textContent = "正在读取组织成员…";
+      try {
+        const result = await listProjectOwnerCandidates({ controlApiUrl, authentication: "workspace", search: search.value, limit: 50, signal: currentRequest.signal });
+        if (request !== currentRequest || !picker.isConnected || !resourcePageLifecycle.isBindingCurrent(binding)) return;
+        const currentValue = select.value;
+        const currentOption = select.selectedOptions[0]?.cloneNode(true);
+        select.replaceChildren(new Option("未设置负责人", ""));
+        if (currentValue && !result.candidates.some((member) => member.user_id === currentValue)) select.append(currentOption);
+        for (const member of result.candidates) select.append(new Option(member.display_name, member.user_id));
+        select.value = currentValue;
+        loaded = true;
+        hint.textContent = result.total > result.candidates.length ? "仅显示前 50 位成员，请搜索姓名缩小范围。" : "从启用的组织成员中选择；选择“未设置负责人”可清除。";
+      } catch (error) {
+        if (error?.name !== "AbortError" && picker.isConnected) hint.textContent = "成员读取失败，请重新搜索；已有负责人保持不变。";
+      }
+    };
+    search.addEventListener("input", () => {
+      clearTimeout(timer);
+      request?.abort();
+      timer = setTimeout(() => void loadOwners(), 180);
+    });
+    select.addEventListener("focus", () => { if (!loaded) void loadOwners(); });
+    search.addEventListener("focus", () => { if (!loaded) void loadOwners(); });
+    picker.closest("details")?.addEventListener("toggle", (event) => { if (event.currentTarget.open && !loaded) void loadOwners(); });
+    picker.closest("dialog")?.addEventListener("close", () => { request?.abort(); clearTimeout(timer); });
+  });
+
   const createProjectForm = document.querySelector("#create-project-form");
   const projectCreateBinding = bindResourceElement(createProjectForm, [PERMISSIONS.PROJECT_READ, PERMISSIONS.PROJECT_WRITE], "projects");
   createProjectForm?.addEventListener("submit", async (event) => {
@@ -3305,6 +3357,7 @@ function bindAuthenticatedEvents(consoleShellState) {
         controlApiUrl,
         name: String(data.get("name") ?? ""),
         description: String(data.get("description") ?? ""),
+        ownerUserId: String(data.get("ownerUserId") ?? ""),
       });
       projectFeedback = "项目已创建";
       await refreshResourceMutation(operation);
@@ -3359,7 +3412,11 @@ function bindAuthenticatedEvents(consoleShellState) {
     });
   });
   document.querySelectorAll("[data-edit-project]").forEach((button) => {
-    button.addEventListener("click", () => openProjectDialog(findProjectDialog("data-project-edit-dialog", button.dataset.editProject)));
+    button.addEventListener("click", () => {
+      const dialog = findProjectDialog("data-project-edit-dialog", button.dataset.editProject);
+      openProjectDialog(dialog);
+      dialog?.querySelector("[data-project-owner-search]")?.focus();
+    });
   });
   document.querySelectorAll("[data-edit-application]").forEach((button) => {
     button.addEventListener("click", () => openProjectDialog(findProjectDialog("data-application-edit-dialog", button.dataset.editApplication)));
@@ -3379,6 +3436,7 @@ function bindAuthenticatedEvents(consoleShellState) {
           projectId: form.dataset.projectEditForm,
           name: String(data.get("name") ?? ""),
           description: String(data.get("description") ?? ""),
+          ownerUserId: String(data.get("ownerUserId") ?? "") || null,
           status: String(data.get("status") ?? ""),
         });
         projectFeedback = "项目已更新";
@@ -3453,6 +3511,9 @@ function bindAuthenticatedEvents(consoleShellState) {
   const applicationMembersNext = applicationMembersDialog?.querySelector("[data-application-members-next]");
   let applicationMembersApplicationId = "";
   let applicationMembersSelected = new Set();
+  let applicationMembersInitialized = false;
+  const applicationMembersBinding = bindResourceElement(applicationMembersForm, [PERMISSIONS.PROJECT_READ], "projects");
+  const canEditApplicationMembers = applicationMembersForm?.dataset.canWrite === "true";
   let applicationMembersRequest = null;
   let applicationMembersSearchTimer = null;
   let applicationMembersOffset = 0;
@@ -3475,6 +3536,7 @@ function bindAuthenticatedEvents(consoleShellState) {
       checkbox.type = "checkbox";
       checkbox.value = member.membership_id;
       checkbox.checked = applicationMembersSelected.has(member.membership_id);
+      checkbox.disabled = !canEditApplicationMembers;
       checkbox.addEventListener("change", () => {
         if (checkbox.checked) applicationMembersSelected.add(member.membership_id);
         else applicationMembersSelected.delete(member.membership_id);
@@ -3494,9 +3556,10 @@ function bindAuthenticatedEvents(consoleShellState) {
   };
 
   const loadApplicationMembers = async () => {
-    if (!applicationMembersApplicationId || !applicationMembersList) return;
+    if (!applicationMembersApplicationId || !applicationMembersList || !resourcePageLifecycle.isBindingCurrent(applicationMembersBinding)) return;
     applicationMembersRequest?.abort();
     applicationMembersRequest = new AbortController();
+    const currentRequest = applicationMembersRequest;
     applicationMembersList.innerHTML = "<div class=\"empty-state\">正在读取成员</div>";
     try {
       const result = await listApplicationMembers({
@@ -3506,9 +3569,15 @@ function bindAuthenticatedEvents(consoleShellState) {
         search: applicationMembersSearch?.value ?? "",
         limit: applicationMembersPageSize,
         offset: applicationMembersOffset,
-        signal: applicationMembersRequest.signal,
+        selectedOnly: !canEditApplicationMembers,
+        signal: currentRequest.signal,
       });
-      applicationMembersSelected = new Set(result.selected_membership_ids ?? []);
+      if (applicationMembersRequest !== currentRequest || !applicationMembersList.isConnected || !resourcePageLifecycle.isBindingCurrent(applicationMembersBinding)) return;
+      // 已选集合只在首次打开初始化，搜索和翻页保留尚未保存的勾选。
+      if (!applicationMembersInitialized) applicationMembersSelected = new Set(result.selected_membership_ids ?? []);
+      applicationMembersInitialized = true;
+      const save = applicationMembersForm?.querySelector("[data-application-members-save]");
+      if (save) save.disabled = false;
       renderApplicationMemberOptions(result.members ?? []);
       if (applicationMembersCount) applicationMembersCount.textContent = `${applicationMembersSelected.size} 人已选择`;
       if (applicationMembersPage) applicationMembersPage.textContent = result.total ? `${applicationMembersOffset + 1}-${Math.min(applicationMembersOffset + (result.members ?? []).length, result.total)} / ${result.total}` : "";
@@ -3524,6 +3593,11 @@ function bindAuthenticatedEvents(consoleShellState) {
     button.addEventListener("click", async () => {
       if (!applicationMembersDialog) return;
       applicationMembersApplicationId = button.dataset.manageApplicationMembers ?? "";
+      applicationMembersInitialized = false;
+      applicationMembersSelected = new Set();
+      const save = applicationMembersForm?.querySelector("[data-application-members-save]");
+      if (save) save.disabled = true;
+      if (applicationMembersCount) applicationMembersCount.textContent = "正在读取已分配成员…";
       const title = applicationMembersDialog.querySelector("[data-application-members-title]");
       if (title) title.textContent = `${button.dataset.applicationName ?? "应用"} · 成员`;
       if (applicationMembersSearch) applicationMembersSearch.value = "";
@@ -3532,6 +3606,10 @@ function bindAuthenticatedEvents(consoleShellState) {
       else applicationMembersDialog.setAttribute("open", "");
       await loadApplicationMembers();
     });
+  });
+  applicationMembersDialog?.addEventListener("close", () => {
+    applicationMembersRequest?.abort();
+    clearTimeout(applicationMembersSearchTimer);
   });
   applicationMembersSearch?.addEventListener("input", () => {
     clearTimeout(applicationMembersSearchTimer);
@@ -3547,6 +3625,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   });
   applicationMembersForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!canEditApplicationMembers || !applicationMembersInitialized) return;
     const binding = bindResourceElement(applicationMembersForm, [PERMISSIONS.PROJECT_READ, PERMISSIONS.PROJECT_WRITE], "projects");
     const operation = resourcePageLifecycle.beginMutation(binding);
     if (!operation) return;
@@ -3614,27 +3693,6 @@ function bindAuthenticatedEvents(consoleShellState) {
     queueMicrotask(openVirtualKeyDialog);
   }
 
-  for (const limitDialog of document.querySelectorAll("[data-virtual-key-limit-dialog]")) {
-    const virtualKeyId = limitDialog.dataset.virtualKeyLimitDialog;
-    const openLimitDialog = () => {
-      if (typeof limitDialog.showModal === "function" && !limitDialog.open) {
-        try { limitDialog.showModal(); } catch { limitDialog.setAttribute("open", ""); }
-      } else {
-        limitDialog.setAttribute("open", "");
-      }
-      limitDialog.querySelector("input")?.focus({ preventScroll: true });
-    };
-    [...document.querySelectorAll("[data-open-virtual-key-limit-dialog]")]
-      .find((button) => button.dataset.openVirtualKeyLimitDialog === virtualKeyId)
-      ?.addEventListener("click", openLimitDialog);
-    for (const closeButton of limitDialog.querySelectorAll("[data-virtual-key-limit-dialog-close]")) {
-      closeButton.addEventListener("click", () => {
-        if (limitDialog.open) limitDialog.close();
-        else limitDialog.removeAttribute("open");
-      });
-    }
-  }
-
   // 管理员用同一把员工 KEY 调整项目/应用归属；应用选项始终跟随所选项目过滤。
   for (const bindingDialog of document.querySelectorAll("[data-virtual-key-binding-dialog]")) {
     const virtualKeyId = bindingDialog.dataset.virtualKeyBindingDialog;
@@ -3642,6 +3700,10 @@ function bindAuthenticatedEvents(consoleShellState) {
     const projectSelect = bindingForm?.querySelector("[data-virtual-key-binding-project]");
     const applicationSelect = bindingForm?.querySelector("[data-virtual-key-binding-application]");
     const bindingFormResource = bindResourceElement(bindingForm, [PERMISSIONS.VIRTUAL_KEY_READ, PERMISSIONS.VIRTUAL_KEY_WRITE], "virtual-keys");
+    let initialName = bindingForm?.elements.namedItem("name")?.value ?? "";
+    const initialLimits = ["rpmLimit", "tpmLimit", "concurrencyLimit"]
+      .map((name) => bindingForm?.elements.namedItem(name)?.value ?? "");
+    let projectsLoaded = false;
     const syncApplications = () => {
       const projectId = String(projectSelect?.value ?? "");
       for (const option of applicationSelect?.querySelectorAll("option[data-project-id]") ?? []) {
@@ -3652,14 +3714,49 @@ function bindAuthenticatedEvents(consoleShellState) {
         if (applicationSelect) applicationSelect.value = "";
       }
     };
-    const openBindingDialog = () => {
-      syncApplications();
+    const openBindingDialog = async () => {
       if (typeof bindingDialog.showModal === "function" && !bindingDialog.open) {
         try { bindingDialog.showModal(); } catch { bindingDialog.setAttribute("open", ""); }
       } else {
         bindingDialog.setAttribute("open", "");
       }
-      projectSelect?.focus({ preventScroll: true });
+      bindingDialog.scrollTop = 0;
+      if (projectsLoaded) return;
+      let feedback = bindingForm.querySelector("[data-key-project-loading]");
+      if (!feedback) {
+        feedback = document.createElement("p");
+        feedback.dataset.keyProjectLoading = "";
+        feedback.setAttribute("role", "status");
+        projectSelect.closest("fieldset").append(feedback);
+      }
+      const submitButton = bindingForm.querySelector("button[type='submit']");
+      submitButton.disabled = true;
+      projectSelect.disabled = true;
+      applicationSelect.disabled = true;
+      feedback.textContent = "正在加载项目与应用…";
+      const options = await loadProjectState();
+      if (!resourcePageLifecycle.isBindingCurrent(bindingFormResource)) return;
+      if (options?.state !== "ok") {
+        feedback.textContent = "项目与应用加载失败，请关闭后重新编辑。";
+        return;
+      }
+      const populate = (select, records, idField, currentId, emptyLabel) => {
+        select.replaceChildren(new Option(emptyLabel, ""));
+        for (const record of records.filter((item) => item.status === "active" || item[idField] === currentId)) {
+          const option = new Option(record.name, record[idField], false, record[idField] === currentId);
+          if (record.project_id) option.dataset.projectId = record.project_id;
+          select.append(option);
+        }
+        select.value = currentId;
+      };
+      populate(projectSelect, options.projects, "project_id", projectSelect.dataset.currentProject, "未绑定项目");
+      populate(applicationSelect, options.applications, "application_id", applicationSelect.dataset.currentApplication, "未绑定应用");
+      syncApplications();
+      projectsLoaded = true;
+      feedback.textContent = "";
+      submitButton.disabled = false;
+      projectSelect.disabled = false;
+      applicationSelect.disabled = false;
     };
     Array.from(document.querySelectorAll("[data-open-virtual-key-binding-dialog]"))
       .find((button) => button.dataset.openVirtualKeyBindingDialog === virtualKeyId)
@@ -3679,19 +3776,48 @@ function bindAuthenticatedEvents(consoleShellState) {
       const submitButton = bindingForm.querySelector("button[type='submit']");
       submitButton.disabled = true;
       virtualKeyActionError = null;
+      let feedback = bindingForm.querySelector(".virtual-key-feedback");
+      if (!feedback) {
+        feedback = document.createElement("span");
+        feedback.className = "virtual-key-feedback";
+        feedback.setAttribute("role", "status");
+        submitButton.parentElement.append(feedback);
+      }
+      feedback.textContent = "正在保存…";
+      let metadataSaved = false;
       try {
-        await resourceMutationRequest(operation, updateVirtualKey, {
-          controlApiUrl,
-          virtualKeyId,
-          projectId: String(data.get("projectId") ?? ""),
-          applicationId: String(data.get("applicationId") ?? ""),
-        });
-        virtualKeyFeedback = "KEY 归属已更新";
+        const name = String(data.get("name") ?? "").trim();
+        const projectId = String(data.get("projectId") ?? "");
+        const applicationId = String(data.get("applicationId") ?? "");
+        const bindingChanged = projectId !== projectSelect.dataset.currentProject
+          || applicationId !== applicationSelect.dataset.currentApplication;
+        if (name !== initialName || bindingChanged) {
+          await resourceMutationRequest(operation, updateVirtualKey, {
+            controlApiUrl, virtualKeyId, name,
+            ...(bindingChanged ? { projectId, applicationId } : {}),
+          });
+          metadataSaved = true;
+          initialName = name;
+          projectSelect.dataset.currentProject = projectId;
+          applicationSelect.dataset.currentApplication = applicationId;
+        }
+        const limits = ["rpmLimit", "tpmLimit", "concurrencyLimit"].map((field) => String(data.get(field) ?? ""));
+        if (limits.some((value, index) => value !== initialLimits[index])) {
+          await resourceMutationRequest(operation, updateVirtualKeyLimits, {
+            controlApiUrl, virtualKeyId, rpmLimit: limits[0], tpmLimit: limits[1],
+            concurrencyLimit: limits[2], status: "active",
+          });
+        }
+        virtualKeyFeedback = "KEY 已更新";
+        bindingDialog.close();
         await refreshResourceMutation(operation);
       } catch (error) {
         if (handleResourceMutationError(operation, error)) return;
-        virtualKeyActionError = error;
-        await refreshResourceMutation(operation);
+        feedback.textContent = `${metadataSaved ? "名称与归属已保存，限制未保存。" : "保存失败。"}${authErrorMessage(error)}`;
+        feedback.setAttribute("role", "alert");
+        submitButton.disabled = false;
+      } finally {
+        resourcePageLifecycle.finishMutation(operation);
       }
     });
   }
@@ -3799,37 +3925,6 @@ function bindAuthenticatedEvents(consoleShellState) {
       } catch (error) {
         if (handleResourceMutationError(operation, error)) return;
         virtualKeyActionError = error;
-        await refreshResourceMutation(operation);
-      }
-    });
-  }
-
-  for (const limitForm of document.querySelectorAll("[data-virtual-key-limits-form]")) {
-    const virtualKeyLimitsBinding = bindResourceElement(limitForm, [PERMISSIONS.VIRTUAL_KEY_READ, PERMISSIONS.VIRTUAL_KEY_WRITE], "virtual-keys");
-    limitForm.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const operation = resourcePageLifecycle.beginMutation(virtualKeyLimitsBinding);
-      if (!operation) return;
-      const button = limitForm.querySelector("button[type='submit']");
-      const data = new FormData(limitForm);
-      button.disabled = true;
-      virtualKeyActionError = null;
-      virtualKeyFeedback = "保存限制中";
-      try {
-        await resourceMutationRequest(operation, updateVirtualKeyLimits, {
-          controlApiUrl,
-          virtualKeyId: limitForm.dataset.virtualKeyId,
-          rpmLimit: String(data.get("rpmLimit") ?? ""),
-          tpmLimit: String(data.get("tpmLimit") ?? ""),
-          concurrencyLimit: String(data.get("concurrencyLimit") ?? ""),
-          status: "active",
-        });
-        virtualKeyFeedback = "限制已保存";
-        await refreshResourceMutation(operation);
-      } catch (error) {
-        if (handleResourceMutationError(operation, error)) return;
-        virtualKeyActionError = error;
-        virtualKeyFeedback = "限制保存失败";
         await refreshResourceMutation(operation);
       }
     });
@@ -4602,6 +4697,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   }
   createModelForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!resourcePageLifecycle.isBindingCurrent(modelCreateBinding)) return;
     if (createModelForm.dataset.setupUnconfirmed === "true") return;
     const initialData = new FormData(createModelForm);
     const enteredPrices = ["inputPricePerMillion", "outputPricePerMillion", "cachePricePerMillion"]
@@ -4614,7 +4710,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     }
     const operation = resourcePageLifecycle.beginMutation(modelCreateBinding);
     if (!operation) return;
-    const data = new FormData(createModelForm);
+    const data = initialData;
     const capabilities = readCapabilities(createModelForm);
     const pricingConfigured = String(data.get("pricingConfigured") ?? "") === "true";
     // 价格版本是计费内部事实，不再要求管理员填写；只要填写过价格就自动生成。
@@ -5059,7 +5155,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     const binding = bindResourceElement(button, [PERMISSIONS.VIRTUAL_KEY_READ], "virtual-keys");
     button.addEventListener("click", async () => {
       if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
-      const feedback = button.closest(".virtual-key-row-actions")?.querySelector("[data-virtual-key-copy-feedback]");
+      const feedback = button.closest("[data-virtual-key-row]")?.querySelector("[data-virtual-key-copy-feedback]");
       button.disabled = true;
       if (feedback) feedback.textContent = "复制中...";
       try {
@@ -5201,7 +5297,7 @@ function bindAuthenticatedEvents(consoleShellState) {
       scopeOption.dataset.environmentId = key.environment_id ?? "";
       budgetScopeIdControl.add(scopeOption);
     }
-    budgetEmployeeKeyWrap.hidden = keys.length < 2;
+    budgetEmployeeKeyWrap.hidden = keys.length === 0;
     if (keys.length) chooseBudgetEmployeeKey(keys[0].virtual_key_id);
     else {
       budgetScopeIdControl.value = "";
@@ -5211,6 +5307,7 @@ function bindAuthenticatedEvents(consoleShellState) {
 
   async function searchBudgetEmployees() {
     if (!budgetEmployeeSearch || !budgetEmployeeResults || !budgetDialog?.open || editingBudgetRule) return;
+    clearTimeout(budgetEmployeeSearchTimer);
     const term = budgetEmployeeSearch.value.trim();
     const sequence = ++budgetEmployeeSearchSequence;
     budgetEmployeeResults.replaceChildren();
@@ -5261,6 +5358,11 @@ function bindAuthenticatedEvents(consoleShellState) {
     budgetEmployeeSearchTimer = setTimeout(searchBudgetEmployees, 250);
   });
   budgetRuleForm?.querySelector("[data-budget-employee-search]")?.addEventListener("click", searchBudgetEmployees);
+  budgetEmployeeSearch?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    void searchBudgetEmployees();
+  });
   budgetEmployeeKey?.addEventListener("change", () => chooseBudgetEmployeeKey(budgetEmployeeKey.value));
 
   /**
@@ -5312,7 +5414,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   syncBudgetScopeOptions();
 
   const budgetDialog = document.querySelector("#budget-rule-dialog");
-  document.querySelector("[data-budget-open-form]")?.addEventListener("click", () => {
+  document.querySelectorAll("[data-budget-open-form]").forEach((button) => button.addEventListener("click", () => {
     if (!resourcePageLifecycle.isBindingCurrent(budgetRuleBinding) || !budgetRuleForm) return;
     editingBudgetRule = null;
     budgetRuleForm.reset();
@@ -5334,10 +5436,14 @@ function bindAuthenticatedEvents(consoleShellState) {
     }
     const keep = budgetActivationMode?.querySelector("[value='keep']");
     if (keep) { keep.hidden = true; keep.disabled = true; }
+    const personnel = button.dataset.budgetOpenForm === "virtual_key";
+    if (personnel) budgetScopeTypeControl.value = "virtual_key";
+    document.querySelector("#budget-dialog-title").textContent = personnel ? "新增人员预算" : "设置成本预算";
     syncBudgetScopeOptions();
     syncBudgetActivationInput();
     budgetDialog?.showModal();
-  });
+    if (personnel) budgetEmployeeSearch.focus();
+  }));
   document.querySelector("[data-budget-close-form]")?.addEventListener("click", () => budgetDialog?.close());
 
   document.querySelectorAll("[data-budget-edit-rule-id]").forEach((button) => {
@@ -5348,6 +5454,7 @@ function bindAuthenticatedEvents(consoleShellState) {
       const rule = budgetRulesSnapshot.find((item) => item.budget_rule_id === button.dataset.budgetEditRuleId);
       if (!rule) return;
       editingBudgetRule = rule;
+      document.querySelector("#budget-dialog-title").textContent = rule.scope_type === "virtual_key" ? "编辑人员预算" : "编辑成本预算";
       showBudgetDialogMessage("修改完成后点击保存；未到启用时间前不会限制调用。");
       budgetRuleForm.reset();
       budgetRuleForm.elements.environmentId.value = rule.environment_id;
@@ -5445,7 +5552,7 @@ function bindAuthenticatedEvents(consoleShellState) {
       if (!isCurrentBudgetMutation(operation) || handleResourceMutationError(ticket, error)) return;
       budgetActionError = error;
       budgetFeedback = error instanceof AuthApiError && error.status === 409 ? "预算规则已变化" : "预算保存失败";
-      showBudgetDialogMessage(`${error.message || "保存失败"}${error.requestId ? `（请求 ID：${error.requestId}）` : ""}`, true);
+      showBudgetDialogMessage(error.message || "保存失败，请稍后重试。", true);
       return;
     } finally {
       button.disabled = false;
@@ -5504,6 +5611,12 @@ function bindAuthenticatedEvents(consoleShellState) {
   });
 
   const dlpRuleFilters = document.querySelector("#dlp-rule-filters");
+  const dlpCreateDialog = document.querySelector("[data-dlp-create-dialog]");
+  document.querySelector("[data-dlp-create-open]")?.addEventListener("click", () => dlpCreateDialog?.showModal());
+  for (const closeButton of dlpCreateDialog?.querySelectorAll("[data-dlp-create-close]") ?? []) {
+    closeButton.addEventListener("click", () => dlpCreateDialog.close());
+  }
+  if (dlpCreateDialog?.hasAttribute("data-dlp-auto-open")) dlpCreateDialog.showModal();
   dlpRuleFilters?.addEventListener("change", async () => {
     const data = new FormData(dlpRuleFilters);
     const requestedScope = String(data.get("scanScope") ?? "");
@@ -5809,6 +5922,19 @@ function bindAuthenticatedEvents(consoleShellState) {
   requestLogFilterReset?.addEventListener("click", async () => {
     if (!requestLogEventCurrent()) return;
     configureCurrentRequestLogState({ limit: 20, offset: 0 }, null);
+    await refresh();
+  });
+
+  const requestLogRefresh = document.querySelector("#request-log-refresh");
+  requestLogRefresh?.addEventListener("click", async () => {
+    if (!requestLogEventCurrent()) return;
+    const currentFilters = requestLogPageMemory.query().filters;
+    configureCurrentRequestLogState({
+      ...currentFilters,
+      // 默认时间窗口需要跟随刷新前移；“全部时间”筛选仍保持为空。
+      createdTo: currentFilters.createdTo ? new Date().toISOString() : "",
+      offset: 0,
+    }, null);
     await refresh();
   });
 
@@ -6143,11 +6269,17 @@ function bindAuthenticatedEvents(consoleShellState) {
   const usageDimensionSelect = document.querySelector("#usage-dimension");
   usageDimensionSelect?.addEventListener("change", () => {
     const selected = usageDimensionSelect.value;
-    usageDimension = ["overview", "day", "consumer", "model", "project", "environment"].includes(selected)
+    usageDimension = [...usageDimensionSelect.options].some((option) => option.value === selected)
       ? selected : "overview";
     for (const view of document.querySelectorAll("[data-usage-dimension]")) {
       view.hidden = view.dataset.usageDimension !== usageDimension;
     }
+    const personalView = usageDimension === "personal";
+    for (const organization of document.querySelectorAll("[data-usage-organization]")) {
+      organization.hidden = personalView;
+    }
+    const scopeLabel = document.querySelector("[data-usage-scope-label]");
+    if (scopeLabel) scopeLabel.textContent = personalView ? "个人汇总" : "组织汇总";
   });
 
   const usageFilterReset = document.querySelector("#usage-filter-reset");
@@ -6906,11 +7038,13 @@ function bindSessionRiskPageInteractions(consoleShellState) {
 async function submitSessionRiskAction(values, consoleShellState) {
   const token = authSession.token;
   const owner = currentSessionRiskManageOwner(consoleShellState);
-  // Token 或双权限 owner 任一缺失都销毁动作闭包，不能仅靠按钮隐藏阻止 POST。
-  if (!token || !owner) {
+  const authenticated = authSession.authentication === "workspace"
+    ? hasWorkspaceConsoleSession(authSession) : Boolean(token);
+  // The live Cookie owner or legacy token must accompany both permissions.
+  if (!authenticated || !owner) {
     sessionRiskPageState.clear();
-    // 只有 Token 缺失才切回登录；撤权但仍登录由下一轮后端导航决定页面。
-    if (!token) renderLogin();
+    // 会话缺失才切回登录；撤权但仍登录由下一轮后端导航决定页面。
+    if (!authenticated) renderLogin();
     return;
   }
   const payload = sessionRiskPageState.beginAction(values);
@@ -6924,6 +7058,7 @@ async function submitSessionRiskAction(values, consoleShellState) {
   try {
     const result = await applySessionRiskAction({
       controlApiUrl,
+      authentication: authSession.authentication,
       token,
       ...payload,
       signal: operation.controller.signal,
@@ -13670,6 +13805,8 @@ function bindWorkspaceProviderEngineeringInteractions(consoleShellState) {
         )) return;
       void workspaceProviderEngineeringController.open({
         authContext: authSession.context,
+        session: authSession,
+        consoleShellState,
         activeNavigationItemId: consoleShellState.activeNavigationItemId,
         providerId,
       });
@@ -13917,6 +14054,17 @@ async function loadPolicySnapshotsState(consoleShellState, refreshId) {
       limit: Number(history.limit ?? policySnapshotHistoryFilters.limit),
       offset: Number(history.offset ?? policySnapshotHistoryFilters.offset),
     };
+    // 回滚冲突刷新后，旧目标可能已被标记为不可恢复；关闭过期表单，
+    // 让错误反馈回到发布操作区，避免用户看到一个仍可提交的失效表单。
+    if (policySnapshotRollbackTargetId) {
+      const rollbackTarget = policySnapshotsState.policy_snapshots.find(
+        (item) => item.policy_snapshot_id === policySnapshotRollbackTargetId,
+      );
+      if (!rollbackTarget || rollbackTarget.rollback_unavailable_reason) {
+        policySnapshotRollbackTargetId = null;
+        policySnapshotRollbackReason = "";
+      }
+    }
     return buildPolicySnapshotsRenderState();
   } catch (error) {
     // Abort 是主动生命周期收口，不应被包装成服务故障或重新展示旧快照元数据。
@@ -14032,7 +14180,8 @@ function bindPolicySnapshotInteractions(consoleShellState) {
       const targetId = openButton.dataset.policySnapshotRollbackOpen;
       const allowed = policySnapshotsState?.policy_snapshots?.some(
         (item) => item.policy_snapshot_id === targetId
-          && item.snapshot_version === policySnapshotsState.current_snapshot?.previous_snapshot_version,
+          && item.snapshot_version === policySnapshotsState.current_snapshot?.previous_snapshot_version
+          && !item.rollback_unavailable_reason,
       );
       if (!allowed) {
         // 伪造或过时 data 属性不会形成请求；后端路径接口仍对跨租户 ID 返回统一 404。
@@ -14200,7 +14349,8 @@ async function submitPolicySnapshotRollback(targetId) {
   const reason = policySnapshotRollbackReason.trim();
   const target = policySnapshotsState?.policy_snapshots?.find(
     (item) => item.policy_snapshot_id === targetId
-      && item.snapshot_version === policySnapshotsState.current_snapshot?.previous_snapshot_version,
+      && item.snapshot_version === policySnapshotsState.current_snapshot?.previous_snapshot_version
+      && !item.rollback_unavailable_reason,
   );
   // 会话、上一版对象和原因必须同时有效，避免伪造 data 属性绕过页面回滚范围。
   if (
@@ -16153,6 +16303,11 @@ function modelQualityDraftFromElement(input) {
 /** 局部更新 PAGE-069 保存门禁，不替换正在输入的 number 节点。 */
 function updateModelQualityFormState(form, modelId, inputValid) {
   const row = modelQualityScorePageMemory.snapshot().rows.find((item) => item.modelId === modelId);
+  const cancel = form.querySelector("[data-model-quality-cancel]");
+  if (cancel) {
+    cancel.hidden = !row?.dirty && !row?.busy && !row?.conflicted;
+    cancel.disabled = cancel.hidden;
+  }
   const submit = form.querySelector("button[type='submit']");
   if (submit) {
     submit.disabled = !inputValid || !row?.dirty || row.busy || row.conflicted || !row.baseFeedbackVersion;
@@ -16966,7 +17121,7 @@ async function loadProjectState() {
       listProjects({ ...options, status: "all" }), listApplications({ ...options, status: "all" }),
     ]),
     ([projects, applications]) => ({ state: "ok", projects: projects.projects ?? [],
-      applications: applications.applications ?? [], actionError: projectActionError, feedback: projectFeedback }));
+      applications: applications.applications ?? [], expandedProjectIds: [...expandedProjectIds], actionError: projectActionError, feedback: projectFeedback }));
 }
 
 /**
@@ -17110,6 +17265,7 @@ async function loadSessionRisksState(consoleShellState, refreshId) {
   try {
     const result = await listSessionRisks({
       controlApiUrl,
+      authentication: authSession.authentication,
       token: authSession.token,
       ...sessionRiskPageState.query(),
       operationRequestId: createSessionRiskRequestId("list"),
@@ -18072,9 +18228,10 @@ async function loadBudgetState(virtualKeysState, consoleShellState, refreshId) {
   }
   budgetRulesSnapshot = [];
   return loadResourceState("budgets", [PERMISSIONS.BILLING_BUDGET_READ],
-    async (options) => {
+    async (options, current) => {
       const [rules, people, selected] = await Promise.all([
-        listBudgets({ ...options, offset: budgetRuleOffset, limit: 10 }),
+        // One server snapshot keeps parents and children together across all periods.
+        listBudgets(options),
         budgetPeopleSearch
           ? listBudgetPeople({ ...options, search: budgetPeopleSearch, offset: budgetPeopleOffset })
           : Promise.resolve({ people: [], total: 0 }),
@@ -18082,6 +18239,7 @@ async function loadBudgetState(virtualKeysState, consoleShellState, refreshId) {
           ? listBudgetPeople({ ...options, userId: selectedBudgetPersonId })
           : Promise.resolve(null),
       ]);
+      if (!current()) return null;
       const selectedPerson = selected?.people?.[0] ?? null;
       const keys = selectedPerson?.keys ?? [];
       if (!keys.some((key) => key.virtual_key_id === selectedBudgetVirtualKeyId)) {
@@ -19386,10 +19544,12 @@ function bindRequestLogDetailDialogInteractions(consoleShellState) {
   if (consoleShellState?.activeNavigationItemId !== "request-logs") return;
   const dialog = document.querySelector(".request-logs-panel .request-log-detail-dialog");
   if (!dialog) return;
+  if (!dialog.open) dialog.showModal();
   for (const closeButton of dialog.querySelectorAll("[data-request-log-detail-close]")) {
     if (closeButton.dataset.requestLogDetailCloseBound === "true") continue;
     closeButton.dataset.requestLogDetailCloseBound = "true";
     closeButton.addEventListener("click", () => {
+      dialog.close();
       dialog.hidden = true;
     });
   }
@@ -19399,6 +19559,7 @@ function bindRequestLogDetailDialogInteractions(consoleShellState) {
       if (event.key !== "Escape") return;
       const current = document.querySelector(".request-logs-panel .request-log-detail-dialog:not([hidden])");
       if (!current) return;
+      current.close();
       current.hidden = true;
     });
   }

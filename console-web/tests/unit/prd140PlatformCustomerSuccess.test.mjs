@@ -210,7 +210,7 @@ test("PRD-140 renderer exposes dense tabs and never leaks hidden contacts", () =
   const state = workbenchState();
   const html = renderPlatformCustomerSuccess(state, permissions, platformContext());
   assert.match(html, /data-platform-customer-success-root/u);
-  assert.match(html, /Health[\s\S]*Plan[\s\S]*Task[\s\S]*Renewal[\s\S]*QBR/u);
+  assert.match(html, /健康[\s\S]*计划[\s\S]*任务[\s\S]*续费[\s\S]*季度回顾/u);
   assert.match(html, /data-platform-customer-plan-create-form/u);
   assert.doesNotMatch(html, /owner@example\.invalid|13800138000/u);
   const taskHtml = renderPlatformCustomerSuccess(

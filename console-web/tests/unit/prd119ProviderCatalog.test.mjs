@@ -182,8 +182,8 @@ test("Platform render separates security projection from release management", ()
   renderPlatformWorkspace(securityRoot, platformState(
     ["platform.provider_catalog.security_read"], platformCatalogResponse(true),
   ));
-  assert.match(securityRoot.innerHTML, /Security projection/u);
-  assert.match(securityRoot.innerHTML, /Signature proof/u);
+  assert.match(securityRoot.innerHTML, /安全投影/u);
+  assert.match(securityRoot.innerHTML, /签名证明/u);
   assert.doesNotMatch(securityRoot.innerHTML, /data-platform-provider-catalog-form/u);
 
   const releaseRoot = fakeRoot();
@@ -224,7 +224,7 @@ test("Platform controller loads and publishes catalog without retaining submitte
   });
   assert.equal(await controller.mount(), true);
   controller.selectView("provider-catalog");
-  assert.match(root.innerHTML, /Publish signed manifest/u);
+  assert.match(root.innerHTML, /发布供应商目录/u);
   assert.equal(await controller.publishProviderCatalog({
     manifestText: JSON.stringify(publishManifest()),
     keyId: "provider-catalog-release-v2",
@@ -237,7 +237,7 @@ test("Platform controller loads and publishes catalog without retaining submitte
   assert.equal(calls[0].idempotencyKey, "platform:provider-catalog:controller");
   assert.doesNotMatch(root.innerHTML, new RegExp(SIGNATURE, "u"));
   assert.doesNotMatch(root.innerHTML, /entry_9/u);
-  assert.match(root.innerHTML, /Generation[\s\S]*2/u);
+  assert.match(root.innerHTML, /发布代数[\s\S]*2/u);
 });
 
 test("PRD-119 source keeps enterprise and Platform DOM and credential domains separate", async () => {
@@ -251,7 +251,7 @@ test("PRD-119 source keeps enterprise and Platform DOM and credential domains se
   assert.doesNotMatch(enterprise, /data-platform-provider-catalog/u);
   assert.doesNotMatch(platformRender, /data-provider-catalog-create-form|plainValue|Provider Key/u);
   assert.match(platformClient, /credentials: "include"/u);
-  assert.match(mainSource, /loadProvidersState\(\{ includeCatalog: providerCatalogRequested \}\)/u);
+  assert.match(mainSource, /loadProvidersState\(\{\s*includeCatalog: providerCatalogRequested,/u);
   assert.match(mainSource, /providerCatalogFeedback = "筛选已应用"/u);
   assert.doesNotMatch(mainSource, /providerCatalogFeedback = "正在筛选"/u);
   assert.doesNotMatch(css, /provider-catalog-filters|provider-catalog-meta|provider-catalog-capabilities/u);

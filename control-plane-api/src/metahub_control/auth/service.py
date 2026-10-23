@@ -912,17 +912,17 @@ def refresh_transaction_authentication_fingerprint(
         raise ApiError("auth.permission_denied")
     owner = connection.execute(
         """
-        SELECT user.role,role.permission_revision,role.matrix_sha256,
+        SELECT actor.role,role.permission_revision,role.matrix_sha256,
                role.is_permission_immutable
         FROM sessions session
-        JOIN users user
-          ON user.tenant_id=session.tenant_id AND user.user_id=session.user_id
+        JOIN users actor
+          ON actor.tenant_id=session.tenant_id AND actor.user_id=session.user_id
         JOIN tenants tenant ON tenant.tenant_id=session.tenant_id
-        JOIN roles role ON role.tenant_id=user.tenant_id AND role.code=user.role
+        JOIN roles role ON role.tenant_id=actor.tenant_id AND role.code=actor.role
         WHERE session.tenant_id=? AND session.user_id=? AND session.session_id=?
           AND session.token_jti=? AND session.token_hash=?
           AND session.status='active' AND julianday(session.expires_at)>julianday(?)
-          AND user.status='active' AND tenant.status='active' AND role.status='active'
+          AND actor.status='active' AND tenant.status='active' AND role.status='active'
         """,
         (
             tenant_id,

@@ -105,9 +105,9 @@ def _persist(config: AppConfig, facts: tuple[RiskFact, ...]) -> None:
                         (fact.count_after, _db_time(changed), counter_id),
                     )
             connection.execute(
-                """INSERT OR IGNORE INTO abuse_counter_facts(
+                """INSERT INTO abuse_counter_facts(
                      abuse_counter_fact_id,abuse_counter_id,count_after,source_code,
-                     request_id,trace_id,occurred_at) VALUES(?,?,?,?,?,?,?)""",
+                     request_id,trace_id,occurred_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT DO NOTHING""",
                 (
                     "abf_" + uuid4().hex,
                     counter_id,

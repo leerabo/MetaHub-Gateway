@@ -350,7 +350,7 @@ def test_idle_stage_release_leaves_active_transaction_untouched(tmp_path):
 
 
 @pytest.mark.parametrize("owner", ["request", "worker"])
-def test_full_profile_burst_reuses_sixteen_exclusively_owned_handles(tmp_path, owner):
+def test_full_profile_burst_keeps_exclusive_owners_and_reuses_bounded_idle_handles(tmp_path, owner):
     url = f"sqlite:///{(tmp_path / 'burst.db').as_posix()}"
     batches = []
     try:
@@ -373,7 +373,12 @@ def test_full_profile_burst_reuses_sixteen_exclusively_owned_handles(tmp_path, o
             for handle in handles:
                 with pytest.raises(sqlite3.ProgrammingError):
                     handle.execute("SELECT 1")
-        assert batches[0] == batches[1] == batches[2]
+        # Active callers have exclusive handles, but a burst must not retain
+        # sixteen schema caches after it finishes. Only the bounded idle set
+        # survives into the next burst; overflow is closed by its owner.
+        capacity = min(16, database_connections._MAX_IDLE_CONNECTIONS_PER_DATABASE)
+        for before, after in zip(batches, batches[1:]):
+            assert len(before & after) == capacity
     finally:
         _close_idle_database_connections()
 

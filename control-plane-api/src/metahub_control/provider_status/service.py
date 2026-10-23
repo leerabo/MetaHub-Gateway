@@ -373,7 +373,7 @@ def _load_call_facts(
                    'gateway.upstream_auth_failed','provider_key.unavailable'
                  ) THEN 1 ELSE 0 END AS credential_failure_count,
                  latency_ms AS non_stream_latency,
-                 NULL AS stream_first_chunk_latency
+                 CAST(NULL AS BIGINT) AS stream_first_chunk_latency
           FROM routing_attempts
           WHERE tenant_id=? AND provider_id IN ({placeholders})
             AND status IN ('succeeded','failed')
@@ -390,7 +390,7 @@ def _load_call_facts(
                  CASE WHEN status='upstream_failed' AND error_code IN (
                    'gateway.upstream_auth_failed','provider_key.unavailable'
                  ) THEN 1 ELSE 0 END AS credential_failure_count,
-                 NULL AS non_stream_latency,
+                 CAST(NULL AS BIGINT) AS non_stream_latency,
                  CASE WHEN first_chunk_at IS NOT NULL
                    THEN metahub_elapsed_ms(started_at,first_chunk_at) ELSE NULL END
                    AS stream_first_chunk_latency
@@ -1132,6 +1132,8 @@ def _connect(config: AppConfig) -> sqlite3.Connection:
 
     try:
         connection = connect_database(config.database_url)
+        if getattr(connection, "backend", "sqlite") == "postgresql":
+            return _PostgresStatusConnection(connection)
         connection.execute("PRAGMA busy_timeout=5000")
         # 自定义函数只做纯整数时间运算与固定码校验，避免 julianday 浮点误差和正文泄露。
         connection.create_function("metahub_epoch_us", 1, _epoch_microseconds, deterministic=True)
@@ -1146,6 +1148,65 @@ def _connect(config: AppConfig) -> sqlite3.Connection:
     # 连接配置或打开失败统一映射成状态领域 503，绝不透传数据库文件路径。
     except DbError:
         raise ApiError("provider_status.query_unavailable") from None
+
+
+def _postgres_epoch_expression(column: str) -> str:
+    """Use numeric epoch arithmetic, with the same explicit UTC legacy rule.
+
+    Column names come only from the fixed queries in this module. Invalid facts
+    become NULL (or a native cast error); the contract scan rejects the page.
+    PostgreSQL must not guess a timezone for arbitrary naive date strings.
+    """
+    zoned = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})$"
+    legacy = r"^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?$"
+    return (
+        f"(CASE WHEN {column} ~ '{zoned}' THEN "
+        f"(EXTRACT(EPOCH FROM {column}::timestamptz)*1000000)::bigint "
+        f"WHEN {column} ~ '{legacy}' THEN "
+        f"(EXTRACT(EPOCH FROM ({column}::timestamp AT TIME ZONE 'UTC'))*1000000)::bigint "
+        "ELSE NULL END)"
+    )
+
+
+def _postgres_status_statement(statement: str) -> str:
+    """Compile the three SQLite-only pure functions to native SQL expressions.
+
+    This applies to this module's fixed status queries, never to parameter data.
+    It creates no database functions or schema and keeps aggregation server-side.
+    """
+    statement = re.sub(
+        r"metahub_elapsed_ms\(([a-z_]+),\s*([a-z_]+)\)",
+        lambda match: (
+            f"(({_postgres_epoch_expression(match[2])}-"
+            f"{_postgres_epoch_expression(match[1])})/1000)"
+        ),
+        statement,
+    )
+    statement = re.sub(
+        r"metahub_epoch_us\(([a-z_]+)\)",
+        lambda match: _postgres_epoch_expression(match[1]),
+        statement,
+    )
+    # The whitelist is the runtime's frozen error catalog, never user input.
+    allowed = ",".join("'" + code + "'" for code in sorted(CALL_ERROR_CODES))
+    return re.sub(
+        r"metahub_safe_error_code\(([a-z_]+)\)",
+        lambda match: f"(CASE WHEN {match[1]} IN ({allowed}) THEN {match[1]} ELSE NULL END)",
+        statement,
+    )
+
+
+class _PostgresStatusConnection:
+    """Delegate ownership and fencing, compiling only the status SQL dialect."""
+
+    def __init__(self, connection):
+        self._connection = connection
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+    def execute(self, statement, parameters=None):
+        return self._connection.execute(_postgres_status_statement(statement), parameters)
 
 
 def _safe_rollback(connection: sqlite3.Connection) -> None:

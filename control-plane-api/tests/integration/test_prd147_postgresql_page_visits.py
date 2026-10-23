@@ -183,6 +183,18 @@ async def test_native_page_visit_strict_owner_and_transport(native_visit_subject
 
 
 @pytest.mark.anyio
+async def test_native_page_visit_current_schema_facts_and_replay(native_visit_subjects):
+    await visits.test_workspace_page_visits_share_original_facts_and_replay(native_visit_subjects)
+
+
+@pytest.mark.anyio
+async def test_native_page_visit_replay_rechecks_live_session(native_visit_subjects):
+    await visits.test_page_visit_replay_reauthenticates_and_rejects_changed_session(
+        native_visit_subjects
+    )
+
+
+@pytest.mark.anyio
 async def test_native_page_visit_history_and_rollback(native_visit_subjects, monkeypatch):
     original = database_connection._raise_postgres_error
     rejected = []

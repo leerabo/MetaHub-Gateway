@@ -701,13 +701,13 @@ def _ensure_jobs(connection, account_id, workspace_id, tenant_id, now):
     for job in _JOBS:
         scheduler_id = "css_" + _sha(f"customer-success-scheduler-v1\x1f{account_id}\x1f{job}")[:32]
         connection.execute(
-            """INSERT OR IGNORE INTO platform_customer_success_scheduler_state(
+            """INSERT INTO platform_customer_success_scheduler_state(
               customer_success_scheduler_id,customer_account_id,workspace_id,tenant_id,job_code,
               status,next_run_at,scan_sequence_watermark,scan_time_watermark,
               consecutive_failure_count,fencing_generation,lease_owner_id,lease_token_sha256,
               lease_expires_at,last_error_code,bounded_batch_size,revision,created_at,updated_at)
             VALUES(?,?,?, ?,?,'pending',?,0,'1970-01-01T00:00:00Z',0,0,
-              NULL,NULL,NULL,NULL,50,1,?,?)""",
+              NULL,NULL,NULL,NULL,50,1,?,?) ON CONFLICT DO NOTHING""",
             (scheduler_id, account_id, workspace_id, tenant_id, job, stamp, stamp, stamp),
         )
 

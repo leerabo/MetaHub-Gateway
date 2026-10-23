@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
+from metahub_shared.db.schema import tables_exist
 from metahub_shared.payment_commerce import (
     PaymentCryptoError,
     decrypt_receipt_body,
@@ -1459,17 +1460,11 @@ def _require_platform_billing(actor: PlatformContext) -> None:
 def _require_schema(connection: sqlite3.Connection) -> None:
     """业务入口要求 0095 八张表完整，代码回退不得对缺失 receipt 表返回成功。"""
 
-    count = int(
-        connection.execute(
-            """
-            SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name IN(
-              'subscription_orders','payment_intents','payment_webhook_receipts',
-              'payment_attempts','refunds','dunning_cases','dunning_attempts',
-              'commercial_effects')
-            """
-        ).fetchone()[0]
-    )
-    if count != 8:
+    if not tables_exist(connection, (
+        "subscription_orders", "payment_intents", "payment_webhook_receipts",
+        "payment_attempts", "refunds", "dunning_cases", "dunning_attempts",
+        "commercial_effects",
+    )):
         raise ApiError("payment.unavailable")
 
 

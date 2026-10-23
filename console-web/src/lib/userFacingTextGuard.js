@@ -23,6 +23,8 @@ const DYNAMIC_ATTRIBUTE_NAMES = ["data-label", "aria-label", "title", "placehold
 const DYNAMIC_CONTENT_SELECTOR = [
   "[data-user-content='true']",
   ".user-identity", ".provider-name", ".model-name",
+  // Tool product names (for example Cursor) are not pagination metadata.
+  ".tool-guide > summary > strong",
   ".provider-identity strong", ".provider-url", ".request-log-model",
   ".request-log-row [data-label='模型服务']", "time[datetime]",
   ".status-updated", ".status-event-meta",
@@ -104,6 +106,10 @@ export function sanitizeUserFacingDom(root, options = {}) {
     if (isTechnicalElement(element)) continue;
     const text = String(element.textContent ?? "").trim();
     if (!text) {
+      // Live regions must exist before async results arrive. Removing an empty
+      // region (or a child referenced by its controller) breaks feedback and
+      // prevents assistive technology from observing later announcements.
+      if (element.closest?.('[role="status"], [role="alert"], [role="log"], [aria-live]')) continue;
       // Empty fallback controls are structural state, not disposable copy.
       // The picker fills their position/announcement text after interaction;
       // removing them here makes an older cached dialog throw halfway through
@@ -169,7 +175,8 @@ function sanitizeTextNode(node, locale = "zh-CN") {
   }
   value = value.replace(/[ \t]{2,}/gu, " ");
   value = value.replace(/[ \t]*([·|])[ \t]*/gu, " $1 ");
-  value = value.replace(/[ \t]*([：:，,。])[ \t]*/gu, "$1 ");
+  // ASCII punctuation is part of URLs, JSON and runnable SDK commands.
+  value = value.replace(/[ \t]*([：，。])[ \t]*/gu, "$1 ");
   value = value.replace(/[ \t]*[·|][ \t]*(?:[·|][ \t]*)+/gu, " ");
   value = value.replace(/^[ \t]*[·|:：][ \t]*|[ \t]*[·|:：][ \t]*$/gu, "").trim();
   if (value !== original) node.nodeValue = value;
@@ -184,6 +191,10 @@ function resolveLocale(root, options) {
 
 function sanitizeUserFacingAttributes(root) {
   for (const element of root.querySelectorAll("*")) {
+    // Input instructions are product copy, including technical fields used by
+    // administrators. Removing them leaves required controls unnamed.
+    if (element.matches?.("input, select, textarea, label, legend")
+      || element.closest?.("label, legend")) continue;
     for (const name of DYNAMIC_ATTRIBUTE_NAMES) {
       if (!element.hasAttribute?.(name)) continue;
       const value = String(element.getAttribute(name) ?? "");
@@ -205,8 +216,8 @@ function isTechnicalElement(element) {
   // request IDs, hashes and internal revision markers cannot leak through a
   // <pre> or data-technical-content block. Only editable/user-authored text
   // and executable document nodes bypass the guard.
-  return ["TEXTAREA", "SCRIPT", "STYLE"].includes(element.tagName)
-    || Boolean(element.closest?.(`textarea, script, style, ${DYNAMIC_CONTENT_SELECTOR}`));
+  return ["TEXTAREA", "SCRIPT", "STYLE", "LABEL", "LEGEND"].includes(element.tagName)
+    || Boolean(element.closest?.(`textarea, script, style, label, legend, ${DYNAMIC_CONTENT_SELECTOR}`));
 }
 
 function isFallbackStructure(element) {

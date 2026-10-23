@@ -1,0 +1,69 @@
+/* Public entry: product-first technical B2B surface. */
+body:has(.home-header) { background: #f8fafc; color: #0f172a; }
+.home-header, .home-footer { max-width: 1440px; padding-inline: clamp(20px, 5vw, 72px); }
+.home-header { height: 72px; border-bottom: 1px solid #e2e8f0; }
+.home-wordmark { color: #0f172a; font-size: 20px; font-weight: 780; letter-spacing: -.025em; }
+.home-mark { width: 30px; height: 30px; border: 0; border-radius: 6px; background: #0f172a; color: #7dd3fc; font-size: 15px; }
+.home-header nav { gap: 26px; color: #475569; font-size: 14px; font-weight: 650; }
+.home-header nav a:hover, .home-text-link:hover, .home-nav-login:hover { color: #0369a1; }
+.home-nav-login { min-height: 40px; padding: 0 15px; border: 1px solid #cbd5e1; border-radius: 6px; color: #0f172a; font-size: 14px; font-weight: 700; }
+.home-nav-login:hover { border-color: #0369a1; background: #f0f9ff; }
+.home-hero { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: clamp(32px, 6vw, 96px); max-width: 1440px; min-height: 560px; height: auto; margin: 0 auto; padding: 88px clamp(20px, 5vw, 72px) 48px; border-bottom: 1px solid #e2e8f0; }
+.home-hero-copy { align-self: center; width: auto; padding: 0; text-align: left; }
+.home-eyebrow { color: #0369a1; font-size: 12px; font-weight: 800; letter-spacing: .11em; text-transform: uppercase; }
+.home-hero h1 { max-width: 520px; margin: 14px 0 18px; color: #0f172a; font-size: clamp(48px, 7vw, 84px); font-weight: 800; letter-spacing: -.065em; line-height: .96; }
+.home-hero-description { max-width: 470px; margin: 0 0 30px; color: #475569; font-size: 18px; line-height: 1.7; }
+.home-hero-actions { justify-content: flex-start; gap: 12px; }
+.home-button { min-height: 46px; padding-inline: 20px; border: 1px solid #0369a1; border-radius: 6px; background: #0369a1; font-size: 14px; font-weight: 750; }
+.home-button:hover { border-color: #075985; background: #075985; transform: translateY(-1px); }
+.home-text-link { min-height: 44px; color: #475569; font-size: 14px; font-weight: 700; }
+.home-scene { position: relative; inset: auto; min-height: 360px; align-self: center; border: 1px solid #cbd5e1; border-radius: 10px; background: #0f172a; overflow: hidden; }
+.home-scene canvas { opacity: .9; }
+.home-scene::before { content: "LIVE GATEWAY"; position: absolute; top: 20px; left: 24px; z-index: 1; color: #7dd3fc; font-size: 11px; font-weight: 800; letter-spacing: .12em; }
+.home-scene::after { content: "MODEL ROUTING  ·  USAGE  ·  GOVERNANCE"; position: absolute; right: 24px; bottom: 20px; z-index: 1; color: #94a3b8; font-size: 10px; letter-spacing: .08em; }
+.home-hero-bottom { position: absolute; inset: auto clamp(20px, 5vw, 72px) 0; height: 48px; color: #64748b; font-size: 12px; }
+.home-capabilities { max-width: 1440px; margin: 0 auto; padding: 0 clamp(20px, 5vw, 72px) 76px; background: #fff; }
+.home-capability-intro { height: 64px; margin: 0 0 28px; color: #0369a1; font-size: 11px; font-weight: 800; letter-spacing: .11em; text-transform: uppercase; }
+.home-section-heading { margin-bottom: 32px; }
+.home-section-heading h2 { color: #0f172a; font-size: clamp(28px, 3vw, 38px); font-weight: 800; letter-spacing: -.04em; }
+.home-section-heading > p { color: #64748b; font-size: 14px; }
+.home-capability-grid { column-gap: 40px; row-gap: 0; }
+.home-capability-grid article { min-height: 160px; padding: 24px 0 20px; border-top: 1px solid #e2e8f0; }
+.home-capability-grid article > [data-icon] { color: #0369a1; }
+.home-capability-grid article:nth-child(3n) > [data-icon] { color: #0f766e; }
+.home-capability-grid h3 { margin: 16px 0 8px; color: #0f172a; font-size: 16px; font-weight: 750; }
+.home-capability-grid p { color: #475569; font-size: 14px; line-height: 1.7; }
+.home-footer { min-height: 80px; color: #64748b; }
+.home-footer .home-wordmark { font-size: 17px; }
+@media (max-width: 900px) { .home-hero { grid-template-columns: 1fr; min-height: 720px; padding-top: 64px; } .home-hero-copy { align-self: start; } .home-scene { min-height: 300px; } }
+@media (max-width: 600px) { .home-header, .home-footer { padding-inline: 20px; } .home-header { height: 64px; } .home-hero { min-height: 660px; padding: 58px 20px 48px; } .home-hero h1 { font-size: 56px; } .home-hero-description { font-size: 16px; } .home-scene { min-height: 230px; } .home-hero-bottom { inset-inline: 20px; } .home-capabilities { padding-inline: 20px; } .home-capability-grid { grid-template-columns: 1fr; } }
+
+/* Public entry follows the same restrained glass language as the authenticated workspaces. */
+body:has(.home-header) {
+  color: #f2f8fc;
+  background: radial-gradient(circle at 12% 0%, rgb(46 143 178 / 28%), transparent 34rem), radial-gradient(circle at 88% 20%, rgb(101 79 173 / 20%), transparent 38rem), linear-gradient(145deg, #091322, #12263b);
+}
+body:has(.home-header) .home-header,
+body:has(.home-header) .home-footer,
+body:has(.home-header) .home-capabilities { background: transparent; border-color: rgb(180 218 238 / 22%); }
+body:has(.home-header) .home-wordmark,
+body:has(.home-header) .home-hero h1,
+body:has(.home-header) .home-section-heading h2,
+body:has(.home-header) .home-capability-grid h3 { color: #f2f8fc; }
+body:has(.home-header) .home-hero-description,
+body:has(.home-header) .home-section-heading > p,
+body:has(.home-header) .home-capability-grid p,
+body:has(.home-header) .home-footer { color: #b9cbd8; }
+body:has(.home-header) .home-mark,
+body:has(.home-header) .home-scene { border: 1px solid rgb(180 218 238 / 28%); background: rgb(22 42 61 / 72%); box-shadow: 0 18px 60px rgb(0 0 0 / 25%); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+body:has(.home-header) .home-nav-login,
+body:has(.home-header) .home-text-link { border-color: rgb(180 218 238 / 32%); color: #f2f8fc; background: rgb(255 255 255 / 7%); }
+body:has(.home-header) .home-button { border-color: #38bcd5; background: linear-gradient(135deg, rgb(37 159 187 / 86%), rgb(73 103 189 / 82%)); }
+body:has(.home-header) .home-eyebrow,
+body:has(.home-header) .home-capability-intro,
+body:has(.home-header) .home-capability-grid article > [data-icon] { color: #78d8e9; }
+body:has(.home-header) .home-header nav,
+body:has(.home-header) .home-hero-bottom { color: #b9cbd8; }
+body:has(.home-header) .home-header nav a { color: inherit; }
+body:has(.home-header) .home-header nav a:hover { color: #78d8e9; }
+body:has(.home-header) .home-capability-grid article { border-color: rgb(180 218 238 / 22%); background: rgb(22 42 61 / 40%); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }

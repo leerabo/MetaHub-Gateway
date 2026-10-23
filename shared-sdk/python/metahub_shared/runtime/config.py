@@ -59,7 +59,7 @@ ConfigSource = Literal["default", "file", "env"]
 ConfigStatus = Literal["configured", "missing", "masked", "defaulted"]
 ServiceMode = Literal["internal_only", "public_service"]
 McpExecutorMode = Literal["disabled", "test_loopback", "sandbox_http"]
-IdentityChallengeDeliveryMode = Literal["disabled", "test_capture"]
+IdentityChallengeDeliveryMode = Literal["disabled", "test_capture", "smtp"]
 CapacityRunnerMode = Literal["disabled", "test_loopback", "isolated_http"]
 
 # CacheAffinity 使用独立密钥域；默认值只保证本地可运行，生产 Gateway 必须显式替换。
@@ -130,6 +130,13 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_ENTERPRISE_SSO_ENCRYPTION_SECRET": DEFAULT_ENTERPRISE_SSO_ENCRYPTION_SECRET,
     "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET": DEFAULT_IDENTITY_PII_ENCRYPTION_SECRET,
     "METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE": "disabled",
+    "METAHUB_SMTP_HOST": "",
+    "METAHUB_SMTP_PORT": "587",
+    "METAHUB_SMTP_SECURITY": "starttls",
+    "METAHUB_SMTP_USERNAME": "",
+    "METAHUB_SMTP_PASSWORD": "",
+    "METAHUB_SMTP_SENDER": "",
+    "METAHUB_SMTP_TIMEOUT_SECONDS": "10",
     "METAHUB_WORKSPACE_SESSION_SECRET": DEFAULT_WORKSPACE_SESSION_SECRET,
     "METAHUB_PLATFORM_SESSION_SECRET": DEFAULT_PLATFORM_SESSION_SECRET,
     "METAHUB_PLATFORM_SESSION_TTL_SECONDS": "3600",
@@ -145,6 +152,7 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_IDENTITY_MFA_ENCRYPTION_SECRET": DEFAULT_IDENTITY_MFA_ENCRYPTION_SECRET,
     "METAHUB_PLATFORM_BOOTSTRAP_ENABLED": "false",
     "METAHUB_PLATFORM_BOOTSTRAP_RECOVERY_SECRET": DEFAULT_PLATFORM_BOOTSTRAP_RECOVERY_SECRET,
+    "METAHUB_DEV_PLATFORM_NO_MFA": "false",
     "METAHUB_WORKSPACE_ALLOWED_REGIONS": "cn-north-1,cn-east-1",
     "METAHUB_WORKSPACE_RESIDENCY_POLICY_VERSION": "cn-residency-v1",
     "METAHUB_CACHE_AFFINITY_HMAC_SECRET": DEFAULT_CACHE_AFFINITY_HMAC_SECRET,
@@ -728,6 +736,8 @@ class AppConfig(BaseModel):
         default=DEFAULT_IDENTITY_MFA_ENCRYPTION_SECRET, exclude=True, repr=False
     )
     platform_bootstrap_enabled: bool = False
+    # Local development convenience only. Production keeps the real TOTP path.
+    dev_platform_no_mfa: bool = False
     platform_bootstrap_recovery_secret: str = Field(
         default=DEFAULT_PLATFORM_BOOTSTRAP_RECOVERY_SECRET, exclude=True, repr=False
     )
@@ -737,6 +747,13 @@ class AppConfig(BaseModel):
         repr=False,
     )
     identity_challenge_delivery_mode: IdentityChallengeDeliveryMode = "disabled"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_security: Literal["starttls", "tls"] = "starttls"
+    smtp_username: str = Field(default="", exclude=True, repr=False)
+    smtp_password: str = Field(default="", exclude=True, repr=False)
+    smtp_sender: str = ""
+    smtp_timeout_seconds: int = 10
     # Prompt 指纹根密钥与登录 Token 密钥必须分域，且不得进入 model_dump、repr 或配置摘要明文。
     cache_affinity_hmac_secret: str = Field(exclude=True, repr=False)
     # Response Cache 的部署级总开关默认关闭；四个根密钥均从 repr/model_dump 排除。
@@ -1317,7 +1334,7 @@ def load_app_config(service_name: str) -> AppConfig:
             message="METAHUB_IDENTITY_CHALLENGE_SECRET is not an independent production secret.",
             suggestion="Configure a unique identity challenge secret of at least 32 characters.",
         )
-    if identity_challenge_delivery_mode not in {"disabled", "test_capture"} or (
+    if identity_challenge_delivery_mode not in {"disabled", "test_capture", "smtp"} or (
         service_name == "control-plane-api"
         and environment == "prod"
         and identity_challenge_delivery_mode == "test_capture"
@@ -1325,8 +1342,32 @@ def load_app_config(service_name: str) -> AppConfig:
         raise ConfigError(
             code="infra.config_invalid",
             message="METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE is invalid for this environment.",
-            suggestion="Use disabled until a production delivery adapter is configured.",
+            suggestion="Use disabled or configure authenticated TLS SMTP; test_capture is forbidden in production.",
         )
+    smtp_host = _value(values, "METAHUB_SMTP_HOST").strip()
+    smtp_port = _positive_int(values, "METAHUB_SMTP_PORT")
+    smtp_security = _value(values, "METAHUB_SMTP_SECURITY").strip().lower()
+    smtp_username = _value(values, "METAHUB_SMTP_USERNAME")
+    smtp_password = _value(values, "METAHUB_SMTP_PASSWORD")
+    smtp_sender = _value(values, "METAHUB_SMTP_SENDER").strip()
+    smtp_timeout = _positive_int(values, "METAHUB_SMTP_TIMEOUT_SECONDS")
+    if smtp_security not in {"starttls", "tls"} or smtp_port > 65535 or smtp_timeout > 60:
+        raise ConfigError(code="infra.config_invalid", message="SMTP transport configuration is invalid.",
+                          suggestion="Use TLS or STARTTLS, a valid port, and a timeout of 1–60 seconds.")
+    if identity_challenge_delivery_mode == "smtp":
+        from email.headerregistry import Address
+        from email.errors import HeaderParseError
+        try:
+            mailbox = Address(addr_spec=smtp_sender)
+            valid_sender = bool(mailbox.username and mailbox.domain)
+        except (ValueError, TypeError, HeaderParseError):
+            valid_sender = False
+        if (not valid_sender or not smtp_host or not smtp_username or not smtp_password
+                or any(ord(char) < 32 or ord(char) == 127 for value in
+                       (smtp_host, smtp_username, smtp_sender) for char in value)
+                or any(char in smtp_host for char in "/:@ ")):
+            raise ConfigError(code="infra.config_invalid", message="SMTP identity delivery settings are incomplete or invalid.",
+                              suggestion="Configure a hostname, sender mailbox and dedicated SMTP credentials.")
 
     enterprise_sso_keys = {
         "METAHUB_ENTERPRISE_SSO_HMAC_SECRET",
@@ -2717,9 +2758,20 @@ def load_app_config(service_name: str) -> AppConfig:
         ),
         identity_mfa_encryption_secret=identity_mfa_encryption_secret,
         platform_bootstrap_enabled=_boolean(values, "METAHUB_PLATFORM_BOOTSTRAP_ENABLED"),
+        dev_platform_no_mfa=(
+            environment in {"dev", "test"}
+            and _boolean(values, "METAHUB_DEV_PLATFORM_NO_MFA")
+        ),
         platform_bootstrap_recovery_secret=platform_bootstrap_recovery_secret,
         identity_pii_encryption_secret=identity_pii_encryption_secret,
         identity_challenge_delivery_mode=identity_challenge_delivery_mode,
+        smtp_host=smtp_host,
+        smtp_port=smtp_port,
+        smtp_security=smtp_security,
+        smtp_username=smtp_username,
+        smtp_password=smtp_password,
+        smtp_sender=smtp_sender,
+        smtp_timeout_seconds=smtp_timeout,
         cache_affinity_hmac_secret=cache_affinity_hmac_secret,
         response_cache_enabled=response_cache_enabled,
         response_cache_hmac_version=response_cache_hmac_version,
@@ -4084,6 +4136,13 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_IDENTITY_CHALLENGE_SECRET",
         "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET",
         "METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE",
+        "METAHUB_SMTP_HOST",
+        "METAHUB_SMTP_PORT",
+        "METAHUB_SMTP_SECURITY",
+        "METAHUB_SMTP_USERNAME",
+        "METAHUB_SMTP_PASSWORD",
+        "METAHUB_SMTP_SENDER",
+        "METAHUB_SMTP_TIMEOUT_SECONDS",
         "METAHUB_ENTERPRISE_SSO_HMAC_SECRET",
         "METAHUB_ENTERPRISE_SSO_ENCRYPTION_SECRET",
         "METAHUB_WORKSPACE_SESSION_SECRET",
@@ -4094,6 +4153,7 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_IDENTITY_MFA_ENCRYPTION_SECRET",
         "METAHUB_PLATFORM_BOOTSTRAP_ENABLED",
         "METAHUB_PLATFORM_BOOTSTRAP_RECOVERY_SECRET",
+        "METAHUB_DEV_PLATFORM_NO_MFA",
         "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
         "METAHUB_RESPONSE_CACHE_ENABLED",
         "METAHUB_RESPONSE_CACHE_HMAC_VERSION",
@@ -5711,6 +5771,7 @@ def _is_sensitive_config_key(key: str) -> bool:
         return False
     return (
         is_sensitive_key(key)
+        or normalized == "metahub_smtp_username"
         or "database_url" in normalized
         or "redis_url" in normalized
         or "object_store_endpoint_url" in normalized

@@ -370,8 +370,9 @@ class PriceSnapshotEvidence:
 class CostEstimate:
     """按当前模型价格快照估算出的调用成本。
 
-    M0 阶段不做复杂账单结算，但每次调用都要具备可追踪的成本估算字段。
-    价格缺失或版本价格损坏时回落到 0 CNY，并保留 price_schema_version 为空。
+    原币金额保留在 ``amount``；CNY 调用填入 ``cost_cny``，USD 调用保留在 ``cost_usd``，
+    由预算读取层按发生时汇率换算。价格缺失或版本价格损坏时回落到 0 CNY，并保留
+    ``price_schema_version`` 为空。
     """
 
     amount: Decimal
@@ -1114,7 +1115,9 @@ def record_usage_ledger(
             usage_ledger_id=write_intent.usage_ledger_id,
             finops_ledger_entry_id=committed.ledger_entry_id,
             actual_micros=(
-                _decimal_cny_micros(estimate.cost_cny) if estimate.currency == "CNY" else None
+                _decimal_cny_micros(estimate.cost_cny)
+                if estimate.currency == "CNY"
+                else None
             ),
             exposure_outstanding_micros=_quota_exposure_micros(context),
         )
@@ -3685,7 +3688,7 @@ def _normalize_currency(value: object) -> str | None:
 
 
 def _cost_amounts(amount: Decimal, currency: str) -> tuple[Decimal, Decimal]:
-    """按照原币种拆分 CNY/USD 成本字段，M0 阶段不做汇率折算。"""
+    """按照原币种拆分 CNY/USD 成本字段；USD 原值由预算读取层换算。"""
 
     # 用量成本是审计账本字段，缺失或异常必须进入可追踪分支。
     if currency == "USD":

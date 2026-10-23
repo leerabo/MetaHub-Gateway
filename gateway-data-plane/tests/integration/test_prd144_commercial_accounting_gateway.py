@@ -150,6 +150,24 @@ def _scenario(template: Path, tmp_path: Path) -> SimpleNamespace:
             ),
             head_version=VERSION_USD,
         )
+        connection.execute(
+            """
+            INSERT INTO workspace_fx_rate_versions(
+              workspace_fx_rate_version_id,workspace_id,tenant_id,version_number,
+              usd_to_cny,effective_from,created_by_membership_id,created_at
+            ) VALUES(?,?,?,?,?,?,?,?)
+            """,
+            (
+                "wfxv_prd144",
+                str(owner["workspace_id"]),
+                tenant_id,
+                1,
+                "7.2",
+                "1970-01-01T00:00:00Z",
+                str(owner["workspace_membership_id"]),
+                OBSERVED,
+            ),
+        )
         connection.commit()
     config = SimpleNamespace(
         database_url=database_url,
@@ -418,7 +436,10 @@ def test_budget_routing_batch_and_cache_share_exact_workspace_rate(
             token_estimate=tokens,
             price_as_of=OBSERVED_AT,
         )
-        assert usd_budget.price_available is False
+        assert usd_budget.price_available is True
+        # 100 input and 50 output tokens at USD 1.5/2.5 per million,
+        # converted at 7.2 CNY/USD, produces 0.001980 CNY.
+        assert usd_budget.cost_cny == Decimal("0.001980")
         facts = _load_routing_prices(
             connection,
             scenario.tenant_id,

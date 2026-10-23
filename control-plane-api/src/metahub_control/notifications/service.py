@@ -1118,10 +1118,10 @@ def _ensure_preferences(
         for channel in CHANNELS:
             enabled = int(channel not in {"sms", "web_push"})
             connection.execute(
-                """INSERT OR IGNORE INTO notification_preferences(
+                """INSERT INTO notification_preferences(
                   workspace_id,tenant_id,recipient_account_id,category,channel,enabled,
                   mandatory_security,revision,created_at,updated_at)
-                  VALUES(?,?,?,?,?,?,?,1,?,?)""",
+                  VALUES(?,?,?,?,?,?,?,1,?,?) ON CONFLICT DO NOTHING""",
                 (
                     workspace_id,
                     tenant_id,

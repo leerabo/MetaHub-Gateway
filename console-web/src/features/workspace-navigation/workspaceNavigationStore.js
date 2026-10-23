@@ -258,7 +258,7 @@ export function createWorkspaceNavigationStore({ createIdempotencyKey } = {}) {
     if (!current(ticket) || ticket.lane !== "preference") return false;
     // A UI preference CAS conflict does not revoke the current authorization.
     // Keep the projection so the controller can re-read and retry this write.
-    if (Number(nextError?.status) === 409 && nextError?.code === "identity.revision_conflict") {
+    if ([409, 412].includes(Number(nextError?.status)) && nextError?.code === "identity.revision_conflict") {
       active.delete(ticket);
       pendingPreference = null;
       status = "conflict";

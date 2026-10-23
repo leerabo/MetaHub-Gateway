@@ -37,7 +37,7 @@ export function renderResponseCache(state, authContext, consoleShellState) {
       <header class="response-cache-toolbar">
         <div>
           <h2 id="response-cache-title">响应缓存</h2>
-          <span>${escapeHtml(owner.tenantId)}</span>
+          <span>当前组织</span>
         </div>
         <div class="response-cache-toolbar-actions">
           <span class="response-cache-global-state tone-${view.globalEnabled ? "enabled" : "disabled"}">

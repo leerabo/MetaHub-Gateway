@@ -3,8 +3,11 @@
 import {
   authorizationIdentitySnapshot,
   hasPermission,
+  permissionCodesFromAuthContext,
   PERMISSIONS,
 } from "../../lib/permissions.js";
+import { hasWorkspaceConsoleSession } from "../../lib/workspaceConsoleSession.js";
+import { workspaceResourcePageOwner } from "../../lib/workspaceResourcePage.js";
 
 const READ_ROLES = new Set(["owner", "admin", "developer", "security_admin"]);
 const NAVIGATION_IDS = new Set(["providers", "error-maps"]);
@@ -12,6 +15,7 @@ const NAVIGATION_IDS = new Set(["providers", "error-maps"]);
 export function createWorkspaceProviderEngineeringStore({ onChange = () => {} } = {}) {
   let epoch = 0;
   let owner = "";
+  let ownerInput = null;
   const requests = new Map();
   let state = initialState();
 
@@ -21,6 +25,7 @@ export function createWorkspaceProviderEngineeringStore({ onChange = () => {} } 
     abortAll();
     epoch += 1;
     owner = "";
+    ownerInput = null;
     state = {
       ...initialState(),
       activeNavigationItemId: String(activeNavigationItemId),
@@ -34,6 +39,7 @@ export function createWorkspaceProviderEngineeringStore({ onChange = () => {} } 
     abortAll();
     epoch += 1;
     owner = "";
+    ownerInput = null;
     const status = Number(error?.status) || 0;
     state = {
       ...initialState(),
@@ -47,13 +53,9 @@ export function createWorkspaceProviderEngineeringStore({ onChange = () => {} } 
     publish();
   }
 
-  function enter({ authContext, workspaceSession, activeNavigationItemId, providerId }) {
-    const signature = workspaceProviderEngineeringOwner({
-      authContext,
-      workspaceSession,
-      activeNavigationItemId,
-      providerId,
-    });
+  function enter(input) {
+    const { authContext, workspaceSession, activeNavigationItemId, providerId } = input;
+    const signature = workspaceProviderEngineeringOwner(input);
     if (!signature) {
       leave();
       return false;
@@ -62,6 +64,7 @@ export function createWorkspaceProviderEngineeringStore({ onChange = () => {} } 
       abortAll();
       epoch += 1;
       owner = signature;
+      ownerInput = input;
       state = {
         ...initialState(),
         activeNavigationItemId: String(activeNavigationItemId),
@@ -82,6 +85,7 @@ export function createWorkspaceProviderEngineeringStore({ onChange = () => {} } 
     abortAll();
     epoch += 1;
     owner = "";
+    ownerInput = null;
     state = initialState();
     if (changed) publish();
   }
@@ -108,6 +112,7 @@ export function createWorkspaceProviderEngineeringStore({ onChange = () => {} } 
       && ticket.epoch === epoch
       && ticket.owner === owner
       && owner
+      && workspaceProviderEngineeringOwner(ownerInput) === owner
       && !ticket.controller.signal.aborted,
     );
   }
@@ -227,7 +232,36 @@ export function workspaceProviderEngineeringOwner({
   workspaceSession,
   activeNavigationItemId,
   providerId,
+  session,
+  consoleShellState,
 } = {}) {
+  // Cookie sessions have a Workspace authorization projection, not a legacy
+  // tenant/user/Bearer mirror. Bind it to the validated shell and the fresh
+  // server session instead of manufacturing those historical fields.
+  if (session || consoleShellState?.workspaceNavigationContract === true
+    || authContext?.permission_fingerprint !== undefined) {
+    const context = workspaceSession?.context;
+    const authorization = workspaceSession?.authorization;
+    const permissions = [PERMISSIONS.WORKSPACE_PROVIDER_ERROR_OVERRIDE_READ];
+    if (activeNavigationItemId === "providers") permissions.push(PERMISSIONS.PROVIDER_READ);
+    const pageOwner = workspaceResourcePageOwner(session, consoleShellState, {
+      navigationId: activeNavigationItemId, permissions,
+    });
+    const id = String(providerId ?? "");
+    if (!hasWorkspaceConsoleSession(session) || !pageOwner || authContext !== session.context
+      || !NAVIGATION_IDS.has(activeNavigationItemId)
+      || context?.session_status !== "active" || !READ_ROLES.has(context?.role)
+      || context?.workspace_id !== session.owner.workspaceId || context.role !== session.owner.role
+      || context.expires_at !== session.owner.workspaceExpiresAt
+      || authorization?.permission_revision !== session.owner.permissionRevision
+      || authorization?.membership_revision !== session.owner.membershipRevision
+      || authorization?.permission_fingerprint !== session.owner.permissionFingerprint
+      || JSON.stringify(permissionCodesFromAuthContext(authorization))
+        !== JSON.stringify(permissionCodesFromAuthContext(session.context))
+      || (id && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(id))
+      || (activeNavigationItemId === "providers" && !id)) return "";
+    return JSON.stringify([pageOwner.key, id]);
+  }
   const overrideIdentity = authorizationIdentitySnapshot(
     authContext,
     PERMISSIONS.WORKSPACE_PROVIDER_ERROR_OVERRIDE_READ,

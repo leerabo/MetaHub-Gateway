@@ -211,22 +211,22 @@ test("PRD-139 renderer gates directory, commands, approvals, and statements inde
     "platform.channel.attribution.approve",
     "platform.channel.statement.read",
   ]));
-  assert.match(channel, /Partner directory/u);
+  assert.match(channel, /合作方目录/u);
   assert.match(channel, /data-platform-channel-partner-create-form/u);
   assert.match(channel, /data-platform-channel-lead-form/u);
   assert.match(channel, /data-platform-channel-attribution-form/u);
   assert.match(channel, /data-platform-channel-approval-form/u);
-  assert.match(channel, /Channel statements/u);
+  assert.match(channel, /渠道结算单/u);
 
   const billing = renderChannelManagement(state, new Set([
     "platform.channel.statement.read",
   ]));
-  assert.match(billing, /Channel statements/u);
-  assert.doesNotMatch(billing, /Partner directory|New partner|Register lead|Pending attribution/u);
+  assert.match(billing, /渠道结算单/u);
+  assert.doesNotMatch(billing, /合作方目录|新增合作方|登记线索|待处理归因/u);
 
   const enterprise = renderChannelManagement(state, new Set());
   assert.doesNotMatch(enterprise,
-    /Partner directory|New partner|Register lead|Pending attribution|Channel statements/u);
+    /合作方目录|新增合作方|登记线索|待处理归因|渠道结算单/u);
 });
 
 test("PRD-139 approval controls fit the desktop decision column and stack on mobile", async () => {

@@ -91,14 +91,17 @@ def _insert_request_fact(
 
 @pytest.fixture(scope="module")
 def prd077_control_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """一次构造完整 0070 模板，后续每个用例复制为独立租户事实库。"""
+    """使用当前完整结构和权限目录，后续每个用例复制为独立事实库。"""
 
     database = tmp_path_factory.mktemp("prd077-control-template") / "template.sqlite3"
     database_url = _url(database)
     previous_password = os.environ.get("METAHUB_SEED_ADMIN_PASSWORD")
     os.environ["METAHUB_SEED_ADMIN_PASSWORD"] = ADMIN_PASSWORD
     try:
-        assert apply_migrations(database_url).applied[-1] == "0070"
+        # 0070 introduced this feature; later migrations also update the RBAC
+        # catalog checked by today's authentication code. A historical 0070
+        # database cannot exercise the current HTTP runtime faithfully.
+        assert "0070" in apply_migrations(database_url).applied
         seed = apply_seed_data(database_url)
     finally:
         if previous_password is None:

@@ -5,6 +5,7 @@
  */
 
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 // 查询、运行状态与处置枚举是冻结 wire 合同；未知值必须在 fetch 或 DOM 之前失败关闭。
 const STATUS_VALUES = new Set(["high_risk", "frozen", "resolved", "expired"]);
@@ -132,6 +133,7 @@ const ERROR_MESSAGES = Object.freeze({
  */
 export async function listSessionRisks({
   controlApiUrl,
+  authentication,
   token,
   status,
   scopeType,
@@ -154,12 +156,13 @@ export async function listSessionRisks({
   setOptionalCursor(url, cursor);
   ensureTimeRange(fromTime, toTime);
 
-  const response = await fetch(url.toString(), {
+  const response = await authenticatedResourceFetch(url.toString(), {
+    authentication,
+    token,
     signal,
     cache: "no-store",
     headers: {
       Accept: "application/json",
-      Authorization: `Bearer ${token}`,
       "X-Request-ID": operationRequestId || createSessionRiskRequestId("list"),
       "X-Trace-ID": operationTraceId || createSessionRiskTraceId(),
     },
@@ -190,6 +193,7 @@ export async function listSessionRisks({
  */
 export async function applySessionRiskAction({
   controlApiUrl,
+  authentication,
   token,
   sessionRiskScoreId,
   action,
@@ -203,13 +207,14 @@ export async function applySessionRiskAction({
   const scoreId = requireScoreId(sessionRiskScoreId);
   const body = normalizeSessionRiskActionBody({ action, reasonCode, expectedRevision });
   const safeIdempotencyKey = requireIdempotencyKey(idempotencyKey);
-  const response = await fetch(`${controlApiUrl}/security/session-risks/${scoreId}/action`, {
+  const response = await authenticatedResourceFetch(`${controlApiUrl}/security/session-risks/${scoreId}/action`, {
+    authentication,
+    token,
     method: "POST",
     signal,
     cache: "no-store",
     headers: {
       Accept: "application/json",
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
       "Idempotency-Key": safeIdempotencyKey,
       "X-Request-ID": operationRequestId || createSessionRiskRequestId("action"),

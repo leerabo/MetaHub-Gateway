@@ -1769,10 +1769,10 @@ def _ensure_scheduler_tenant(
 ) -> None:
     connection.execute(
         """
-        INSERT OR IGNORE INTO mcp_scheduler_tenants(
+        INSERT INTO mcp_scheduler_tenants(
           tenant_id,status,last_claimed_at,last_claim_sequence,lease_generation,
           lease_owner_id,lease_token,lease_expires_at,next_scan_at,created_at,updated_at
-        ) VALUES(?,'idle',NULL,0,0,NULL,NULL,NULL,?,?,?)
+        ) VALUES(?,'idle',NULL,0,0,NULL,NULL,NULL,?,?,?) ON CONFLICT DO NOTHING
         """,
         (tenant_id, timestamp, timestamp, timestamp),
     )

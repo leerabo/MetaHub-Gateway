@@ -238,7 +238,17 @@ def list_policy_snapshots(
             (context.user.tenant_id,),
         ).fetchone()
         total = int(total_row["total"] if total_row is not None else 0)
-        infos = [_snapshot_info(row) for row in rows]
+        blocked_ids = _withdrawn_template_snapshot_ids(
+            connection, context.user.tenant_id, [str(row["policy_snapshot_id"]) for row in rows]
+        )
+        infos = [
+            _snapshot_info(row).model_copy(update={
+                "rollback_unavailable_reason": (
+                    "template_withdrawn" if str(row["policy_snapshot_id"]) in blocked_ids else None
+                ),
+            })
+            for row in rows
+        ]
         transaction.commit()
     # 历史读取与 DTO 转换故障不能返回部分租户数据，统一按快照服务不可用处理。
     except (sqlite3.Error, TypeError, ValueError) as exc:
@@ -1318,6 +1328,28 @@ def _require_no_rolled_back_template_policies(
     # application 终态优先于历史 Snapshot 内容；两者相交即表示来源制品已失去再次上线授权。
     if any(str(row["generated_policy_id"]) in source_policy_ids for row in rows):
         raise ApiError("policy_snapshot.rollback_target_invalid")
+
+
+def _withdrawn_template_snapshot_ids(
+    connection: sqlite3.Connection, tenant_id: str, snapshot_ids: list[str]
+) -> set[str]:
+    """批量标记包含已撤回模板规则的历史版本，避免界面提供不可执行的恢复操作。"""
+
+    if not snapshot_ids:
+        return set()
+    placeholders = ",".join("?" for _ in snapshot_ids)
+    rows = connection.execute(
+        f"""
+        SELECT DISTINCT i.policy_snapshot_id
+        FROM policy_snapshot_items i
+        JOIN policy_template_applications a
+          ON a.tenant_id=i.tenant_id AND a.generated_policy_id=i.source_policy_id
+        WHERE i.tenant_id=? AND a.status='rolled_back'
+          AND i.policy_snapshot_id IN ({placeholders})
+        """,
+        (tenant_id, *snapshot_ids),
+    ).fetchall()
+    return {str(row["policy_snapshot_id"]) for row in rows}
 
 
 def _require_active_route_targets(
