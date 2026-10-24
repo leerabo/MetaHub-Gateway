@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { createIdentityPageController } from "../../src/features/identity/identityPageState.js";
 import { createPlatformPageController } from "../../src/features/platform/platformPageState.js";
-import { renderPlatformWorkspace } from "../../src/features/platform/renderPlatformPage.js";
+import { renderPlatformGate, renderPlatformWorkspace } from "../../src/features/platform/renderPlatformPage.js";
 import {
   beginIdentityTotpEnrollment,
   getIdentityPlatformAccess,
@@ -39,6 +39,39 @@ const GLOBAL_CSRF = "G".repeat(43);
 const PLATFORM_CSRF = "P".repeat(43);
 const MFA_FACTOR_ID = `mfa_${"5".repeat(32)}`;
 const MFA_SECRET = "A".repeat(32);
+
+test("platform password entry sends no code and only shows OTP after MFA is enabled", async () => {
+  const originalDocument = globalThis.document;
+  globalThis.document = { cookie: `__Host-metahub-global-csrf=${GLOBAL_CSRF}` };
+  const calls = installFetch(() => jsonResponse(sessionPayload()));
+  try {
+    await openPlatformSession({ controlApiUrl: CONTROL_URL });
+    assert.deepEqual(JSON.parse(calls[0].options.body), {});
+    assert.equal(calls[0].options.headers["X-CSRF-Token"], GLOBAL_CSRF);
+  } finally { globalThis.document = originalDocument; }
+  const root = createRoot();
+  renderPlatformGate(root, {});
+  assert.doesNotMatch(root.innerHTML, /name="totpCode"/u);
+  renderPlatformGate(root, { mfaRequired: true });
+  assert.match(root.innerHTML, /name="totpCode"/u);
+});
+
+test("platform opens a password session automatically and challenges only enrolled accounts", async () => {
+  let opened = 0;
+  const expired = () => { throw new PlatformApiError({ code: "platform.session_required", status: 401 }); };
+  const root = createRoot();
+  const controller = createPlatformPageController({ root, api: workingApi({ session: expired,
+    openSession: async ({ totpCode }) => { opened++; assert.equal(totpCode, undefined); return sessionPayload(); },
+  }) });
+  await controller.mount();
+  assert.equal(opened, 1);
+  assert.doesNotMatch(root.innerHTML, /name="totpCode"/u);
+  const protectedController = createPlatformPageController({ root, api: workingApi({ session: expired,
+    openSession: async () => { throw new PlatformApiError({ code: "identity.mfa_required", status: 403 }); },
+  }) });
+  await protectedController.mount();
+  assert.match(root.innerHTML, /name="totpCode"/u);
+});
 
 test("registration switches belong to platform operator management and use platform CSRF", async () => {
   const originalDocument = globalThis.document;

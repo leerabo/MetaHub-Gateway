@@ -59,9 +59,10 @@ export function renderPlatformGate(container, state = {}) {
         <h1 id="platform-gate-title">进入工作台</h1>
         ${feedback(state)}
         <form data-platform-session-form autocomplete="off">
-          <label><span>动态验证码</span><input name="totpCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required autofocus /></label>
-          <button class="platform-primary" type="submit">验证并进入</button>
+          ${state.mfaRequired ? '<label><span>动态验证码</span><input name="totpCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required autofocus /></label>' : '<p>默认使用账号密码登录；仅在手动启用 MFA 后验证动态验证码。</p>'}
+          <button class="platform-primary" type="submit" ${state.loading ? 'disabled' : ''}>${state.mfaRequired ? '验证并进入' : '进入工作台'}</button>
         </form>
+        <a href="identity.html?view=login">登录账号</a>
         <a href="identity.html?view=account#security">返回账号安全</a>
       </section>
     </div>`;

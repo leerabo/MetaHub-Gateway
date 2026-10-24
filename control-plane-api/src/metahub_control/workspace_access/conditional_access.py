@@ -93,7 +93,7 @@ def simulate_conditional_access(
                      require_step_up_for_high_risk,allow_trusted_devices,region_rule,
                      network_rule,allowed_cidrs_json,exception_membership_ids_json,revision,
                      simulation_watermark_at,updated_by_account_id,created_at,updated_at)
-                   VALUES(?,?,?,'audit',1,1,0,'any','any','[]','[]',1,NULL,?,?,?)""",
+                   VALUES(?,?,?,'audit',0,1,0,'any','any','[]','[]',1,NULL,?,?,?)""",
                 (
                     policy_id,
                     context.workspace_id,

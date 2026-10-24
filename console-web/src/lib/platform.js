@@ -50,7 +50,7 @@ export class PlatformApiError extends Error {
 export function openPlatformSession({ controlApiUrl, totpCode, signal } = {}) {
   return request(controlApiUrl, "/platform/sessions", {
     method: "POST",
-    body: { totp_code: totp(totpCode) },
+    body: totpCode ? { totp_code: totp(totpCode) } : {},
     csrf: GLOBAL_CSRF_COOKIE,
     signal,
   });

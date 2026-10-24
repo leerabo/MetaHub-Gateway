@@ -90,6 +90,7 @@ export function createPlatformPageController({
   const state = {
     loading: true,
     session: null,
+    mfaRequired: false,
     navigation: [],
     navigationOpen: false,
     operators: null,
@@ -386,6 +387,9 @@ export function createPlatformPageController({
       } catch (error) {
         if (!current(ticket)) return false;
         if (isPlatformSessionFailure(error)) clearPlatformSession();
+        if (error instanceof PlatformApiError && error.status === 401) {
+          return controller.openSession();
+        }
         state.loading = false;
         state.error = error instanceof PlatformApiError && [401, 403].includes(error.status)
           ? null
@@ -400,7 +404,7 @@ export function createPlatformPageController({
       clearPlatformSession();
       state.loading = true;
       state.error = null;
-      renderPlatformGate(root, { loading: true });
+      renderPlatformGate(root, { loading: true, mfaRequired: state.mfaRequired });
       try {
         const session = await api.openSession({ totpCode, signal: ticket.signal });
         if (!current(ticket)) return false;
@@ -410,7 +414,10 @@ export function createPlatformPageController({
       } catch (error) {
         if (!current(ticket)) return false;
         state.loading = false;
-        state.error = safeError(error);
+        state.mfaRequired = state.mfaRequired || Boolean(totpCode)
+          || error.code === "identity.mfa_required"
+          || error.code === "identity.mfa_verification_failed";
+        state.error = error.code === "identity.mfa_required" ? null : safeError(error);
         renderPlatformGate(root, state);
         return false;
       }

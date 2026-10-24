@@ -312,7 +312,7 @@ class PlatformContext:
     operator_id: str
     account_id: str
     global_session_id: str
-    factor_id: str
+    factor_id: str | None
     factor_revision: int
     operator_revision: int
     roles: tuple[str, ...]
@@ -556,8 +556,17 @@ def _consume_platform_factor(
     totp_code: str,
     device_fingerprint: str,
     now: datetime,
-) -> tuple[str, int, int]:
-    """本地开发平台登录的无 MFA 通行路径；生产环境始终走真实 TOTP。"""
+) -> tuple[str | None, int, int]:
+    """Require a real code only after this account explicitly enables MFA."""
+
+    configured = connection.execute(
+        "SELECT 1 FROM account_mfa_factors WHERE account_id=? AND status='active' LIMIT 1",
+        (account_id,),
+    ).fetchone()
+    if configured is None:
+        return None, 0, 0
+    if not totp_code:
+        raise ApiError("identity.mfa_required")
 
     if getattr(config, "dev_platform_no_mfa", False):
         factor = connection.execute(
@@ -669,7 +678,7 @@ def issue_platform_session(
             action="platform.session_issued",
             object_type="platform_session",
             object_id=session_id,
-            reason="mfa_verified",
+            reason="mfa_verified" if factor_id else "password_verified",
             request_id=request_id,
             trace_id=trace_id,
             now=now,
@@ -1384,6 +1393,8 @@ def issue_support_session(
         actor = _authenticate_platform(
             connection, config, session_token, csrf_token=csrf_token, touch=True
         )
+        if actor.factor_id is None:
+            raise ApiError("identity.mfa_required")
         grant = _grant_row(connection, grant_id)
         now = _utcnow()
         if grant["requester_operator_id"] != actor.operator_id or grant["status"] != "active":
@@ -2029,7 +2040,7 @@ def _authenticate_platform(
         JOIN platform_operators operator ON operator.operator_id=session.operator_id
         JOIN global_accounts account ON account.account_id=session.account_id
         JOIN global_sessions global_session ON global_session.session_id=session.global_session_id
-        JOIN account_mfa_factors factor ON factor.factor_id=session.factor_id
+        LEFT JOIN account_mfa_factors factor ON factor.factor_id=session.factor_id
         WHERE session.token_hmac=?
         """,
         (_platform_hmac(config, "token", session_token),),
@@ -2065,9 +2076,14 @@ def _authenticate_platform(
         or row["login_enabled"] != 1
         or row["global_status"] != "active"
         or row["global_account_id"] != row["account_id"]
-        or row["factor_status"] != "active"
+        or (row["factor_id"] is not None and row["factor_status"] != "active")
         or row["operator_revision"] != row["current_operator_revision"]
-        or row["factor_revision"] != row["current_factor_revision"]
+        or (row["factor_id"] is not None
+            and row["factor_revision"] != row["current_factor_revision"])
+        or (row["factor_id"] is None and connection.execute(
+            "SELECT 1 FROM account_mfa_factors WHERE account_id=? AND status='active' LIMIT 1",
+            (row["account_id"],),
+        ).fetchone() is not None)
         or not roles
         or not hmac.compare_digest(row["role_fingerprint"], fingerprint)
     )

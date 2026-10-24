@@ -146,7 +146,7 @@ async def bootstrap(request: Request, response: Response) -> PlatformBootstrapRe
 async def create_session(request: Request, response: Response) -> PlatformSessionResponse:
     _reject_authorization(request)
     _require_write_origin(request)
-    payload = await _strict_json(request, required_fields=("totp_code",))
+    payload = await _strict_json(request, required_fields=(), optional_fields=("totp_code",))
     issued = await _run(
         issue_platform_session,
         _config(request),
@@ -154,7 +154,7 @@ async def create_session(request: Request, response: Response) -> PlatformSessio
             request, GLOBAL_SESSION_COOKIE, "platform.session_required"
         ),
         global_csrf_token=_required_csrf(request, GLOBAL_CSRF_COOKIE, "identity.csrf_invalid"),
-        totp_code=_totp(payload),
+        totp_code=_totp(payload) if "totp_code" in payload else "",
         device_fingerprint=_device_fingerprint(request),
         request_id=_request_id(request),
         trace_id=_trace_id(request),

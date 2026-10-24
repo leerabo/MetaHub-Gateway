@@ -1038,7 +1038,7 @@ function renderConditionalAccessSection(state) {
             <label class="is-wide"><span>受信 CIDR</span><textarea name="allowedCidrs" rows="3" spellcheck="false">${escapeHtml((policy?.allowed_cidrs ?? []).join("\n"))}</textarea></label>
           </div>
           <div class="identity-conditional-toggles">
-            ${renderPolicyToggle("requireMfa", "要求 MFA", policy?.require_mfa ?? true)}
+            ${renderPolicyToggle("requireMfa", "要求 MFA（手动启用）", policy?.require_mfa ?? false)}
             ${renderPolicyToggle("requireStepUpForHighRisk", "高风险操作要求 step-up", policy?.require_step_up_for_high_risk ?? true)}
             ${renderPolicyToggle("allowTrustedDevices", "允许受信设备满足 MFA", policy?.allow_trusted_devices ?? false)}
           </div>
@@ -1997,6 +1997,7 @@ function renderMfaSection(state) {
         <div>
           <p>身份保护</p>
           <h2 id="identity-mfa-title">登录保护</h2>
+          <p>默认使用邮箱和密码登录。需要额外保护时，可在这里手动添加 MFA 验证方式。</p>
         </div>
         ${state.platformAccess ? '<a class="identity-primary identity-platform-link" href="platform.html">进入平台工作台</a>' : ""}
       </div>

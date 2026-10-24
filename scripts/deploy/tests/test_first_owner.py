@@ -35,6 +35,13 @@ def test_real_authenticator_code_and_normalized_identity():
     assert counter > 0
 
 
+def test_password_only_owner_does_not_need_authenticator():
+    values = credentials()
+    values.update(secret=None, code=None)
+    email, name, counter = owner.checked_credentials(**values)
+    assert (email, name, counter) == ("owner@example.invalid", "Owner", None)
+
+
 @pytest.mark.parametrize("field,value", [("email", "not-an-email"), ("name", " "),
                                         ("name", "bad\x00name"), ("password", "shortpwd"),
                                         ("code", "not-a-code")])

@@ -246,6 +246,20 @@ async def test_security_overview_matches_active_device_sessions(
 
 
 @pytest.mark.anyio
+async def test_new_organization_policy_keeps_mfa_opt_in(monkeypatch, tmp_path, migrated_database):
+    _, app, owner_email, _ = _prepare(monkeypatch, tmp_path, migrated_database)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://testserver") as owner:
+        await _login(owner, owner_email)
+        workspaces = await owner.get("/identity/workspaces")
+        workspace = workspaces.json()["workspaces"][0]["workspace_id"]
+        assert (await _switch(owner, workspace)).status_code == 200
+        simulated = await owner.post(f"/workspaces/{workspace}/conditional-access/simulations",
+                                     json={}, headers=_csrf(owner, WORKSPACE_CSRF_COOKIE))
+        assert simulated.status_code == 200, simulated.text
+        assert simulated.json()["policy"]["require_mfa"] is False
+
+
+@pytest.mark.anyio
 async def test_identity_security_lifecycle_and_conditional_access(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

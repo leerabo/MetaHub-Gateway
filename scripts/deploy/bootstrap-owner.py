@@ -11,12 +11,11 @@ import json
 import os
 from pathlib import Path
 import sys
-from urllib.parse import quote
 from uuid import uuid4
 
 
-def checked_credentials(email: str, name: str, password: str, secret: str, code: str,
-                        now: datetime) -> tuple[str, str, int]:
+def checked_credentials(email: str, name: str, password: str, secret: str | None, code: str | None,
+                        now: datetime) -> tuple[str, str, int | None]:
     from metahub_control.identity.service import normalize_global_email, validate_global_password
     from metahub_shared.identity import totp_counter
 
@@ -27,14 +26,17 @@ def checked_credentials(email: str, name: str, password: str, secret: str, code:
     validate_global_password(password)
     if len(password) < 14:
         raise ValueError("First-owner password must contain at least 14 characters.")
-    counter = totp_counter(code, secret, unix_time=int(now.timestamp()))
+    if secret is None and code is None:
+        return email, name, None
+    counter = totp_counter(code or "", secret or "", unix_time=int(now.timestamp()))
     if counter is None:
         raise ValueError("Authenticator code did not verify; nothing was changed.")
     return email, name, counter
 
 
-def provision(connection, *, email: str, name: str, password: str, secret: str,
-              code: str, encryption_root: str, now: datetime) -> dict[str, str]:
+def provision(connection, *, email: str, name: str, password: str,
+              encryption_root: str, now: datetime, secret: str | None = None,
+              code: str | None = None) -> dict[str, str]:
     from metahub_shared.db.security import hash_password_argon2id
     from metahub_shared.identity import MfaSecretOwner, encrypt_mfa_secret
 
@@ -42,8 +44,8 @@ def provision(connection, *, email: str, name: str, password: str, secret: str,
     account, factor, operator = (prefix + uuid4().hex for prefix in ("gac_", "mfa_", "pto_"))
     timestamp = now.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     hashed = hash_password_argon2id(password)
-    encrypted = encrypt_mfa_secret(secret, secret=encryption_root,
-                                   owner=MfaSecretOwner(account, factor))
+    encrypted = (encrypt_mfa_secret(secret, secret=encryption_root,
+                                   owner=MfaSecretOwner(account, factor)) if secret else None)
     with connection.transaction():
         # Serialize this tool and also block normal account/tenant insertions
         # during the empty-database check. No existing account can be promoted.
@@ -64,11 +66,12 @@ def provision(connection, *, email: str, name: str, password: str, secret: str,
           credential_id,account_id,credential_type,algorithm,secret_hash,status,version,created_at,updated_at)
           VALUES(%s,%s,'password','argon2id',%s,'active',1,%s,%s)""",
           ("acr_" + uuid4().hex, account, hashed, timestamp, timestamp))
-        connection.execute("""INSERT INTO account_mfa_factors(
-          factor_id,account_id,factor_type,secret_ciphertext,secret_version,status,revision,
-          last_accepted_counter,verified_at,created_at,updated_at)
-          VALUES(%s,%s,'totp',%s,1,'active',1,%s,%s,%s,%s)""",
-          (factor, account, encrypted, counter, timestamp, timestamp, timestamp))
+        if encrypted is not None:
+            connection.execute("""INSERT INTO account_mfa_factors(
+              factor_id,account_id,factor_type,secret_ciphertext,secret_version,status,revision,
+              last_accepted_counter,verified_at,created_at,updated_at)
+              VALUES(%s,%s,'totp',%s,1,'active',1,%s,%s,%s,%s)""",
+              (factor, account, encrypted, counter, timestamp, timestamp, timestamp))
         connection.execute("""INSERT INTO platform_operators(
           operator_id,account_id,status,revision,created_by_operator_id,created_at,updated_at)
           VALUES(%s,%s,'active',1,NULL,%s,%s)""", (operator, account, timestamp, timestamp))
@@ -98,7 +101,6 @@ def main() -> int:
         sys.path.insert(0, "/app")
         from service import load_secrets, validate_production
         from metahub_shared.runtime.config import load_app_config
-        from metahub_shared.identity import generate_totp_secret
         import psycopg
 
         load_secrets(Path("/run/secrets/runtime.env"))
@@ -109,19 +111,13 @@ def main() -> int:
         password = getpass.getpass("New password (at least 14 characters): ")
         if password != getpass.getpass("Confirm new password: "):
             raise ValueError("Passwords do not match.")
-        secret = generate_totp_secret()
-        uri = f"otpauth://totp/{quote('MetaHub:' + email, safe='')}?secret={secret}&issuer=MetaHub&algorithm=SHA1&digits=6&period=30"
-        print("Add this secret to your authenticator. Keep it private:")
-        print(secret)
-        print(uri)
-        code = getpass.getpass("Current authenticator code: ")
         with psycopg.connect(config.database_url, autocommit=True,
                              options="-c timezone=UTC -c statement_timeout=30000 -c lock_timeout=10000") as connection:
             result = provision(connection, email=email, name=name, password=password,
-                               secret=secret, code=code, encryption_root=config.identity_mfa_encryption_secret,
+                               encryption_root=config.identity_mfa_encryption_secret,
                                now=datetime.now(UTC))
         print(json.dumps(result))
-        print("Wait for a fresh authenticator code before logging in. Initialization cannot be repeated.")
+        print("Sign in with your email and password. MFA is optional and can be enabled in account security. Initialization cannot be repeated.")
         return 0
     except Exception as error:
         # Driver errors may include inserted values. Never emit their message.

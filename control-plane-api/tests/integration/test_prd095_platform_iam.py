@@ -10,6 +10,7 @@ import math
 import shutil
 import struct
 import time
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -170,6 +171,51 @@ async def _register(client: AsyncClient) -> None:
 def _p95(values: list[float]) -> float:
     ordered = sorted(values)
     return ordered[math.ceil(len(ordered) * 0.95) - 1]
+
+
+@pytest.mark.anyio
+async def test_platform_password_default_and_manually_enabled_mfa(
+    monkeypatch, tmp_path, migrated_database,
+):
+    database_url, app = _prepare(monkeypatch, tmp_path, migrated_database)
+    clock = [datetime.now(UTC).replace(microsecond=0)]
+    monkeypatch.setattr(identity_service, "_utcnow", lambda: clock[0])
+    monkeypatch.setattr(platform_service, "_utcnow", lambda: clock[0])
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="https://testserver") as client:
+        await _login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+        denied = await client.post("/platform/sessions", json={},
+                                   headers=_csrf(client, GLOBAL_CSRF_COOKIE))
+        assert denied.status_code == 403, denied.text
+        with closing(connect_database(database_url)) as connection:
+            account = connection.execute("SELECT account_id FROM global_accounts WHERE email_normalized=?", (ADMIN_EMAIL,)).fetchone()[0]
+            operator = "pto_" + "9" * 32
+            stamp = clock[0].isoformat()
+            connection.execute("INSERT INTO platform_operators VALUES(?,?,'active',1,NULL,?,?)", (operator, account, stamp, stamp))
+            connection.execute("INSERT INTO platform_operator_role_bindings VALUES(?,'platform_owner','active',NULL,?,NULL)", (operator, stamp))
+            connection.commit()
+        csrf_denied = await client.post("/platform/sessions", json={}, headers=_headers())
+        assert csrf_denied.status_code == 403, csrf_denied.text
+        issued = await client.post("/platform/sessions", json={},
+                                  headers=_csrf(client, GLOBAL_CSRF_COOKIE))
+        assert issued.status_code == 200, issued.text
+        assert (await client.get("/platform/navigation")).status_code == 200
+        with closing(connect_database(database_url)) as connection:
+            row = connection.execute("SELECT factor_id,factor_revision FROM platform_sessions WHERE status='active'").fetchone()
+            assert tuple(row) == (None, 0)
+            assert not connection.execute("PRAGMA foreign_key_check").fetchall()
+        secret = await _enroll(client, ADMIN_PASSWORD, clock[0])
+        stale = await client.get("/platform/navigation")
+        assert stale.status_code == 401, stale.text
+        missing = await client.post("/platform/sessions", json={},
+                                   headers=_csrf(client, GLOBAL_CSRF_COOKIE))
+        assert missing.status_code == 403, missing.text
+        assert missing.json()["code"] == "identity.mfa_required"
+        clock[0] += timedelta(seconds=30)
+        issued = await client.post("/platform/sessions", json={"totp_code": _totp(secret, clock[0])},
+                                  headers=_csrf(client, GLOBAL_CSRF_COOKIE))
+        assert issued.status_code == 200, issued.text
+        assert (await client.get("/platform/navigation")).status_code == 200
 
 
 def test_prd095_security_response_models_forbid_extra_fields() -> None:
