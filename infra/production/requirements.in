@@ -7,7 +7,7 @@ httpx==0.28.1
 cryptography==45.0.7
 rfc8785==0.1.4
 psycopg[binary,pool]==3.3.4
-pglast==7.18
+pglast==7.20
 redis==6.4.0
 boto3==1.43.78
 argon2-cffi==25.1.0
