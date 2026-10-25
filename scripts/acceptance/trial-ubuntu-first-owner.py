@@ -122,25 +122,15 @@ def main():
         channel = stdout.channel
         buffer = ""
         stage = 0
-        prompts = ["First-owner email: ", "Display name: ", "New password (at least 14 characters): ",
-                   "Confirm new password: ", "Current authenticator code: "]
+        prompts = ["First-owner email: ", "Display name: ", "New password (at least 8 characters): ",
+                   "Confirm new password: "]
         while time.monotonic() - started < 900:
             if channel.recv_ready():
                 buffer += channel.recv(65536).decode(errors="replace")
                 if len(buffer) > 262144:
                     raise ValueError("Unexpected enrollment output size")
             if stage < len(prompts) and prompts[stage] in buffer:
-                if stage < 4:
-                    answer = [value["email"], value["name"], value["password"], value["password"]][stage]
-                else:
-                    match = re.search(r"otpauth://[^\s]+[?]secret=([A-Z2-7]+)&", buffer)
-                    if not match:
-                        raise ValueError("No real authenticator enrollment material received")
-                    value["totp_secret"] = match[1]
-                    _, clock, _ = client.exec_command("date +%s", timeout=60)
-                    epoch = int(clock.read().strip())
-                    answer = totp(value["totp_secret"], epoch)
-                    save_credentials(value)
+                answer = [value["email"], value["name"], value["password"], value["password"]][stage]
                 channel.sendall((answer + "\n").encode())
                 stage += 1
             if channel.exit_status_ready() and not channel.recv_ready():
@@ -149,14 +139,14 @@ def main():
         else:
             raise TimeoutError("Interactive enrollment did not finish")
         status = channel.recv_exit_status()
-        if status != 0 or stage != 5 or '"status": "initialized"' not in buffer:
+        if status != 0 or stage != len(prompts) or '"status": "initialized"' not in buffer:
             raise ValueError("Interactive enrollment was refused or did not finish")
         value["status"] = "initialized"
         save_credentials(value)
         report = dict(status="passed", platform="Ubuntu Docker, real interactive first-owner command",
                       state=args.state, install_receipt=args.install_receipt,
                       actual_terminal_prompts_completed=True, generated_password=True,
-                      real_generated_totp_verified=True, fixed_otp_used=False, development_seed_applied=False,
+                      password_only_initialization=True, fixed_otp_used=False, development_seed_applied=False,
                       local_credentials_storage="Windows user-scoped DPAPI", original_accounts_modified=False,
                       browser_login_verified=False, elapsed_seconds=round(time.monotonic() - started, 3))
         (ROOT / "output/deployment-ubuntu-20261014" / args.report_name).write_text(json.dumps(report, indent=2), encoding="utf-8")

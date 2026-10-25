@@ -1,6 +1,6 @@
 # Ubuntu 上的 GitHub 版本更新
 
-版本：`v2.0.0-trial.47`。本版将首次管理员初始化和未启用 MFA 的平台登录改为默认使用邮箱和密码；MFA 由用户手动启用。依赖清单、锁定哈希、签名部署包随 Release 提供。
+版本：`v2.0.0-trial.48`。本版将首次管理员密码最低长度统一为 8 个字符，明确提示密码长度不足、确认不一致等初始化错误。MFA 继续由用户手动启用。依赖清单、锁定哈希、签名部署包随 Release 提供。
 
 ## 流程
 
@@ -27,10 +27,10 @@
 先完成该版本的验收。以下命令只准备发布文件，不会上传 GitHub：
 
 ```bash
-python3 scripts/deploy/package-trial.py --version 2.0.0-trial.47 \
-  --output release/metahub-2.0.0-trial.47-source.tar.gz
-python3 scripts/deploy/sign-release.py --version 2.0.0-trial.47 \
-  --bundle release/metahub-2.0.0-trial.47-source.tar.gz \
+python3 scripts/deploy/package-trial.py --version 2.0.0-trial.48 \
+  --output release/metahub-2.0.0-trial.48-source.tar.gz
+python3 scripts/deploy/sign-release.py --version 2.0.0-trial.48 \
+  --bundle release/metahub-2.0.0-trial.48-source.tar.gz \
   --summary '已验收的试用版本' --key /offline/release-private.pem
 ```
 
@@ -42,7 +42,7 @@ openssl genpkey -algorithm Ed25519 -out /offline/release-private.pem
 openssl pkey -in /offline/release-private.pem -pubout -out release-public.pem
 ```
 
-公钥通过独立可信渠道核对并安装，不能让更新程序从同一个待验证发布包获取信任根。本轮 GitHub Release 标签为 `v2.0.0-trial.47`，已附上部署包、清单、签名和公钥四个文件。默认不执行仓库中的 Git hooks，也不在服务器上运行 `git pull`。本文未创建 GitHub Actions 或自动发布任务。
+公钥通过独立可信渠道核对并安装，不能让更新程序从同一个待验证发布包获取信任根。本轮 GitHub Release 标签为 `v2.0.0-trial.48`，已附上部署包、清单、签名和公钥四个文件。默认不执行仓库中的 Git hooks，也不在服务器上运行 `git pull`。本文未创建 GitHub Actions 或自动发布任务。
 
 ## 宿主机配置
 

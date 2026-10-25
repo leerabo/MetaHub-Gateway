@@ -43,7 +43,7 @@ def test_password_only_owner_does_not_need_authenticator():
 
 
 @pytest.mark.parametrize("field,value", [("email", "not-an-email"), ("name", " "),
-                                        ("name", "bad\x00name"), ("password", "shortpwd"),
+                                        ("name", "bad\x00name"), ("password", "shortpw"),
                                         ("code", "not-a-code")])
 def test_invalid_credentials_are_rejected_before_database_access(field, value):
     values = credentials()
@@ -56,3 +56,57 @@ def test_cli_refuses_redirected_enrollment_material(monkeypatch, capsys):
     monkeypatch.setattr(owner.sys.stdin, "isatty", lambda: False)
     assert owner.main() == 1
     assert not capsys.readouterr().out
+
+
+def test_eight_character_password_is_accepted():
+    values = credentials()
+    values.update(password="Eight123", secret=None, code=None)
+    assert owner.checked_credentials(**values) == ("owner@example.invalid", "Owner", None)
+
+
+@pytest.mark.parametrize("password,reason", [("secret7", "password_too_short"),
+                                           ("a" * 1025, "password_invalid"),
+                                           ("secret\x00pass", "password_invalid"),
+                                           ("\ud800" * 8, "password_invalid")])
+def test_password_validation_has_safe_actionable_message(password, reason):
+    with pytest.raises(owner.FirstOwnerError) as caught:
+        owner.checked_password(password)
+    assert caught.value.code == reason
+    assert password not in str(caught.value)
+
+
+def test_short_password_is_rejected_before_confirmation(monkeypatch):
+    prompts = []
+    def answer(prompt):
+        prompts.append(prompt)
+        return "secret7"
+    monkeypatch.setattr(owner.getpass, "getpass", answer)
+    with pytest.raises(owner.FirstOwnerError, match="at least 8 characters"):
+        owner.read_password()
+    assert len(prompts) == 1
+
+
+def test_password_confirmation_mismatch_is_explained(monkeypatch):
+    answers = iter(["Eight123", "Different456"])
+    monkeypatch.setattr(owner.getpass, "getpass", lambda prompt: next(answers))
+    with pytest.raises(owner.FirstOwnerError, match="Passwords do not match") as caught:
+        owner.read_password()
+    assert caught.value.code == "password_mismatch"
+
+
+def test_expected_cli_refusal_is_visible_without_exposing_password(monkeypatch, capsys):
+    import types
+    service = types.SimpleNamespace(load_secrets=lambda path: None, validate_production=lambda env: None)
+    monkeypatch.setitem(sys.modules, "service", service)
+    from metahub_shared.runtime import config
+    monkeypatch.setattr(config, "load_app_config", lambda name: object())
+    monkeypatch.setattr(owner.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(owner.sys.stdout, "isatty", lambda: True)
+    answers = iter(["owner@example.invalid", "Owner"])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    monkeypatch.setattr(owner.getpass, "getpass", lambda prompt: "secret7")
+    assert owner.main() == 1
+    output = capsys.readouterr()
+    assert '"reason": "password_too_short"' in output.err
+    assert "至少需要 8 个字符" in output.err
+    assert "secret7" not in output.err + output.out

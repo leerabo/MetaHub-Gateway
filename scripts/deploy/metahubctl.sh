@@ -56,7 +56,9 @@ case "$action" in
   first-owner)
     [[ -t 0 && -t 1 ]] || { printf 'First-owner enrollment requires an interactive terminal.\n' >&2; exit 1; }
     # Never send password or authenticator enrollment material to journald.
-    compose run --rm --no-deps first-owner
+    # Use this verified controller's initialization tool with the installed
+    # runtime. Tool-only fixes need no image rebuild or service interruption.
+    compose run --rm --no-deps --volume "$controller_root/scripts/deploy/bootstrap-owner.py:/app/tools/bootstrap-owner.py:ro" first-owner
     ;;
   restart)
     compose stop edge console gateway control-api
