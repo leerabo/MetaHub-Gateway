@@ -2,7 +2,7 @@
 
 MetaHub 是面向团队的 AI Gateway 平台：集中管理模型服务、模型路由、项目与应用、成员权限、API KEY、用量、成本和预算。它同时提供组织控制台、AI Gateway 数据面和平台管理工作台，适合在单台 Ubuntu 服务器上以 Docker Compose 方式部署。
 
-当前 GitHub 试用版本为 **2.0.0-trial.48**。这是预发布版本，安装前请先完成目标服务器、域名、HTTPS、SMTP 和备份策略的验收。发布包和签名文件位于 [GitHub Release v2.0.0-trial.48](https://github.com/leerabo/MetaHub/releases/tag/v2.0.0-trial.48)。
+当前 GitHub 试用版本为 **2.0.0-trial.49**。这是预发布版本，安装前请先完成目标服务器、域名、HTTPS、SMTP 和备份策略的验收。发布包和签名文件位于 [GitHub Release v2.0.0-trial.49](https://github.com/leerabo/MetaHub/releases/tag/v2.0.0-trial.49)。
 
 项目路线图当前覆盖 **PRD-090 至 PRD-148**。这是持续演进的 SaaS 项目，不限定需求总数或最终编号；路线图和逐项验收记录位于 `docs/prd/`、`docs/architecture/` 与 `docs/testing/`。
 
@@ -32,6 +32,10 @@ sudo scripts/deploy/metahubctl.sh first-owner /opt/metahub-state
 ```
 
 命令中的 `STATE` 是服务器上的私有状态目录，需按实际部署路径替换。首位管理员密码和动态验证码密钥只在交互终端设置；系统不会启用默认密码或固定验证码 `000000`。
+
+## 邮件服务
+
+SaaS 管理员登录平台工作台后，在 **品牌与通知 → 邮件服务** 填写 SMTP 服务器、端口、加密方式、登录账号、密码或授权码以及发件邮箱。保存后即时生效，无需修改服务器文件或重启服务。先点击“测试连接与认证”，再发送测试邮件到自己的邮箱；确认收件后，可在“操作员”的注册验证设置中开启邮箱验证。详细说明见 [邮件服务配置](docs/operations/smtp-settings.md)。
 
 ## 数据与升级安全
 

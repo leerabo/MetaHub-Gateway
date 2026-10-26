@@ -54,6 +54,7 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "commercial-accounting",
   "channels",
   "branding",
+  "mail-settings",
   "customer-success",
   "growth",
   "notification-templates",
@@ -95,6 +96,9 @@ export function createPlatformPageController({
     navigationOpen: false,
     operators: null,
     registrationPolicy: null,
+    mailSettings: null,
+    mailDraft: null,
+    mailTest: null,
     plans: null,
     providerCatalog: null,
     providerCatalogPublishIntent: null,
@@ -2695,6 +2699,27 @@ export function createPlatformPageController({
         revision: state.registrationPolicy.revision,
       } }));
     },
+    async updateMailSettings(settings) {
+      if (state.loading || !state.mailSettings || !currentPermissions().has("platform.operator.manage")) return false;
+      const { password, ...draft } = settings;
+      state.mailDraft = draft;
+      state.mailTest = null;
+      const success = await write("邮件服务配置已保存，即时生效。", (signal) => api.updateMailSettings({
+        settings: { ...settings, revision: state.mailSettings.revision }, signal,
+      }));
+      if (success) { state.mailDraft = null; render(); }
+      return success;
+    },
+    async testMailSettings(kind, recipient) {
+      if (state.loading || !state.mailSettings || !currentPermissions().has("platform.operator.manage")) return false;
+      state.mailTest = null;
+      return write("邮件服务测试已完成。", async (signal) => {
+        const result = await api.testMailSettings({ test: {
+          revision: state.mailSettings.revision, kind, ...(kind === "email" ? { recipient } : {}),
+        }, signal });
+        state.mailTest = result.test;
+      });
+    },
     async createPlan(plan) {
       return write("套餐版本已创建。", (signal) => api.createPlan({ plan, signal }));
     },
@@ -3381,6 +3406,7 @@ export function createPlatformPageController({
         navigation: normalizeNavigation(navigation.items),
         operators: null,
         registrationPolicy: null,
+        mailSettings: null,
         plans: null,
         providerCatalog: null,
         developerContracts: null,
@@ -3471,6 +3497,9 @@ export function createPlatformPageController({
             next.registrationPolicy = value;
           }));
         }
+      }
+      if (state.view === "mail-settings" && permissions.has("platform.operator.manage") && typeof api.mailSettings === "function") {
+        tasks.push(api.mailSettings({ signal: ticket.signal }).then((value) => { next.mailSettings = value; }));
       }
       if (state.view === "billing" && permissions.has("platform.catalog.read") && typeof api.plans === "function") {
         tasks.push(api.plans({ signal: ticket.signal }).then((value) => { next.plans = value; }));
@@ -3896,6 +3925,7 @@ export function createPlatformPageController({
     const view = state.view;
     const resources = {
       operators: [["operators", "operators", "platform.operator.manage"], ["registrationPolicy", "registrationPolicy", "platform.operator.manage"]],
+      "mail-settings": [["mailSettings", "mailSettings", "platform.operator.manage"]],
       infrastructure: [["infrastructure", "infrastructureStatus", "platform.infrastructure.read"]],
       gateway: [["gatewayCells", "gatewayCells", "platform.gateway.read"]],
       audit: [["audit", "audit", "platform.audit.read"]],
@@ -5811,6 +5841,17 @@ export function createPlatformPageController({
         controller.updateRegistrationPolicy(data.get("emailVerification") === "on",
           data.get("humanVerification") === "on");
       }
+      if (form.matches("[data-platform-mail-settings-form]")) {
+        const settings = Object.fromEntries(data);
+        settings.enabled = data.get("enabled") === "on";
+        settings.port = Number(data.get("port"));
+        settings.timeout_seconds = Number(data.get("timeout_seconds"));
+        form.querySelector('[name="password"]').value = "";
+        void controller.updateMailSettings(settings).finally(() => { settings.password = ""; });
+      }
+      if (form.matches("[data-platform-mail-test-form]")) {
+        controller.testMailSettings("email", data.get("recipient"));
+      }
       if (form.matches("[data-platform-plan-form]")) {
         controller.createPlan({
           plan_code: data.get("planCode"),
@@ -6616,6 +6657,10 @@ export function createPlatformPageController({
       }
     });
     root.addEventListener("click", (event) => {
+      if (event.target.closest("[data-smtp-connection-test]")) {
+        controller.testMailSettings("connection");
+        return;
+      }
       const summary = event.target.closest("summary");
       if (summary?.parentElement?.matches(".platform-nav-group")) {
         const opened = summary.parentElement;
@@ -7011,6 +7056,9 @@ export function createPlatformPageController({
     consoleMigrationController.leave();
     state.operators = null;
     state.registrationPolicy = null;
+    state.mailSettings = null;
+    state.mailDraft = null;
+    state.mailTest = null;
     state.plans = null;
     state.providerCatalog = null;
     state.providerCatalogPublishIntent = null;

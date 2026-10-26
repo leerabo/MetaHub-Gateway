@@ -223,6 +223,7 @@ _NAVIGATION = (
         "/platform.html#launch-gates",
     ),
     ("platform.operator.manage", "operators", "Operators", "/platform.html#operators"),
+    ("platform.operator.manage", "mail-settings", "Email service", "/platform.html#mail-settings"),
     ("platform.workspace.directory.read", "workspaces", "Workspaces", "/platform.html#workspaces"),
     ("platform.support.request", "support", "Support", "/platform.html#support"),
     ("platform.audit.read", "audit", "Audit", "/platform.html#audit"),

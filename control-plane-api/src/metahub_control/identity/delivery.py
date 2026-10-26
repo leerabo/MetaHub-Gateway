@@ -148,6 +148,8 @@ _TEST_CAPTURE_DELIVERY = _TestCaptureDelivery()
 
 
 def identity_challenge_delivery(config: AppConfig) -> IdentityChallengeDelivery:
+    from .smtp_settings import effective_delivery_config
+    config = effective_delivery_config(config)
     mode = config.identity_challenge_delivery_mode
     if mode == "test_capture" and config.environment != "prod":
         return _TEST_CAPTURE_DELIVERY

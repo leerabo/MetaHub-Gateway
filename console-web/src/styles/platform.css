@@ -3109,3 +3109,22 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-section-heading { flex-wrap: wrap; }
   .platform-section-heading > form { flex-basis: 100%; width: 100%; min-width: 0; }
 }
+
+/* Mail settings share the existing glass panels and theme colors. */
+.platform-smtp-panel { padding: clamp(20px, 2.4vw, 32px); }
+.platform-smtp-form, .platform-smtp-fields { display: grid; gap: 22px; }
+.platform-smtp-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.platform-smtp-fields > label, .platform-smtp-test-form > label { display: grid; min-width: 0; align-content: start; gap: 8px; }
+.platform-smtp-fields input:not([type="checkbox"]), .platform-smtp-fields select, .platform-smtp-test-form input { width: 100%; min-width: 0; box-sizing: border-box; }
+.platform-smtp-fields small, .platform-smtp-actions > span { color: var(--ui-muted, var(--muted)); line-height: 1.6; }
+.platform-smtp-fields .platform-smtp-enabled { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; min-height: 44px; }
+.platform-smtp-enabled input { width: 18px; height: 18px; min-height: 0; }
+.platform-smtp-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.platform-smtp-test-form { display: grid; grid-template-columns: minmax(180px, 480px) auto; gap: 16px; align-items: end; justify-content: start; margin-top: 24px; }
+.platform-smtp-result { margin-top: 20px; padding: 16px 20px; border: 1px solid var(--ui-border, var(--line)); border-left: 4px solid var(--ui-accent, var(--green)); border-radius: 12px; }
+.platform-smtp-result[data-tone="error"] { border-left-color: var(--ui-danger, var(--red)); }
+.platform-smtp-result p { margin: 8px 0 0; line-height: 1.6; }
+@media (max-width: 760px) {
+  .platform-smtp-fields, .platform-smtp-test-form { grid-template-columns: minmax(0, 1fr); }
+  .platform-smtp-test-form button { justify-self: start; }
+}

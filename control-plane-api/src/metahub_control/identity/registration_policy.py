@@ -52,6 +52,8 @@ def public_registration_policy(config):
 
 
 def _delivery_available(config):
+    from .smtp_settings import effective_delivery_config
+    config = effective_delivery_config(config)
     return (
         config.identity_challenge_delivery_mode == "smtp" or (
             config.identity_challenge_delivery_mode == "test_capture" and config.environment != "prod"

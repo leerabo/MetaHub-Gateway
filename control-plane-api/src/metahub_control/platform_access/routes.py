@@ -274,6 +274,50 @@ async def update_registration_policy(request: Request, response: Response) -> di
     return result
 
 
+def _smtp_boundary(request: Request, *, write: bool = False):
+    (_platform_write_boundary if write else _platform_read_boundary)(request)
+    if (_cookie_values(request, WORKSPACE_SESSION_COOKIE)
+            or _cookie_values(request, SUPPORT_SESSION_COOKIE)):
+        raise ApiError("platform.credential_conflict")
+
+
+@router.get("/platform/mail-settings")
+async def get_mail_settings(request: Request, response: Response) -> dict:
+    from metahub_control.identity.smtp_settings import platform_smtp_settings
+    _smtp_boundary(request)
+    result = await _run(platform_smtp_settings, _config(request),
+        session_token=_required_platform_cookie(request), request_id=_request_id(request), trace_id=_trace_id(request))
+    _private(response)
+    return result
+
+
+@router.put("/platform/mail-settings")
+async def update_mail_settings(request: Request, response: Response) -> dict:
+    from metahub_control.identity.smtp_settings import platform_smtp_settings
+    _smtp_boundary(request, write=True)
+    payload = await _strict_json(request, required_fields=("enabled", "host", "port", "security", "username", "sender", "timeout_seconds", "revision"),
+                                 optional_fields=("password",))
+    result = await _run(platform_smtp_settings, _config(request),
+        session_token=_required_platform_cookie(request),
+        csrf_token=_required_csrf(request, PLATFORM_CSRF_COOKIE, "platform.csrf_invalid"),
+        payload=payload, request_id=_request_id(request), trace_id=_trace_id(request))
+    _private(response)
+    return result
+
+
+@router.post("/platform/mail-settings/test")
+async def test_mail_settings(request: Request, response: Response) -> dict:
+    from metahub_control.identity.smtp_settings import platform_smtp_settings
+    _smtp_boundary(request, write=True)
+    payload = await _strict_json(request, required_fields=("revision", "kind"), optional_fields=("recipient",))
+    result = await _run(platform_smtp_settings, _config(request),
+        session_token=_required_platform_cookie(request),
+        csrf_token=_required_csrf(request, PLATFORM_CSRF_COOKIE, "platform.csrf_invalid"),
+        test=payload, request_id=_request_id(request), trace_id=_trace_id(request))
+    _private(response)
+    return result
+
+
 @router.get("/platform/navigation", response_model=PlatformNavigationResponse)
 async def navigation(request: Request, response: Response) -> PlatformNavigationResponse:
     _platform_read_boundary(request)

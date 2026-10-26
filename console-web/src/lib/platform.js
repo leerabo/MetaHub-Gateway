@@ -72,6 +72,22 @@ export function getPlatformRegistrationPolicy({ controlApiUrl, signal } = {}) {
   return request(controlApiUrl, "/platform/registration-policy", { signal });
 }
 
+export function getPlatformMailSettings({ controlApiUrl, signal } = {}) {
+  return request(controlApiUrl, "/platform/mail-settings", { signal });
+}
+
+export function updatePlatformMailSettings({ controlApiUrl, settings, signal } = {}) {
+  return request(controlApiUrl, "/platform/mail-settings", {
+    method: "PUT", body: settings, csrf: PLATFORM_CSRF_COOKIE, signal,
+  });
+}
+
+export function testPlatformMailSettings({ controlApiUrl, test, signal } = {}) {
+  return request(controlApiUrl, "/platform/mail-settings/test", {
+    method: "POST", body: test, csrf: PLATFORM_CSRF_COOKIE, signal,
+  });
+}
+
 export function updatePlatformRegistrationPolicy({ controlApiUrl, policy, signal } = {}) {
   return request(controlApiUrl, "/platform/registration-policy", {
     method: "PUT", body: policy, csrf: PLATFORM_CSRF_COOKIE, signal,

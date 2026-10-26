@@ -36,6 +36,7 @@ def main() -> None:
         raise ValueError("Invalid release version")
     files = [ROOT / ".dockerignore", ROOT / "console-web/package.json", ROOT / "console-web/production-surface-manifest.json", ROOT / "docs/operations/github-release-upgrades.md", ROOT / "docs/operations/ubuntu-log-retention.md", ROOT / "docs/operations/sqlite-to-postgresql.md", ROOT / "docs/operations/first-owner-initialization.md", *ROOT.glob("console-web/*.html")]
     # SDK metadata and controlled downloads validate these exact runtime files.
+    files.append(ROOT / "docs/operations/smtp-settings.md")
     # Never recursively copy example trees: they can contain local .env or keys.
     for directory, names in SDK_EXAMPLE_FILES.items():
         for name in names:

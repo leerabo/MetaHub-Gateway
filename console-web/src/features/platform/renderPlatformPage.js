@@ -43,7 +43,7 @@ const NAVIGATION_GROUPS = [
   ["账务与增长", "chart-no-axes-combined", [["billing", "账单与计量"], ["commercial-accounting", "商业账务"], ["channels", "渠道管理"], ["growth", "增长分析"]]],
   ["安全与治理", "shield-check", [["operators", "操作员"], ["verification", "企业认证"], ["abuse-risk", "滥用风控"], ["audit", "平台审计"], ["compliance", "合规复核"], ["privacy", "隐私请求"], ["data-residency", "数据驻留"], ["security-assurance", "安全评估"]]],
   ["发布与供应商", "git-branch", [["feature-rollouts", "功能发布"], ["launch-gates", "发布门禁"], ["console-migration", "控制台迁移"], ["releases", "接口与 SDK 发布"], ["providers", "供应商"], ["provider-engineering", "供应商工程"], ["provider-catalog", "供应商目录"]]],
-  ["品牌与通知", "layers", [["branding", "平台品牌"], ["notification-templates", "通知模板"]]],
+  ["品牌与通知", "layers", [["branding", "平台品牌"], ["mail-settings", "邮件服务"], ["notification-templates", "通知模板"]]],
 ];
 
 export function renderPlatformGate(container, state = {}) {
@@ -143,6 +143,7 @@ function renderView(state, permissions) {
   }
   if (state.view === "abuse-risk") return abuseRiskView(state, permissions);
   if (state.view === "operators") return operatorsView(state, permissions);
+  if (state.view === "mail-settings") return mailSettingsView(state);
   if (state.view === "workspaces") return workspacesView(state, permissions);
   if (state.view === "support") return supportView(state, permissions);
   if (state.view === "audit") return auditView(state);
@@ -2200,6 +2201,42 @@ function operatorsView(state, permissions) {
     <section class="platform-band"><div class="platform-table-wrap"><table><thead><tr><th>操作员</th><th>角色</th><th>状态</th><th>修订号</th><th><span class="platform-visually-hidden">操作</span></th></tr></thead><tbody>${operators.map(operatorRow).join("") || emptyRow("暂无操作员")}</tbody></table></div></section>`;
 }
 
+function mailSettingsView(state) {
+  const saved = state.mailSettings;
+  if (!saved) return '<section class="platform-band"><p role="status">正在加载邮件服务配置…</p></section>';
+  const settings = state.mailDraft ?? saved;
+  const disabled = state.loading ? " disabled" : "";
+  const testDisabled = state.loading || saved.revision < 1 || !saved.password_set ? " disabled" : "";
+  const test = state.mailTest;
+  return `
+    <header class="platform-page-heading"><div><p>品牌与通知</p><h1>邮件服务</h1><p>为注册验证、邮箱验证和密码找回配置发信服务。</p></div><span class="platform-chip">${saved.enabled ? "已启用" : "未启用"}</span></header>
+    <section class="platform-band platform-smtp-panel" aria-labelledby="smtp-settings-title">
+      <div class="platform-section-heading"><div><h2 id="smtp-settings-title">SMTP 配置</h2><p>保存后即时生效，无需重启。密码加密保存，不会回显。</p></div></div>
+      <form class="platform-smtp-form" data-platform-mail-settings-form autocomplete="off">
+        <fieldset class="platform-smtp-fields"${disabled}>
+          <label class="platform-smtp-enabled"><input type="checkbox" name="enabled"${settings.enabled ? " checked" : ""}><span>启用验证码邮件发送</span></label>
+          <label><span>SMTP 服务器</span><input name="host" value="${escapeHtml(settings.host)}" required maxlength="253" placeholder="例如 smtp.example.com" autocomplete="off"><small>填写主机名，不含 https://、端口或路径。</small></label>
+          <label><span>连接端口</span><input name="port" value="${Number(settings.port) || 587}" type="number" min="1" max="65535" required><small>STARTTLS 常用 587，TLS 常用 465；以邮件服务商要求为准。</small></label>
+          <label><span>加密方式</span><select name="security"><option value="starttls"${settings.security === "starttls" ? " selected" : ""}>STARTTLS</option><option value="tls"${settings.security === "tls" ? " selected" : ""}>TLS / SSL</option></select><small>验证服务器证书，支持两种加密连接方式。</small></label>
+          <label><span>SMTP 登录账号</span><input name="username" value="${escapeHtml(settings.username)}" required maxlength="320" autocomplete="off" placeholder="邮件服务提供的登录账号"></label>
+          <label><span>密码或授权码</span><input name="password" type="password" maxlength="1024" autocomplete="new-password" ${saved.password_set ? 'placeholder="已保存；留空保留原密码"' : 'required placeholder="填写 SMTP 密码或邮箱授权码"'}><small>${saved.password_set ? "已保存密码。更换服务器或账号时须重新填写。" : "部分邮箱需要使用单独生成的 SMTP 授权码。"}</small></label>
+          <label><span>发件邮箱</span><input name="sender" value="${escapeHtml(settings.sender)}" type="email" required maxlength="320" placeholder="security@example.com"><small>必须是邮件服务允许发送的地址。</small></label>
+          <label><span>连接超时（秒）</span><input name="timeout_seconds" value="${Number(settings.timeout_seconds) || 10}" type="number" min="1" max="30" required></label>
+        </fieldset>
+        <div class="platform-smtp-actions"><button class="platform-primary" type="submit"${disabled}>${state.loading ? "处理中…" : "保存配置"}</button><a href="#operators">设置注册验证要求 →</a></div>
+      </form>
+    </section>
+    <section class="platform-band platform-smtp-panel" aria-labelledby="smtp-test-title">
+      <div class="platform-section-heading"><div><h2 id="smtp-test-title">验证发信配置</h2><p>先保存配置再测试。未启用邮件发送时，也可以测试已保存的配置。</p></div></div>
+      <div class="platform-smtp-actions"><button type="button" data-smtp-connection-test${testDisabled}>测试连接与认证</button><span>只检查连接、加密和认证，不发送邮件。</span></div>
+      <form class="platform-smtp-test-form" data-platform-mail-test-form>
+        <label><span>测试收件邮箱</span><input name="recipient" type="email" required maxlength="320" placeholder="填写你能接收邮件的地址"${disabled}></label>
+        <button type="submit" class="platform-primary"${testDisabled}>发送测试邮件</button>
+      </form>
+      ${test ? `<div class="platform-smtp-result" role="status" data-tone="${test.status === "passed" ? "success" : "error"}"><strong>${test.status === "passed" ? "测试成功" : "测试失败"}</strong><p>${escapeHtml(test.message)}</p></div>` : ""}
+    </section>`;
+}
+
 function registrationPolicyForm(state) {
   const policy = state.registrationPolicy;
   if (!policy) return "";
@@ -2210,7 +2247,7 @@ function registrationPolicyForm(state) {
         <label><input name="emailVerification" type="checkbox" ${policy.email_verification ? "checked" : ""} /><span>邮箱验证</span></label>
         <label><input name="humanVerification" type="checkbox" ${policy.human_verification ? "checked" : ""} /><span>基础图形验证码</span></label>
       </div></fieldset>
-      <span>邮件服务：${policy.email_delivery_available ? "可用" : "未配置"}</span>
+      <span>邮件服务：${policy.email_delivery_available ? "可用" : "未配置"} · <a href="#mail-settings">配置 SMTP 邮件服务 →</a></span>
       <button class="platform-primary" type="submit" ${state.loading ? "disabled" : ""}>保存设置</button>
     </form></section>`;
 }
