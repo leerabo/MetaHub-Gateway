@@ -690,7 +690,7 @@ export function createPlatformPageController({
         && currentPermissions().has("platform.verification.read")) {
         return loadVerificationPage();
       }
-      if (new Set(["operators", "infrastructure", "gateway", "audit", "notification-templates"]).has(state.view)) {
+      if (new Set(["operators", "mail-settings", "infrastructure", "gateway", "audit", "notification-templates"]).has(state.view)) {
         return loadCorePage();
       }
     },

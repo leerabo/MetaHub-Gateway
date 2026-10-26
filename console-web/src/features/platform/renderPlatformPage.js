@@ -2203,7 +2203,9 @@ function operatorsView(state, permissions) {
 
 function mailSettingsView(state) {
   const saved = state.mailSettings;
-  if (!saved) return '<section class="platform-band"><p role="status">正在加载邮件服务配置…</p></section>';
+  if (!saved) return `<section class="platform-band">${state.loading
+    ? '<p role="status">正在加载邮件服务配置…</p>'
+    : '<p>邮件服务配置尚未加载成功。</p><button type="button" data-platform-action="refresh">重新加载</button>'}</section>`;
   const settings = state.mailDraft ?? saved;
   const disabled = state.loading ? " disabled" : "";
   const testDisabled = state.loading || saved.revision < 1 || !saved.password_set ? " disabled" : "";

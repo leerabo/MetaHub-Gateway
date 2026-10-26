@@ -23,6 +23,51 @@ async function controller(overrides = {}) {
   return { c, page };
 }
 
+const sidebarApi = {
+  navigation: async () => ({ items: [
+    { id: "operators", label: "操作员", href: "/platform.html#operators" },
+    { id: "mail-settings", label: "邮件服务", href: "/platform.html#mail-settings" },
+  ] }),
+  operators: async () => ({ operators: [] }),
+  registrationPolicy: async () => null,
+};
+
+test("entering mail settings from another sidebar page fetches and renders the form", async () => {
+  let requests = 0;
+  const { c, page } = await controller({ ...sidebarApi, mailSettings: async () => {
+    requests += 1;
+    return settings();
+  } });
+  assert.equal(c.snapshot().view, "operators");
+  assert.equal(requests, 0);
+  assert.equal(await c.selectView("mail-settings"), true);
+  assert.equal(requests, 1);
+  assert.equal(c.snapshot().loading, false);
+  assert.match(page.innerHTML, /data-platform-mail-settings-form/u);
+  assert.doesNotMatch(page.innerHTML, /正在加载邮件服务配置/u);
+  c.destroy();
+});
+
+test("a failed sidebar load stops loading, offers retry, and can recover", async () => {
+  let requests = 0;
+  const { c, page } = await controller({ ...sidebarApi, mailSettings: async () => {
+    requests += 1;
+    if (requests === 1) throw new PlatformApiError({
+      code: "platform.unavailable", message: "暂时无法读取配置。", status: 503,
+    });
+    return settings();
+  } });
+  assert.equal(await c.selectView("mail-settings"), false);
+  assert.equal(c.snapshot().loading, false);
+  assert.match(page.innerHTML, /暂时无法读取配置/u);
+  assert.match(page.innerHTML, /重新加载/u);
+  assert.doesNotMatch(page.innerHTML, /正在加载邮件服务配置/u);
+  assert.equal(await c.refresh(), true);
+  assert.equal(requests, 2);
+  assert.match(page.innerHTML, /data-platform-mail-settings-form/u);
+  c.destroy();
+});
+
 test("mail navigation loads the form, never restores a password and retains safe drafts after failed save", async () => {
   const { c, page } = await controller({ updateMailSettings: async () => {
     throw new PlatformApiError({ code: "platform.revision_conflict", message: "请刷新后重试。", status: 412 });
