@@ -5006,7 +5006,7 @@ function safePageError(error) {
       "identity.login_invalid": "邮箱或密码不正确，请重试或选择“忘记密码”。",
       "auth.login_invalid": "邮箱或密码不正确，请重试或选择“忘记密码”。",
       "workspace.account_unverified": "此账号尚未完成邮箱验证，请先通过登录页的“忘记密码”验证邮箱，再创建组织。你在现有组织中的员工职责不影响创建自己的组织。",
-      "identity.delivery_unavailable": "邮箱验证服务尚未配置，请联系平台管理员。",
+      "identity.delivery_unavailable": "验证码邮件暂时无法发送，请稍后重试；若持续失败，请联系平台管理员检查发信配置。",
       "identity.registration_invalid": "注册信息不完整或格式不正确，请检查后重试。",
       "identity.password_invalid": "密码长度须为 8 至 1024 字节。",
       "identity.request_invalid": "注册信息不完整或格式不正确，请检查后重试。",

@@ -2232,7 +2232,7 @@ function mailSettingsView(state) {
       <div class="platform-section-heading"><div><h2 id="smtp-test-title">验证发信配置</h2><p>先保存配置再测试。未启用邮件发送时，也可以测试已保存的配置。</p></div></div>
       <div class="platform-smtp-actions"><button type="button" data-smtp-connection-test${testDisabled}>测试连接与认证</button><span>只检查连接、加密和认证，不发送邮件。</span></div>
       <form class="platform-smtp-test-form" data-platform-mail-test-form>
-        <label><span>测试收件邮箱</span><input name="recipient" type="email" required maxlength="320" placeholder="填写你能接收邮件的地址"${disabled}></label>
+        <label><span>测试收件邮箱</span><input name="recipient" type="email" value="${escapeHtml(state.mailRecipient ?? "")}" required maxlength="320" placeholder="填写你能接收邮件的地址"${disabled}></label>
         <button type="submit" class="platform-primary"${testDisabled}>发送测试邮件</button>
       </form>
       ${test ? `<div class="platform-smtp-result" role="status" data-tone="${test.status === "passed" ? "success" : "error"}"><strong>${test.status === "passed" ? "测试成功" : "测试失败"}</strong><p>${escapeHtml(test.message)}</p></div>` : ""}

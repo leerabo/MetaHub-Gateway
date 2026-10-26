@@ -123,3 +123,38 @@ test("mail HTTP writes use platform CSRF and cookies without credentials in URLs
     assert.equal(calls[2].options.headers["X-CSRF-Token"], "c".repeat(43));
   } finally { globalThis.document = previous; }
 });
+
+test("failed email tests retain the recipient during and after sending without success feedback", async () => {
+  let finish;
+  const { c, page } = await controller({ testMailSettings: ({ test: input }) => {
+    assert.equal(input.recipient, "recipient@example.test");
+    return new Promise((resolve) => { finish = resolve; });
+  } });
+  const pending = c.testMailSettings("email", " recipient@example.test ");
+  assert.equal(c.snapshot().loading, true);
+  assert.match(page.innerHTML, /value="recipient@example.test"/u);
+  finish({ test: { status: "failed", message: "加密连接失败。" } });
+  assert.equal(await pending, false);
+  assert.equal(c.snapshot().loading, false);
+  assert.equal(c.snapshot().feedback, null);
+  assert.match(page.innerHTML, /value="recipient@example.test"/u);
+  assert.match(page.innerHTML, /测试失败/u);
+  assert.doesNotMatch(page.innerHTML, /邮件服务测试已完成/u);
+  c.destroy();
+  assert.equal(c.snapshot().mailRecipient, "");
+});
+
+test("network failures retain the test recipient and allow retry", async () => {
+  let attempt = 0;
+  const { c, page } = await controller({ testMailSettings: async () => {
+    if (++attempt === 1) throw new PlatformApiError({ status: 503, message: "网络暂不可用。" });
+    return { test: { status: "passed", message: "SMTP 服务已接受测试邮件。" } };
+  } });
+  assert.equal(await c.testMailSettings("email", "recipient@example.test"), false);
+  assert.match(page.innerHTML, /value="recipient@example.test"/u);
+  assert.match(page.innerHTML, /网络暂不可用/u);
+  assert.equal(await c.testMailSettings("email", c.snapshot().mailRecipient), true);
+  assert.match(page.innerHTML, /测试成功/u);
+  assert.match(page.innerHTML, /value="recipient@example.test"/u);
+  c.destroy();
+});

@@ -144,6 +144,8 @@ def _checked(payload, previous):
         _invalid("SMTP 端口须为 1–65535 的整数。")
     if type(result["security"]) is not str or result["security"] not in {"starttls", "tls"}:
         _invalid("请选择 STARTTLS 或 TLS 加密连接。")
+    if (result["port"], result["security"]) in {(465, "starttls"), (587, "tls")}:
+        _invalid("端口与加密方式不匹配：465 请使用 TLS，587 请使用 STARTTLS。")
     if type(result["timeout_seconds"]) is not int or not 1 <= result["timeout_seconds"] <= 30:
         _invalid("连接超时须为 1–30 秒的整数。")
     try:
@@ -315,6 +317,11 @@ def platform_smtp_settings(
 
 
 def _test_smtp(settings, kind, recipient):
+    if (settings["port"], settings["security"]) in {(465, "starttls"), (587, "tls")}:
+        return {
+            "status": "failed", "kind": kind, "stage": "configuration",
+            "message": "端口与加密方式不匹配：465 请使用 TLS，587 请使用 STARTTLS。修改后请先保存配置。",
+        }
     stage = "connection"
     try:
         context = ssl.create_default_context()
@@ -353,8 +360,13 @@ def _test_smtp(settings, kind, recipient):
             if kind == "connection"
             else "SMTP 服务已接受测试邮件，请检查收件箱及垃圾邮件；这不代表收件方已确认送达。",
         }
-    except Exception:
+    except Exception as error:
         # Never expose server replies: they may contain credentials or recipients.
+        if isinstance(error, (smtplib.SMTPServerDisconnected, ConnectionError, TimeoutError)):
+            return {
+                "status": "failed", "kind": kind, "stage": stage,
+                "message": "SMTP 连接中断或超时，请检查服务器出站网络、邮件服务商访问限制后重试。",
+            }
         messages = {
             "connection": "无法连接 SMTP 服务器，请检查地址、端口及服务器出站网络。",
             "tls": "加密连接失败，请检查加密方式、端口和服务器证书。",

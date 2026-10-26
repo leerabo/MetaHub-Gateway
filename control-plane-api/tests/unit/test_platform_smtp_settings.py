@@ -109,6 +109,8 @@ def test_blank_password_preserves_but_does_not_forward_secret_to_changed_host(st
     [
         {"port": True},
         {"security": []},
+        {"port": 465, "security": "starttls"},
+        {"port": 587, "security": "tls"},
         {"sender": "a\nb@example.invalid"},
         {"host": "https://smtp.example.invalid"},
         {"timeout_seconds": 31},
@@ -195,6 +197,27 @@ def test_tls_failure_redacted_and_never_authenticates(monkeypatch):
     assert result["status"] == "failed" and result["stage"] == "tls"
     assert "login" not in [e[0] for e in events]
     assert "sensitive" not in str(result) and "recipient@" not in str(result)
+
+
+def test_existing_mismatched_settings_fail_before_connecting(monkeypatch):
+    events = []
+    monkeypatch.setattr(smtp.smtplib, "SMTP", transport(events))
+    result = smtp._test_smtp(payload(port=465), "email", "recipient@example.invalid")
+    assert result["status"] == "failed" and result["stage"] == "configuration"
+    assert "465" in result["message"] and "TLS" in result["message"]
+    assert not events
+
+
+def test_disconnect_during_login_is_not_reported_as_bad_password(monkeypatch):
+    class Disconnected(transport([])):
+        def login(self, *_args):
+            raise smtp.smtplib.SMTPServerDisconnected("sensitive reply")
+
+    monkeypatch.setattr(smtp.smtplib, "SMTP", Disconnected)
+    result = smtp._test_smtp(payload(), "connection", None)
+    assert result["status"] == "failed" and result["stage"] == "authentication"
+    assert "连接中断" in result["message"]
+    assert "认证失败" not in result["message"] and "sensitive" not in str(result)
 
 
 def test_http_cookie_origin_csrf_and_strict_payload_boundaries(store):

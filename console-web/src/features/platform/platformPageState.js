@@ -99,6 +99,7 @@ export function createPlatformPageController({
     mailSettings: null,
     mailDraft: null,
     mailTest: null,
+    mailRecipient: "",
     plans: null,
     providerCatalog: null,
     providerCatalogPublishIntent: null,
@@ -2712,13 +2713,26 @@ export function createPlatformPageController({
     },
     async testMailSettings(kind, recipient) {
       if (state.loading || !state.mailSettings || !currentPermissions().has("platform.operator.manage")) return false;
+      if (kind === "email") state.mailRecipient = String(recipient ?? "").trim();
       state.mailTest = null;
-      return write("邮件服务测试已完成。", async (signal) => {
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      state.feedback = null;
+      render();
+      try {
         const result = await api.testMailSettings({ test: {
-          revision: state.mailSettings.revision, kind, ...(kind === "email" ? { recipient } : {}),
-        }, signal });
+          revision: state.mailSettings.revision, kind,
+          ...(kind === "email" ? { recipient: state.mailRecipient } : {}),
+        }, signal: ticket.signal });
+        if (!current(ticket)) return false;
         state.mailTest = result.test;
-      });
+        state.loading = false;
+        render();
+        return result.test?.status === "passed";
+      } catch (error) {
+        return fail(ticket, error);
+      }
     },
     async createPlan(plan) {
       return write("套餐版本已创建。", (signal) => api.createPlan({ plan, signal }));
@@ -6787,6 +6801,15 @@ export function createPlatformPageController({
     });
     root.addEventListener("change", (event) => {
       const select = event.target;
+      if (select?.matches?.('[data-platform-mail-test-form] [name="recipient"]')) {
+        state.mailRecipient = select.value;
+      }
+      if (select?.matches?.('[data-platform-mail-settings-form] [name="port"]')) {
+        const security = select.form?.querySelector('[name="security"]');
+        if (security && [465, 587].includes(Number(select.value))) {
+          security.value = Number(select.value) === 465 ? "tls" : "starttls";
+        }
+      }
       if (select?.matches?.("[data-platform-commercial-step-up-method]")) {
         const code = select.form?.querySelector?.("[data-platform-commercial-step-up-code]");
         const input = code?.querySelector?.("[data-platform-sensitive]");
@@ -7059,6 +7082,7 @@ export function createPlatformPageController({
     state.mailSettings = null;
     state.mailDraft = null;
     state.mailTest = null;
+    state.mailRecipient = "";
     state.plans = null;
     state.providerCatalog = null;
     state.providerCatalogPublishIntent = null;
