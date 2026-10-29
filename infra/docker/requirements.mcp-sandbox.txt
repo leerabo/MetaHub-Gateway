@@ -1,0 +1,7 @@
+# Isolated PRD-083 Sandbox Worker runtime. Keep this list independent from
+# Control/Gateway dependencies so database and document tooling stay absent.
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+httpx>=0.27,<1.0
+cryptography>=42,<46
+mcp>=1.0,<2.0

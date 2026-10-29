@@ -1,0 +1,14 @@
+[Unit]
+Description=MetaHub verified release update worker
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /opt/metahub/scripts/deploy/update-agent.py --config /etc/metahub/updater.json
+UMask=0077
+TimeoutStartSec=7500
+TimeoutStopSec=180
+KillMode=control-group
+NoNewPrivileges=true

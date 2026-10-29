@@ -1,0 +1,8 @@
+{
+  "repository": "leerabo/MetaHub",
+  "include_prereleases": true,
+  "public_key": "/etc/metahub/release-public.pem",
+  "release_store": "/opt/metahub-releases",
+  "updates": "/opt/metahub-state/updates",
+  "state": "/opt/metahub-state"
+}

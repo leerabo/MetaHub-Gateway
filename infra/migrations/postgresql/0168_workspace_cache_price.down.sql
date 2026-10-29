@@ -1,0 +1,2 @@
+-- PostgreSQL production migrations are forward-only for this additive billing
+-- evidence field; rollback requires a controlled baseline rebuild.

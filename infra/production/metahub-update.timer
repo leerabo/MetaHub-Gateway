@@ -1,0 +1,10 @@
+[Unit]
+Description=Check MetaHub owner upgrade requests
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=15s
+Unit=metahub-update.service
+
+[Install]
+WantedBy=timers.target

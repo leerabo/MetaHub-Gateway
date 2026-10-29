@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metahub.local/schemas/service-info.schema.json",
+  "title": "ServiceInfo",
+  "type": "object",
+  "required": ["service_name", "version", "build_commit", "build_time", "started_at", "uptime_seconds", "request_id", "trace_id"],
+  "properties": {
+    "service_name": { "type": "string" },
+    "version": { "type": "string" },
+    "build_commit": { "type": "string" },
+    "build_time": { "type": "string" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "uptime_seconds": { "type": "number" },
+    "request_id": { "type": "string" },
+    "trace_id": { "type": "string" }
+  },
+  "additionalProperties": false
+}

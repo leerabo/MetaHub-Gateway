@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="description" data-i18n-meta="description" content="MetaHub 企业级 AI 网关。自带密钥、统一接入、策略路由，让安全、成本与每一次 AI 调用尽在掌控。" />
+    <title>MetaHub · AI 的统一入口</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="src/styles/public-home.css" />
+    <link rel="stylesheet" href="src/styles/public-design.css" />
+  </head>
+  <body>
+    <a class="home-skip" href="#main" data-i18n="home.skip">跳到主要内容</a>
+    <header class="home-header">
+      <a class="home-wordmark" href="./" data-i18n-aria="home.aria" aria-label="MetaHub 首页"><span class="home-mark" aria-hidden="true">M</span>MetaHub</a>
+      <nav data-i18n-aria="home.nav" aria-label="主导航">
+        <a href="#capabilities" data-i18n="home.capabilities">产品能力</a>
+        <a href="status.html" data-i18n="home.status">服务状态</a>
+      </nav>
+      <div class="home-header-actions">
+        <button class="home-locale-toggle" type="button" data-locale-toggle>English</button>
+        <button class="home-nav-toggle" type="button" data-home-nav-toggle aria-expanded="false" aria-controls="home-mobile-nav" data-i18n="home.menu">菜单</button>
+        <a class="home-nav-login" href="identity.html"><span data-i18n="home.login">登录</span><span data-icon="arrow-right"></span></a>
+      </div>
+    </header>
+    <nav id="home-mobile-nav" class="home-mobile-nav" data-home-mobile-nav data-i18n-aria="home.nav" aria-label="主导航" hidden>
+      <a href="#capabilities" data-i18n="home.capabilities">产品能力</a>
+      <a href="status.html" data-i18n="home.status">服务状态</a>
+    </nav>
+    <main id="main">
+      <section class="home-hero" aria-labelledby="home-title">
+        <div class="home-hero-copy">
+          <p class="home-eyebrow" data-i18n="home.eyebrow">企业 AI 网关</p>
+          <h1 id="home-title">MetaHub</h1>
+          <p class="home-hero-description" data-i18n="home.description">连接每一种模型，掌握每一次调用。</p>
+          <div class="home-hero-actions">
+            <a class="home-button" href="identity.html"><span data-i18n="home.login">登录</span><span data-icon="arrow-right"></span></a>
+            <a class="home-text-link" href="identity.html?view=register"><span data-i18n="home.register">创建账号</span><span data-icon="arrow-right"></span></a>
+          </div>
+        </div>
+        <div class="home-scene" data-gateway-scene aria-hidden="true">
+          <div class="gateway-fallback"><span></span><span></span><span></span><strong>M</strong></div>
+        </div>
+        <div class="home-hero-bottom"><span data-i18n="home.models">模型 · 密钥 · 团队</span><a href="#capabilities"><span data-i18n="home.capabilities">产品能力</span><span aria-hidden="true">↓</span></a></div>
+      </section>
+      <section class="home-capabilities" id="capabilities" aria-labelledby="capabilities-title">
+        <p class="home-capability-intro" data-i18n="home.capability_intro">产品能力</p>
+        <div class="home-section-heading"><h2 id="capabilities-title" data-i18n="home.heading">自由接入，有序管理</h2><p data-i18n="home.heading_description">从模型到团队，一个入口。</p></div>
+        <div class="home-capability-grid">
+          <article><span data-icon="key-round"></span><h3 data-i18n="home.byok">自带密钥 BYOK</h3><p data-i18n="home.byok_description">连接已有模型服务，密钥集中管理。</p></article>
+          <article><span data-icon="layers"></span><h3 data-i18n="home.keys">统一 KEY</h3><p data-i18n="home.keys_description">一人一 Key，统一接口与模型权限。</p></article>
+          <article><span data-icon="git-branch"></span><h3 data-i18n="home.routing">路由分发</h3><p data-i18n="home.routing_description">策略选路、权重调度与故障回退。</p></article>
+          <article><span data-icon="shield-check"></span><h3 data-i18n="home.dlp">敏感数据防护</h3><p data-i18n="home.dlp_description">内容检测与脱敏，访问留痕可审计。</p></article>
+          <article><span data-icon="chart-no-axes-combined"></span><h3 data-i18n="home.finops">精细化财务</h3><p data-i18n="home.finops_description">用量计费、部门归集与预算控制。</p></article>
+          <article><span data-icon="cpu"></span><h3 data-i18n="home.edge">边缘 Agent</h3><p data-i18n="home.edge_description">私有网关部署、健康检查与升级。</p></article>
+          <article><span data-icon="users"></span><h3 data-i18n="home.identity">团队与身份</h3><p data-i18n="home.identity_description">组织隔离、员工档案与企业 SSO。</p></article>
+          <article><span data-icon="activity"></span><h3 data-i18n="home.insights">调用洞察</h3><p data-i18n="home.insights_description">日志、指标与告警，定位调用异常。</p></article>
+        </div>
+      </section>
+    </main>
+    <footer class="home-footer"><a class="home-wordmark" href="./">MetaHub</a><span data-i18n="home.footer">AI 的统一入口</span><a href="status.html"><span data-i18n="home.status">服务状态</span><span data-icon="arrow-right"></span></a></footer>
+    <script type="module" src="src/features/public-home/main.js"></script>
+  </body>
+</html>

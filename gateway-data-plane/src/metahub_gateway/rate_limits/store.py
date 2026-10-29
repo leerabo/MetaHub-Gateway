@@ -1,0 +1,555 @@
+"""限流存储适配：为内存与 Redis 后端提供单维和批任务多维原子扣减语义。
+
+维度键只使用受控标识，Redis 密码仅进入 AUTH 命令；存储失败必须关闭请求，不能以本地
+放行为降级策略，也不得把连接凭据写入日志。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import re
+import ssl
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Literal, Protocol
+from urllib.parse import unquote, urlparse
+
+
+class RateLimitStoreUnavailable(RuntimeError):
+    """限流计数存储不可用。
+
+    上层会把该异常映射为 `gateway.rate_limit_unavailable`，不会把 Redis URL、密码或
+    底层 socket 错误写入 API 响应。
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class BatchRateLimitDimension:
+    """描述批任务一次需要原子扣减的限流维度，维度键不包含凭据明文。
+
+    One bounded dimension in an all-or-nothing Batch lane claim.
+    """
+
+    limit_type: Literal["rpm", "tpm", "concurrency"]
+    key: str
+    amount: int
+    ceiling: int
+    ttl_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
+class BatchRateLimitDecision:
+    """汇总批任务多维限流的原子判定结果和最小重试时间。
+
+    Atomic Batch lane result; a rejection never changes any counter.
+    """
+
+    allowed: bool
+    limit_type: str | None = None
+    current: int = 0
+    limit: int = 0
+
+
+class RateLimitCounterStore(Protocol):
+    """限流计数器存储协议。
+
+    Redis 和测试内存实现都遵守同一组原子操作语义，便于数据面逻辑只关注限流决策。
+    """
+
+    async def increment_window(self, key: str, amount: int, ttl_seconds: int) -> int:
+        """递增固定窗口计数器，并返回递增后的当前值。"""
+
+    async def acquire_concurrency(self, key: str, limit: int, ttl_seconds: int) -> tuple[bool, int]:
+        """尝试占用并发槽位，返回是否准入和当前并发值。"""
+
+    async def release_concurrency(self, key: str) -> None:
+        """释放一个并发槽位，释放失败不能影响已完成的用户请求。"""
+
+    async def try_acquire_batch_limits(
+        self,
+        dimensions: tuple[BatchRateLimitDimension, ...],
+    ) -> BatchRateLimitDecision:
+        """原子申请批任务全部租户和全局限流维度，任一不足时不消耗任何配额。
+
+        Atomically check and increment every configured Batch dimension.
+        """
+
+    async def ping(self) -> bool:
+        """检查限流计数器存储是否已经连接且可以执行原子计数。"""
+
+
+class InMemoryRateLimitStore:
+    """测试用内存计数器。
+
+    该实现只用于单进程测试和本地注入，不用于生产限流；生产路径必须配置 Redis URL。
+    """
+
+    def __init__(self, *, now: Callable[[], float] | None = None, available: bool = True) -> None:
+        """创建内存计数器，并允许测试注入时间源和可用性状态。"""
+
+        self._now = now or time.time
+        self._available = available
+        self._lock = asyncio.Lock()
+        self._values: dict[str, tuple[int, float | None]] = {}
+
+    async def increment_window(self, key: str, amount: int, ttl_seconds: int) -> int:
+        """递增固定窗口计数器，并按 TTL 清理过期窗口。"""
+
+        self._ensure_available()
+        async with self._lock:
+            self._expire_locked()
+            value, _expires_at = self._values.get(key, (0, None))
+            value += amount
+            self._values[key] = (value, self._now() + ttl_seconds)
+            return value
+
+    async def acquire_concurrency(self, key: str, limit: int, ttl_seconds: int) -> tuple[bool, int]:
+        """尝试占用并发槽位，超过限制时立即回滚本次递增。"""
+
+        self._ensure_available()
+        async with self._lock:
+            self._expire_locked()
+            value, _expires_at = self._values.get(key, (0, None))
+            value += 1
+            if value > limit:
+                # 并发限制超限时必须回滚本次占用，否则会把后续请求永久挡住。
+                if value <= 1:
+                    self._values.pop(key, None)
+                else:
+                    self._values[key] = (value - 1, self._now() + ttl_seconds)
+                return False, value
+            self._values[key] = (value, self._now() + ttl_seconds)
+            return True, value
+
+    async def release_concurrency(self, key: str) -> None:
+        """释放并发槽位，计数降到 0 时删除键。"""
+
+        self._ensure_available()
+        async with self._lock:
+            self._expire_locked()
+            value, expires_at = self._values.get(key, (0, None))
+            value -= 1
+            if value <= 0:
+                self._values.pop(key, None)
+                return
+            self._values[key] = (value, expires_at)
+
+    async def try_acquire_batch_limits(
+        self,
+        dimensions: tuple[BatchRateLimitDimension, ...],
+    ) -> BatchRateLimitDecision:
+        """原子申请批任务全部租户和全局限流维度，任一不足时不消耗任何配额。
+
+        Check all Batch ceilings under one lock and mutate only after all pass.
+        """
+
+        self._ensure_available()
+        _validate_batch_dimensions(dimensions)
+        async with self._lock:
+            self._expire_locked()
+            for dimension in dimensions:
+                current, _expires_at = self._values.get(dimension.key, (0, None))
+                projected = current + dimension.amount
+                if projected > dimension.ceiling:
+                    return BatchRateLimitDecision(
+                        allowed=False,
+                        limit_type=dimension.limit_type,
+                        current=projected,
+                        limit=dimension.ceiling,
+                    )
+            now = self._now()
+            for dimension in dimensions:
+                current, expires_at = self._values.get(dimension.key, (0, None))
+                self._values[dimension.key] = (
+                    current + dimension.amount,
+                    expires_at or now + dimension.ttl_seconds,
+                )
+            return BatchRateLimitDecision(allowed=True)
+
+    async def ping(self) -> bool:
+        """返回内存存储是否处于可用状态。"""
+
+        self._ensure_available()
+        return True
+
+    def _ensure_available(self) -> None:
+        """在内存实现中模拟 Redis 不可用，用于验证数据面失败关闭路径。"""
+
+        if not self._available:
+            raise RateLimitStoreUnavailable("rate limit store unavailable")
+
+    def _expire_locked(self) -> None:
+        """清理已过期的窗口键。
+
+        调用方必须已经持有锁，避免并发测试中出现计数被交错清理。
+        """
+
+        now = self._now()
+        expired = [
+            key
+            for key, (_value, expires_at) in self._values.items()
+            if expires_at and expires_at <= now
+        ]
+        for key in expired:
+            self._values.pop(key, None)
+
+
+@dataclass(frozen=True, repr=False)
+class RedisConnectionConfig:
+    """Redis 连接配置。
+
+    该结构仅在内存中保存 Redis 密码，不会进入日志、响应或结构化事件 payload。
+    """
+
+    host: str
+    port: int
+    db: int
+    username: str | None
+    password: str | None
+    use_tls: bool
+
+
+class RedisRateLimitStore:
+    """基于 Redis 的限流计数器实现。
+
+    为避免当前仓库额外依赖外部 Redis 包，这里实现最小 RESP 客户端；M0 每个命令打开一次短连接，
+    后续高吞吐版本可以替换为连接池而不改变上层限流服务接口。
+    """
+
+    def __init__(
+        self,
+        redis_url: str,
+        *,
+        command_timeout_seconds: float = 0.5,
+        close_timeout_seconds: float = 0.1,
+    ) -> None:
+        """解析 Redis URL，密码仅保存在进程内用于 AUTH。"""
+
+        self.redis_url = redis_url
+        self._config = _parse_redis_url(redis_url)
+        self._command_timeout_seconds = _bounded_timeout(command_timeout_seconds)
+        self._close_timeout_seconds = _bounded_timeout(close_timeout_seconds)
+        try:
+            self._ssl_context = ssl.create_default_context() if self._config.use_tls else None
+        except Exception:
+            raise RateLimitStoreUnavailable("redis command failed") from None
+
+    async def increment_window(self, key: str, amount: int, ttl_seconds: int) -> int:
+        """使用 INCRBY 递增固定窗口计数器，并在首次创建时设置 TTL。"""
+
+        value = _counter_value(await self._command("INCRBY", key, str(amount)))
+        if value == amount:
+            await self._command("EXPIRE", key, str(ttl_seconds))
+        return value
+
+    async def acquire_concurrency(self, key: str, limit: int, ttl_seconds: int) -> tuple[bool, int]:
+        """使用 INCR 占用并发槽位，超限时用 DECR 回滚。"""
+
+        value = _counter_value(await self._command("INCR", key))
+        if value == 1:
+            await self._command("EXPIRE", key, str(ttl_seconds))
+        if value > limit:
+            # 超限请求不能留下并发占用，否则后续正常请求会被错误拒绝。
+            await self._command("DECR", key)
+            return False, value
+        return True, value
+
+    async def release_concurrency(self, key: str) -> None:
+        """使用 DECR 释放并发槽位，非正数时删除键。"""
+
+        value = _counter_value(await self._command("DECR", key))
+        if value <= 0:
+            await self._command("DEL", key)
+
+    async def try_acquire_batch_limits(
+        self,
+        dimensions: tuple[BatchRateLimitDimension, ...],
+    ) -> BatchRateLimitDecision:
+        """原子申请批任务全部租户和全局限流维度，任一不足时不消耗任何配额。
+
+        Use one Lua script so a rejected Batch claim leaves every Redis key unchanged.
+        """
+
+        _validate_batch_dimensions(dimensions)
+        if not dimensions:
+            return BatchRateLimitDecision(allowed=True)
+        script = (
+            "local n=tonumber(ARGV[1]);"
+            "for i=1,n do "
+            "local base=2+(i-1)*3;"
+            "local amount=tonumber(ARGV[base]);"
+            "local ceiling=tonumber(ARGV[base+1]);"
+            "local current=tonumber(redis.call('GET',KEYS[i]) or '0');"
+            "if current+amount>ceiling then return {0,i,current+amount}; end;"
+            "end;"
+            "for i=1,n do "
+            "local base=2+(i-1)*3;"
+            "local amount=tonumber(ARGV[base]);"
+            "local ttl=tonumber(ARGV[base+2]);"
+            "local value=redis.call('INCRBY',KEYS[i],amount);"
+            "if value==amount then redis.call('EXPIRE',KEYS[i],ttl); end;"
+            "end;"
+            "return {1,0,0};"
+        )
+        arguments: list[str] = [str(len(dimensions))]
+        for dimension in dimensions:
+            arguments.extend(
+                (str(dimension.amount), str(dimension.ceiling), str(dimension.ttl_seconds))
+            )
+        result = await self._command(
+            "EVAL",
+            script,
+            str(len(dimensions)),
+            *(dimension.key for dimension in dimensions),
+            *arguments,
+        )
+        if (
+            type(result) is not list
+            or len(result) != 3
+            or any(type(item) is not int for item in result)
+        ):
+            raise RateLimitStoreUnavailable("redis batch response invalid")
+        allowed, failed_index, current = result
+        if allowed == 1 and failed_index == 0:
+            return BatchRateLimitDecision(allowed=True)
+        if allowed != 0 or not 1 <= failed_index <= len(dimensions):
+            raise RateLimitStoreUnavailable("redis batch response invalid")
+        failed = dimensions[failed_index - 1]
+        return BatchRateLimitDecision(
+            allowed=False,
+            limit_type=failed.limit_type,
+            current=current,
+            limit=failed.ceiling,
+        )
+
+    async def ping(self) -> bool:
+        """用 PING 验证 Redis 连接、认证和 DB 选择是否可用。"""
+
+        response = await self._command("PING")
+        if response != "PONG":
+            raise RateLimitStoreUnavailable("redis command failed")
+        return True
+
+    async def _command(self, *parts: str) -> object:
+        """发送一个 Redis 命令并解析 RESP 响应。
+
+        任何 socket、协议或 Redis 错误都会收敛成 RateLimitStoreUnavailable，避免把 Redis 地址、
+        密码或底层异常传播给调用方。
+        """
+
+        writer: asyncio.StreamWriter | None = None
+        try:
+            # One deadline covers authentication and the entire reply, including slow fragments.
+            async with asyncio.timeout(self._command_timeout_seconds):
+                reader, writer = await asyncio.open_connection(
+                    self._config.host,
+                    self._config.port,
+                    ssl=self._ssl_context,
+                    server_hostname=self._config.host if self._config.use_tls else None,
+                    ssl_handshake_timeout=(
+                        self._command_timeout_seconds if self._config.use_tls else None
+                    ),
+                    ssl_shutdown_timeout=(
+                        self._close_timeout_seconds if self._config.use_tls else None
+                    ),
+                )
+                await self._authenticate(reader, writer)
+                writer.write(_encode_command(parts))
+                await writer.drain()
+                return await _read_response(reader)
+        except Exception:
+            raise RateLimitStoreUnavailable("redis command failed") from None
+        finally:
+            if writer is not None:
+                try:
+                    writer.close()
+                    async with asyncio.timeout(self._close_timeout_seconds):
+                        await writer.wait_closed()
+                except asyncio.CancelledError:
+                    writer.transport.abort()
+                    raise
+                except Exception:
+                    # Cleanup cannot extend the request indefinitely or hide its original outcome.
+                    writer.transport.abort()
+
+    async def _authenticate(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """按需执行 AUTH 和 SELECT。
+
+        Redis 密码只进入 AUTH 命令，不写日志；DB 选择失败会被外层统一映射为存储不可用。
+        """
+
+        if self._config.password:
+            if self._config.username:
+                writer.write(
+                    _encode_command(
+                        ("AUTH", self._config.username, self._config.password)
+                    )
+                )
+            else:
+                writer.write(_encode_command(("AUTH", self._config.password)))
+            await writer.drain()
+            if await _read_response(reader) != "OK":
+                raise RateLimitStoreUnavailable("redis command failed")
+        if self._config.db:
+            writer.write(_encode_command(("SELECT", str(self._config.db))))
+            await writer.drain()
+            if await _read_response(reader) != "OK":
+                raise RateLimitStoreUnavailable("redis command failed")
+
+
+def _parse_redis_url(redis_url: str) -> RedisConnectionConfig:
+    """解析 Redis URL 为连接配置，并拒绝不支持的协议或非法数据库编号。"""
+
+    try:
+        if type(redis_url) is not str:
+            raise ValueError
+        parsed = urlparse(redis_url)
+        port = parsed.port
+        if port is None:
+            port = 6380 if parsed.scheme == "rediss" else 6379
+        if (
+            parsed.scheme not in {"redis", "rediss"}
+            or not parsed.hostname
+            or parsed.query
+            or parsed.fragment
+            or not 1 <= port <= 65535
+            or (parsed.username is not None and not parsed.password)
+        ):
+            raise ValueError
+        db_text = parsed.path.removeprefix("/") or "0"
+        if not re.fullmatch(r"[0-9]{1,3}", db_text):
+            raise ValueError
+        db = int(db_text)
+        if db > 255:
+            raise ValueError
+    except (ValueError, TypeError):
+        raise RateLimitStoreUnavailable("redis command failed") from None
+    return RedisConnectionConfig(
+        host=parsed.hostname,
+        port=port,
+        db=db,
+        username=unquote(parsed.username) if parsed.username else None,
+        password=unquote(parsed.password) if parsed.password else None,
+        use_tls=parsed.scheme == "rediss",
+    )
+
+
+def _bounded_timeout(value: float) -> float:
+    if type(value) not in {int, float} or not 0.05 <= value <= 10:
+        raise RateLimitStoreUnavailable("redis command failed")
+    return float(value)
+
+
+def _counter_value(value: object) -> int:
+    if type(value) is not int:
+        raise RateLimitStoreUnavailable("redis command failed")
+    return value
+
+
+def _encode_command(parts: tuple[str, ...] | list[str]) -> bytes:
+    """把 Redis 命令编码成 RESP 数组，保持自研轻量客户端只处理必要协议子集。"""
+
+    encoded_parts = [part.encode("utf-8") for part in parts]
+    payload = [f"*{len(encoded_parts)}\r\n".encode("ascii")]
+    for part in encoded_parts:
+        payload.append(f"${len(part)}\r\n".encode("ascii"))
+        payload.append(part)
+        payload.append(b"\r\n")
+    return b"".join(payload)
+
+
+@dataclass
+class _ResponseBudget:
+    bytes_left: int = 65536
+    values_left: int = 128
+
+
+async def _read_response(
+    reader: asyncio.StreamReader, *, depth: int = 0, budget: _ResponseBudget | None = None
+) -> object:
+    """读取一个 RESP 响应。
+
+    单维计数使用简单字符串与整数，Batch Lua 使用数组；所有响应共享大小和递归预算。
+    """
+
+    budget = budget or _ResponseBudget()
+    budget.values_left -= 1
+    if depth > 4 or budget.values_left < 0:
+        raise RateLimitStoreUnavailable("redis command failed")
+    prefix = await reader.readexactly(1)
+    line = await reader.readline()
+    budget.bytes_left -= 1 + len(line)
+    if budget.bytes_left < 0 or len(line) > 1024 or not line.endswith(b"\r\n"):
+        raise RateLimitStoreUnavailable("redis command failed")
+    body = line[:-2]
+    if prefix == b"+":
+        return body.decode("utf-8")
+    if prefix == b":":
+        return _resp_integer(body)
+    if prefix == b"$":
+        length = _resp_integer(body)
+        if length == -1:
+            return None
+        if length < 0 or length + 2 > budget.bytes_left:
+            raise RateLimitStoreUnavailable("redis command failed")
+        budget.bytes_left -= length + 2
+        data = await reader.readexactly(length)
+        if await reader.readexactly(2) != b"\r\n":
+            raise RateLimitStoreUnavailable("redis command failed")
+        return data.decode("utf-8")
+    if prefix == b"*":
+        length = _resp_integer(body)
+        if length == -1:
+            return None
+        if length < 0 or length > budget.values_left:
+            raise RateLimitStoreUnavailable("redis command failed")
+        return [
+            await _read_response(reader, depth=depth + 1, budget=budget)
+            for _index in range(length)
+        ]
+    if prefix == b"-":
+        # Redis 返回错误响应时把底层细节折叠为限流存储不可用，避免泄露服务端信息。
+        raise RateLimitStoreUnavailable("redis returned error")
+    raise RateLimitStoreUnavailable("unsupported redis response")
+
+
+def _resp_integer(value: bytes) -> int:
+    if re.fullmatch(rb"-?(?:0|[1-9][0-9]{0,18})", value) is None:
+        raise RateLimitStoreUnavailable("redis command failed")
+    number = int(value)
+    if not -(2**63) <= number < 2**63:
+        raise RateLimitStoreUnavailable("redis command failed")
+    return number
+
+
+def _validate_batch_dimensions(
+    dimensions: tuple[BatchRateLimitDimension, ...],
+) -> None:
+    """校验批任务限流维度集合完整、唯一且归属同一请求边界。
+
+    Reject malformed or duplicate atomic claims before touching counters.
+    """
+
+    if type(dimensions) is not tuple or any(
+        not isinstance(item, BatchRateLimitDimension) for item in dimensions
+    ):
+        raise RateLimitStoreUnavailable("batch rate limit claim invalid")
+    if len({item.limit_type for item in dimensions}) != len(dimensions):
+        raise RateLimitStoreUnavailable("batch rate limit claim invalid")
+    for item in dimensions:
+        if (
+            type(item.key) is not str
+            or not item.key
+            or type(item.amount) is not int
+            or item.amount <= 0
+            or type(item.ceiling) is not int
+            or item.ceiling <= 0
+            or type(item.ttl_seconds) is not int
+            or item.ttl_seconds <= 0
+        ):
+            raise RateLimitStoreUnavailable("batch rate limit claim invalid")

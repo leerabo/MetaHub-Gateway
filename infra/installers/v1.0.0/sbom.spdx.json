@@ -1,0 +1,33 @@
+{
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "name": "MetaHub private gateway installer 1.0.0",
+  "documentNamespace": "https://metahub.example/spdx/private-gateway-installer/1.0.0",
+  "creationInfo": {
+    "created": "2026-08-27T00:00:00Z",
+    "creators": ["Organization: MetaHub"]
+  },
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-Gateway",
+      "name": "metahub-gateway",
+      "versionInfo": "1.0.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-LocalControl",
+      "name": "metahub-local-control",
+      "versionInfo": "1.0.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION"
+    }
+  ]
+}

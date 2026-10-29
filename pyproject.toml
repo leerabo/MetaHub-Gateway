@@ -1,0 +1,29 @@
+[tool.pytest.ini_options]
+pythonpath = [
+  "shared-sdk/python",
+  "gateway-data-plane/src",
+  "control-plane-api/src",
+  "mcp-sandbox-worker/src",
+  "examples/python/src",
+]
+testpaths = [
+  "shared-sdk/python/tests",
+  "gateway-data-plane/tests",
+  "control-plane-api/tests",
+  "mcp-sandbox-worker/tests",
+  "examples/python/tests",
+  "scripts/acceptance/tests",
+]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true

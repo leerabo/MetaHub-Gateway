@@ -1,0 +1,503 @@
+# MetaHub 单机 Compose 编排。默认仍允许显式 SQLite 本地开发；compose-full
+# 提供 PostgreSQL 16、可丢失 Redis、S3-compatible MinIO 与独立 Backup Worker。
+name: ${METAHUB_COMPOSE_PROJECT:-metahub}
+
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: infra/docker/python-service.Dockerfile
+    image: ${METAHUB_IMAGE_PREFIX:-metahub}/gateway:${METAHUB_IMAGE_TAG:-local}
+    command: ["python", "-m", "metahub_gateway.main"]
+    env_file:
+      - "${METAHUB_COMPOSE_ENV_FILE:-.env.compose}"
+    environment:
+      PYTHONPATH: /app/shared-sdk/python:/app/gateway-data-plane/src
+      METAHUB_SERVICE_NAME: metahub-gateway
+      METAHUB_MCP_ENABLED: "false"
+      METAHUB_MCP_ENCRYPTION_SECRET: ""
+      METAHUB_MCP_HMAC_SECRET: ""
+      METAHUB_MCP_SANDBOX_BASE_URL: ""
+      METAHUB_MCP_SANDBOX_INTERNAL_TOKEN: ""
+      METAHUB_MCP_SANDBOX_ENVELOPE_SECRET: ""
+      METAHUB_MCP_SANDBOX_PERMIT_SECRET: ""
+      METAHUB_MCP_SANDBOX_RESPONSE_SECRET_CURRENT: ""
+      METAHUB_MCP_SANDBOX_RESPONSE_SECRET_PREVIOUS: ""
+      METAHUB_MCP_SANDBOX_PRIVATE_CIDRS: ""
+      METAHUB_MCP_SANDBOX_DENY_CIDRS: ""
+      METAHUB_MCP_SANDBOX_ALLOWED_PORTS: ""
+      METAHUB_MCP_SANDBOX_DENY_PORTS: ""
+    ports:
+      - "${METAHUB_GATEWAY_BIND:-127.0.0.1}:${METAHUB_GATEWAY_PORT:-8000}:8000"
+    volumes:
+      - metahub-sqlite:/app/.data/compose
+      - metahub-logs:/app/.logs
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=3).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  control-api:
+    build:
+      context: ../..
+      dockerfile: infra/docker/python-service.Dockerfile
+    image: ${METAHUB_IMAGE_PREFIX:-metahub}/control-api:${METAHUB_IMAGE_TAG:-local}
+    command: ["python", "-m", "metahub_control.main"]
+    env_file:
+      - "${METAHUB_COMPOSE_ENV_FILE:-.env.compose}"
+    environment:
+      # Control 的会话风险人工处置与 Gateway 共用 Redis Store 合同；三个源码根目录必须
+      # 同时存在，否则容器会在导入 metahub_gateway.session_risk 时启动失败。
+      PYTHONPATH: /app/shared-sdk/python:/app/gateway-data-plane/src:/app/control-plane-api/src
+      METAHUB_SERVICE_NAME: metahub-control-api
+      METAHUB_MCP_SCHEDULER_ENABLED: "false"
+      METAHUB_MCP_EXECUTOR_MODE: disabled
+      METAHUB_MCP_SANDBOX_BASE_URL: ""
+      METAHUB_MCP_SANDBOX_INTERNAL_TOKEN: ""
+      METAHUB_MCP_SANDBOX_ENVELOPE_SECRET: ""
+      METAHUB_MCP_SANDBOX_PERMIT_SECRET: ""
+      METAHUB_MCP_SANDBOX_RESPONSE_SECRET_CURRENT: ""
+      METAHUB_MCP_SANDBOX_RESPONSE_SECRET_PREVIOUS: ""
+      METAHUB_MCP_SANDBOX_PRIVATE_CIDRS: ""
+      METAHUB_MCP_SANDBOX_DENY_CIDRS: ""
+      METAHUB_MCP_SANDBOX_ALLOWED_PORTS: ""
+      METAHUB_MCP_SANDBOX_DENY_PORTS: ""
+      METAHUB_CAPACITY_RUNNER_MODE: isolated_http
+      METAHUB_CAPACITY_RUNNER_BASE_URL: http://capacity-runner:8012
+      METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN: ${METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN:?set METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN in .env.compose}
+      METAHUB_CAPACITY_RUNNER_PERMIT_SECRET: ${METAHUB_CAPACITY_RUNNER_PERMIT_SECRET:?set METAHUB_CAPACITY_RUNNER_PERMIT_SECRET in .env.compose}
+      METAHUB_CAPACITY_RUNNER_HTTP_TIMEOUT_SECONDS: ${METAHUB_CAPACITY_RUNNER_HTTP_TIMEOUT_SECONDS:-30}
+    expose:
+      - "8001"
+    volumes:
+      - metahub-sqlite:/app/.data/compose
+      - metahub-logs:/app/.logs
+      - metahub-status:/app/.data/status-page
+    networks:
+      - default
+      - capacity-runner-control
+    depends_on:
+      capacity-runner:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/live', timeout=3).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  control-ingress:
+    build:
+      context: ../..
+      dockerfile: infra/docker/control-ingress.Dockerfile
+    # This policy version is independent of METAHUB_IMAGE_TAG and survives app rollback.
+    image: ${METAHUB_IMAGE_PREFIX:-metahub}/control-ingress:prd147-v1
+    ports:
+      - "${METAHUB_CONTROL_BIND:-127.0.0.1}:${METAHUB_CONTROL_PORT:-8001}:8080"
+    depends_on:
+      control-api:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  capacity-runner:
+    build:
+      context: ../..
+      dockerfile: infra/docker/capacity-runner.Dockerfile
+    image: ${METAHUB_IMAGE_PREFIX:-metahub}/capacity-runner:${METAHUB_IMAGE_TAG:-local}
+    environment:
+      PYTHONPATH: /app/control-plane-api/src
+      METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN: ${METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN:?set METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN in .env.compose}
+      METAHUB_CAPACITY_RUNNER_PERMIT_SECRET: ${METAHUB_CAPACITY_RUNNER_PERMIT_SECRET:?set METAHUB_CAPACITY_RUNNER_PERMIT_SECRET in .env.compose}
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - capacity-runner-control
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8012/health', timeout=3).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+    restart: unless-stopped
+
+  status-page:
+    build:
+      context: ../..
+      dockerfile: infra/docker/python-service.Dockerfile
+    image: ${METAHUB_IMAGE_PREFIX:-metahub}/control-api:${METAHUB_IMAGE_TAG:-local}
+    command: ["python", "-m", "metahub_status.main"]
+    environment:
+      PYTHONPATH: /app/shared-sdk/python:/app/control-plane-api/src
+      METAHUB_STATUS_BUNDLE_ROOT: /app/.data/status-page
+      # Local Compose uses the explicit test provider. Production injects only the
+      # versioned public key and leaves the test value empty.
+      METAHUB_KMS_TEST_MASTER_KEY: ${METAHUB_KMS_TEST_MASTER_KEY:-}
+      METAHUB_STATUS_SIGNING_KEY_VERSION: ${METAHUB_STATUS_SIGNING_KEY_VERSION:-}
+      METAHUB_STATUS_SIGNING_PUBLIC_KEY: ${METAHUB_STATUS_SIGNING_PUBLIC_KEY:-}
+    ports:
+      - "${METAHUB_STATUS_BIND:-127.0.0.1}:${METAHUB_STATUS_PORT:-8002}:8002"
+    volumes:
+      - metahub-status:/app/.data/status-page:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=3).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  mcp-scheduler-worker:
+    build:
+      context: ../..
+      dockerfile: infra/docker/python-service.Dockerfile
+    image: ${METAHUB_IMAGE_PREFIX:-metahub}/control-api:${METAHUB_IMAGE_TAG:-local}
+    command: ["python", "-m", "metahub_control.mcp_governance.scheduler_main"]
+    environment:
+      PYTHONPATH: /app/shared-sdk/python:/app/gateway-data-plane/src:/app/control-plane-api/src
+      METAHUB_SERVICE_NAME: mcp-scheduler-worker
+      METAHUB_ENV: ${METAHUB_ENV:-dev}
+      METAHUB_LOG_LEVEL: ${METAHUB_LOG_LEVEL:-INFO}
+      METAHUB_DATABASE_URL: ${METAHUB_DATABASE_URL:?set METAHUB_DATABASE_URL in .env.compose}
+      METAHUB_APPROVAL_HMAC_VERSION: ${METAHUB_APPROVAL_HMAC_VERSION:-1}
+      METAHUB_APPROVAL_HMAC_SECRET: ${METAHUB_APPROVAL_HMAC_SECRET:?set METAHUB_APPROVAL_HMAC_SECRET in .env.compose}
+      METAHUB_MCP_ENABLED: "true"
+      METAHUB_MCP_ENCRYPTION_VERSION: ${METAHUB_MCP_ENCRYPTION_VERSION:-1}
+      METAHUB_MCP_ENCRYPTION_SECRET: ${METAHUB_MCP_ENCRYPTION_SECRET:?set METAHUB_MCP_ENCRYPTION_SECRET in .env.compose}
+      METAHUB_MCP_HMAC_VERSION: ${METAHUB_MCP_HMAC_VERSION:-1}
+      METAHUB_MCP_HMAC_SECRET: ${METAHUB_MCP_HMAC_SECRET:?set METAHUB_MCP_HMAC_SECRET in .env.compose}
+      METAHUB_MCP_SCHEDULER_ENABLED: "true"
+      METAHUB_MCP_EXECUTOR_MODE: sandbox_http
+      METAHUB_MCP_SANDBOX_BASE_URL: http://mcp-sandbox:8091
+      METAHUB_MCP_SANDBOX_INTERNAL_TOKEN: ${METAHUB_MCP_SANDBOX_INTERNAL_TOKEN:?set METAHUB_MCP_SANDBOX_INTERNAL_TOKEN in .env.compose}
+      METAHUB_MCP_SANDBOX_ENVELOPE_SECRET: ${METAHUB_MCP_SANDBOX_ENVELOPE_SECRET:?set METAHUB_MCP_SANDBOX_ENVELOPE_SECRET in .env.compose}
+      METAHUB_MCP_SANDBOX_RESPONSE_KEY_VERSION: ${METAHUB_MCP_SANDBOX_RESPONSE_KEY_VERSION:-1}
+      METAHUB_MCP_SANDBOX_RESPONSE_SECRET_CURRENT: ${METAHUB_MCP_SANDBOX_RESPONSE_SECRET_CURRENT:?set METAHUB_MCP_SANDBOX_RESPONSE_SECRET_CURRENT in .env.compose}
+      METAHUB_MCP_SANDBOX_RESPONSE_SECRET_PREVIOUS: ${METAHUB_MCP_SANDBOX_RESPONSE_SECRET_PREVIOUS:-}
+      METAHUB_MCP_NETWORK_CONNECT_TIMEOUT_MAX_SECONDS: ${METAHUB_MCP_NETWORK_CONNECT_TIMEOUT_MAX_SECONDS:-5}
+      METAHUB_MCP_NETWORK_PROBE_TIMEOUT_MAX_SECONDS: ${METAHUB_MCP_NETWORK_PROBE_TIMEOUT_MAX_SECONDS:-10}
+      METAHUB_MCP_NETWORK_CALL_TIMEOUT_MAX_SECONDS: ${METAHUB_MCP_NETWORK_CALL_TIMEOUT_MAX_SECONDS:-30}
+      METAHUB_MCP_NETWORK_FAILURE_THRESHOLD_MAX: ${METAHUB_MCP_NETWORK_FAILURE_THRESHOLD_MAX:-10}
+      METAHUB_MCP_NETWORK_OPEN_SECONDS_MAX: ${METAHUB_MCP_NETWORK_OPEN_SECONDS_MAX:-3600}
+    volumes:
+      - metahub-sqlite:/app/.data/compose
+      - metahub-logs:/app/.logs
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    networks:
+      - mcp-sandbox-control
+    depends_on:
+      mcp-sandbox:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+    restart: unless-stopped
+
+  mcp-sandbox:
+    build:
+      context: ../..
+      dockerfile: infra/docker/mcp-sandbox.Dockerfile
+    image: ${METAHUB_IMAGE_PREFIX:-metahub}/mcp-sandbox:${METAHUB_IMAGE_TAG:-local}
+    environment:
+      METAHUB_MCP_SANDBOX_WORKER_ENABLED: "true"
+      METAHUB_MCP_ENCRYPTION_VERSION: ${METAHUB_MCP_ENCRYPTION_VERSION:-1}
+      METAHUB_MCP_ENCRYPTION_SECRET: ${METAHUB_MCP_ENCRYPTION_SECRET:?set METAHUB_MCP_ENCRYPTION_SECRET in .env.compose}
+      METAHUB_MCP_SANDBOX_INTERNAL_TOKEN: ${METAHUB_MCP_SANDBOX_INTERNAL_TOKEN:?set METAHUB_MCP_SANDBOX_INTERNAL_TOKEN in .env.compose}
+      METAHUB_MCP_SANDBOX_ENVELOPE_SECRET: ${METAHUB_MCP_SANDBOX_ENVELOPE_SECRET:?set METAHUB_MCP_SANDBOX_ENVELOPE_SECRET in .env.compose}
+      METAHUB_MCP_SANDBOX_PERMIT_SECRET: ${METAHUB_MCP_SANDBOX_PERMIT_SECRET:?set METAHUB_MCP_SANDBOX_PERMIT_SECRET in .env.compose}
+      METAHUB_MCP_SANDBOX_RESPONSE_KEY_VERSION: ${METAHUB_MCP_SANDBOX_RESPONSE_KEY_VERSION:-1}
+      METAHUB_MCP_SANDBOX_RESPONSE_SECRET_CURRENT: ${METAHUB_MCP_SANDBOX_RESPONSE_SECRET_CURRENT:?set METAHUB_MCP_SANDBOX_RESPONSE_SECRET_CURRENT in .env.compose}
+      METAHUB_MCP_NETWORK_CONNECT_TIMEOUT_MAX_SECONDS: ${METAHUB_MCP_NETWORK_CONNECT_TIMEOUT_MAX_SECONDS:-5}
+      METAHUB_MCP_NETWORK_PROBE_TIMEOUT_MAX_SECONDS: ${METAHUB_MCP_NETWORK_PROBE_TIMEOUT_MAX_SECONDS:-10}
+      METAHUB_MCP_NETWORK_CALL_TIMEOUT_MAX_SECONDS: ${METAHUB_MCP_NETWORK_CALL_TIMEOUT_MAX_SECONDS:-30}
+      METAHUB_MCP_NETWORK_FAILURE_THRESHOLD_MAX: ${METAHUB_MCP_NETWORK_FAILURE_THRESHOLD_MAX:-10}
+      METAHUB_MCP_NETWORK_OPEN_SECONDS_MAX: ${METAHUB_MCP_NETWORK_OPEN_SECONDS_MAX:-3600}
+      METAHUB_MCP_SANDBOX_PRIVATE_CIDRS: ${METAHUB_MCP_SANDBOX_PRIVATE_CIDRS:-}
+      METAHUB_MCP_SANDBOX_DENY_CIDRS: ${METAHUB_MCP_SANDBOX_DENY_CIDRS:-}
+      METAHUB_MCP_SANDBOX_ALLOWED_PORTS: ${METAHUB_MCP_SANDBOX_ALLOWED_PORTS:-443}
+      METAHUB_MCP_SANDBOX_DENY_PORTS: ${METAHUB_MCP_SANDBOX_DENY_PORTS:-1433,1521,2049,2375,2376,3306,5432,5984,6379,6443,8020,8500,9000,9042,9200,11211,27017}
+      METAHUB_MCP_SANDBOX_DNS_TIMEOUT_SECONDS: ${METAHUB_MCP_SANDBOX_DNS_TIMEOUT_SECONDS:-2}
+      METAHUB_MCP_SANDBOX_TLS_TIMEOUT_SECONDS: ${METAHUB_MCP_SANDBOX_TLS_TIMEOUT_SECONDS:-5}
+      METAHUB_MCP_SANDBOX_HEADERS_TIMEOUT_SECONDS: ${METAHUB_MCP_SANDBOX_HEADERS_TIMEOUT_SECONDS:-10}
+      METAHUB_MCP_SANDBOX_BODY_IDLE_TIMEOUT_SECONDS: ${METAHUB_MCP_SANDBOX_BODY_IDLE_TIMEOUT_SECONDS:-10}
+      METAHUB_MCP_SANDBOX_MAX_DNS_ANSWERS: ${METAHUB_MCP_SANDBOX_MAX_DNS_ANSWERS:-8}
+      METAHUB_MCP_SANDBOX_MAX_ACTIVE_SESSIONS: ${METAHUB_MCP_SANDBOX_MAX_ACTIVE_SESSIONS:-16}
+      METAHUB_MCP_SANDBOX_CLEANUP_TIMEOUT_SECONDS: ${METAHUB_MCP_SANDBOX_CLEANUP_TIMEOUT_SECONDS:-2}
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      mcp-sandbox-egress:
+        gw_priority: 1
+      mcp-sandbox-control: {}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/health/ready', timeout=3).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+    restart: unless-stopped
+
+  batch-worker:
+    build:
+      context: ../..
+      dockerfile: infra/docker/python-service.Dockerfile
+    image: ${METAHUB_IMAGE_PREFIX:-metahub}/control-api:${METAHUB_IMAGE_TAG:-local}
+    command: ["python", "-m", "metahub_control.batch_jobs.worker_main"]
+    environment:
+      PYTHONPATH: /app/shared-sdk/python:/app/gateway-data-plane/src:/app/control-plane-api/src
+      METAHUB_SERVICE_NAME: batch-worker
+      METAHUB_ENV: ${METAHUB_ENV:-dev}
+      METAHUB_LOG_LEVEL: ${METAHUB_LOG_LEVEL:-INFO}
+      METAHUB_DATABASE_URL: ${METAHUB_DATABASE_URL:?set METAHUB_DATABASE_URL in .env.compose}
+      METAHUB_GATEWAY_API_BASE_URL: ${METAHUB_GATEWAY_API_BASE_URL:-http://gateway:8000}
+      METAHUB_INTERNAL_BATCH_TOKEN: ${METAHUB_INTERNAL_BATCH_TOKEN:?set METAHUB_INTERNAL_BATCH_TOKEN in .env.compose}
+      METAHUB_BATCH_ENCRYPTION_SECRET: ${METAHUB_BATCH_ENCRYPTION_SECRET:?set METAHUB_BATCH_ENCRYPTION_SECRET in .env.compose}
+      METAHUB_FILE_ENCRYPTION_SECRET: ${METAHUB_FILE_ENCRYPTION_SECRET:?set METAHUB_FILE_ENCRYPTION_SECRET in .env.compose}
+      METAHUB_FILE_STORAGE_ROOT: ${METAHUB_FILE_STORAGE_ROOT:-.data/compose/file-storage}
+      METAHUB_BATCH_WORKER_ENABLED: ${METAHUB_BATCH_WORKER_ENABLED:-true}
+      METAHUB_BATCH_POLL_INTERVAL_SECONDS: ${METAHUB_BATCH_POLL_INTERVAL_SECONDS:-1}
+      METAHUB_BATCH_GLOBAL_CONCURRENCY: ${METAHUB_BATCH_GLOBAL_CONCURRENCY:-2}
+      METAHUB_BATCH_TENANT_CONCURRENCY: ${METAHUB_BATCH_TENANT_CONCURRENCY:-1}
+      METAHUB_BATCH_LEASE_SECONDS: ${METAHUB_BATCH_LEASE_SECONDS:-90}
+      METAHUB_BATCH_HEARTBEAT_SECONDS: ${METAHUB_BATCH_HEARTBEAT_SECONDS:-30}
+    volumes:
+      - metahub-sqlite:/app/.data/compose
+      - metahub-logs:/app/.logs
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    depends_on:
+      gateway:
+        condition: service_healthy
+      control-api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+    restart: unless-stopped
+
+  backup-worker:
+    profiles: ["compose-full"]
+    build:
+      context: ../..
+      dockerfile: infra/docker/python-service.Dockerfile
+    image: ${METAHUB_IMAGE_PREFIX:-metahub}/control-api:${METAHUB_IMAGE_TAG:-local}
+    command: ["python", "-m", "metahub_control.platform_infrastructure.worker_main"]
+    env_file:
+      - "${METAHUB_COMPOSE_ENV_FILE:-.env.compose}"
+    environment:
+      PYTHONPATH: /app/shared-sdk/python:/app/gateway-data-plane/src:/app/control-plane-api/src
+      METAHUB_SERVICE_NAME: metahub-backup-worker
+      METAHUB_BACKUP_WORKER_ENABLED: "true"
+      METAHUB_OBJECT_STORE_ENDPOINT_URL: ${METAHUB_OBJECT_STORE_ENDPOINT_URL:-http://minio:9000}
+      METAHUB_OBJECT_STORE_REGION: ${METAHUB_OBJECT_STORE_REGION:-us-east-1}
+      METAHUB_OBJECT_STORE_BUCKET: ${METAHUB_OBJECT_STORE_BUCKET:-metahub-backups}
+      METAHUB_OBJECT_STORE_ACCESS_KEY_ID: ${METAHUB_MINIO_ACCESS_KEY:?set METAHUB_MINIO_ACCESS_KEY in .env.compose}
+      METAHUB_OBJECT_STORE_SECRET_ACCESS_KEY: ${METAHUB_MINIO_SECRET_KEY:?set METAHUB_MINIO_SECRET_KEY in .env.compose}
+      METAHUB_KMS_PROVIDER: ${METAHUB_KMS_PROVIDER:-test}
+      METAHUB_KMS_TEST_MASTER_KEY: ${METAHUB_KMS_TEST_MASTER_KEY:?set METAHUB_KMS_TEST_MASTER_KEY in .env.compose}
+      METAHUB_BACKUP_RESTORE_DATABASE_URL: ${METAHUB_BACKUP_RESTORE_DATABASE_URL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:size=4g,mode=1777
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 1G
+    restart: unless-stopped
+
+  console:
+    build:
+      context: ../..
+      dockerfile: infra/docker/console.Dockerfile
+    image: ${METAHUB_IMAGE_PREFIX:-metahub}/console:${METAHUB_IMAGE_TAG:-local}
+    environment:
+      METAHUB_CONSOLE_PORT: "5173"
+    ports:
+      - "${METAHUB_CONSOLE_BIND:-127.0.0.1}:${METAHUB_CONSOLE_PORT:-5173}:5173"
+    depends_on:
+      gateway:
+        condition: service_started
+      control-api:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:5173/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    profiles: ["compose-full"]
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "${METAHUB_REDIS_BIND:-127.0.0.1}:${METAHUB_REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["compose-full"]
+    environment:
+      POSTGRES_DB: ${METAHUB_POSTGRES_DB:-metahub}
+      POSTGRES_USER: ${METAHUB_POSTGRES_USER:-metahub}
+      POSTGRES_PASSWORD: ${METAHUB_POSTGRES_PASSWORD:?set METAHUB_POSTGRES_PASSWORD in .env.compose}
+    ports:
+      - "${METAHUB_POSTGRES_BIND:-127.0.0.1}:${METAHUB_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - metahub-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    profiles: ["compose-full"]
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${METAHUB_MINIO_ACCESS_KEY:?set METAHUB_MINIO_ACCESS_KEY in .env.compose}
+      MINIO_ROOT_PASSWORD: ${METAHUB_MINIO_SECRET_KEY:?set METAHUB_MINIO_SECRET_KEY in .env.compose}
+    ports:
+      - "${METAHUB_MINIO_BIND:-127.0.0.1}:${METAHUB_MINIO_PORT:-9000}:9000"
+      - "${METAHUB_MINIO_CONSOLE_BIND:-127.0.0.1}:${METAHUB_MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - metahub-minio:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    profiles: ["compose-full"]
+    environment:
+      METAHUB_MINIO_ACCESS_KEY: ${METAHUB_MINIO_ACCESS_KEY:?set METAHUB_MINIO_ACCESS_KEY in .env.compose}
+      METAHUB_MINIO_SECRET_KEY: ${METAHUB_MINIO_SECRET_KEY:?set METAHUB_MINIO_SECRET_KEY in .env.compose}
+      METAHUB_OBJECT_STORE_BUCKET: ${METAHUB_OBJECT_STORE_BUCKET:-metahub-backups}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mc alias set local http://minio:9000 "$${METAHUB_MINIO_ACCESS_KEY}"
+        "$${METAHUB_MINIO_SECRET_KEY}" >/dev/null &&
+        mc mb --ignore-existing "local/$${METAHUB_OBJECT_STORE_BUCKET}" >/dev/null
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  metahub-sqlite:
+  metahub-logs:
+  metahub-status:
+  metahub-postgres:
+  metahub-minio:
+
+networks:
+  capacity-runner-control:
+    internal: true
+  mcp-sandbox-control:
+    internal: true
+  mcp-sandbox-egress:

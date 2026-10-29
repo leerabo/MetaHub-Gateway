@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metahub.local/schemas/error-response.schema.json",
+  "title": "ErrorResponse",
+  "type": "object",
+  "required": ["code", "message", "request_id", "trace_id", "suggestion"],
+  "properties": {
+    "code": { "type": "string" },
+    "message": { "type": "string" },
+    "request_id": { "type": "string" },
+    "trace_id": { "type": "string" },
+    "suggestion": { "type": "string" }
+  },
+  "additionalProperties": false
+}

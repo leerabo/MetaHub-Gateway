@@ -1,0 +1,3 @@
+# Dedicated host supervisor only. Never install Docker access into Control or guest.
+docker==7.1.0
+pydantic>=2.7,<3.0

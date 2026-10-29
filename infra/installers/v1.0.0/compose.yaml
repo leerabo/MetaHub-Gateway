@@ -1,0 +1,52 @@
+name: metahub-private-gateway
+
+services:
+  gateway:
+    image: ghcr.io/metahub-ai/gateway@sha256:4ef405537ade676a97adef3c86f1fc734be7bc59bfbd7f40efe02b26a728fca1
+    command: ["python", "-m", "metahub_gateway.main"]
+    env_file:
+      - /etc/metahub/runtime.env
+    ports:
+      - "127.0.0.1:8000:8000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    volumes:
+      - metahub-data:/app/.data
+      - metahub-logs:/app/.logs
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  local-control:
+    image: ghcr.io/metahub-ai/local-control@sha256:3c70f4f98c17e07d60dbf28a9a2a47e527f418539772f38e4024c071919e75e8
+    command: ["python", "-m", "metahub_gateway.local_admin"]
+    env_file:
+      - /etc/metahub/runtime.env
+    ports:
+      - "127.0.0.1:8090:8090"
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    volumes:
+      - metahub-data:/app/.data
+      - metahub-logs:/app/.logs
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health/ready', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  metahub-data:
+  metahub-logs:

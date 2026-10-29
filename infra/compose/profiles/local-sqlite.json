@@ -1,0 +1,25 @@
+{
+  "profile_id": "local-sqlite",
+  "project_name": "metahub",
+  "database_mode": "sqlite",
+  "env_file": "infra/compose/.env.compose",
+  "services": {
+    "gateway": { "enabled": true, "port": 8000, "health": "/health/live" },
+    "control-api": { "enabled": true, "ports": [], "health": "/health/live", "network": "internal-only" },
+    "control-ingress": { "enabled": true, "port": 8001, "health": "/health/live" },
+    "capacity-runner": { "enabled": true, "ports": [], "health": "/health", "network": "internal-only" },
+    "status-page": { "enabled": true, "port": 8002, "health": "/health" },
+    "mcp-scheduler-worker": { "enabled": true, "ports": [], "health": null },
+    "mcp-sandbox": { "enabled": true, "ports": [], "health": "/health/ready", "network": "isolated-egress" },
+    "batch-worker": { "enabled": true, "ports": [], "health": null },
+    "console": { "enabled": true, "port": 5173, "health": "/" },
+    "redis": { "enabled": false, "port": 6379 },
+    "postgres": { "enabled": false, "port": 5432 },
+    "minio": { "enabled": false, "port": 9000 }
+  },
+  "volumes": {
+    "sqlite": "metahub-sqlite",
+    "logs": "metahub-logs",
+    "status": "metahub-status"
+  }
+}

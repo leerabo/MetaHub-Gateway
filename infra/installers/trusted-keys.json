@@ -1,0 +1,12 @@
+{
+  "schema_version": "metahub.installer-trust/v1",
+  "keys": [
+    {
+      "key_id": "metahub-installer-release-v1",
+      "algorithm": "Ed25519",
+      "public_key": "iWdr6OXtZwavcXTcBc7NNFybeHG8C5iieyizQx1vdA8",
+      "purpose": "metahub.edge-installer.release/v1",
+      "status": "active"
+    }
+  ]
+}
