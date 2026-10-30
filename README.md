@@ -39,14 +39,9 @@ MetaHub exposes an OpenAI-compatible gateway surface so existing SDKs and applic
 
 ## Quick start
 
-The recommended production path uses a versioned GitHub Release. Do not run `git pull` in production and do not store database volumes, API keys, SMTP credentials, or `.env` files in the repository.
+The recommended production path uses a versioned GitHub Release. The complete command a new Ubuntu operator copies into an SSH session is in [Install from a GitHub Release](docs/deployment/ubuntu.md#1-install-from-a-github-release). It downloads a pinned bundle, verifies its checksum and signature, prepares private state, installs Docker services, and opens the one-time SaaS administrator prompt.
 
-```bash
-sudo scripts/deploy/metahubctl.sh install /opt/metahub-state
-sudo scripts/deploy/register-saas-admin.sh /opt/metahub-state
-```
-
-Replace the state path with your private deployment location. The complete workflow is documented in [Ubuntu deployment](docs/deployment/ubuntu.md), including HTTPS, SMTP, backups, upgrades, and rollback.
+Do not run `git pull` in production and do not store database volumes, API keys, SMTP credentials, or `.env` files in the repository. The full workflow is documented in [Ubuntu deployment](docs/deployment/ubuntu.md), including HTTPS, SMTP, backups, upgrades, and rollback.
 
 ## Documentation
 

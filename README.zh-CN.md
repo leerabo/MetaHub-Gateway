@@ -35,6 +35,8 @@ MetaHub 首先解决的是组织治理问题：给团队一个受控的网关 KE
 
 生产环境请使用版本化 GitHub Release，不要在服务器上直接拉取 `main`，也不要把数据库、密钥、SMTP 凭据或 `.env` 文件提交到仓库。
 
+新 Ubuntu 用户应复制执行的完整远程安装命令见[从 GitHub Release 安装](docs/deployment/ubuntu.zh-CN.md#用户直接执行的安装命令)。命令会下载固定版本的 Release，校验完整性和签名，准备私有状态目录，安装 Docker 服务，并进入一次性的 SaaS 管理员创建流程。
+
 ## 文档
 
 请从 [英文主文档](README.md) 开始；完整中文使用说明见 [中文文档](docs/README.zh-CN.md)，重点阅读[组织级网关模型](docs/organization-gateway.zh-CN.md)和[SaaS 平台管理员](docs/saas-administrator.zh-CN.md)。
