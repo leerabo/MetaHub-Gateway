@@ -21,3 +21,9 @@ sudo scripts/deploy/metahubctl.sh recover /opt/metahub-state \
 ```
 
 Do not delete Docker volumes or edit the database manually during an incident. Preserve `recovery.json`, the backup prefix, and service logs for diagnosis.
+
+## SaaS administrator upgrade center
+
+The `platform_owner` can open **Platform → Infrastructure** in the SaaS console. The page shows the running release, verified releases available from the host updater, and recent jobs. **Back up and upgrade** queues a signed release for the host update agent; it does not accept shell commands or arbitrary paths. **Restart service** queues a controlled restart of the currently active release without changing the database or release pointer. Both actions require an explicit confirmation and are recorded in the job list. During either operation the SaaS console and organization gateways may be briefly unavailable; gateway users receive the new gateway version when the system release completes.
+
+The host update service must be enabled for these controls to be available. A failed upgrade blocks further actions until an operator inspects the backup and recovery state. Do not use the restart control as a substitute for recovery after a failed migration.

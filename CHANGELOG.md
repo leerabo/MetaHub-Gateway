@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.0-trial.48
+
+- Added a SaaS-owner-only system upgrade center with current-version and release availability status.
+- Added explicit, queued service restart requests alongside signed release upgrades.
+- Recorded upgrade and restart operation types in host-agent status history and documented the operator workflow.
+
 ## Unreleased public release
 
 - Reorganized the repository for public distribution.

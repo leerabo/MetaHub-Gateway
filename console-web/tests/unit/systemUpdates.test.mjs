@@ -7,11 +7,19 @@ import { initializeSystemUpdates } from "../../src/features/platform/systemUpdat
 function mount(t, fetcher) {
   const originalObserver = globalThis.MutationObserver;
   const button = {};
+  const restartButton = {};
+  const feedback = { setAttribute() {} };
+  const restartForm = { querySelector: (selector) => selector === "button" ? restartButton : null };
   const attributes = new Map();
   const panel = {
     dataset: {}, isConnected: true, innerHTML: "加载系统升级状态…",
     setAttribute: (name, value) => attributes.set(name, value),
-    querySelector: (selector) => selector === "[data-update-refresh]" ? button : null,
+    querySelector: (selector) => {
+      if (selector === "[data-update-refresh]") return button;
+      if (selector === "[data-restart-form]") return restartForm;
+      if (selector === "[data-update-feedback]") return feedback;
+      return null;
+    },
   };
   let observed;
   globalThis.MutationObserver = class {
@@ -26,6 +34,10 @@ function mount(t, fetcher) {
 
 function statusResponse() {
   return { ok: true, json: async () => ({ current_version: "2.0.0", enabled: false, releases: [], jobs: [] }) };
+}
+
+function restartableStatusResponse() {
+  return { ok: true, json: async () => ({ current_version: "2.0.0", enabled: true, releases: [], jobs: [], upgrade_blocked: false }) };
 }
 
 test("an existing upgrade panel times out and retries its GET without submitting an install", async (t) => {
@@ -84,4 +96,21 @@ test("a failed service read offers retry without exposing its response payload",
   assert.match(ui.panel.innerHTML, /重试读取状态/u);
   assert.doesNotMatch(ui.panel.innerHTML, /internal-path/u);
   assert.equal(ui.attributes.get("aria-busy"), "false");
+});
+
+test("the owner restart control submits only the confirmed restart operation", async (t) => {
+  const originalDocument = globalThis.document;
+  globalThis.document = { cookie: "__Host-metahub-platform-csrf=" + "a".repeat(43) };
+  t.after(() => { globalThis.document = originalDocument; });
+  const requests = [];
+  const ui = mount(t, async (url, options) => {
+    requests.push({ url, options });
+    return restartableStatusResponse();
+  });
+  await setImmediate();
+  await ui.panel.querySelector("[data-restart-form]").onsubmit({ preventDefault() {} });
+  const restart = requests.find(({ options }) => options.method === "POST");
+  assert.equal(restart.url, "https://control.test/platform/system-restart");
+  assert.equal(restart.options.headers["Content-Type"], "application/json");
+  assert.deepEqual(JSON.parse(restart.options.body), { confirmed: true });
 });

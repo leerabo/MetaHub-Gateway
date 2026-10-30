@@ -102,7 +102,8 @@ def test_queued_job_contains_only_identity_and_version_metadata(client):
     assert result.status_code == 202
     path = root / "requests" / (result.json()["job_id"] + ".json")
     job = json.loads(path.read_text())
-    assert set(job) == {"job_id", "version", "account_id", "requested_at"}
+    assert set(job) == {"job_id", "operation", "version", "account_id", "requested_at"}
+    assert job["operation"] == "upgrade"
     assert not list((root / "requests").glob("*.pending"))
 
 
@@ -111,4 +112,22 @@ def test_failed_upgrade_blocks_further_requests(client):
     (root / "status/failed.json").write_text(json.dumps({"status": "failed"}))
     assert browser.get("/platform/system-updates").json()["upgrade_blocked"] is True
     assert browser.post("/platform/system-updates", json={"version": "2.0.0-trial.2", "confirmed": True}).json()["code"] == "platform.unavailable"
+    assert not list((root / "requests").iterdir())
+
+
+def test_platform_owner_can_queue_controlled_restart(client):
+    browser, root = client
+    result = browser.post("/platform/system-restart", json={"confirmed": True})
+    assert result.status_code == 202
+    path = root / "requests" / (result.json()["job_id"] + ".json")
+    job = json.loads(path.read_text())
+    assert job["operation"] == "restart"
+    assert job["version"] == "2.0.0-trial.1"
+
+
+def test_restart_rejects_unconfirmed_or_extra_fields(client):
+    browser, root = client
+    for payload in ({"confirmed": False}, {"confirmed": True, "command": "restart"}):
+        result = browser.post("/platform/system-restart", json=payload)
+        assert result.json()["code"] == "platform.request_invalid"
     assert not list((root / "requests").iterdir())
