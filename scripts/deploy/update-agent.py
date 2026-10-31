@@ -17,6 +17,7 @@ spec = importlib.util.spec_from_file_location("github_releases", Path(__file__).
 releases = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(releases)
 JOB = re.compile(r"[0-9]{8}T[0-9]{6}_[0-9a-f]{32}")
+OPERATIONS = {"upgrade", "restart"}
 
 
 def run_bounded(command, timeout=7200, grace=30):
@@ -59,7 +60,11 @@ def read_request(path):
     if len(payload) > 4096:
         raise ValueError("Oversized update request.")
     job = json.loads(payload)
-    if (not isinstance(job, dict) or set(job) != {"job_id", "version", "account_id", "requested_at"}
+    if not isinstance(job, dict) or set(job) not in ({"job_id", "version", "account_id", "requested_at"}, {"job_id", "operation", "version", "account_id", "requested_at"}):
+        raise ValueError("Invalid update request fields.")
+    # Requests created before the explicit operation field remain upgrade jobs.
+    job.setdefault("operation", "upgrade")
+    if (job["operation"] not in OPERATIONS
             or job["job_id"] != path.stem or not isinstance(job["version"], str)
             or len(job["version"]) > 64 or not releases.VERSION.fullmatch(job["version"])
             or not isinstance(job["account_id"], str) or not 1 <= len(job["account_id"]) <= 128
@@ -81,9 +86,9 @@ def retain_request(updates, request):
     os.replace(request, retained / (uuid4().hex + ".json"))
 
 
-def write_status(status_root, job_id, version, outcome, message):
+def write_status(status_root, job_id, version, outcome, message, *, operation="upgrade"):
     releases.atomic_json(status_root / (job_id + ".json"), {
-        "job_id": job_id, "version": version, "status": outcome,
+        "job_id": job_id, "operation": operation, "version": version, "status": outcome,
         "message": message, "updated_at": datetime.now(UTC).isoformat(),
     })
 
@@ -127,8 +132,32 @@ def process(config_path):
                 retain_request(updates, request)
                 continue
             version = job["version"]
+            operation = job["operation"]
+            if operation == "restart":
+                active = Path((state / "current-release").read_text().strip())
+                releases.check_owned(active)
+                controller = active / "scripts/deploy/metahubctl.sh"
+                releases.check_owned(controller)
+                if not controller.is_file():
+                    raise releases.ReleaseError("Active release controller is missing.")
+                def restart_status(outcome, message):
+                    write_status(status_root, job["job_id"], version, outcome, message, operation=operation)
+                restart_status("running", "正在重启生产服务。")
+                try:
+                    result = run_bounded(["bash", str(controller), "restart", str(state)], timeout=900)
+                    if result.returncode:
+                        restart_status("failed", "服务重启未通过；请检查服务状态后再重试。")
+                        retain_request(updates, request)
+                        return
+                    restart_status("completed", "生产服务已重启并通过健康检查。")
+                except (Exception, KeyboardInterrupt, SystemExit):
+                    restart_status("failed", "服务重启中断；请检查服务状态后再重试。")
+                    retain_request(updates, request)
+                    return
+                retain_request(updates, request)
+                continue
             if version not in {item["version"] for item in json.loads((updates / "catalog.json").read_text(encoding="utf-8"))["releases"]}:
-                write_status(status_root, job["job_id"], version, "rejected", "该版本已不在可升级目录中；未执行安装。")
+                write_status(status_root, job["job_id"], version, "rejected", "该版本已不在可升级目录中；未执行安装。", operation=operation)
                 retain_request(updates, request)
                 continue
             receipt = store / f"{version}.verified.json"
@@ -151,7 +180,7 @@ def process(config_path):
             if not controller.is_file():
                 raise releases.ReleaseError("Verified release controller is missing.")
             def status(outcome, message):
-                write_status(status_root, job["job_id"], version, outcome, message)
+                write_status(status_root, job["job_id"], version, outcome, message, operation=operation)
             current = next(line.split("=", 1)[1] for line in (state / "compose.env").read_text().splitlines()
                            if line.startswith("METAHUB_RELEASE="))
             if releases.version_order(version) <= releases.version_order(current):

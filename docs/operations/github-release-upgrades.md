@@ -1,6 +1,6 @@
 # Ubuntu 上的 GitHub 版本更新
 
-版本：`v2.0.0-trial.48`。本版将首次管理员密码最低长度统一为 8 个字符，明确提示密码长度不足、确认不一致等初始化错误。MFA 继续由用户手动启用。依赖清单、锁定哈希、签名部署包随 Release 提供。
+本文描述签名 GitHub Release 的通用发布和升级流程；命令中的版本号必须替换为正在验收的 Release，不要照抄历史示例版本。当前公开仓库为 `leerabo/MetaHub-Gateway`。
 
 ## 流程
 
@@ -27,10 +27,10 @@
 先完成该版本的验收。以下命令只准备发布文件，不会上传 GitHub：
 
 ```bash
-python3 scripts/deploy/package-trial.py --version 2.0.0-trial.48 \
-  --output release/metahub-2.0.0-trial.48-source.tar.gz
-python3 scripts/deploy/sign-release.py --version 2.0.0-trial.48 \
-  --bundle release/metahub-2.0.0-trial.48-source.tar.gz \
+python3 scripts/deploy/package-trial.py --version 2.0.0-trial.53 \
+  --output release/metahub-2.0.0-trial.53-source.tar.gz
+python3 scripts/deploy/sign-release.py --version 2.0.0-trial.53 \
+  --bundle release/metahub-2.0.0-trial.53-source.tar.gz \
   --summary '已验收的试用版本' --key /offline/release-private.pem
 ```
 
@@ -42,7 +42,7 @@ openssl genpkey -algorithm Ed25519 -out /offline/release-private.pem
 openssl pkey -in /offline/release-private.pem -pubout -out release-public.pem
 ```
 
-公钥通过独立可信渠道核对并安装，不能让更新程序从同一个待验证发布包获取信任根。本轮 GitHub Release 标签为 `v2.0.0-trial.48`，已附上部署包、清单、签名和公钥四个文件。默认不执行仓库中的 Git hooks，也不在服务器上运行 `git pull`。本文未创建 GitHub Actions 或自动发布任务。
+公钥通过独立可信渠道核对并安装，不能让更新程序从同一个待验证发布包获取信任根。Release 应附上部署包、清单和签名；公钥通过独立渠道分发。默认不执行仓库中的 Git hooks，也不在服务器上运行 `git pull`。本文未创建 GitHub Actions 或自动发布任务。
 
 ## 宿主机配置
 
@@ -50,7 +50,7 @@ openssl pkey -in /offline/release-private.pem -pubout -out release-public.pem
 
 首次准备须在已核对签名和文件摘要的解包目录中执行。配置的版本号读取该包的 `release-manifest.json`，构建标识为该清单的 SHA-256，与后续升级使用同一格式；不会固定为早期 trial 版本。缺少有效清单时在创建 state 或生成密钥之前拒绝执行。准备脚本读取清单不等于验证发布签名，签名和包内文件仍须先由可信发布校验流程核对。
 
-安装信任公钥和配置示例，按实际 state 路径修改 `/etc/metahub/updater.json`：
+首次安装完成后，必须在 Ubuntu 宿主机启用升级代理。仅执行 `metahubctl.sh install` 不会自动拥有在线升级能力；这样可以避免未经运维确认就把宿主机 root 权限交给未核对的 Release。使用已通过独立渠道核对的 Ed25519 公钥执行：
 
 ```bash
 sudo install -d -m 0755 /etc/metahub /opt/metahub-releases
@@ -63,7 +63,25 @@ sudo systemctl enable --now metahub-update.timer metahub-release-sync.timer
 sudo systemctl start metahub-release-sync.service
 ```
 
-systemd 示例假设初始工具目录为 `/opt/metahub`，实际不同则修改 ExecStart。仓库目前为 `leerabo/MetaHub`。试用预发布版本需显式 `include_prereleases: true`；正式环境可设为 false。当前自动同步脚本仍按公开仓库流程运行；本次私有仓库安装按 Release 说明使用临时 GitHub token 通过 API 下载，token 只在 root 私有环境中提供，不写入更新器、网页或日志。网络需允许 GitHub API/Release 资源，以及镜像构建使用的官方镜像、Python 和 Debian 固定快照源。
+推荐直接运行 Release 包内的安装脚本，它会创建配置、安装两个 systemd timer、立即执行一次签名同步，并在首次同步失败时返回非零状态：
+
+```bash
+sudo scripts/deploy/install-updater.sh \
+  /opt/metahub-state \
+  /opt/metahub-releases/2.0.0-trial.53 \
+  /root/metahub-release-public.pem \
+  leerabo/MetaHub-Gateway
+```
+
+其中公钥不能从待验证的 Release 包中自动取得；首次安装必须由发布者或运维通过独立可信渠道提供。启用后可用以下命令检查：
+
+```bash
+systemctl is-enabled metahub-update.timer metahub-release-sync.timer
+systemctl is-active metahub-update.timer metahub-release-sync.timer
+cat /opt/metahub-state/updates/catalog.json
+```
+
+systemd 示例使用 `/opt/metahub` 作为宿主机工具目录；脚本会将已验收 Release 中的 updater 脚本复制到该目录。仓库默认是公开的 `leerabo/MetaHub-Gateway`。试用预发布版本需显式 `include_prereleases: true`；正式环境可设为 false。网络需允许 GitHub API/Release 资源，以及镜像构建使用的官方镜像、Python 和 Debian 固定快照源。
 
 ## 配置和数据
 

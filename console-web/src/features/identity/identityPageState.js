@@ -16,6 +16,7 @@ import {
   renderIdentityVerificationPage,
 } from "./renderIdentityPage.js";
 import { createAccountPreferenceController } from "../account-preferences/accountPreferenceController.js";
+import { writePreferredLocale } from "../../i18n/locale.js";
 import { identitySection } from "./identitySections.js";
 
 const CONSENT_VERSION = "privacy-local-2026-09-09";
@@ -4357,7 +4358,9 @@ export function createIdentityPageController({
         event.preventDefault();
         const fields = new FormData(form);
         if (enterAccountPreferences()) {
-          await accountPreferenceController.save(String(fields.get("locale") ?? ""));
+          const locale = String(fields.get("locale") ?? "");
+          const saved = await accountPreferenceController.save(locale);
+          if (saved) writePreferredLocale(locale);
         }
       } else if (form?.matches?.("[data-identity-mfa-enrollment-form]")) {
         event.preventDefault();

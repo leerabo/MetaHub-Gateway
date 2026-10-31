@@ -71,6 +71,21 @@
   padding: 0;
 }
 .platform-content .platform-system-update-form > button { justify-self: end; }
+.platform-content .platform-system-restart-form {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--platform-border);
+}
+.platform-content .platform-system-restart-form .platform-check { display: flex; align-items: center; gap: 8px; min-height: 40px; cursor: pointer; }
+.platform-content .platform-system-restart-form input[type="checkbox"] { width: 18px; height: 18px; min-height: 18px; margin: 0; }
+.platform-content .platform-system-restart-form button { border-color: var(--platform-border); background: var(--platform-panel); color: var(--platform-ink); }
+.platform-system-update-jobs { display: grid; gap: 6px; margin-top: 16px; color: var(--platform-muted); font-size: 13px; }
+.platform-system-update-jobs p { margin: 0; }
+.platform-system-update-jobs strong { color: var(--platform-ink); }
 .platform-table-wrap { max-width: 100%; overflow-x: auto; }
 :where(.platform-table-wrap table) { width: 100%; min-width: 0; table-layout: fixed; }
 .platform-table-wrap th, .platform-table-wrap td { overflow-wrap: anywhere; }
@@ -86,6 +101,8 @@
   .platform-page-heading { align-items: flex-start; flex-direction: column; gap: 8px; }
   .platform-content .platform-system-update-form { grid-template-columns: minmax(0, 1fr); }
   .platform-content .platform-system-update-form > button { justify-self: start; }
+  .platform-content .platform-system-restart-form { align-items: stretch; flex-direction: column; gap: 8px; }
+  .platform-content .platform-system-restart-form button { align-self: flex-start; }
 }
 
 /* PRD-133 public contract release workspace. */
@@ -1879,7 +1896,13 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
 .platform-customer-renewal-table,
 .platform-customer-qbr-table { width: 100%; min-width: 0; table-layout: fixed; }
 .platform-customer-qbr-table small { display: block; margin-top: 4px; color: var(--muted); }
-.platform-customer-contacts { margin-top: 20px; }
+.platform-customer-contacts {
+  margin: 0 0 18px;
+  scroll-margin-top: 24px;
+}
+.platform-customer-detail .platform-customer-contacts {
+  border-radius: 8px;
+}
 .platform-customer-contacts .platform-section-heading button { width: 34px; height: 34px; border: 0; background: transparent; font-size: 24px; cursor: pointer; }
 .platform-customer-contact-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .platform-customer-batch { margin-top: 20px; }

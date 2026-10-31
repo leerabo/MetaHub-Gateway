@@ -128,9 +128,51 @@ import { serviceOrigin } from "../../lib/runtimeOrigins.js";
 import { installUserFacingTextGuard } from "../../lib/userFacingTextGuard.js";
 import { initializeTheme } from "../../lib/theme.js";
 import { initializeDialogs } from "../../lib/dialogs.js";
+import { initializeLocale, LOCALE_CHANGE_EVENT } from "../../i18n/locale.js";
 
 initializeTheme();
 initializeDialogs();
+const identityEntryLocale = initializeLocale();
+
+const ACCESS_COPY = {
+  "zh-CN": {
+    hero_title: "让 AI 更自由。<br /><span>让管理更从容。</span>",
+    hero_description: "你的模型、密钥与团队。<br />在一个入口，有序连接。",
+    footnote_access: "统一接入",
+    footnote_security: "安全与成本",
+    back_home: "返回首页",
+    title: "MetaHub 账号安全",
+    home_aria: "返回首页",
+  },
+  "en-US": {
+    hero_title: "Set AI free.<br /><span>Manage with clarity.</span>",
+    hero_description: "Your models, keys, and teams.<br />Connected through one entry point.",
+    footnote_access: "Unified access",
+    footnote_security: "Security & cost",
+    back_home: "Back home",
+    title: "MetaHub account security",
+    home_aria: "Back home",
+  },
+};
+
+function renderIdentityEntryLocale(locale = identityEntryLocale) {
+  const copy = ACCESS_COPY[locale === "en-US" ? "en-US" : "zh-CN"];
+  globalThis.document?.querySelectorAll?.("[data-identity-i18n]").forEach((element) => {
+    const value = copy[element.dataset.identityI18n];
+    if (value !== undefined) element.innerHTML = value;
+  });
+  const title = globalThis.document?.querySelector?.("[data-i18n-title]");
+  if (title) title.textContent = copy.title;
+  const home = globalThis.document?.querySelector?.(".identity-access-home");
+  home?.setAttribute?.("aria-label", copy.home_aria);
+  const app = globalThis.document?.querySelector?.("#identity-app");
+  app?.setAttribute?.("aria-label", copy.title);
+}
+
+renderIdentityEntryLocale(identityEntryLocale);
+globalThis.window?.addEventListener?.(LOCALE_CHANGE_EVENT, (event) => {
+  renderIdentityEntryLocale(event.detail?.locale);
+});
 const root = globalThis.document?.querySelector("#identity-app");
 if (root) {
   installUserFacingTextGuard(root);

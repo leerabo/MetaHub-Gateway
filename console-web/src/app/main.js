@@ -276,6 +276,7 @@ import {
   providerStatusIdentitySnapshot,
 } from "../features/provider-health/providerStatusPageState.js";
 import { createI18n, DEFAULT_LOCALE } from "../i18n/messages.js";
+import { initializeLocale } from "../i18n/locale.js";
 import { localizeConsoleStaticHtml } from "../i18n/localizeConsoleStaticHtml.js";
 import {
   AuthApiError,
@@ -799,6 +800,7 @@ import { initializeActionMenus } from "../lib/actionMenus.js";
 initializeTheme();
 initializeDialogs();
 initializeActionMenus();
+const preferredEntryLocale = initializeLocale();
 
 // 非浏览器单测只导入生命周期管理器，不启动应用；真实页面仍要求存在 #app 根节点。
 const app = globalThis.document?.querySelector("#app") ?? null;
@@ -854,7 +856,7 @@ let publicBrandingPreview = null;
 let publicBrandingGeneration = 0;
 let publicBrandingLogoUrl = "";
 // 当前 i18n 上下文供 PAGE-070 局部重绘复用；身份清除时会回到默认中文，避免沿用上一用户偏好。
-let currentI18n = createI18n(DEFAULT_LOCALE);
+let currentI18n = createI18n(preferredEntryLocale);
 let gatewayDebugState = {};
 // 0138 分组状态只来自当前 Workspace 的服务端偏好；默认全部折叠。
 let expandedConsoleGroupKey = null;
@@ -1719,7 +1721,12 @@ async function performRefresh(options = {}) {
     if (RESOURCE_NAVIGATION_IDS.has(previousResourceNavigation)) app?.replaceChildren();
   }
   if (resourcePageLifecycle.blocksReplacement(isBackgroundRefresh)) return;
+  // The public entry selection is the browser-wide presentation choice. The
+  // server locale remains the account fallback for a fresh browser profile.
   currentI18n = createI18n(consoleShellState.locale);
+  // The entry-page preference is authoritative for the presentation language.
+  const browserLocale = globalThis.document?.documentElement?.lang;
+  if (browserLocale) currentI18n = createI18n(browserLocale);
   if (app?.dataset) app.dataset.locale = currentI18n.locale;
   const providerEngineeringSnapshot = workspaceProviderEngineeringController.snapshot();
   if (!WORKSPACE_PROVIDER_ENGINEERING_NAVIGATION_IDS.has(

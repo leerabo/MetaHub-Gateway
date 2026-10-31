@@ -6,7 +6,6 @@ export function renderPlatformCustomerSuccess(state = {}, permissions = new Set(
     (item) => item.customer_account_id === state.selectedAccountId,
   ) ?? null;
   const canOperate = permissions.has("platform.customer_success.read");
-  const canReadContacts = permissions.has("platform.customer_success.contact.read");
   const openTasks = items.reduce((total, item) => total + Number(item.open_task_count ?? 0), 0);
   const risky = items.filter((item) => ["at_risk", "critical"].includes(item.health_risk)).length;
   return `<div data-platform-customer-success-root data-phase="${escapeAttribute(state.phase ?? "idle")}">
@@ -36,7 +35,6 @@ export function renderPlatformCustomerSuccess(state = {}, permissions = new Set(
         </div>
       </div>
     </section>
-    ${state.contactsVisible ? contactsPanel(state, canReadContacts) : ""}
     ${canOperate ? batchApprovalPanel(state, context) : ""}
   </div>`;
 }
@@ -96,6 +94,7 @@ function customerDetail(state, account, permissions, context) {
         <button type="button" data-platform-action="customer-refresh" title="刷新客户投影" aria-label="刷新客户投影" ${state.loading?.length ? "disabled" : ""}>↻</button>
       </div>
     </header>
+    ${state.contactsVisible ? contactsPanel(state, permissions.has("platform.customer_success.contact.read")) : ""}
     <div class="platform-customer-facts">
       ${fact("所属组织", "组织空间")}
       ${fact("启用阶段", account.activation ?? "not_available")}
@@ -228,7 +227,7 @@ function qbrTab(state) {
 function contactsPanel(state, allowed) {
   if (!allowed) return "";
   const contacts = state.contacts ?? [];
-  return `<section class="platform-band platform-customer-contacts" aria-labelledby="platform-customer-contacts-title">
+  return `<section class="platform-band platform-customer-contacts" data-platform-customer-contacts tabindex="-1" aria-labelledby="platform-customer-contacts-title">
     <div class="platform-section-heading"><div><p>单个客户信息</p><h2 id="platform-customer-contacts-title">联系人</h2></div><button type="button" data-platform-action="customer-contacts-close" title="关闭联系人" aria-label="关闭联系人">×</button></div>
     <div class="platform-customer-contact-list">${contacts.map((contact) => `<div><header><strong>${escapeHtml(contact.display_name)}</strong>${status(contact.status)}</header><dl>${fact("角色", contact.contact_role)}${fact("邮箱", contact.email)}${fact("电话", contact.phone ?? "-")}${fact("更新次数", contact.membership_revision)}</dl></div>`).join("") || empty("当前联系人不可用。")}</div>
   </section>`;

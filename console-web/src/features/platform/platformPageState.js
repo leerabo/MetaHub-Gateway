@@ -6731,7 +6731,22 @@ export function createPlatformPageController({
         controller.selectGrowthTab(target.dataset.platformGrowthTab);
       }
       if (action === "customer-refresh") controller.refreshCustomerSuccess();
-      if (action === "customer-contacts") controller.loadCustomerSuccessContacts();
+      if (action === "customer-contacts") {
+        void controller.loadCustomerSuccessContacts().then((opened) => {
+          if (!opened) return;
+          const reveal = () => {
+            const contacts = root.querySelector("[data-platform-customer-contacts]");
+            if (!contacts) return;
+            contacts.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+            contacts.focus?.({ preventScroll: true });
+          };
+          if (typeof globalThis.requestAnimationFrame === "function") {
+            globalThis.requestAnimationFrame(reveal);
+          } else {
+            globalThis.setTimeout(reveal, 0);
+          }
+        });
+      }
       if (action === "customer-contacts-close") controller.hideCustomerSuccessContacts();
       if (action === "customer-next") controller.nextCustomerSuccessPage();
       if (action === "customer-previous") controller.previousCustomerSuccessPage();

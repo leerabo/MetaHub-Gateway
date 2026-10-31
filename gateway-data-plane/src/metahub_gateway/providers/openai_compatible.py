@@ -8,6 +8,7 @@ Provider Key 与 Token 不得明文落日志。
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections.abc import AsyncIterator, Mapping
@@ -130,10 +131,15 @@ class OpenAICompatibleAdapter:
 
         spec = _validated_adapter_spec(route, self.name, self.version)
         auth_type = route.provider_auth_type.strip().lower()
+        anthropic = _is_anthropic_route(route)
         upstream_payload = dict(payload)
         upstream_payload["model"] = route.upstream_model_name
         # 只有 spec 明确允许的协议才注入 OpenAI stream option；通用 JSON/SSE 端点可能拒绝它。
-        if upstream_payload.get("stream") is True and spec.stream_profile.allow_include_usage:
+        if (
+            not anthropic
+            and upstream_payload.get("stream") is True
+            and spec.stream_profile.allow_include_usage
+        ):
             # OpenAI-compatible 路径需要最终 usage chunk，且必须复制调用方字典避免原地污染。
             stream_options = upstream_payload.get("stream_options")
             safe_stream_options = (
@@ -151,6 +157,18 @@ class OpenAICompatibleAdapter:
         elif auth_type == "none":
             # 无鉴权 spec 即使调用方误传 Key 也必须丢弃，避免向客户本地端点意外发送凭据。
             selected_key = None
+        if anthropic:
+            upstream_payload = _to_anthropic_request(upstream_payload)
+        upstream_headers_value = upstream_headers(spec, auth_type, selected_key)
+        upstream_endpoint = "messages" if anthropic else endpoint
+        if anthropic:
+            # Anthropic's native Messages API uses x-api-key and requires an explicit
+            # version header; the catalog still stores the credential as a bearer key.
+            upstream_headers_value.pop("Authorization", None)
+            if selected_key is None:
+                raise ApiError("gateway.provider_adapter_spec_invalid")
+            upstream_headers_value["x-api-key"] = selected_key.plain_value
+            upstream_headers_value["anthropic-version"] = "2023-06-01"
         return ProviderRequest(
             provider_id=route.provider_id,
             provider_code=route.provider_code,
@@ -159,9 +177,9 @@ class OpenAICompatibleAdapter:
             adapter_version=spec.adapter_version,
             adapter_catalog_hash=CATALOG_HASH,
             stream_termination_marker=spec.stream_profile.termination_marker,
-            endpoint=endpoint,
-            url=upstream_url(route, endpoint),
-            headers=upstream_headers(spec, auth_type, selected_key),
+            endpoint=upstream_endpoint,
+            url=upstream_url(route, upstream_endpoint),
+            headers=upstream_headers_value,
             payload=upstream_payload,
             tenant_id=route.tenant_id,
             model_id=route.model_id,
@@ -278,6 +296,8 @@ class OpenAICompatibleAdapter:
         # 错误分支统一收敛为标准错误码，避免泄露上游原始敏感信息。
         except (httpx.InvalidURL, httpx.TimeoutException, httpx.HTTPError) as exc:
             self._raise_adapter_error(request, self.normalize_error(exc=exc, request=request))
+        if _is_anthropic_request(request):
+            data = _from_anthropic_response(data)
         usage = self.parse_usage(data)
         # 用量成本是审计账本字段，缺失或异常必须进入可追踪分支。
         if usage.estimated:
@@ -371,6 +391,8 @@ class OpenAICompatibleAdapter:
                 request,
                 self.normalize_error(response=response, request=request, extracted_facts=facts),
             )
+        if _is_anthropic_request(request):
+            response = _AnthropicStreamingBody(response)
         return ProviderStreamResponse(
             client=client,
             response=response,
@@ -762,6 +784,313 @@ def _upstream_error_category(code: str, http_status: int | None) -> str:
     if http_status is not None and 500 <= http_status <= 599:
         return "upstream_5xx"
     return "other"
+
+
+def _is_anthropic_route(route: GatewayRoute) -> bool:
+    """识别目录创建的 Anthropic 路由，不让任意租户请求体选择协议。"""
+
+    code = str(route.provider_code or "").strip().lower()
+    host = urlsplit(str(route.provider_base_url or "")).hostname or ""
+    return code.startswith("anthropic_") or host.lower() == "api.anthropic.com"
+
+
+def _is_anthropic_request(request: ProviderRequest) -> bool:
+    """识别已经冻结的 Anthropic 上游请求。"""
+
+    code = str(request.provider_code or "").strip().lower()
+    host = urlsplit(str(request.url or "")).hostname or ""
+    return code.startswith("anthropic_") or host.lower() == "api.anthropic.com"
+
+
+def _to_anthropic_request(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """把网关统一的 Chat Completions 请求转换为 Anthropic Messages 请求。"""
+
+    result: dict[str, Any] = {
+        "model": payload.get("model"),
+        "messages": [],
+        "max_tokens": payload.get("max_tokens") or payload.get("max_completion_tokens") or 1024,
+        "stream": bool(payload.get("stream", False)),
+    }
+    system_blocks: list[dict[str, Any]] = []
+    for message in payload.get("messages", []):
+        if not isinstance(message, Mapping):
+            continue
+        role = str(message.get("role") or "user")
+        if role == "system":
+            system_blocks.extend(_anthropic_blocks(message.get("content")))
+            continue
+        if role == "tool":
+            result["messages"].append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": str(message.get("tool_call_id") or ""),
+                            "content": _anthropic_blocks(message.get("content")),
+                        }
+                    ],
+                }
+            )
+            continue
+        content = _anthropic_blocks(message.get("content"))
+        if role == "assistant":
+            for tool_call in message.get("tool_calls", []) or []:
+                if not isinstance(tool_call, Mapping):
+                    continue
+                function = tool_call.get("function")
+                if not isinstance(function, Mapping):
+                    continue
+                arguments = function.get("arguments", {})
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments)
+                    except (TypeError, ValueError):
+                        arguments = {"raw": arguments}
+                content.append(
+                    {
+                        "type": "tool_use",
+                        "id": str(tool_call.get("id") or "tool_use"),
+                        "name": str(function.get("name") or "tool"),
+                        "input": arguments if isinstance(arguments, Mapping) else {},
+                    }
+                )
+        result["messages"].append(
+            {"role": "assistant" if role == "assistant" else "user", "content": content}
+        )
+    if system_blocks:
+        result["system"] = system_blocks
+    for source, target in (("temperature", "temperature"), ("top_p", "top_p")):
+        if payload.get(source) is not None:
+            result[target] = payload[source]
+    stop = payload.get("stop")
+    if isinstance(stop, str):
+        result["stop_sequences"] = [stop]
+    elif isinstance(stop, list):
+        result["stop_sequences"] = [str(item) for item in stop[:4]]
+    tools: list[dict[str, Any]] = []
+    for tool in payload.get("tools", []) or []:
+        if not isinstance(tool, Mapping):
+            continue
+        function = tool.get("function")
+        if isinstance(function, Mapping):
+            tools.append(
+                {
+                    "name": str(function.get("name") or "tool"),
+                    "description": str(function.get("description") or ""),
+                    "input_schema": function.get("parameters")
+                    if isinstance(function.get("parameters"), Mapping)
+                    else {"type": "object", "properties": {}},
+                }
+            )
+    if tools:
+        result["tools"] = tools
+    choice = payload.get("tool_choice")
+    if isinstance(choice, Mapping):
+        function = choice.get("function")
+        if choice.get("type") == "function" and isinstance(function, Mapping):
+            result["tool_choice"] = {"type": "tool", "name": str(function.get("name") or "tool")}
+        elif choice.get("type") == "required":
+            result["tool_choice"] = {"type": "any"}
+    elif choice == "required":
+        result["tool_choice"] = {"type": "any"}
+    return result
+
+
+def _anthropic_blocks(content: Any) -> list[dict[str, Any]]:
+    """将 OpenAI 文本/内容数组转换为 Anthropic 内容块。"""
+
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    if isinstance(content, list):
+        blocks: list[dict[str, Any]] = []
+        for item in content:
+            if isinstance(item, str):
+                blocks.append({"type": "text", "text": item})
+            elif isinstance(item, Mapping) and item.get("type") in {"text", "image"}:
+                blocks.append(dict(item))
+        return blocks or [{"type": "text", "text": ""}]
+    return [{"type": "text", "text": ""}]
+
+
+def _from_anthropic_response(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """将 Anthropic Messages 响应归一成网关下游使用的 Chat Completions 结构。"""
+
+    text_parts: list[str] = []
+    tool_calls: list[dict[str, Any]] = []
+    for block in payload.get("content", []) or []:
+        if not isinstance(block, Mapping):
+            continue
+        if block.get("type") == "text":
+            text_parts.append(str(block.get("text") or ""))
+        elif block.get("type") == "tool_use":
+            tool_calls.append(
+                {
+                    "id": str(block.get("id") or "tool_use"),
+                    "type": "function",
+                    "function": {
+                        "name": str(block.get("name") or "tool"),
+                        "arguments": json.dumps(block.get("input") or {}, ensure_ascii=False),
+                    },
+                }
+            )
+    message: dict[str, Any] = {"role": "assistant", "content": "".join(text_parts)}
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+    native_usage = payload.get("usage") if isinstance(payload.get("usage"), Mapping) else {}
+    input_tokens = _int_usage(native_usage.get("input_tokens"))
+    output_tokens = _int_usage(native_usage.get("output_tokens"))
+    stop_reason = str(payload.get("stop_reason") or "")
+    finish_reason = "tool_calls" if stop_reason == "tool_use" else "stop"
+    return {
+        "id": str(payload.get("id") or "anthropic_completion"),
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": str(payload.get("model") or ""),
+        "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
+        "usage": {
+            "prompt_tokens": input_tokens,
+            "completion_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        },
+    }
+
+
+class _AnthropicStreamingBody:
+    """把 Anthropic SSE 事件转换为 OpenAI data-only SSE 事件。"""
+
+    def __init__(self, response: httpx.Response) -> None:
+        self._response = response
+        self.extensions: dict[str, Any] = {}
+        self.status_code = getattr(response, "status_code", 200)
+
+    def aiter_bytes(self) -> AsyncIterator[bytes]:
+        return self._iter()
+
+    async def _iter(self) -> AsyncIterator[bytes]:
+        buffer = b""
+        state: dict[str, Any] = {"id": "anthropic_stream", "model": "", "created": int(time.time())}
+        async for chunk in self._response.aiter_bytes():
+            buffer += chunk
+            while b"\n\n" in buffer:
+                raw, buffer = buffer.split(b"\n\n", 1)
+                event = _anthropic_sse_event(raw)
+                if event is not None:
+                    for rendered in _anthropic_sse_to_openai(event, state):
+                        yield rendered
+        if buffer.strip():
+            event = _anthropic_sse_event(buffer)
+            if event is not None:
+                for rendered in _anthropic_sse_to_openai(event, state):
+                    yield rendered
+        if not state.get("done"):
+            yield b"data: [DONE]\n\n"
+            state["done"] = True
+
+
+def _anthropic_sse_event(raw: bytes) -> dict[str, Any] | None:
+    data_lines = []
+    for line in raw.decode("utf-8", errors="replace").splitlines():
+        if line.startswith("data:"):
+            data_lines.append(line[5:].lstrip())
+    if not data_lines:
+        return None
+    try:
+        event = json.loads("\n".join(data_lines))
+    except (TypeError, ValueError):
+        return None
+    return event if isinstance(event, dict) else None
+
+
+def _anthropic_sse_to_openai(event: Mapping[str, Any], state: dict[str, Any]) -> list[bytes]:
+    event_type = str(event.get("type") or "")
+    if event_type == "message_start":
+        message = event.get("message") if isinstance(event.get("message"), Mapping) else {}
+        state["id"] = message.get("id") or state["id"]
+        state["model"] = message.get("model") or state["model"]
+        usage = message.get("usage") if isinstance(message.get("usage"), Mapping) else {}
+        state["input_tokens"] = _int_usage(usage.get("input_tokens"))
+        return [
+            _openai_sse(
+                {
+                    "id": state["id"],
+                    "object": "chat.completion.chunk",
+                    "created": state["created"],
+                    "model": state["model"],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant", "content": ""},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+            )
+        ]
+    if event_type == "content_block_delta":
+        delta = event.get("delta") if isinstance(event.get("delta"), Mapping) else {}
+        if delta.get("type") == "text_delta":
+            return [
+                _openai_sse(
+                    {
+                        "id": state["id"],
+                        "object": "chat.completion.chunk",
+                        "created": state["created"],
+                        "model": state["model"],
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": str(delta.get("text") or "")},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                )
+            ]
+        return []
+    if event_type == "message_delta":
+        delta = event.get("delta") if isinstance(event.get("delta"), Mapping) else {}
+        usage = event.get("usage") if isinstance(event.get("usage"), Mapping) else {}
+        state["output_tokens"] = _int_usage(usage.get("output_tokens"))
+        reason = "tool_calls" if delta.get("stop_reason") == "tool_use" else "stop"
+        return [
+            _openai_sse(
+                {
+                    "id": state["id"],
+                    "object": "chat.completion.chunk",
+                    "created": state["created"],
+                    "model": state["model"],
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": reason}],
+                }
+            )
+        ]
+    if event_type == "message_stop":
+        state["done"] = True
+        input_tokens = state.get("input_tokens", 0)
+        output_tokens = state.get("output_tokens", 0)
+        usage = {
+            "prompt_tokens": input_tokens,
+            "completion_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        }
+        return [
+            _openai_sse(
+                {
+                    "id": state["id"],
+                    "object": "chat.completion.chunk",
+                    "created": state["created"],
+                    "model": state["model"],
+                    "choices": [],
+                    "usage": usage,
+                }
+            ),
+            b"data: [DONE]\n\n",
+        ]
+    return []
+
+
+def _openai_sse(payload: Mapping[str, Any]) -> bytes:
+    return f"data: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n".encode()
 
 
 def upstream_headers(

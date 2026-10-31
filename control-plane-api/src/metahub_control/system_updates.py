@@ -21,6 +21,7 @@ from metahub_control.workspace_access.constants import WORKSPACE_SESSION_COOKIE
 
 router = APIRouter(tags=["system-updates"])
 VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$")
+OPERATIONS = {"upgrade", "restart"}
 
 
 def version_order(value):
@@ -86,7 +87,7 @@ async def status(request: Request, response: Response):
         jobs = []
         for path in sorted((root / "status").glob("*.json"), reverse=True)[:20]:
             value = json.loads(path.read_text(encoding="utf-8"))
-            jobs.append({key: value.get(key) for key in ("job_id", "version", "status", "message", "updated_at")})
+            jobs.append({key: value.get(key) for key in ("job_id", "operation", "version", "status", "message", "updated_at")})
         blocked = any(job["status"] in {"running", "failed"} for job in jobs) or any((root / "requests").glob("*.json"))
         return {"enabled": True, "current_version": current, "releases": releases, "jobs": jobs, "upgrade_blocked": blocked}
     except (OSError, ValueError, TypeError):
@@ -112,7 +113,7 @@ async def request_update(request: Request, response: Response):
         if any((root / "requests").glob("*.json")) or any(json.loads(path.read_text(encoding="utf-8")).get("status") in {"running", "failed"} for path in (root / "status").glob("*.json")):
             raise ApiError("platform.unavailable")
         job_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%S") + "_" + uuid4().hex
-        job = {"job_id": job_id, "version": payload["version"], "account_id": context.account_id, "requested_at": datetime.now(UTC).isoformat()}
+        job = {"job_id": job_id, "operation": "upgrade", "version": payload["version"], "account_id": context.account_id, "requested_at": datetime.now(UTC).isoformat()}
         path = root / "requests" / (job_id + ".json")
         # The host sees only fully written files. Hard-link publishes without
         # overwriting an existing request; the request never contains commands.
@@ -126,6 +127,50 @@ async def request_update(request: Request, response: Response):
         temporary.unlink()
         _private(response)
         return {"job_id": job_id, "status": "queued", "version": payload["version"]}
+    except ApiError:
+        raise
+    except (OSError, ValueError, TypeError):
+        raise ApiError("platform.unavailable") from None
+
+
+@router.post("/platform/system-restart", status_code=202)
+async def request_restart(request: Request, response: Response):
+    """Queue a controlled restart of the current production services."""
+    context = await run_in_threadpool(_owner, request)
+    if request.url.query:
+        raise ApiError("platform.request_invalid")
+    payload = await _strict_json(request, "platform.request_invalid")
+    if not isinstance(payload, dict) or set(payload) != {"confirmed"} or payload["confirmed"] is not True:
+        raise ApiError("platform.request_invalid")
+    root = _root()
+    if root is None:
+        raise ApiError("platform.unavailable")
+    try:
+        current = _current_version(request)
+        if any((root / "requests").glob("*.json")) or any(
+            json.loads(path.read_text(encoding="utf-8")).get("status") in {"running", "failed"}
+            for path in (root / "status").glob("*.json")
+        ):
+            raise ApiError("platform.unavailable")
+        job_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%S") + "_" + uuid4().hex
+        job = {
+            "job_id": job_id,
+            "operation": "restart",
+            "version": current,
+            "account_id": context.account_id,
+            "requested_at": datetime.now(UTC).isoformat(),
+        }
+        path = root / "requests" / (job_id + ".json")
+        temporary = path.with_suffix(".pending")
+        with temporary.open("x", encoding="utf-8") as output:
+            temporary.chmod(0o600)
+            json.dump(job, output)
+            output.flush()
+            os.fsync(output.fileno())
+        os.link(temporary, path)
+        temporary.unlink()
+        _private(response)
+        return {"job_id": job_id, "status": "queued", "operation": "restart", "version": current}
     except ApiError:
         raise
     except (OSError, ValueError, TypeError):

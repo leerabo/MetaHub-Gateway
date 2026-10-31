@@ -2,7 +2,7 @@
 
 MetaHub 是面向团队的 AI Gateway 平台：集中管理模型服务、模型路由、项目与应用、成员权限、API KEY、用量、成本和预算。它同时提供组织控制台、AI Gateway 数据面和平台管理工作台，适合在单台 Ubuntu 服务器上以 Docker Compose 方式部署。
 
-当前 GitHub 试用版本为 **2.0.0-trial.51**。这是预发布版本，安装前请先完成目标服务器、域名、HTTPS、SMTP 和备份策略的验收。发布包和签名文件位于 [GitHub Release v2.0.0-trial.51](https://github.com/leerabo/MetaHub/releases/tag/v2.0.0-trial.51)。
+当前 GitHub 试用版本为 **2.0.0-trial.53**。这是预发布版本，安装前请先完成目标服务器、域名、HTTPS、SMTP 和备份策略的验收。发布包和签名文件位于 [GitHub Release v2.0.0-trial.53](https://github.com/leerabo/MetaHub-Gateway/releases/tag/v2.0.0-trial.53)。
 
 项目路线图当前覆盖 **PRD-090 至 PRD-148**。这是持续演进的 SaaS 项目，不限定需求总数或最终编号；路线图和逐项验收记录位于 `docs/prd/`、`docs/architecture/` 与 `docs/testing/`。
 
@@ -24,10 +24,11 @@ MetaHub 是面向团队的 AI Gateway 平台：集中管理模型服务、模型
 - [SQLite 到 PostgreSQL 的离线迁移](docs/operations/sqlite-to-postgresql.md)
 - [Ubuntu 日志保留](docs/operations/ubuntu-log-retention.md)
 
-首次安装的基本顺序是：在可信环境核对 Release 签名和包内清单，解压到版本目录，运行 `prepare-production.py` 创建独立 state，执行 `metahubctl.sh install STATE`，再在服务器交互终端运行 `metahubctl.sh first-owner STATE` 创建首位管理员。
+首次安装的基本顺序是：在可信环境核对 Release 签名和包内清单，解压到版本目录，运行 `prepare-production.py` 创建独立 state，执行 `metahubctl.sh install STATE`，运行 `install-updater.sh` 启用签名在线升级，再在服务器交互终端运行 `metahubctl.sh first-owner STATE` 创建首位管理员。在线升级代理是宿主机 root 服务，必须单独安装已核对的 Release 公钥。
 
 ```bash
 sudo scripts/deploy/metahubctl.sh install /opt/metahub-state
+sudo scripts/deploy/install-updater.sh /opt/metahub-state /opt/metahub-releases/2.0.0-trial.53 /root/metahub-release-public.pem leerabo/MetaHub-Gateway
 sudo scripts/deploy/metahubctl.sh first-owner /opt/metahub-state
 ```
 

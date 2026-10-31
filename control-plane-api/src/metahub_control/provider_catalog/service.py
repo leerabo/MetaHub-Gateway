@@ -45,7 +45,13 @@ from .models import (
     ProviderPreflightResponse,
     ProviderPreflightRun,
 )
-from .seed import REQUIRED_ENTRY_MODES, SEED_KEY_ID
+from .seed import (
+    EXTENDED_OFFICIAL_ENTRY_CODES,
+    EXTENDED_REQUIRED_ENTRY_MODES,
+    EXTENDED_SEED_VERSION,
+    REQUIRED_ENTRY_MODES,
+    SEED_KEY_ID,
+)
 
 _CODE_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _REGION_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,39}$")
@@ -66,6 +72,14 @@ _BLOCKED_HOSTS = frozenset(
 _OFFICIAL_ENTRY_CODES = frozenset(
     {"zhipu", "dashscope", "moonshot", "wenxin", "volcengine", "hunyuan", "deepseek"}
 )
+
+
+def _catalog_contract(version: str) -> tuple[dict[str, str], frozenset[str]]:
+    """Return the immutable entry-mode contract for a published catalog version."""
+
+    if version == EXTENDED_SEED_VERSION:
+        return EXTENDED_REQUIRED_ENTRY_MODES, EXTENDED_OFFICIAL_ENTRY_CODES
+    return REQUIRED_ENTRY_MODES, _OFFICIAL_ENTRY_CODES
 
 
 @dataclass(frozen=True, slots=True)
@@ -987,15 +1001,16 @@ def _verified_manifest(
 
 
 def _validate_manifest(manifest: ProviderCatalogManifest) -> None:
+    required_entry_modes, official_entry_codes = _catalog_contract(manifest.version)
     modes = {entry.entry_code: entry.instantiation_mode for entry in manifest.entries}
-    if modes != REQUIRED_ENTRY_MODES:
+    if modes != required_entry_modes:
         raise ApiError("provider_catalog.manifest_invalid")
     official = {
         entry.entry_code
         for entry in manifest.entries
         if entry.service_class == "official_cloud"
     }
-    if official != _OFFICIAL_ENTRY_CODES:
+    if official != official_entry_codes:
         raise ApiError("provider_catalog.manifest_invalid")
     for entry in manifest.entries:
         try:

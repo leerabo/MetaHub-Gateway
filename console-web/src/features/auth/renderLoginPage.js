@@ -4,6 +4,10 @@
  * 登录页只收集租户标识、邮箱和密码；真正的租户上下文和角色由后端认证接口返回，
  * 页面不会自行推断权限。
  */
+function loginCopy(chinese, english) {
+  return globalThis.document?.documentElement?.lang === "en-US" ? english : chinese;
+}
+
 export function renderLoginPage(container, options = {}) {
   if (!container) {
     return;
@@ -11,7 +15,9 @@ export function renderLoginPage(container, options = {}) {
   const branding = options.branding && typeof options.branding === "object" ? options.branding : {};
   const logoUrl = safePublicBrandAssetPath(branding.logo_path);
   const productName = boundedText(branding.product_name, 120) ? branding.product_name : "MetaHub";
-  const loginTitle = boundedText(branding.login_title, 160) ? branding.login_title : "MetaHub 控制台登录";
+  const loginTitle = boundedText(branding.login_title, 160)
+    ? branding.login_title
+    : loginCopy("MetaHub 控制台登录", "MetaHub console sign in");
   const loginMessage = boundedText(branding.login_message, 400) ? branding.login_message : "";
   container.innerHTML = `
     <main class="login-shell">
@@ -26,15 +32,15 @@ export function renderLoginPage(container, options = {}) {
         <p class="login-brand-message" data-login-brand-message${loginMessage ? "" : " hidden"}>${escapeHtml(loginMessage)}</p>
         <form class="login-form" id="login-form">
           <label>
-            <span>租户标识</span>
+            <span>${loginCopy("租户标识", "Workspace")}</span>
             <input name="tenantSlug" autocomplete="organization" value="${escapeAttribute(options.tenantSlug ?? "default")}" />
           </label>
           <label>
-            <span>邮箱</span>
+            <span>${loginCopy("邮箱", "Email")}</span>
             <input name="email" type="email" autocomplete="username" value="${escapeAttribute(options.email ?? "")}" required />
           </label>
           <label>
-            <span>密码</span>
+            <span>${loginCopy("密码", "Password")}</span>
             <input name="password" type="password" autocomplete="current-password" required />
           </label>
           ${
@@ -42,7 +48,7 @@ export function renderLoginPage(container, options = {}) {
               ? `<div class="login-error" role="alert">${escapeHtml(options.error)}</div>`
               : ""
           }
-          <button type="submit">登录</button>
+          <button type="submit">${loginCopy("登录", "Sign in")}</button>
         </form>
       </section>
     </main>
@@ -52,20 +58,20 @@ export function renderLoginPage(container, options = {}) {
 export function renderWorkspaceSessionPrompt(container, { error, requestId, pending = false } = {}) {
   if (!container) return;
   if (pending) {
-    container.innerHTML = '<section class="console-entry-loading" role="status"><strong>MetaHub</strong><p>正在退出登录...</p></section>';
+    container.innerHTML = `<section class="console-entry-loading" role="status"><strong>MetaHub</strong><p>${loginCopy("正在退出登录...", "Signing out…")}</p></section>`;
     return;
   }
   container.innerHTML = `
     <main class="console-entry-recovery">
       <a class="console-entry-brand" href="./">MetaHub</a>
       <section aria-labelledby="workspace-recovery-title">
-        <h1 id="workspace-recovery-title">${error ? "连接暂时中断" : "登录后继续"}</h1>
-        <p role="status">${error ? "请重新连接，继续刚才的操作。" : "登录账号后，即可进入你的组织空间。"}</p>
+        <h1 id="workspace-recovery-title">${error ? loginCopy("连接暂时中断", "Connection interrupted") : loginCopy("登录后继续", "Sign in to continue")}</h1>
+        <p role="status">${error ? loginCopy("请重新连接，继续刚才的操作。", "Reconnect to continue where you left off.") : loginCopy("登录账号后，即可进入你的组织空间。", "Sign in to enter your workspace.")}</p>
         <div class="console-entry-actions">
-          ${error ? '<button type="button" data-console-session-retry>重新连接</button>' : '<a href="identity.html">前往登录</a>'}
-          <a href="./">返回首页</a>
+          ${error ? `<button type="button" data-console-session-retry>${loginCopy("重新连接", "Reconnect")}</button>` : `<a href="identity.html">${loginCopy("前往登录", "Go to sign in")}</a>`}
+          <a href="./">${loginCopy("返回首页", "Back home")}</a>
         </div>
-        ${error ? `<details class="console-entry-diagnostics"><summary>查看错误详情</summary><p>${escapeHtml(error)}</p>${requestId ? `<p>请求编号：<code>${escapeHtml(requestId)}</code></p>` : ""}<a href="identity.html">重新登录或选择组织</a></details>` : ""}
+        ${error ? `<details class="console-entry-diagnostics"><summary>${loginCopy("查看错误详情", "View error details")}</summary><p>${escapeHtml(error)}</p>${requestId ? `<p>${loginCopy("请求编号：", "Request ID: ")}<code>${escapeHtml(requestId)}</code></p>` : ""}<a href="identity.html">${loginCopy("重新登录或选择组织", "Sign in again or choose a workspace")}</a></details>` : ""}
       </section>
     </main>`;
 }

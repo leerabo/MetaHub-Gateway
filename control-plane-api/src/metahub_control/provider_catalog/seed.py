@@ -76,6 +76,11 @@ SEED_VERSION: Final = "2026.08.26.1"
 SEED_KEY_ID: Final = "metahub-provider-catalog-seed-v1"
 SEED_PUBLISHED_AT: Final = "2026-08-26T00:00:00.000Z"
 
+# 外部官方厂商目录使用独立版本发布，避免在没有平台签名发布动作时悄悄改变已经
+# 激活的种子目录。平台管理员发布该版本后，Workspace 会通过同一个签名目录入口
+# 看到这些厂商；旧安装可以继续使用 2026.08.26.1 并安全回滚。
+EXTENDED_SEED_VERSION: Final = "2026.10.27.1"
+
 _CHAT = lambda context: _capability(  # noqa: E731
     "chat", context=context, stream=True, tools=True
 )
@@ -259,6 +264,135 @@ SEED_MANIFEST: Final[dict[str, object]] = {
     "version": SEED_VERSION,
 }
 
+# 国际厂商扩展目录。除了 Anthropic 外均使用厂商公开的 OpenAI-compatible API；
+# Anthropic 由 Gateway 的原生 Messages 转换层处理，入口仍复用受控 bearer 凭据。
+_FOREIGN_ENTRIES: Final[list[dict[str, object]]] = [
+    _entry(
+        "anthropic",
+        vendor_code="anthropic",
+        display_name="Anthropic Claude",
+        provider_type="openai_compatible",
+        auth_modes=["bearer"],
+        regions=["global"],
+        compliance_tags=["customer_credential", "global"],
+        capabilities=[_CHAT(200000)],
+        endpoints=[
+            _endpoint(
+                "api.anthropic.com", "/v1", region="global", cloud="anthropic_official"
+            )
+        ],
+        compatibility_level="native",
+    ),
+    _entry(
+        "cohere",
+        vendor_code="cohere",
+        display_name="Cohere",
+        provider_type="openai_compatible",
+        auth_modes=["bearer"],
+        regions=["global"],
+        compliance_tags=["customer_credential", "global"],
+        capabilities=[_CHAT(128000)],
+        endpoints=[
+            _endpoint(
+                "api.cohere.com",
+                "/compatibility/v1",
+                region="global",
+                cloud="cohere_compatibility",
+            )
+        ],
+        compatibility_level="openai_compatible",
+    ),
+    _entry(
+        "google_gemini",
+        vendor_code="google",
+        display_name="Google Gemini",
+        provider_type="openai_compatible",
+        auth_modes=["bearer"],
+        regions=["global"],
+        compliance_tags=["customer_credential", "global"],
+        capabilities=[_CHAT(200000)],
+        endpoints=[
+            _endpoint(
+                "generativelanguage.googleapis.com",
+                "/v1beta/openai",
+                region="global",
+                cloud="google_gemini_openai_compatibility",
+            )
+        ],
+        compatibility_level="openai_compatible",
+    ),
+    _entry(
+        "mistral",
+        vendor_code="mistral_ai",
+        display_name="Mistral AI",
+        provider_type="openai_compatible",
+        auth_modes=["bearer"],
+        regions=["global"],
+        compliance_tags=["customer_credential", "global"],
+        capabilities=[_CHAT(128000)],
+        endpoints=[_endpoint("api.mistral.ai", "/v1", region="global", cloud="mistral_official")],
+        compatibility_level="openai_compatible",
+    ),
+    _entry(
+        "openai",
+        vendor_code="openai",
+        display_name="OpenAI",
+        provider_type="openai_compatible",
+        auth_modes=["bearer"],
+        regions=["global"],
+        compliance_tags=["customer_credential", "global"],
+        capabilities=[_CHAT(200000)],
+        endpoints=[_endpoint("api.openai.com", "/v1", region="global", cloud="openai_official")],
+        compatibility_level="native",
+    ),
+    _entry(
+        "xai_grok",
+        vendor_code="xai",
+        display_name="xAI Grok",
+        provider_type="openai_compatible",
+        auth_modes=["bearer"],
+        regions=["global"],
+        compliance_tags=["customer_credential", "global"],
+        capabilities=[_CHAT(131072)],
+        endpoints=[_endpoint("api.x.ai", "/v1", region="global", cloud="xai_official")],
+        compatibility_level="openai_compatible",
+    ),
+]
+
+EXTENDED_SEED_MANIFEST: Final[dict[str, object]] = {
+    "entries": sorted(
+        [*SEED_MANIFEST["entries"], *_FOREIGN_ENTRIES],
+        key=lambda item: str(item["entry_code"]),
+    ),
+    "schema_version": 1,
+    "version": EXTENDED_SEED_VERSION,
+}
+
+EXTENDED_REQUIRED_ENTRY_MODES: Final[dict[str, str]] = {
+    "dashscope": "provider",
+    "deepseek": "provider",
+    "hunyuan": "provider",
+    "local_openai_compatible": "local_endpoint",
+    "moonshot": "provider",
+    "openrouter_migration": "migration_only",
+    "siliconflow_migration": "migration_only",
+    "volcengine": "provider",
+    "wenxin": "provider",
+    "zhipu": "provider",
+    **{entry["entry_code"]: "provider" for entry in _FOREIGN_ENTRIES},
+}
+
+EXTENDED_OFFICIAL_ENTRY_CODES: Final[frozenset[str]] = frozenset(
+    {
+        *{
+            entry["entry_code"]
+            for entry in SEED_MANIFEST["entries"]
+            if entry["service_class"] == "official_cloud"
+        },
+        *(entry["entry_code"] for entry in _FOREIGN_ENTRIES),
+    }
+)
+
 REQUIRED_ENTRY_MODES: Final[dict[str, str]] = {
     "dashscope": "provider",
     "deepseek": "provider",
@@ -274,6 +408,10 @@ REQUIRED_ENTRY_MODES: Final[dict[str, str]] = {
 
 
 __all__ = [
+    "EXTENDED_OFFICIAL_ENTRY_CODES",
+    "EXTENDED_REQUIRED_ENTRY_MODES",
+    "EXTENDED_SEED_MANIFEST",
+    "EXTENDED_SEED_VERSION",
     "REQUIRED_ENTRY_MODES",
     "SEED_KEY_ID",
     "SEED_MANIFEST",

@@ -183,7 +183,8 @@ export function bindConsoleSidebarViewport({ shell, state, applyCollapsed, onCom
 
 export function renderConsoleEntryLoading(container) {
   if (!container) return;
-  container.innerHTML = '<section class="console-entry-loading" role="status"><strong>MetaHub</strong><p>正在加载组织空间...</p><a href="./">返回首页</a></section>';
+  const english = globalThis.document?.documentElement?.lang === "en-US";
+  container.innerHTML = `<section class="console-entry-loading" role="status"><strong>MetaHub</strong><p>${english ? "Loading workspace…" : "正在加载组织空间..."}</p><a href="./">${english ? "Back home" : "返回首页"}</a></section>`;
 }
 
 /** Reveal the current item inside the sidebar without scrolling the page or moving focus. */

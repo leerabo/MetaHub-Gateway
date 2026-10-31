@@ -17,8 +17,8 @@ JOB_A = '20261015T000000_' + 'a' * 32
 JOB_B = '20261015T000001_' + 'b' * 32
 
 
-def job(job_id=JOB_B, version='2.0.0-trial.2'):
-    return {'job_id':job_id,'version':version,'account_id':'synthetic-owner',
+def job(job_id=JOB_B, version='2.0.0-trial.2', operation='upgrade'):
+    return {'job_id':job_id,'operation':operation,'version':version,'account_id':'synthetic-owner',
             'requested_at':datetime.now(UTC).isoformat()}
 
 
@@ -65,6 +65,20 @@ def test_verified_candidate_controller_supplies_upgrade_guards(queue):
     candidate=Path(paths['release_store']) / '2.0.0-trial.2'
     assert calls==[['bash',str(candidate / 'scripts/deploy/metahubctl.sh'),
                    'upgrade',paths['state'],str(candidate),'2.0.0-trial.2']]
+
+
+def test_restart_request_uses_active_release_controller(queue):
+    config, updates, calls = queue
+    paths = json.loads(config.read_text())
+    active = Path(paths['state']) / 'current-release'
+    request = job(operation='restart', version='2.0.0-trial.1')
+    (updates / 'requests' / f'{JOB_B}.json').write_text(json.dumps(request))
+    agent.process(config)
+    active_root = Path(active.read_text().strip())
+    assert calls == [['bash', str(active_root / 'scripts/deploy/metahubctl.sh'), 'restart', paths['state']]]
+    status = json.loads((updates / 'status' / f'{JOB_B}.json').read_text(encoding='utf-8'))
+    assert status['operation'] == 'restart'
+    assert status['status'] == 'completed'
 
 
 def test_old_state_worker_cannot_run_after_cold_recovery(queue):

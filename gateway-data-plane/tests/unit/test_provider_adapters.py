@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import threading
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -127,8 +128,23 @@ def fake_provider_endpoint():
                     "path": self.path,
                     "body": body,
                     "authorization": self.headers.get("Authorization"),
+                    "x_api_key": self.headers.get("x-api-key"),
+                    "anthropic_version": self.headers.get("anthropic-version"),
                 }
             )
+            if self.path == "/v1/messages":
+                self._json(
+                    {
+                        "id": "msg_adapter",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": body.get("model"),
+                        "content": [{"type": "text", "text": "claude ok"}],
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 13, "output_tokens": 5},
+                    }
+                )
+                return
             # 错误分支统一收敛为标准错误码，避免泄露上游原始敏感信息。
             if self.path == "/v1/error":
                 self._json({"error": {"type": "rate_limit", "message": "too many"}}, status_code=429)
@@ -297,7 +313,7 @@ async def test_stream_adapter_uses_bounded_handshake_timeouts(monkeypatch: pytes
     class _Client:
         """捕获 Adapter 传入的 httpx.Timeout 和代理开关参数。"""
 
-        def __init__(self, *, timeout, trust_env: bool) -> None:
+        def __init__(self, *, timeout, trust_env: bool, **_kwargs: object) -> None:
             """保存 timeout，并断言没有使用系统代理。"""
 
             captured["timeout"] = timeout
@@ -372,7 +388,7 @@ async def test_stream_adapter_cancelled_handshake_closes_resources_within_bound(
     class _CancelledClient:
         """返回取消流替身，并记录独立 client 清理是否仍被执行。"""
 
-        def __init__(self, *, timeout, trust_env: bool) -> None:
+        def __init__(self, *, timeout, trust_env: bool, **_kwargs: object) -> None:
             """断言取消测试仍使用生产路径的有界 timeout 与禁代理配置。"""
 
             assert timeout.connect == 30.0
@@ -452,7 +468,7 @@ async def test_stream_adapter_runtime_handshake_error_closes_resources_without_l
     class _RuntimeErrorClient:
         """提供运行时异常流并记录独占 HTTP client 的关闭次数。"""
 
-        def __init__(self, *, timeout, trust_env: bool) -> None:
+        def __init__(self, *, timeout, trust_env: bool, **_kwargs: object) -> None:
             """验证异常流程仍使用禁代理的生产初始化参数。"""
 
             assert timeout.connect == 30.0
@@ -511,7 +527,7 @@ async def test_stream_adapter_non_2xx_context_exit_error_still_closes_client(
     class _NonSuccessClient:
         """提供非成功响应流并记录 context 失败后的 client 关闭。"""
 
-        def __init__(self, *, timeout, trust_env: bool) -> None:
+        def __init__(self, *, timeout, trust_env: bool, **_kwargs: object) -> None:
             """验证非成功响应仍禁用环境代理。"""
 
             assert timeout.connect == 30.0
@@ -832,6 +848,72 @@ async def test_openai_adapter_send_non_stream_returns_normalized_response(
     assert events[-1].request_id == "req_usage_normalized"
     assert events[-1].payload["total_tokens"] == 18
     assert "raw_usage" not in events[-1].payload
+
+
+@pytest.mark.anyio
+async def test_anthropic_catalog_route_translates_native_messages_and_usage(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_provider_endpoint,
+) -> None:
+    """Anthropic 原生 Messages 请求和响应必须转换成网关统一的 OpenAI 口径。"""
+
+    base_url, captured = fake_provider_endpoint
+    monkeypatch.setattr(
+        openai_compatible_module,
+        "_selected_provider_key",
+        lambda _route, _config: SelectedProviderKey(None, "sk-anthropic-secret", "test"),
+    )
+    anthropic_route = replace(route(base_url=base_url), provider_code="anthropic_catalog_instance")
+    adapter = OpenAICompatibleAdapter()
+    request = adapter.build_request(
+        anthropic_route,
+        "chat/completions",
+        {
+            "model": "internal-chat",
+            "messages": [
+                {"role": "system", "content": "Be concise"},
+                {"role": "user", "content": "hello"},
+            ],
+        },
+    )
+
+    assert request.url == f"{base_url}/messages"
+    assert request.headers["x-api-key"] == "sk-anthropic-secret"
+    assert request.headers["anthropic-version"] == "2023-06-01"
+    assert "Authorization" not in request.headers
+    assert request.payload["system"][0]["text"] == "Be concise"
+    response = await adapter.send_non_stream(request)
+
+    assert response.payload["object"] == "chat.completion"
+    assert response.payload["choices"][0]["message"]["content"] == "claude ok"
+    assert response.usage.input_tokens == 13
+    assert response.usage.output_tokens == 5
+    assert captured[-1]["x_api_key"] == "sk-anthropic-secret"
+    assert captured[-1]["anthropic_version"] == "2023-06-01"
+
+
+@pytest.mark.anyio
+async def test_anthropic_stream_body_emits_openai_sse() -> None:
+    """Anthropic 事件流转换为下游可消费的 data-only OpenAI SSE。"""
+
+    class FakeResponse:
+        async def aiter_bytes(self):
+            for event in (
+                b'data: {"type":"message_start","message":{"id":"msg_1","model":"claude"}}\n\n',
+                b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}\n\n',
+                b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}\n\n',
+                b'data: {"type":"message_stop"}\n\n',
+            ):
+                yield event
+
+    body = openai_compatible_module._AnthropicStreamingBody(FakeResponse())
+    chunks = [chunk async for chunk in body.aiter_bytes()]
+    rendered = b"".join(chunks).decode("utf-8")
+    assert '"role":"assistant"' in rendered
+    assert '"content":"hi"' in rendered
+    assert '"finish_reason":"stop"' in rendered
+    assert '"completion_tokens":2' in rendered
+    assert rendered.endswith("data: [DONE]\n\n")
 
 
 @pytest.mark.anyio

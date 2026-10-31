@@ -226,6 +226,16 @@ test("PRD-140 renderer exposes dense tabs and never leaks hidden contacts", () =
     contacts: [contactSummary()],
   }, permissions, platformContext());
   assert.match(contacts, /owner@example\.invalid/u);
+  assert.match(
+    contacts,
+    /class="platform-customer-detail"[\s\S]*data-platform-customer-contacts/u,
+    "contacts should render inside the selected customer detail",
+  );
+  assert.doesNotMatch(
+    contacts,
+    /<\/section>\s*<section class="platform-band platform-customer-contacts"/u,
+    "contacts should not be appended below the whole directory workbench",
+  );
   const support = renderPlatformCustomerSuccess({
     ...state,
     directory: directoryResponse({ scope: "support" }),

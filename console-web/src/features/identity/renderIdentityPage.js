@@ -5,9 +5,9 @@ import { renderAccountPreferences } from "../account-preferences/renderAccountPr
 import { renderThemeToggle } from "../../lib/theme.js";
 
 export function renderIdentityAccountLoadingPage(root) {
-  root.innerHTML = `<section class="identity-account-loading" aria-busy="true" aria-label="加载账号设置">
-    <a href="console.html">MetaHub</a><h1>账号设置</h1>
-    <p role="status" aria-live="polite">正在加载账号和空间信息…</p>
+  root.innerHTML = `<section class="identity-account-loading" aria-busy="true" aria-label="${accessCopy("加载账号设置", "Loading account settings")}">
+    <a href="console.html">MetaHub</a><h1>${accessCopy("账号设置", "Account settings")}</h1>
+    <p role="status" aria-live="polite">${accessCopy("正在加载账号和空间信息…", "Loading account and workspace information…")}</p>
     <div class="identity-account-skeleton" aria-hidden="true"></div>
     <div class="identity-account-skeleton" aria-hidden="true"></div>
   </section>`;
@@ -27,15 +27,19 @@ const DEFAULT_PUBLIC_BRAND = Object.freeze({
 });
 let publicBrand = DEFAULT_PUBLIC_BRAND;
 
+function accessCopy(chinese, english) {
+  return globalThis.document?.documentElement?.lang === "en-US" ? english : chinese;
+}
+
 /** Apply the strict Host-scoped public projection without persisting brand or host state. */
 export function setIdentityPublicBranding(value, documentObject = globalThis.document) {
   publicBrand = normalizedPublicBrand(value);
   const root = documentObject?.documentElement;
   root?.style?.setProperty?.("--identity-accent", publicBrand.primary_color);
   root?.style?.setProperty?.("--identity-accent-dark", publicBrand.secondary_color);
-  if (documentObject) documentObject.title = `${publicBrand.product_name} 账号安全`;
+  if (documentObject) documentObject.title = `${publicBrand.product_name} ${accessCopy("账号安全", "Account security")}`;
   const app = documentObject?.querySelector?.("#identity-app");
-  app?.setAttribute?.("aria-label", `${publicBrand.product_name} 账号安全`);
+  app?.setAttribute?.("aria-label", `${publicBrand.product_name} ${accessCopy("账号安全", "Account security")}`);
   const favicon = documentObject?.querySelector?.("link[rel='icon']");
   favicon?.setAttribute?.("href", publicBrand.favicon_path ?? "data:,");
   const product = documentObject?.querySelector?.("[data-access-product]");
@@ -43,7 +47,9 @@ export function setIdentityPublicBranding(value, documentObject = globalThis.doc
   const visual = documentObject?.querySelector?.(".identity-access-visual");
   visual?.setAttribute?.("aria-label", publicBrand.product_name);
   const title = documentObject?.querySelector?.("#identity-login-title");
-  if (title) title.textContent = publicBrand.login_title;
+  if (title) title.textContent = publicBrand.login_title === DEFAULT_PUBLIC_BRAND.login_title
+    ? accessCopy("登录账号", "Sign in")
+    : publicBrand.login_title;
   for (const label of documentObject?.querySelectorAll?.(".identity-brand > div > p, .identity-wordmark > strong") ?? []) {
     label.textContent = publicBrand.product_name;
   }
@@ -68,28 +74,28 @@ export function renderIdentityLoginPage(container, options = {}) {
           ${renderIdentityBrandMark()}
           <div>
             <p>${escapeHtml(publicBrand.product_name)}</p>
-            <h1 id="identity-login-title">${escapeHtml(publicBrand.login_title)}</h1>
+            <h1 id="identity-login-title">${escapeHtml(publicBrand.login_title === DEFAULT_PUBLIC_BRAND.login_title ? accessCopy("登录账号", "Sign in") : publicBrand.login_title)}</h1>
           </div>
         </header>
         <p class="identity-brand-message" ${publicBrand.login_message ? "" : "hidden"}>${escapeHtml(publicBrand.login_message)}</p>
-        <p class="identity-login-welcome">欢迎回来</p>
+        <p class="identity-login-welcome">${accessCopy("欢迎回来", "Welcome back")}</p>
         <form class="identity-login-form" data-identity-login-form aria-busy="${busy}">
           <label>
-            <span>邮箱</span>
+            <span>${accessCopy("邮箱", "Email")}</span>
             <input name="email" type="email" autocomplete="username" inputmode="email" placeholder="name@company.com" value="${escapeAttribute(options.email ?? "")}" required autofocus ${busy ? "disabled" : ""} />
           </label>
           <label>
-            <span>密码</span>
-            <span class="identity-password-control"><input name="password" type="password" aria-label="密码" autocomplete="current-password" placeholder="输入你的密码" required ${busy ? "disabled" : ""} /><button class="identity-password-toggle" type="button" data-password-toggle aria-label="显示密码" title="显示密码" aria-pressed="false" ${busy ? "disabled" : ""}>${icon("eye")}</button></span>
+            <span>${accessCopy("密码", "Password")}</span>
+            <span class="identity-password-control"><input name="password" type="password" aria-label="${accessCopy("密码", "Password")}" autocomplete="current-password" placeholder="${accessCopy("输入你的密码", "Enter your password")}" required ${busy ? "disabled" : ""} /><button class="identity-password-toggle" type="button" data-password-toggle aria-label="${accessCopy("显示密码", "Show password")}" title="${accessCopy("显示密码", "Show password")}" aria-pressed="false" ${busy ? "disabled" : ""}>${icon("eye")}</button></span>
           </label>
           ${renderError(options.error)}
-          <button class="identity-primary" type="submit" ${busy ? "disabled" : ""}><span>${busy ? "正在登录" : "登录"}</span>${icon("arrow-right")}</button>
+          <button class="identity-primary" type="submit" ${busy ? "disabled" : ""}><span>${busy ? accessCopy("正在登录", "Signing in") : accessCopy("登录", "Sign in")}</span>${icon("arrow-right")}</button>
           <div class="identity-access-actions">
-            <button type="button" data-identity-action="show-register" ${busy ? "disabled" : ""}>创建账号</button>
-            <button type="button" data-identity-action="show-reset" ${busy ? "disabled" : ""}>忘记密码</button>
+            <button type="button" data-identity-action="show-register" ${busy ? "disabled" : ""}>${accessCopy("创建账号", "Create account")}</button>
+            <button type="button" data-identity-action="show-reset" ${busy ? "disabled" : ""}>${accessCopy("忘记密码", "Forgot password")}</button>
           </div>
         </form>
-        <p class="identity-login-assurance">${icon("shield-check")}安全连接，从这里开始。</p>
+        <p class="identity-login-assurance">${icon("shield-check")}${accessCopy("安全连接，从这里开始。", "Secure connection, start here.")}</p>
       </section>
     </div>
   `;
@@ -104,10 +110,10 @@ export function renderIdentityLogoutPage(container) {
           ${renderIdentityBrandMark()}
           <div>
             <p>${escapeHtml(publicBrand.product_name)}</p>
-            <h1 id="identity-login-title">正在退出登录</h1>
+            <h1 id="identity-login-title">${accessCopy("正在退出登录", "Signing out")}</h1>
           </div>
         </header>
-        <p class="identity-login-welcome">正在安全结束当前会话，请稍候。</p>
+        <p class="identity-login-welcome">${accessCopy("正在安全结束当前会话，请稍候。", "Ending the current session securely. Please wait.")}</p>
       </section>
     </div>`;
 }
@@ -118,17 +124,17 @@ export function renderIdentityRiskChallengePage(container, options = {}) {
   container.innerHTML = `
     <div class="identity-login-shell">
       <section class="identity-login-panel" aria-labelledby="identity-risk-challenge-title">
-        ${renderAccessBrand("identity-risk-challenge-title", "附加验证")}
+        ${renderAccessBrand("identity-risk-challenge-title", accessCopy("附加验证", "Additional verification"))}
         <form class="identity-login-form" data-identity-risk-challenge-form autocomplete="off" aria-busy="${busy}">
           <div class="identity-risk-reference"><span>Challenge</span><strong>${escapeHtml(shortRiskReference(options.challengeId))}</strong></div>
           <label>
-            <span>验证答案</span>
+            <span>${accessCopy("验证答案", "Verification answer")}</span>
             <input name="answer" type="password" autocomplete="one-time-code" minlength="6" maxlength="128" required autofocus ${busy ? "disabled" : ""} />
           </label>
           ${renderError(options.error)}
-          <button class="identity-primary" type="submit" ${busy ? "disabled" : ""}>完成验证</button>
+          <button class="identity-primary" type="submit" ${busy ? "disabled" : ""}>${accessCopy("完成验证", "Complete verification")}</button>
           <div class="identity-access-actions is-single">
-            <button type="button" data-identity-action="cancel-risk-challenge" ${busy ? "disabled" : ""}>返回账号安全</button>
+            <button type="button" data-identity-action="cancel-risk-challenge" ${busy ? "disabled" : ""}>${accessCopy("返回账号安全", "Back to account security")}</button>
           </div>
         </form>
       </section>
@@ -143,28 +149,28 @@ export function renderIdentityRegistrationPage(container, options = {}) {
   container.innerHTML = `
     <div class="identity-login-shell">
       <section class="identity-login-panel" aria-labelledby="identity-registration-title">
-        ${renderAccessBrand("identity-registration-title", "创建账号")}
+        ${renderAccessBrand("identity-registration-title", accessCopy("创建账号", "Create account"))}
         <form class="identity-login-form" data-identity-registration-form aria-busy="${busy}">
           <fieldset class="identity-registration-fields" ${busy ? "disabled" : ""}>
           <label>
-            <span>邮箱</span>
+            <span>${accessCopy("邮箱", "Email")}</span>
             <input name="email" type="email" autocomplete="username" inputmode="email" value="${escapeAttribute(options.email ?? "")}" required autofocus />
           </label>
           <label>
-            <span>显示名称</span>
+            <span>${accessCopy("显示名称", "Display name")}</span>
             <input name="displayName" type="text" autocomplete="name" maxlength="120" value="${escapeAttribute(options.displayName ?? "")}" required />
           </label>
           <label>
-            <span>密码</span>
-            ${registrationPassword("password", "密码")}
+            <span>${accessCopy("密码", "Password")}</span>
+            ${registrationPassword("password", accessCopy("密码", "Password"))}
           </label>
           <label>
-            <span>确认密码</span>
-            ${registrationPassword("confirmPassword", "确认密码")}
+            <span>${accessCopy("确认密码", "Confirm password")}</span>
+            ${registrationPassword("confirmPassword", accessCopy("确认密码", "Confirm password"))}
           </label>
           <label class="identity-consent">
             <input name="consent" type="checkbox" required ${options.consent ? "checked" : ""} />
-            <span>我已阅读并同意<a href="privacy.html" target="_blank" rel="noopener">隐私条款</a></span>
+            <span>${accessCopy("我已阅读并同意", "I have read and agree to the ")}<a href="privacy.html" target="_blank" rel="noopener">${accessCopy("隐私条款", "Privacy terms")}</a></span>
           </label>
           ${options.policy?.human_verification ? `<label><span>图形验证码</span><span class="identity-captcha-control">
             <input name="captchaAnswer" aria-label="图形验证码" type="text" inputmode="numeric" autocomplete="off" pattern="[0-9]{5}" maxlength="5" required />
@@ -172,12 +178,12 @@ export function renderIdentityRegistrationPage(container, options = {}) {
             <button type="button" data-identity-action="refresh-captcha" aria-label="刷新验证码" title="刷新验证码">${icon("rotate-cw")}</button>
           </span></label>` : ""}
           </fieldset>
-          ${policyLoading ? '<p class="identity-setup-status" role="status">正在准备本地注册验证，填写信息后即可继续。</p>' : ""}
+          ${policyLoading ? `<p class="identity-setup-status" role="status">${accessCopy("正在准备本地注册验证，填写信息后即可继续。", "Preparing local registration checks. Complete the form to continue.")}</p>` : ""}
           ${renderError(options.error)}
-          <button class="identity-primary" type="submit" ${busy || policyLoading || options.unavailable ? "disabled" : ""}><span>${busy ? (options.loading ? "正在加载" : "正在注册") : policyLoading ? "准备中" : "注册"}</span>${icon("arrow-right")}</button>
-          ${options.unavailable ? '<button class="identity-secondary-action" type="button" data-identity-action="retry-registration">重试连接</button>' : ""}
+          <button class="identity-primary" type="submit" ${busy || policyLoading || options.unavailable ? "disabled" : ""}><span>${busy ? (options.loading ? accessCopy("正在加载", "Loading") : accessCopy("正在注册", "Creating account")) : policyLoading ? accessCopy("准备中", "Preparing") : accessCopy("注册", "Create account")}</span>${icon("arrow-right")}</button>
+          ${options.unavailable ? `<button class="identity-secondary-action" type="button" data-identity-action="retry-registration">${accessCopy("重试连接", "Retry connection")}</button>` : ""}
           <div class="identity-access-actions is-single">
-            <button type="button" data-identity-action="show-login">返回登录</button>
+            <button type="button" data-identity-action="show-login">${accessCopy("返回登录", "Back to sign in")}</button>
           </div>
         </form>
       </section>
@@ -194,18 +200,18 @@ export function renderIdentityVerificationPage(container, options = {}) {
   container.innerHTML = `
     <div class="identity-login-shell">
       <section class="identity-login-panel" aria-labelledby="identity-verification-title">
-        ${renderAccessBrand("identity-verification-title", "验证邮箱")}
+        ${renderAccessBrand("identity-verification-title", accessCopy("验证邮箱", "Verify email"))}
         <form class="identity-login-form" data-identity-verification-form>
           <label>
-            <span>验证码</span>
+            <span>${accessCopy("验证码", "Verification code")}</span>
             <input name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required autofocus />
           </label>
           ${renderFeedback(options.feedback)}
           ${renderError(options.error)}
-          <button class="identity-primary" type="submit">完成验证</button>
+          <button class="identity-primary" type="submit">${accessCopy("完成验证", "Complete verification")}</button>
           <div class="identity-access-actions">
-            <button type="button" data-identity-action="resend-verification">重新发送</button>
-            <button type="button" data-identity-action="show-login">返回登录</button>
+            <button type="button" data-identity-action="resend-verification">${accessCopy("重新发送", "Send again")}</button>
+            <button type="button" data-identity-action="show-login">${accessCopy("返回登录", "Back to sign in")}</button>
           </div>
         </form>
       </section>
@@ -218,17 +224,17 @@ export function renderIdentityResetRequestPage(container, options = {}) {
   container.innerHTML = `
     <div class="identity-login-shell">
       <section class="identity-login-panel" aria-labelledby="identity-reset-request-title">
-        ${renderAccessBrand("identity-reset-request-title", "找回密码")}
+        ${renderAccessBrand("identity-reset-request-title", accessCopy("找回密码", "Reset password"))}
         <form class="identity-login-form" data-identity-reset-request-form>
           <label>
-            <span>邮箱</span>
+            <span>${accessCopy("邮箱", "Email")}</span>
             <input name="email" type="email" autocomplete="username" inputmode="email" value="${escapeAttribute(options.email ?? "")}" required autofocus />
           </label>
           ${renderError(options.error)}
-          <p class="identity-setup-status" role="status" data-reset-delivery-status>${options.checking ? "正在检查邮箱验证服务…" : options.unavailable ? "邮箱验证服务尚未配置，请联系平台管理员。" : ""}</p>
-          <button class="identity-primary" type="submit" ${options.checking || options.unavailable ? "disabled" : ""}>发送验证码</button>
+          <p class="identity-setup-status" role="status" data-reset-delivery-status>${options.checking ? accessCopy("正在检查邮箱验证服务…", "Checking email verification service…") : options.unavailable ? accessCopy("邮箱验证服务尚未配置，请联系平台管理员。", "Email verification is not configured. Contact the platform administrator.") : ""}</p>
+          <button class="identity-primary" type="submit" ${options.checking || options.unavailable ? "disabled" : ""}>${accessCopy("发送验证码", "Send code")}</button>
           <div class="identity-access-actions is-single">
-            <button type="button" data-identity-action="show-login">返回登录</button>
+            <button type="button" data-identity-action="show-login">${accessCopy("返回登录", "Back to sign in")}</button>
           </div>
         </form>
       </section>
@@ -241,25 +247,25 @@ export function renderIdentityResetConfirmPage(container, options = {}) {
   container.innerHTML = `
     <div class="identity-login-shell">
       <section class="identity-login-panel" aria-labelledby="identity-reset-confirm-title">
-        ${renderAccessBrand("identity-reset-confirm-title", "设置新密码")}
+        ${renderAccessBrand("identity-reset-confirm-title", accessCopy("设置新密码", "Set a new password"))}
         <form class="identity-login-form" data-identity-reset-confirm-form>
           <label>
-            <span>验证码</span>
+            <span>${accessCopy("验证码", "Verification code")}</span>
             <input name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required autofocus />
           </label>
           <label>
-            <span>新密码</span>
+            <span>${accessCopy("新密码", "New password")}</span>
             <input name="newPassword" type="password" autocomplete="new-password" minlength="8" required />
           </label>
           <label>
-            <span>确认新密码</span>
+            <span>${accessCopy("确认新密码", "Confirm new password")}</span>
             <input name="confirmPassword" type="password" autocomplete="new-password" minlength="8" required />
           </label>
           ${renderFeedback(options.feedback)}
           ${renderError(options.error)}
-          <button class="identity-primary" type="submit">更新密码</button>
+          <button class="identity-primary" type="submit">${accessCopy("更新密码", "Update password")}</button>
           <div class="identity-access-actions is-single">
-            <button type="button" data-identity-action="show-login">返回登录</button>
+            <button type="button" data-identity-action="show-login">${accessCopy("返回登录", "Back to sign in")}</button>
           </div>
         </form>
       </section>

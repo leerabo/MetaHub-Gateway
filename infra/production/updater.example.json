@@ -1,5 +1,5 @@
 {
-  "repository": "leerabo/MetaHub",
+  "repository": "leerabo/MetaHub-Gateway",
   "include_prereleases": true,
   "public_key": "/etc/metahub/release-public.pem",
   "release_store": "/opt/metahub-releases",

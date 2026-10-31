@@ -81,6 +81,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid #07816a; outline-offs
   .home-footer { gap: 16px; }
   .home-footer > span { display: none; }
 }
+
 @media (max-height: 640px) {
   .home-hero { --home-copy-top: 18px; min-height: 500px; }
   .home-hero-description { margin-bottom: 14px; }
@@ -290,6 +291,10 @@ body:has(.home-header) {
 
 .home-footer .home-wordmark { font-size: 18px; }
 
+.home-header-actions { display: inline-flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.home-locale-toggle { min-height: 38px; padding: 0 12px; border: 1px solid var(--home-line); border-radius: 6px; background: transparent; color: var(--home-ink-soft); font-size: 13px; font-weight: 750; }
+.home-locale-toggle:hover { border-color: var(--home-mint); color: var(--home-mint); background: #edf7f2; }
+
 @media (max-width: 900px) {
   .home-header, .home-footer, .home-hero, .home-capabilities { padding-inline: 28px; }
   .home-hero-copy { width: 52%; padding-top: 94px; }
@@ -312,4 +317,6 @@ body:has(.home-header) {
   .home-section-heading h2 { font-size: 27px; }
   .home-capability-grid { column-gap: 20px; }
   .home-capability-grid article { min-height: 148px; }
+  .home-header-actions { gap: 6px; }
+  .home-locale-toggle { min-height: 36px; padding-inline: 9px; font-size: 12px; }
 }
